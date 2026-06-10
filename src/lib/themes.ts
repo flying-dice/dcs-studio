@@ -17,6 +17,14 @@ import {
   ayuLight,
   noctisLilac,
 } from "thememirror";
+import {
+  dcsDark,
+  dcsLight,
+  githubDark,
+  githubLight,
+  jetbrainsDark,
+  jetbrainsLight,
+} from "./custom-themes";
 
 export interface EditorTheme {
   id: string;
@@ -31,22 +39,28 @@ export interface EditorTheme {
 
 export const EDITOR_THEMES: EditorTheme[] = [
   // ── Dark ──
+  { id: "dcs-dark", label: "DCS Dark", dark: true, ext: dcsDark, bg: "#15181c", fg: "#c9d0d9", accent: "#ffb454" },
   { id: "one-dark", label: "One Dark", dark: true, ext: oneDark, bg: "#282c34", fg: "#abb2bf", accent: "#61afef" },
   { id: "dracula", label: "Dracula", dark: true, ext: dracula, bg: "#2d2f3f", fg: "#f8f8f2", accent: "#bd93f9" },
   { id: "cobalt", label: "Cobalt", dark: true, ext: cobalt, bg: "#00254b", fg: "#ffffff", accent: "#ff9d00" },
   { id: "bespin", label: "Bespin", dark: true, ext: bespin, bg: "#2e241d", fg: "#baae9e", accent: "#5ea6ea" },
   { id: "birds-of-paradise", label: "Birds of Paradise", dark: true, ext: birdsOfParadise, bg: "#3b2627", fg: "#e6e1c4", accent: "#ef5d32" },
   { id: "cool-glow", label: "Cool Glow", dark: true, ext: coolGlow, bg: "#060521", fg: "#e0e0e0", accent: "#2bf1dc" },
+  { id: "github-dark", label: "GitHub Dark", dark: true, ext: githubDark, bg: "#0d1117", fg: "#c9d1d9", accent: "#58a6ff" },
+  { id: "jetbrains-dark", label: "JetBrains Dark", dark: true, ext: jetbrainsDark, bg: "#2b2b2b", fg: "#a9b7c6", accent: "#589df6" },
   // ── Light ──
+  { id: "dcs-light", label: "DCS Light", dark: false, ext: dcsLight, bg: "#fbfaf8", fg: "#33373d", accent: "#b3661a" },
   { id: "tomorrow", label: "Tomorrow", dark: false, ext: tomorrow, bg: "#ffffff", fg: "#4d4d4c", accent: "#8959a8" },
   { id: "solarized-light", label: "Solarized Light", dark: false, ext: solarizedLight, bg: "#fef7e5", fg: "#586e75", accent: "#268bd2" },
   { id: "clouds", label: "Clouds", dark: false, ext: clouds, bg: "#ffffff", fg: "#1f1f1f", accent: "#9a6e3a" },
   { id: "ayu-light", label: "Ayu Light", dark: false, ext: ayuLight, bg: "#fcfcfc", fg: "#5c6166", accent: "#fa8d3e" },
   { id: "noctis-lilac", label: "Noctis Lilac", dark: false, ext: noctisLilac, bg: "#f2f1f8", fg: "#0c006b", accent: "#ff5792" },
+  { id: "github-light", label: "GitHub Light", dark: false, ext: githubLight, bg: "#ffffff", fg: "#24292e", accent: "#0969da" },
+  { id: "jetbrains-light", label: "JetBrains Light", dark: false, ext: jetbrainsLight, bg: "#ffffff", fg: "#080808", accent: "#3574f0" },
 ];
 
-export const DEFAULT_DARK_THEME = "one-dark";
-export const DEFAULT_LIGHT_THEME = "tomorrow";
+export const DEFAULT_DARK_THEME = "dcs-dark";
+export const DEFAULT_LIGHT_THEME = "dcs-light";
 
 export function editorThemeById(id: string): EditorTheme {
   return EDITOR_THEMES.find((t) => t.id === id) ?? EDITOR_THEMES[0];

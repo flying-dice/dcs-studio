@@ -1,0 +1,133 @@
+//! studio::mission — Mission Scripting manager: finds each DCS install's
+//! Scripts\MissionScripting.lua and toggles its sanitization block —
+//! sanitizeModule('os'|'io'|'lfs') and _G['require'|'loadlib'|'package'] =
+//! nil — so mission scripts can use the full Lua environment. Desanitize
+//! comments the line out; re-sanitize uncomments it.
+
+/// A candidate <install>\Scripts\MissionScripting.lua.
+public data MissionScriptFile { variant: string, path: string, exists: bool }
+
+/// One of the six sanitization items (os, io, lfs, require, loadlib,
+/// package). `present` = a matching line (commented or active) exists;
+/// `sanitized` = the line is active, so DCS will sanitize this item.
+public data SanitizeItem { name: string, present: bool, sanitized: bool }
+
+public data MissionScriptStatus { exists: bool, writable: bool, backupExists: bool, inProgramFiles: bool, items: studio::mission::SanitizeItem[] }
+
+/// Desired sanitized state for one item (`lfs: false` = desanitize lfs).
+public data ItemChange { name: string, sanitized: bool }
+
+public data MissionEditError { message: string }
+
+/// Rust-side MissionScripting service of the Tauri backend.
+public container MissionScripting for studio::core::Studio {
+  /// Find candidate files: Eagle Dynamics registry installs first, then
+  /// fixed Program Files probes; deduped by resolved path. A machine with no
+  /// DCS yields an empty list, never an error.
+  public Detect(): studio::mission::MissionScriptFile[] {
+    fromRegistry = studio::mission::MissionScriptFile[] from self.RegistryInstalls()
+    probed = studio::mission::MissionScriptFile[] from self.ProbeProgramFiles()
+    merged = studio::mission::MissionScriptFile[] from self.DedupeByPath(fromRegistry, probed)
+    return merged
+  }
+
+  /// Install roots from HKCU/HKLM Software\Eagle Dynamics `Path` values.
+  RegistryInstalls(): studio::mission::MissionScriptFile[];
+
+  /// C:/D:/E: Program Files probes for DCS World / OpenBeta / Server.
+  ProbeProgramFiles(): studio::mission::MissionScriptFile[];
+
+  /// Registry results win; duplicates collapse on case-insensitive path.
+  DedupeByPath(fromRegistry: studio::mission::MissionScriptFile[], probed: studio::mission::MissionScriptFile[]): studio::mission::MissionScriptFile[];
+
+  /// Snapshot a file's sanitization state: classify each item's line
+  /// (tolerating quote style and whitespace; a leading `--` means
+  /// desanitized), probe writability without truncating, and flag files
+  /// under Program Files (admin rights needed to write).
+  public Status(path: string): studio::mission::MissionScriptStatus {
+    items = studio::mission::SanitizeItem[] from self.ClassifyItems(path)
+    writable = bool from self.ProbeWritable(path)
+    inProgramFiles = bool from self.IsUnderProgramFiles(path)
+    backupExists = bool from self.BackupExists(path)
+    snapshot = studio::mission::MissionScriptStatus from { items, writable, inProgramFiles, backupExists }
+    return snapshot
+  }
+
+  ClassifyItems(path: string): studio::mission::SanitizeItem[];
+  ProbeWritable(path: string): bool;
+  IsUnderProgramFiles(path: string): bool;
+
+  /// Whether the pristine <path>.dcsstudio.bak snapshot exists.
+  BackupExists(path: string): bool;
+
+  /// Apply the desired sanitized state per item: matching lines are
+  /// commented out (desanitize) or uncommented (re-sanitize) in place,
+  /// preserving indentation and the file's dominant line ending; all other
+  /// lines are untouched. The first modification snapshots a pristine backup
+  /// at <path>.dcsstudio.bak before writing.
+  public SetItems(path: string, changes: studio::mission::ItemChange[]): Result<studio::mission::MissionScriptStatus, studio::mission::MissionEditError> {
+    content = Result<string, studio::mission::MissionEditError> from self.ReadScript(path)
+    if (content.isErr) {
+      return Err(content.error)
+    }
+    toggled = string from self.ToggleLines(content.value, changes)
+    changed = bool from toggled != content.value
+    if (changed) {
+      backed = Result<void, studio::mission::MissionEditError> from self.EnsureBackup(path)
+      if (backed.isErr) {
+        return Err(backed.error)
+      }
+      written = Result<void, studio::mission::MissionEditError> from self.WriteScript(path, toggled)
+      if (written.isErr) {
+        return Err(written.error)
+      }
+    }
+    refreshed = studio::mission::MissionScriptStatus from self.Status(path)
+    return Ok(refreshed)
+  }
+
+  ReadScript(path: string): Result<string, studio::mission::MissionEditError>;
+
+  /// Comment / uncomment each item's matching line, preserving indentation.
+  ToggleLines(content: string, changes: studio::mission::ItemChange[]): string;
+
+  /// Copy the pristine file to <path>.dcsstudio.bak unless it already exists.
+  EnsureBackup(path: string): Result<void, studio::mission::MissionEditError>;
+
+  /// Write back with the file's dominant line ending. A permission-denied
+  /// write maps to the "restart DCS Studio as administrator" guidance.
+  WriteScript(path: string, content: string): Result<void, studio::mission::MissionEditError>;
+
+  /// Copy the pristine backup back over the live file.
+  public Restore(path: string): Result<studio::mission::MissionScriptStatus, studio::mission::MissionEditError> {
+    hasBackup = bool from self.BackupExists(path)
+    if (!hasBackup) {
+      missing = studio::mission::MissionEditError from { "No backup found" }
+      return Err(missing)
+    }
+    restored = Result<void, studio::mission::MissionEditError> from self.CopyBackupOver(path)
+    if (restored.isErr) {
+      return Err(restored.error)
+    }
+    refreshed = studio::mission::MissionScriptStatus from self.Status(path)
+    return Ok(refreshed)
+  }
+
+  CopyBackupOver(path: string): Result<void, studio::mission::MissionEditError>;
+}
+
+/// The first edit snapshots a pristine backup before touching the file.
+feature DesanitizeWithBackup for studio::mission::MissionScripting {
+  given "a stock MissionScripting.lua with no DCS Studio backup"
+  when "the developer desanitizes an item"
+  then "a pristine copy is saved to <path>.dcsstudio.bak first"
+  and "only the matching sanitization line is commented out"
+  and "indentation and the file's line endings are preserved"
+}
+
+/// Restore always returns to the pristine stock file.
+feature RestoreStockFile for studio::mission::MissionScripting {
+  given "a previously modified MissionScripting.lua with a backup"
+  when "the developer restores"
+  then "the backup is copied back over the live file"
+}

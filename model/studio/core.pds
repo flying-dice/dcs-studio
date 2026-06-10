@@ -1,0 +1,169 @@
+//! studio::core — DCS Studio, a desktop IDE (Tauri + SvelteKit) for DCS World
+//! mission and mod development: project explorer, CodeMirror editor, live Lua
+//! console against a running sim, plus managers for the in-DCS bridge DLL and
+//! MissionScripting.lua sanitization.
+
+/// Mission / mod developer running DCS Studio (and usually DCS itself).
+public person Developer;
+
+/// How many recent projects the welcome screen keeps.
+public constant RECENTS_MAX = 8
+
+/// The active editor document. `savedText` is the on-disk baseline; it
+/// diverges from `text` while there are unsaved edits.
+public data Document { path: string, text: string, savedText: string }
+
+/// A recently opened project, persisted to localStorage (most recent first).
+public data RecentProject { path: string, name: string, openedAt: datetime }
+
+/// One Lua-console run: the code and its rendered result or error.
+data ConsoleEntry { code: string, ok: bool, output: string }
+
+/// DCS Studio — the desktop editor application.
+public system Studio;
+
+/// SvelteKit UI: welcome screen, file tree, CodeMirror editor, tool-window
+/// stripes, status bar, Lua console, and the injection / mission-scripting
+/// manager panels. Runs inside the Tauri webview (or a plain browser for dev
+/// and the Playwright e2e suite).
+public container Workbench for studio::core::Studio {
+  /// Open a folder as the project workspace and remember it as recent.
+  #[manual]
+  public OpenProject(path: string): void {
+    name = string from studio::files::WorkspaceFs.Basename(path)
+    recent = studio::core::RecentProject from { path, name }
+    self.RememberRecent(recent)
+  }
+
+  /// Keep `recent` at the head of the recents list: dedupe by path, cap at
+  /// RECENTS_MAX, persist to localStorage.
+  RememberRecent(recent: studio::core::RecentProject): void;
+
+  /// Scaffold a new project from a template into `<parent>/<name>`, then
+  /// open it.
+  #[manual]
+  public NewProject(parent: string, name: string, templateId: string): Result<string, studio::files::IoError> {
+    files = studio::files::NewFile[] from self.TemplateFiles(templateId, name)
+    root = Result<string, studio::files::IoError> from studio::files::WorkspaceFs.CreateProject(parent, name, files)
+    if (root.isErr) {
+      return Err(root.error)
+    }
+    self.OpenProject(root.value)
+    return Ok(root.value)
+  }
+
+  /// Render a template into its file set. Every template also emits a
+  /// dcs-studio.toml manifest describing the mod, its files, and install
+  /// mappings.
+  TemplateFiles(templateId: string, name: string): studio::files::NewFile[];
+
+  /// Lazy file-tree expansion: list a folder's children on first open.
+  #[manual]
+  public ExpandFolder(path: string): Result<studio::files::DirEntry[], studio::files::IoError> {
+    entries = Result<studio::files::DirEntry[], studio::files::IoError> from studio::files::WorkspaceFs.ReadDir(path)
+    if (entries.isErr) {
+      return Err(entries.error)
+    }
+    return Ok(entries.value)
+  }
+
+  /// Open a file into the editor; the dirty baseline resets to the loaded text.
+  #[manual]
+  public OpenFile(path: string): Result<studio::core::Document, studio::files::IoError> {
+    text = Result<string, studio::files::IoError> from studio::files::WorkspaceFs.ReadTextFile(path)
+    if (text.isErr) {
+      return Err(text.error)
+    }
+    doc = studio::core::Document from { path, text.value }
+    return Ok(doc)
+  }
+
+  /// Persist the active document; a clean buffer is a no-op.
+  #[manual]
+  public SaveFile(doc: studio::core::Document): void {
+    dirty = bool from doc.text != doc.savedText
+    if (!dirty) {
+      return
+    }
+    studio::files::WorkspaceFs.WriteTextFile(doc.path, doc.text)
+    self.MarkSaved(doc)
+  }
+
+  /// Reset the on-disk baseline to the just-written buffer.
+  MarkSaved(doc: studio::core::Document): void;
+
+  /// Run a snippet from the Lua console and append its result (or error) to
+  /// the console log. A null result renders as `nil`.
+  #[manual]
+  public RunLua(code: string): void {
+    payload = dcs::bridge::Json from { code }
+    result = Result<dcs::bridge::Json, studio::link::CallError> from self.DcsCall("eval", Some(payload))
+    if (result.isErr) {
+      failed = studio::core::ConsoleEntry from { code, result.error }
+      self.AppendConsoleEntry(failed)
+      return
+    }
+    succeeded = studio::core::ConsoleEntry from { code, result.value }
+    self.AppendConsoleEntry(succeeded)
+  }
+
+  AppendConsoleEntry(entry: studio::core::ConsoleEntry): void;
+
+  /// Route a JSON-RPC call to DCS: in the packaged app via the Rust bridge
+  /// client (DcsLink); in a plain browser (vite dev, Playwright) straight
+  /// over the bridge WebSocket — same wire protocol either way.
+  DcsCall(method: string, params: Option<dcs::bridge::Json>): Result<dcs::bridge::Json, studio::link::CallError> {
+    native = bool from self.InTauri()
+    if (!native) {
+      request = dcs::bridge::JsonRpcRequest from { method, params }
+      direct = Result<dcs::bridge::Json, dcs::bridge::RpcError> from dcs::bridge::Dcs.Invoke(request)
+      if (direct.isErr) {
+        wireFailure = studio::link::CallError from { direct.error }
+        return Err(wireFailure)
+      }
+      return Ok(direct.value)
+    }
+    forwarded = Result<dcs::bridge::Json, studio::link::CallError> from studio::link::DcsLink.Forward(method, params)
+    if (forwarded.isErr) {
+      return Err(forwarded.error)
+    }
+    return Ok(forwarded.value)
+  }
+
+  /// Whether the UI is hosted by Tauri (vs a plain browser tab).
+  InTauri(): bool;
+
+  /// Status bar: WS connectivity flips from the link watcher.
+  #[onevent(studio::link::LinkChanged)]
+  OnLinkChanged(change: studio::link::LinkChanged): void;
+
+  /// Status bar: sim-running, latency, and model time from the heartbeat.
+  #[onevent(studio::link::Heartbeat)]
+  OnHeartbeat(beat: studio::link::Heartbeat): void;
+}
+
+/// The developer runs Lua against the live sim from the console.
+feature LuaConsoleEval for studio::core::Workbench {
+  given "the bridge DLL is injected and DCS is running"
+  when "the developer runs a Lua snippet from the console"
+  then "the snippet executes in the DCS GUI/hooks environment"
+  and "the result (or Lua error) is appended to the console log"
+}
+
+/// Saving is a no-op unless the buffer actually changed.
+feature SaveDirtyFile for studio::core::Workbench {
+  given "a file is open in the editor"
+  and "its buffer differs from the on-disk baseline"
+  when "the developer saves"
+  then "the buffer is written to disk"
+  and "the baseline matches the buffer again"
+}
+
+/// A fresh project opens immediately after scaffolding.
+feature CreateAndOpenProject for studio::core::Workbench {
+  given "a template and a parent folder"
+  when "the developer creates a new project"
+  then "the template files are written under the new root"
+  and "the project opens as the workspace"
+  and "it appears at the head of the recents list"
+}

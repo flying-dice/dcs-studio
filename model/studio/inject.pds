@@ -1,0 +1,106 @@
+//! studio::inject — injection manager: installs, updates, and removes the
+//! in-DCS bridge (native DLL + Lua GameGUI hook) in a DCS Saved Games write
+//! dir, replacing the manual deploy.ps1 workflow with in-app commands.
+
+/// A candidate DCS write dir under %USERPROFILE%\Saved Games.
+public data DcsInstall { name: string, writeDir: string, valid: bool }
+
+/// What is (and isn't) installed in a write dir, relative to the bridge
+/// artifacts this build of the app would install.
+public data InjectionStatus { sourceAvailable: bool, sourceVersion: string, dllInstalled: bool, dllUpToDate: bool, hookInstalled: bool, hookUpToDate: bool, dllDest: string, hookDest: string }
+
+public data InjectError { message: string }
+
+/// Rust-side injection service of the Tauri backend. The GameGUI hook source
+/// is embedded at compile time; the DLL is resolved next to the running exe
+/// (or in the cargo target dir during dev).
+public container Injector for studio::core::Studio {
+  /// Scan Saved Games for DCS write dirs (`DCS` or `DCS.*`); `valid` means
+  /// the dir carries a `Config` subdir (the write-dir marker). Plain `DCS`
+  /// sorts first, then the variants alphabetically. A machine without DCS
+  /// yields an empty list, never an error.
+  public DetectInstalls(): studio::inject::DcsInstall[] {
+    candidates = studio::inject::DcsInstall[] from self.ScanSavedGames()
+    ordered = studio::inject::DcsInstall[] from self.PlainDcsFirst(candidates)
+    return ordered
+  }
+
+  ScanSavedGames(): studio::inject::DcsInstall[];
+  PlainDcsFirst(installs: studio::inject::DcsInstall[]): studio::inject::DcsInstall[];
+
+  /// Compare a write dir against this build's artifacts: the DLL is up to
+  /// date only on exact byte equality; the hook is compared with CRLF
+  /// normalised to LF, so a CRLF checkout never reads as outdated.
+  public Status(writeDir: string): studio::inject::InjectionStatus {
+    dllSame = bool from self.DllBytesMatch(writeDir)
+    hookSame = bool from self.HookTextMatches(writeDir)
+    status = studio::inject::InjectionStatus from { dllSame, hookSame }
+    return status
+  }
+
+  /// Byte-for-byte comparison of the installed DLL against the source DLL.
+  DllBytesMatch(writeDir: string): bool;
+
+  /// EOL-normalised comparison of the installed hook against the embedded one.
+  HookTextMatches(writeDir: string): bool;
+
+  /// Install (or update) the DLL + hook into the write dir. Fails when no
+  /// source DLL has been built, or when the installed DLL is locked because
+  /// DCS is running with the bridge loaded.
+  public Inject(writeDir: string): Result<studio::inject::InjectionStatus, studio::inject::InjectError> {
+    source = Option<string> from self.SourceDllPath()
+    if (source.isNone) {
+      notBuilt = studio::inject::InjectError from { "Bridge DLL not built" }
+      return Err(notBuilt)
+    }
+    copied = Result<void, studio::inject::InjectError> from self.CopyDll(source.value, writeDir)
+    if (copied.isErr) {
+      return Err(copied.error)
+    }
+    written = Result<void, studio::inject::InjectError> from self.WriteHook(writeDir)
+    if (written.isErr) {
+      return Err(written.error)
+    }
+    refreshed = studio::inject::InjectionStatus from self.Status(writeDir)
+    return Ok(refreshed)
+  }
+
+  /// Resolve the freshly built dcs_bridge.dll next to (or near) the exe.
+  SourceDllPath(): Option<string>;
+
+  /// Copy to Mods/tech/DcsStudio/bin/dcs_bridge.dll, creating dirs on demand.
+  CopyDll(source: string, writeDir: string): Result<void, studio::inject::InjectError>;
+
+  /// Write the embedded hook to Scripts/Hooks/DcsStudio.lua.
+  WriteHook(writeDir: string): Result<void, studio::inject::InjectError>;
+
+  /// Remove the DLL + hook (missing files are fine) and tidy the now-empty
+  /// Mods/tech/DcsStudio tree.
+  public Eject(writeDir: string): Result<studio::inject::InjectionStatus, studio::inject::InjectError> {
+    removed = Result<void, studio::inject::InjectError> from self.RemoveArtifacts(writeDir)
+    if (removed.isErr) {
+      return Err(removed.error)
+    }
+    refreshed = studio::inject::InjectionStatus from self.Status(writeDir)
+    return Ok(refreshed)
+  }
+
+  RemoveArtifacts(writeDir: string): Result<void, studio::inject::InjectError>;
+}
+
+/// Injecting installs both artifacts and reports them current.
+feature InjectBridge for studio::inject::Injector {
+  given "a valid DCS write dir"
+  and "a freshly built bridge DLL next to the app"
+  when "the developer injects the bridge"
+  then "the DLL lands in Mods/tech/DcsStudio/bin"
+  and "the hook lands in Scripts/Hooks/DcsStudio.lua"
+  and "the reported status shows both installed and up to date"
+}
+
+/// A bridge loaded into a running DCS cannot be overwritten.
+feature LockedDllSurfaces for studio::inject::Injector {
+  given "DCS is running with the bridge DLL loaded"
+  when "the developer injects an update"
+  then "the locked-file copy failure is surfaced, not swallowed"
+}

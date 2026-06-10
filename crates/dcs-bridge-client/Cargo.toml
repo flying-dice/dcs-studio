@@ -1,0 +1,12 @@
+[package]
+name = "dcs-bridge-client"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = "2"
+tokio = { workspace = true, features = ["net"] }
+tokio-tungstenite = "0.26"
+futures-util = "0.3"

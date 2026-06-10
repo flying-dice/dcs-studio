@@ -54,7 +54,10 @@
           }),
           themeComp.of(app.cm),
           langComp.of([]),
-          EditorView.theme({ "&": { height: "100%" } }),
+          EditorView.theme({
+            "&": { height: "100%" },
+            ".cm-scroller": { fontFamily: "var(--font-mono)" },
+          }),
         ],
       }),
     });

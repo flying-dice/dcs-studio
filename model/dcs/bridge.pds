@@ -1,0 +1,226 @@
+//! dcs::bridge — DCS World with the dcs-bridge DLL injected: a GameGUI hook
+//! loads the native module, which serves JSON-RPC over WebSocket on
+//! ws://127.0.0.1:25569/ws. Queued requests are drained once per simulation
+//! frame — which fires at the main menu too (verified live), so RPCs answer
+//! from boot.
+
+/// Opaque JSON value carried across the RPC boundary.
+public data Json;
+
+/// One JSON-RPC request frame. An absent `id` marks a notification — the
+/// server never answers it. Ids are strings on the wire, never numeric.
+public data JsonRpcRequest { method: string, id: Option<string>, params: Option<dcs::bridge::Json> }
+
+/// One JSON-RPC response frame: `result` or `error`, never both.
+public data JsonRpcResponse { id: string, result: Option<dcs::bridge::Json>, error: Option<dcs::bridge::RpcError> }
+
+/// JSON-RPC error object. `code` is -32601 for an unknown method and -32603
+/// for a Lua failure, whose message rides in `detail` (the wire `data` member).
+public data RpcError { code: number, message: string, detail: Option<string> }
+
+/// A Lua-side failure (compile or runtime); the stack traceback is stripped
+/// before it leaves the bridge.
+public data LuaError { message: string }
+
+/// `ping` result. `dcsTime` mirrors DCS.getModelTime() — 0 until a mission
+/// actually runs.
+public data Pong { pong: bool, dcsTime: number }
+
+/// Fired by the sim every frame — at the main menu too.
+data SimulationFrame;
+
+/// A compiled Lua chunk awaiting execution.
+data Chunk;
+
+/// A Lua handler registered under a JSON-RPC method name.
+data Handler;
+
+public constant BRIDGE_HOST = "127.0.0.1"
+public constant BRIDGE_PORT = 25569
+
+/// Server-side drain timeout in seconds — deliberately short (the library
+/// default is 300) so a stalled editor request can never wedge the WS read
+/// loop for minutes.
+public constant SERVER_TIMEOUT_SECONDS = 5
+
+/// DCS World running with the dcs-bridge DLL injected. Published face of the
+/// in-sim JSON-RPC service the editor talks to.
+public system Dcs {
+  /// Liveness probe. Answered from boot: the hook drains the queue every
+  /// simulation frame, and frames fire at the main menu too.
+  public Ping(): Result<dcs::bridge::Pong, dcs::bridge::RpcError> {
+    pong = dcs::bridge::Pong from dcs::bridge::Hook.OnPing()
+    return Ok(pong)
+  }
+
+  /// Run arbitrary Lua in the GUI/hooks environment and return the result.
+  /// localhost-only by the server bind; gives full DCS.*/net.* control (start
+  /// missions, DCS.exitProcess(), …) to the editor and dev tooling.
+  public Eval(code: string): Result<dcs::bridge::Json, dcs::bridge::LuaError> {
+    r = Result<dcs::bridge::Json, dcs::bridge::LuaError> from dcs::bridge::Hook.OnEval(code)
+    if (r.isErr) {
+      return Err(r.error)
+    }
+    return Ok(r.value)
+  }
+
+  /// Generic JSON-RPC entry: the request is queued by the WS server and
+  /// answered once the hook drains the queue on the next simulation frame.
+  public Invoke(request: dcs::bridge::JsonRpcRequest): Result<dcs::bridge::Json, dcs::bridge::RpcError> {
+    r = Result<dcs::bridge::Json, dcs::bridge::RpcError> from dcs::bridge::RpcServer.Submit(request)
+    if (r.isErr) {
+      return Err(r.error)
+    }
+    return Ok(r.value)
+  }
+}
+
+/// DCS World itself — the Lua GUI/hooks environment the bridge runs inside.
+/// #critical
+container Sim for dcs::bridge::Dcs {
+  /// DCS.getModelTime(): 0 at the main menu, advancing once a mission runs.
+  GetModelTime(): number;
+
+  /// loadstring(code) — compile only; a nil chunk is a compile error.
+  Compile(code: string): Result<dcs::bridge::Chunk, dcs::bridge::LuaError>;
+
+  /// Run a compiled chunk in the GUI environment.
+  Execute(chunk: dcs::bridge::Chunk): Result<dcs::bridge::Json, dcs::bridge::LuaError>;
+
+  /// DCS.setUserCallbacks — registers the per-frame queue drain.
+  RegisterFrameCallback(): void;
+}
+
+/// GameGUI hook (Scripts/Hooks/DcsStudio.lua): loads the native dcs_bridge
+/// module from Mods/tech/DcsStudio/bin, registers the RPC methods, and
+/// drains the request queue once per simulation frame.
+container Hook for dcs::bridge::Dcs {
+  /// Runs when DCS loads GameGUI hooks at boot. A failed native-module load
+  /// (or server start) is logged and the hook stays inert — DCS is unharmed.
+  #[manual]
+  Start(): void {
+    dcs::bridge::RpcServer.Listen()
+    dcs::bridge::Router.Register("ping")
+    dcs::bridge::Router.Register("eval")
+    dcs::bridge::Sim.RegisterFrameCallback()
+  }
+
+  /// Drain queued requests. Fires at the main menu too, so RPCs answer from
+  /// boot.
+  #[onevent(dcs::bridge::SimulationFrame)]
+  OnSimulationFrame(frame: dcs::bridge::SimulationFrame): void {
+    dcs::bridge::RpcServer.Drain()
+  }
+
+  /// `ping` handler: pong plus the current model time.
+  OnPing(): dcs::bridge::Pong {
+    t = number from dcs::bridge::Sim.GetModelTime()
+    pong = dcs::bridge::Pong from { t }
+    return pong
+  }
+
+  /// `eval` handler: compile, then run; either failure surfaces as a LuaError.
+  OnEval(code: string): Result<dcs::bridge::Json, dcs::bridge::LuaError> {
+    chunk = Result<dcs::bridge::Chunk, dcs::bridge::LuaError> from dcs::bridge::Sim.Compile(code)
+    if (chunk.isErr) {
+      return Err(chunk.error)
+    }
+    result = Result<dcs::bridge::Json, dcs::bridge::LuaError> from dcs::bridge::Sim.Execute(chunk.value)
+    if (result.isErr) {
+      return Err(result.error)
+    }
+    return Ok(result.value)
+  }
+}
+
+/// Native actix WS/HTTP server inside the DLL (GET /ws, GET /health,
+/// POST /rpc). Requests are parsed off the WS read task into a queue;
+/// each response rides back to its requester over a per-request channel,
+/// guarded by SERVER_TIMEOUT_SECONDS.
+container RpcServer for dcs::bridge::Dcs {
+  /// Bind BRIDGE_HOST:BRIDGE_PORT on a dedicated server thread.
+  Listen(): void;
+
+  /// Queue a request and await its response (or the server-side timeout).
+  Submit(request: dcs::bridge::JsonRpcRequest): Result<dcs::bridge::Json, dcs::bridge::RpcError>;
+
+  /// Requests parsed off the WS since the last frame, in arrival order.
+  Pending(): dcs::bridge::JsonRpcRequest[];
+
+  /// Send a response back over the requester's channel.
+  Reply(response: dcs::bridge::JsonRpcResponse): void;
+
+  /// Called by the hook each frame: dispatch every queued request. A
+  /// notification produces no response, so nothing is sent back for it.
+  Drain(): void {
+    for (request in self.Pending()) {
+      response = Option<dcs::bridge::JsonRpcResponse> from dcs::bridge::Router.Dispatch(request)
+      if (response.isSome) {
+        self.Reply(response.value)
+      }
+    }
+  }
+}
+
+/// Method-name → Lua-handler table, populated by the hook at startup.
+component Router for dcs::bridge::RpcServer {
+  /// Register a handler under a method name.
+  Register(method: string): void;
+
+  /// Find the handler registered for a method name.
+  Lookup(method: string): Option<dcs::bridge::Handler>;
+
+  /// Call a handler with the request params in the sim's Lua state.
+  Call(handler: dcs::bridge::Handler, params: Option<dcs::bridge::Json>): Result<dcs::bridge::Json, dcs::bridge::LuaError>;
+
+  /// JSON-RPC dispatch rules: an unknown method answers -32601 (method not
+  /// found); a Lua failure answers -32603 with the message truncated before
+  /// its stack traceback; a notification (no id) is processed but never
+  /// answered, even on failure.
+  Dispatch(request: dcs::bridge::JsonRpcRequest): Option<dcs::bridge::JsonRpcResponse> {
+    handler = Option<dcs::bridge::Handler> from self.Lookup(request.method)
+    if (handler.isNone) {
+      if (request.id.isNone) {
+        return None
+      }
+      notFound = dcs::bridge::RpcError from { request.method }
+      missing = dcs::bridge::JsonRpcResponse from { request.id, notFound }
+      return Some(missing)
+    }
+    result = Result<dcs::bridge::Json, dcs::bridge::LuaError> from self.Call(handler.value, request.params)
+    if (request.id.isNone) {
+      return None
+    }
+    if (result.isErr) {
+      luaFailure = dcs::bridge::RpcError from { result.error }
+      failed = dcs::bridge::JsonRpcResponse from { request.id, luaFailure }
+      return Some(failed)
+    }
+    answered = dcs::bridge::JsonRpcResponse from { request.id, result.value }
+    return Some(answered)
+  }
+}
+
+/// The bridge answers before any mission is loaded.
+feature AnswersFromBoot for dcs::bridge::Dcs {
+  given "DCS has booted to the main menu with the bridge injected"
+  when "the editor sends a ping"
+  then "a pong returns on the next simulation frame"
+  and "its dcsTime is 0 because no mission is running"
+}
+
+/// Unknown methods fail politely instead of killing the connection.
+feature UnknownMethodRejected for dcs::bridge::Dcs {
+  given "a connected editor"
+  when "it calls a method the router does not know"
+  then "a method-not-found error response names the method"
+  and "the WebSocket session stays open"
+}
+
+/// Lua failures come back as structured errors.
+feature LuaErrorSurfaced for dcs::bridge::Dcs {
+  given "a connected editor"
+  when "an eval'd snippet raises a Lua error"
+  then "an internal-error response carries the message"
+  and "the stack traceback is stripped from it"
+}

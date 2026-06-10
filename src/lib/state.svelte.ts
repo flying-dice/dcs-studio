@@ -11,7 +11,12 @@ import {
   pickFolder,
   writeTextFile,
   createProject as scaffoldProject,
+  dcsCall,
+  dcsStatus,
 } from "./api";
+import { isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { wsConnected } from "./dcs-ws";
 import { templateById } from "./templates";
 import type { Extension } from "@codemirror/state";
 
@@ -97,6 +102,71 @@ class AppState {
   /** Whether the open document has unsaved edits. */
   get dirty(): boolean {
     return !!this.filePath && this.docText !== this.savedText;
+  }
+
+  // Live DCS link status, driven by the Rust-side heartbeat (see dcs.rs).
+  // `dcsConnected` = WS to the bridge is up (DCS may still be in the menu);
+  // `dcsSimRunning` = pings are ponging, i.e. a mission is actually running.
+  dcsConnected = $state(false);
+  dcsSimRunning = $state(false);
+  dcsLatencyMs = $state<number | null>(null);
+  dcsTime = $state<number | null>(null);
+  private dcsInitialised = false;
+
+  /** Subscribe to the DCS link events. Called once from the root layout. */
+  async initDcs() {
+    if (this.dcsInitialised) return;
+    this.dcsInitialised = true;
+
+    // Outside Tauri (vite dev / Playwright) there are no Rust-side events:
+    // drive the status from a browser-side ping heartbeat over the bridge WS.
+    if (!isTauri()) {
+      const beat = async () => {
+        const started = performance.now();
+        try {
+          await dcsCall("ping");
+          this.dcsConnected = true;
+          this.dcsSimRunning = true;
+          this.dcsLatencyMs = Math.round(performance.now() - started);
+        } catch {
+          this.dcsConnected = wsConnected();
+          this.dcsSimRunning = false;
+          this.dcsLatencyMs = null;
+        }
+      };
+      void beat();
+      setInterval(() => void beat(), 2000);
+      return;
+    }
+
+    await listen("dcs://connected", () => {
+      this.dcsConnected = true;
+    });
+    await listen("dcs://disconnected", () => {
+      this.dcsConnected = false;
+      this.dcsSimRunning = false;
+      this.dcsLatencyMs = null;
+      this.dcsTime = null;
+    });
+    await listen<{ sim_running: boolean; latency_ms?: number; dcs_time?: number }>(
+      "dcs://heartbeat",
+      (e) => {
+        this.dcsSimRunning = e.payload.sim_running;
+        this.dcsLatencyMs = e.payload.latency_ms ?? null;
+        this.dcsTime = e.payload.dcs_time ?? null;
+      },
+    );
+
+    // Seed from the backend snapshot to cover events emitted before we
+    // started listening (the heartbeat starts with the app, not the UI).
+    try {
+      const s = await dcsStatus();
+      this.dcsConnected = s.connected;
+      this.dcsSimRunning = s.sim_running;
+      this.dcsLatencyMs = s.latency_ms;
+    } catch {
+      /* backend not ready yet — events will catch us up */
+    }
   }
 
   // Which tool window is open in each stripe (null = collapsed)

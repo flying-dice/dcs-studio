@@ -1,0 +1,18 @@
+[package]
+name = "dcs-bridge"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mlua = { version = "0.10", features = ["lua51", "module", "serialize", "macros"] }
+tokio = { version = "1", features = ["full"] }
+actix-web = "4"
+actix-ws = "0.3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = "0.4"
+log4rs = "1"
+dcs-bridge-client = { path = "../dcs-bridge-client" }

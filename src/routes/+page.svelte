@@ -1,7 +1,12 @@
 <script lang="ts">
   import { app } from "$lib/state.svelte";
   import { EDITOR_THEMES, editorThemeById } from "$lib/themes";
+  import { fileIconFor } from "$lib/file-icons";
+  import FileIcon from "$lib/components/FileIcon.svelte";
   import FileTree from "$lib/components/FileTree.svelte";
+  import InjectionManager from "$lib/components/InjectionManager.svelte";
+  import LuaConsole from "$lib/components/LuaConsole.svelte";
+  import MissionScriptingManager from "$lib/components/MissionScriptingManager.svelte";
   import Editor from "$lib/components/Editor.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
   import { cn } from "$lib/utils.js";
@@ -35,6 +40,9 @@
     Bug,
     Settings,
     Palette,
+    Syringe,
+    ShieldOff,
+    FileCode,
     type LucideIcon,
   } from "@lucide/svelte";
 
@@ -52,11 +60,14 @@
     { id: "bookmarks", label: "Bookmarks", icon: Bookmark },
   ];
   const rightTools: Tool[] = [
+    { id: "inject", label: "Inject", icon: Syringe },
+    { id: "mission", label: "Mission", icon: ShieldOff },
     { id: "database", label: "Database", icon: Database },
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "ai", label: "Assistant", icon: Sparkles },
   ];
   const bottomTools: Tool[] = [
+    { id: "lua", label: "Lua Console", icon: FileCode },
     { id: "terminal", label: "Terminal", icon: SquareTerminal },
     { id: "problems", label: "Problems", icon: TriangleAlert },
     { id: "output", label: "Output", icon: ScrollText },
@@ -252,6 +263,7 @@
         {#if app.fileName}
           <span class="truncate">{app.rootName || "workspace"}</span>
           <span class="opacity-40">/</span>
+          <FileIcon name={fileIconFor(app.fileName)} class="size-3.5" />
           <span class="truncate text-foreground">{app.fileName}</span>
         {/if}
       </div>
@@ -375,6 +387,7 @@
                 {#if app.dirty}
                   <span class="size-1.5 rounded-full bg-primary" title="Unsaved changes"></span>
                 {/if}
+                <FileIcon name={fileIconFor(app.fileName)} class="size-4" />
                 <span class="text-foreground">{app.fileName}</span>
                 <Button
                   variant="ghost"
@@ -411,7 +424,13 @@
           <Card class="flex h-full min-h-0 w-[270px] shrink-0 flex-col gap-0 rounded-xl py-0">
             {@render islandHead(labelFor(rightTools, app.rightTool))}
             <div class="min-h-0 flex-1">
-              {@render placeholder(labelFor(rightTools, app.rightTool))}
+              {#if app.rightTool === "inject"}
+                <InjectionManager />
+              {:else if app.rightTool === "mission"}
+                <MissionScriptingManager />
+              {:else}
+                {@render placeholder(labelFor(rightTools, app.rightTool))}
+              {/if}
             </div>
           </Card>
         {/if}
@@ -423,7 +442,11 @@
           <Card class="flex h-52 shrink-0 flex-col gap-0 rounded-xl py-0">
             {@render islandHead(labelFor(bottomTools, app.bottomTool))}
             <div class="min-h-0 flex-1">
-              {@render placeholder(labelFor(bottomTools, app.bottomTool))}
+              {#if app.bottomTool === "lua"}
+                <LuaConsole />
+              {:else}
+                {@render placeholder(labelFor(bottomTools, app.bottomTool))}
+              {/if}
             </div>
           </Card>
         {/if}
@@ -445,6 +468,24 @@
           <span class="shrink-0 font-mono text-[11px] text-primary">● {app.saving ? "saving…" : "modified"}</span>
         {/if}
       </div>
+      <!-- DCS link: dot = WS liveness (green = mission running, amber = in menu). -->
+      <span class="flex shrink-0 items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground">
+        <span
+          class={cn(
+            "size-1.5 rounded-full",
+            !app.dcsConnected && "bg-muted-foreground/40",
+            app.dcsConnected && (app.dcsSimRunning ? "bg-emerald-500" : "bg-amber-500"),
+          )}
+        ></span>
+        {#if !app.dcsConnected}
+          DCS: offline
+        {:else if app.dcsSimRunning}
+          DCS: connected{#if app.dcsTime != null}&nbsp;· sim {app.dcsTime.toFixed(1)}s{/if}{#if app.dcsLatencyMs != null}&nbsp;· {app.dcsLatencyMs}ms{/if}
+        {:else}
+          DCS: connected · in menu{#if app.dcsLatencyMs != null}&nbsp;· {app.dcsLatencyMs}ms{/if}
+        {/if}
+      </span>
+      <Separator orientation="vertical" class="!h-3" />
       <span class="flex items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground">
         {#if app.dark}<Moon class="size-3" />{:else}<Sun class="size-3" />{/if}
         {editorThemeLabel}

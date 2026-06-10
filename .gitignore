@@ -9,3 +9,11 @@ node_modules
 !.env.example
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+/target
+
+# PseudoScript doc output
+/model/target
+
+# Playwright
+/test-results
+/playwright-report

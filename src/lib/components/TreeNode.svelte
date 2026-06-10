@@ -2,7 +2,9 @@
   import { readDir, type DirEntry } from "$lib/api";
   import { app } from "$lib/state.svelte";
   import { cn } from "$lib/utils.js";
-  import { ChevronRight, Folder, FolderOpen, File } from "@lucide/svelte";
+  import { fileIconFor, FOLDER_ICON } from "$lib/file-icons";
+  import FileIcon from "./FileIcon.svelte";
+  import { ChevronRight } from "@lucide/svelte";
   import Self from "./TreeNode.svelte";
 
   let { entry, depth = 0 }: { entry: DirEntry; depth?: number } = $props();
@@ -33,6 +35,7 @@
   }
 
   const isActive = $derived(!entry.is_dir && app.filePath === entry.path);
+  const iconName = $derived(entry.is_dir ? FOLDER_ICON : fileIconFor(entry.name));
 </script>
 
 <div
@@ -53,13 +56,7 @@
       />
     {/if}
   </span>
-  <span class="flex shrink-0 text-muted-foreground">
-    {#if entry.is_dir}
-      {#if expanded}<FolderOpen class="size-3.5" />{:else}<Folder class="size-3.5" />{/if}
-    {:else}
-      <File class="size-3.5" />
-    {/if}
-  </span>
+  <FileIcon name={iconName} class="size-4" />
   <span class="truncate">{entry.name}</span>
 </div>
 

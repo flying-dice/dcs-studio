@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/app", "crates/dcs-bridge-client", "crates/dcs-bridge"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }

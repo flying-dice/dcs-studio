@@ -1,0 +1,113 @@
+//! studio::link — the live editor↔DCS link. Two independent signals:
+//! "connected" means the WebSocket handshake to the in-DCS server is up (the
+//! bridge DLL is loaded — DCS may still sit at the main menu); "sim running"
+//! means a mission is actually live, derived from the pong's model time, not
+//! from whether the ping succeeded.
+
+/// Seconds between heartbeat pings while connected.
+public constant HEARTBEAT_SECONDS = 2
+
+/// Per-ping guard so a stalled bridge can't wedge the heartbeat loop.
+public constant PING_TIMEOUT_SECONDS = 3
+
+/// Client-side guard so a forwarded call can never wedge forever; the bridge
+/// hook uses a much shorter server-side timeout.
+public constant CALL_TIMEOUT_SECONDS = 30
+
+/// WS connectivity flip, relayed to the UI as dcs://connected|disconnected.
+public data LinkChanged { connected: bool }
+
+/// One heartbeat sample, relayed to the UI as dcs://heartbeat. `dcsTime`
+/// mirrors DCS.getModelTime(); latency is absent while unmeasured.
+public data Heartbeat { simRunning: bool, latencyMs: Option<number>, dcsTime: Option<number> }
+
+/// Snapshot of the link, for late-mounting frontends that missed events.
+public data LinkStatus { connected: bool, simRunning: bool, latencyMs: Option<number> }
+
+/// Editor-side link failure: not connected, timed out, or an RPC error.
+public data CallError { message: string }
+
+/// Rust-side DCS link service of the Tauri backend: owns the bridge client
+/// and drives the heartbeat the status bar listens to.
+public container DcsLink for studio::core::Studio {
+  /// Heartbeat: one ping in flight every HEARTBEAT_SECONDS while connected.
+  /// The bridge pongs from boot (main menu included) — a mission is live only
+  /// once the pong's dcsTime advances past 0.
+  #[schedule = "every HEARTBEAT_SECONDS while the editor runs"]
+  HeartbeatTick(): void {
+    connected = bool from studio::link::BridgeClient.IsConnected()
+    if (!connected) {
+      down = studio::link::Heartbeat from { false }
+      self.Emit(down)
+      return
+    }
+    pong = Result<dcs::bridge::Pong, dcs::bridge::RpcError> from dcs::bridge::Dcs.Ping()
+    if (pong.isErr) {
+      // No pong within PING_TIMEOUT_SECONDS: bridge not answering, though
+      // still connected at the WS layer.
+      stalled = studio::link::Heartbeat from { false }
+      self.Emit(stalled)
+      return
+    }
+    live = bool from pong.value.dcsTime > 0
+    latency = number from self.ElapsedMs()
+    beat = studio::link::Heartbeat from { live, latency, pong }
+    self.Emit(beat)
+  }
+
+  /// Wall-clock milliseconds since the ping left.
+  ElapsedMs(): number;
+
+  /// Publish a heartbeat sample to the UI event channel.
+  Emit(beat: studio::link::Heartbeat): void;
+
+  /// Connection watcher: relay each WS up/down flip from the client's watch
+  /// channel to the UI; the first iteration emits the current state once.
+  #[onevent(studio::link::LinkChanged)]
+  OnConnectionChanged(change: studio::link::LinkChanged): void;
+
+  /// Forward an arbitrary JSON-RPC call from the UI to the bridge (the
+  /// `dcs_call` command).
+  public Forward(method: string, params: Option<dcs::bridge::Json>): Result<dcs::bridge::Json, studio::link::CallError> {
+    started = bool from studio::link::BridgeClient.IsStarted()
+    if (!started) {
+      notStarted = studio::link::CallError from { "DCS link not started" }
+      return Err(notStarted)
+    }
+    request = dcs::bridge::JsonRpcRequest from { method, params }
+    r = Result<dcs::bridge::Json, dcs::bridge::RpcError> from dcs::bridge::Dcs.Invoke(request)
+    if (r.isErr) {
+      failed = studio::link::CallError from { r.error }
+      return Err(failed)
+    }
+    return Ok(r.value)
+  }
+
+  /// Link snapshot for late-mounting frontends (the `dcs_status` command).
+  public Status(): studio::link::LinkStatus {
+    connected = bool from studio::link::BridgeClient.IsConnected()
+    snapshot = studio::link::LinkStatus from { connected }
+    return snapshot
+  }
+}
+
+/// WebSocket JSON-RPC client (the dcs-bridge-client crate). A background
+/// manager dials ws://127.0.0.1:25569/ws, retrying with exponential backoff
+/// (the editor often starts before DCS); one read loop correlates responses
+/// to in-flight requests by id; a watch channel exposes connectivity.
+/// Request ids are always strings — the bridge's serde rejects numeric ids.
+/// #critical
+component BridgeClient for studio::link::DcsLink {
+  /// The client has been created on the async runtime (filled in at setup).
+  IsStarted(): bool;
+  /// The WS handshake to the in-DCS server is currently up.
+  IsConnected(): bool;
+}
+
+/// Sim-running is derived from model time, not ping success.
+feature SimRunningFromModelTime for studio::link::DcsLink {
+  given "the bridge is connected and DCS sits at the main menu"
+  when "a heartbeat ping pongs with dcsTime = 0"
+  then "the link reports connected but not sim-running"
+  but "once a mission starts and dcsTime advances past 0, sim-running flips on"
+}

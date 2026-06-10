@@ -1,0 +1,3 @@
+[env]
+LUA_LIB_NAME = "lua"
+LUA_LIB = { value = "crates/dcs-bridge/lua5.1", relative = true }

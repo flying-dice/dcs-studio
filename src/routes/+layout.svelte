@@ -1,9 +1,15 @@
 <script lang="ts">
 	import './layout.css';
+	import { onMount } from "svelte";
 	import { app } from "$lib/state.svelte";
 	import { editorThemeById, chromeVars } from "$lib/themes";
 
 	let { children } = $props();
+
+	// Start listening for the Rust-side DCS link events (status bar feed).
+	onMount(() => {
+		app.initDcs();
+	});
 
 	// The selected editor theme drives the whole UI. We (a) toggle `.dark` so
 	// shadcn's dark-variant utilities + native controls flip, and (b) overwrite
