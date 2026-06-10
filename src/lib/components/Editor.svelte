@@ -1,0 +1,94 @@
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { EditorView, basicSetup } from "codemirror";
+  import { keymap } from "@codemirror/view";
+  import { EditorState, Compartment, type Extension } from "@codemirror/state";
+  import { StreamLanguage } from "@codemirror/language";
+  import { lua } from "@codemirror/legacy-modes/mode/lua";
+  import { toml } from "@codemirror/legacy-modes/mode/toml";
+  import { json } from "@codemirror/lang-json";
+  import { markdown } from "@codemirror/lang-markdown";
+  import { app } from "$lib/state.svelte";
+  import { readTextFile } from "$lib/api";
+
+  let host: HTMLDivElement;
+  let view: EditorView | undefined;
+
+  // Set while we programmatically replace the document (file load / close) so
+  // the change listener doesn't mistake the load for a user edit.
+  let loadingDoc = false;
+
+  const themeComp = new Compartment();
+  const langComp = new Compartment();
+
+  function languageFor(name: string): Extension {
+    const n = name.toLowerCase();
+    if (n.endsWith(".lua")) return StreamLanguage.define(lua);
+    if (n.endsWith(".toml")) return StreamLanguage.define(toml);
+    if (n.endsWith(".json")) return json();
+    if (n.endsWith(".md") || n.endsWith(".markdown")) return markdown();
+    return [];
+  }
+
+  onMount(() => {
+    view = new EditorView({
+      parent: host,
+      state: EditorState.create({
+        doc: "",
+        extensions: [
+          basicSetup,
+          keymap.of([
+            {
+              key: "Mod-s",
+              preventDefault: true,
+              run: () => {
+                void app.saveFile();
+                return true;
+              },
+            },
+          ]),
+          EditorView.updateListener.of((u) => {
+            if (u.docChanged && !loadingDoc) {
+              app.onDocEdited(u.state.doc.toString());
+            }
+          }),
+          themeComp.of(app.cm),
+          langComp.of([]),
+          EditorView.theme({ "&": { height: "100%" } }),
+        ],
+      }),
+    });
+    return () => view?.destroy();
+  });
+
+  // Load file contents + language when the active file changes.
+  $effect(() => {
+    const path = app.filePath;
+    const name = app.fileName;
+    if (!view) return;
+    if (!path) {
+      loadingDoc = true;
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+      loadingDoc = false;
+      return;
+    }
+    readTextFile(path).then((text) => {
+      if (!view) return;
+      loadingDoc = true;
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        effects: langComp.reconfigure(languageFor(name)),
+      });
+      loadingDoc = false;
+      app.onDocLoaded(text);
+    });
+  });
+
+  // Live theme swap.
+  $effect(() => {
+    const cm = app.cm;
+    view?.dispatch({ effects: themeComp.reconfigure(cm) });
+  });
+</script>
+
+<div class="h-full w-full overflow-hidden [&_.cm-editor]:h-full" bind:this={host}></div>
