@@ -395,6 +395,13 @@ class AppState {
   }
 
   /**
+   * Injectable file writer so /lab/buffers can exercise `saveFile` in a
+   * plain browser (no Tauri fs) — same seam convention as the Editor
+   * component's `readFile` prop and IntelFs in intel.svelte.ts.
+   */
+  writeFile: (path: string, contents: string) => Promise<void> = writeTextFile;
+
+  /**
    * Persist the ACTIVE tab's buffer to the ACTIVE tab's path — never any
    * other tab's (model `SaveFile`). No-op when clean or already saving.
    */
@@ -405,9 +412,11 @@ class AppState {
     try {
       // Capture the buffer BEFORE the await: keystrokes that land while the
       // write is in flight must keep the tab dirty, so the baseline is set
-      // to exactly what was written, not to the post-write buffer.
+      // to exactly what was written, not to the post-write buffer. The
+      // baseline lands on `doc` — the tab that was saved — never on
+      // whichever tab is active by the time the write finishes.
       const text = doc.docText;
-      await writeTextFile(doc.path, text);
+      await this.writeFile(doc.path, text);
       doc.savedText = text;
     } finally {
       this.saving = false;

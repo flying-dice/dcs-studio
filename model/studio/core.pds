@@ -182,7 +182,11 @@ public container Workbench for studio::core::Studio {
   RemoveTab(doc: studio::core::Document): void;
 
   /// Persist the ACTIVE tab's buffer to the ACTIVE tab's path — never any
-  /// other tab's. A clean buffer (or no open tab) is a no-op.
+  /// other tab's. A clean buffer, no open tab, or a write already in
+  /// flight is a no-op. The buffer is captured before the write starts, so
+  /// the baseline becomes exactly what was written: keystrokes landing
+  /// mid-write keep the tab dirty, and a tab switch mid-write still
+  /// baselines the tab that was saved, never the newly active one.
   #[manual]
   public SaveFile(): void {
     active = Option<studio::core::Document> from self.ActiveTab()
@@ -193,11 +197,20 @@ public container Workbench for studio::core::Studio {
     if (!dirty) {
       return
     }
+    saving = bool from self.SaveInFlight()
+    if (saving) {
+      return
+    }
     studio::files::WorkspaceFs.WriteTextFile(active.value.path, active.value.text)
     self.MarkSaved(active.value)
   }
 
-  /// Reset the on-disk baseline to the just-written buffer.
+  /// Whether a save's write is still in flight — a second save during it
+  /// is a no-op rather than a concurrent write.
+  SaveInFlight(): bool;
+
+  /// Reset the on-disk baseline to the text that was actually written —
+  /// captured before the write — on the tab that was saved.
   MarkSaved(doc: studio::core::Document): void;
 
   /// Run a snippet from the Lua console and append its result (or error) to
@@ -318,13 +331,15 @@ feature StaleLoadNeverHijacksView for studio::core::Workbench {
 }
 
 /// Closing the active tab hands the view to a neighbour; closing any other
-/// tab never steals focus from the active one.
+/// tab never steals focus from — or disturbs the pending edits of — the
+/// active one.
 feature CloseActiveTabActivatesNeighbour for studio::core::Workbench {
   given "files A and B are open and B is the active tab"
   when "the developer closes B"
   then "B's tab is gone and A becomes the active tab"
   and "the buffer shows A's content"
   and "closing non-active A instead leaves B active with A's tab gone"
+  and "the active tab's pending edits and dirty flag are untouched by it"
 }
 
 /// Every activation invalidates older in-flight loads — even when the tab
@@ -344,6 +359,73 @@ feature CloseDirtyTabPrompts for studio::core::Workbench {
   when "the developer closes it"
   then "the developer must confirm before the edits are discarded"
   and "declining keeps the tab open with its buffer intact"
+  and "declining a non-active tab's close leaves the active tab focused"
+}
+
+/// With no confirm surface at all (neither the native dialog nor
+/// window.confirm), the answer is NO — a dirty tab stays open.
+feature NoConfirmSurfaceNeverDiscards for studio::core::Workbench {
+  given "a tab has unsaved edits and no confirm surface exists"
+  when "the developer closes it"
+  then "the tab stays open with its buffer intact"
+}
+
+/// Closing a tab drops its parked buffer, dirty or not: reopening always
+/// reloads from disk, never resurrects a discarded buffer.
+feature ReopenAfterCloseReloadsFromDisk for studio::core::Workbench {
+  given "a tab's edits were discarded when it was closed"
+  when "the developer reopens the same file"
+  then "the buffer shows the on-disk text, not the discarded edits"
+  and "the reopened tab is clean"
+}
+
+/// Opening a file that is already open re-activates its tab as-is.
+feature OpeningAnOpenFileKeepsItsBuffer for studio::core::Workbench {
+  given "a tab has unsaved edits"
+  when "the developer opens the same file again"
+  then "no duplicate tab appears"
+  and "the tab keeps its pending edits and dirty flag"
+}
+
+/// A failed first read closes the tab — an empty buffer must never
+/// impersonate the file on disk.
+feature FailedReadClosesTab for studio::core::Workbench {
+  given "a file whose read will fail"
+  when "the developer opens it"
+  then "its tab closes instead of showing an empty buffer"
+  and "the previously shown tab takes the view back"
+}
+
+/// Each tab's scroll position is parked and restored with its buffer.
+feature TabSwitchRestoresScroll for studio::core::Workbench {
+  given "file A is scrolled away from the top"
+  when "the developer switches to file B and back to A"
+  then "A reappears at the same scroll position"
+}
+
+/// Closing the last tab blanks the editor view.
+feature ClosingLastTabBlanksEditor for studio::core::Workbench {
+  given "one tab is open"
+  when "the developer closes it"
+  then "the editor shows an empty buffer and no tab is active"
+}
+
+/// The save baseline is the text that was written, not the buffer at
+/// write-completion time.
+feature MidSaveKeystrokesKeepTabDirty for studio::core::Workbench {
+  given "a dirty tab's write is in flight"
+  when "a keystroke lands before the write finishes"
+  then "the written file holds the pre-keystroke text"
+  and "the tab is still dirty afterwards"
+}
+
+/// A save always lands on the tab that was saved, even if the developer
+/// switches tabs while the write is in flight.
+feature SaveLandsOnTheSavedTab for studio::core::Workbench {
+  given "tab A's write is in flight"
+  when "the developer switches to tab B before it finishes"
+  then "A's baseline matches the written text and A is clean"
+  and "B's buffer and baseline are untouched"
 }
 
 /// A fresh project opens immediately after scaffolding.

@@ -4,7 +4,7 @@
   // component with its file reader pointed at an in-memory store — so the
   // e2e-lang suite can reproduce the cross-file undo corruption without
   // Tauri or DCS (model/studio/core.pds UndoNeverCrossesFiles,
-  // TabSwitchKeepsUnsavedEdits).
+  // TabSwitchKeepsUnsavedEdits, SaveDirtyFile and friends).
   import { onMount } from "svelte";
   import { app } from "$lib/state.svelte";
   import Editor from "$lib/components/Editor.svelte";
@@ -42,7 +42,29 @@
     return text;
   }
 
+  // In-memory writer behind app.writeFile, with the same one-shot
+  // hold/release seam as the reader — the save specs use it to keep a
+  // write deterministically in flight while keystrokes land or tabs
+  // switch (model SaveFile / MarkSaved capture semantics).
+  const writes = $state<{ path: string; text: string }[]>([]);
+  let holdNextWrite = false;
+  let releaseWrite = $state<(() => void) | null>(null);
+
+  async function writeFile(path: string, contents: string): Promise<void> {
+    if (holdNextWrite) {
+      holdNextWrite = false;
+      await new Promise<void>((resolve) => {
+        releaseWrite = () => {
+          releaseWrite = null;
+          resolve();
+        };
+      });
+    }
+    writes.push({ path, text: contents });
+  }
+
   onMount(() => {
+    app.writeFile = writeFile;
     void (async () => {
       // Mount the lab files into the real wasm engine so the editor's
       // lang-intel pump has a live session (same setup as /lab/lua).
@@ -70,6 +92,12 @@
     {ready ? "ready" : "loading"} · active: {app.fileName || "(none)"} · dirty:
     {app.dirty}
   </div>
+  <div class="text-xs text-muted-foreground" data-testid="lab-writes">
+    writes: {writes.length}
+    {#each writes as w, i (i)}
+      · {w.path} =&gt; {w.text.trim()}
+    {/each}
+  </div>
   <div class="flex items-center gap-2 text-xs">
     <button
       class="rounded border px-2 py-0.5"
@@ -94,6 +122,13 @@
     </button>
     <button
       class="rounded border px-2 py-0.5"
+      data-testid="open-missing"
+      onclick={() => app.openFile("lab/missing.lua", "missing.lua")}
+    >
+      open missing.lua
+    </button>
+    <button
+      class="rounded border px-2 py-0.5"
       data-testid="close-active"
       onclick={() => app.closeActiveFile()}
     >
@@ -114,16 +149,36 @@
     >
       release b read
     </button>
+    <button
+      class="rounded border px-2 py-0.5"
+      data-testid="hold-next-write"
+      onclick={() => (holdNextWrite = true)}
+    >
+      hold next write
+    </button>
+    <button
+      class="rounded border px-2 py-0.5 disabled:opacity-40"
+      data-testid="release-write"
+      disabled={!releaseWrite}
+      onclick={() => releaseWrite?.()}
+    >
+      release write
+    </button>
   </div>
-  <div class="flex h-9 shrink-0 items-center gap-1 overflow-x-auto rounded border px-2">
+  <div
+    role="tablist"
+    aria-label="Open files"
+    class="flex h-9 shrink-0 items-center gap-1 overflow-x-auto rounded border px-2"
+  >
     <EditorTabs />
   </div>
+  <!-- Editor stays mounted with no file open: the component owns its own
+       blank state (the swap effect's no-active-tab arm), and the specs pin
+       that closing the last tab actually blanks the view. -->
   <div
     class="min-h-0 flex-1 overflow-hidden rounded border [&_.cm-editor]:h-full"
     data-testid="lab-editor"
   >
-    {#if app.filePath}
-      <Editor {readFile} />
-    {/if}
+    <Editor {readFile} />
   </div>
 </div>
