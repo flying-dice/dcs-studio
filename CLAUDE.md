@@ -150,6 +150,10 @@ diagnostics, never a panic. The IDE side:
   suites (units, conformance goldens, totality properties, corpus gate).
 - `cargo test -p dcs-studio-cli` — CLI suites incl. real-stdio LSP and MCP
   end-to-end sessions.
+- `DCS_TEMPLATE_COMPILE=1 cargo test -p dcs-studio-project --test template_compile`
+  — scaffold the rust-dll template and `cargo check` it (issue #22); skips
+  without the env var so the default suite stays fast. CI's
+  `template-compile` job sets it.
 - `cargo test -p dcs-studio --tests` — host↔real-server IPC integration
   (needs `cargo build -p dcs-studio-cli` first; auto-skips without the binary).
 - `pnpm build:wasm` — rebuild `src/lib/dcs-lua-wasm/` after engine changes.

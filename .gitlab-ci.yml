@@ -54,6 +54,31 @@ app:
     - rustup component add clippy
     - cargo clippy -p dcs-studio --all-targets -- -D warnings
 
+# issue #22: prove scaffolded templates compile, not just string-assert.
+# The rust-dll probe is the opt-in template_compile integration test
+# (DCS_TEMPLATE_COMPILE=1; same env runs it locally): scaffold into a temp
+# dir, then `cargo check` it — type-level proof only. `cargo check` never
+# links, so DCS's Windows-only lua import library is not needed here; a
+# full `cargo build` would have to link a real liblua and stays out of
+# scope. The lua-script probe goes through the real CLI: init, then
+# `check` (exit code = error-finding count) must come back clean.
+template-compile:
+  stage: test
+  image: rust:1.92
+  # Own cache key, registry only: the probe scaffolds into a fresh temp
+  # path every run, so its target dir is uncacheable by construction.
+  cache:
+    key: rust-template-$CI_COMMIT_REF_SLUG
+    paths:
+      - .cargo/registry
+    policy: pull-push
+  variables:
+    DCS_TEMPLATE_COMPILE: "1"
+  script:
+    - cargo test -p dcs-studio-project --test template_compile
+    - cargo run -p dcs-studio-cli -- init "Lua Probe" --template lua-script --parent /tmp/probe
+    - cargo run -p dcs-studio-cli -- check "/tmp/probe/Lua Probe"
+
 web:
   stage: test
   image: node:22
