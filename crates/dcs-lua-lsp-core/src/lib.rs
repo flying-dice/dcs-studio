@@ -21,7 +21,7 @@ pub mod symbols;
 pub mod ty_table;
 pub mod workspace;
 
-pub use analysis::all_findings;
+pub use analysis::{all_findings, file_findings, findings_by_file};
 pub use assignable::assignable;
 pub use check::check_types;
 pub use fold::folding_ranges;

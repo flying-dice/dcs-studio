@@ -11,7 +11,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use dcs_lua_lsp_core::workspace::Workspace;
-use dcs_lua_lsp_core::{DocumentSymbol as CoreSymbol, SymbolKind as CoreSymbolKind};
+use dcs_lua_lsp_core::{
+    DocumentSymbol as CoreSymbol, SymbolKind as CoreSymbolKind, file_findings, findings_by_file,
+};
 use dcs_lua_syntax::{LineIndex, Severity, Span};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
@@ -52,7 +54,12 @@ impl Backend {
     fn set_and_collect(&self, path: &str, text: &str) -> Vec<(Url, Vec<Diagnostic>)> {
         let mut workspace = self.workspace.lock().expect("workspace lock");
         workspace.set_source(path, text);
-        collect_file_diagnostics(&workspace, path)
+        // `file_findings` is the shared finding set (parse + type + future);
+        // this edge only maps it to LSP wire diagnostics. A cross-file edit
+        // may leave a stale finding in another file until that file is next
+        // published — consistent with this server's per-file publish
+        // granularity (the boot walk covers the whole workspace).
+        collect_file_diagnostics(&workspace, path, &file_findings(&workspace, path))
             .map(|payload| vec![payload])
             .unwrap_or_default()
     }
@@ -107,9 +114,17 @@ impl LanguageServer for Backend {
             for (path, text) in &files {
                 workspace.set_source(path, text);
             }
+            // One shared aggregation for the whole walk, not one per file.
+            let by_file = findings_by_file(&workspace);
             files
                 .iter()
-                .filter_map(|(path, _)| collect_file_diagnostics(&workspace, path))
+                .filter_map(|(path, _)| {
+                    collect_file_diagnostics(
+                        &workspace,
+                        path,
+                        by_file.get(path).map_or(&[], Vec::as_slice),
+                    )
+                })
                 .collect::<Vec<_>>()
         };
         self.publish(batches).await;
@@ -231,13 +246,19 @@ fn uri_path(uri: &Url) -> Option<String> {
         .map(|path| path.display().to_string())
 }
 
-fn collect_file_diagnostics(workspace: &Workspace, path: &str) -> Option<(Url, Vec<Diagnostic>)> {
+/// The LSP publish payload for one file: map the shared finding set
+/// ([`file_findings`] / [`findings_by_file`]) to wire diagnostics with
+/// UTF-16 ranges. This edge owns the wire conversion only — never which
+/// findings exist.
+fn collect_file_diagnostics(
+    workspace: &Workspace,
+    path: &str,
+    findings: &[dcs_lua_syntax::Diagnostic],
+) -> Option<(Url, Vec<Diagnostic>)> {
     let entry = workspace.file(path)?;
     let uri = Url::from_file_path(path).ok()?;
     let index = LineIndex::new(&entry.source);
-    let diagnostics = entry
-        .parsed
-        .diagnostics
+    let diagnostics = findings
         .iter()
         .map(|diagnostic| Diagnostic {
             range: span_range(&entry.source, &index, diagnostic.span),
