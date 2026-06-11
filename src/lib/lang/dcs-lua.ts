@@ -1,11 +1,18 @@
-// The dcs-lua provider: the dcs-lua-ls engine compiled to wasm, loaded in
-// the webview (no spawned process — model/studio/lang.pds `DcsLua`).
+// The dcs-lua provider, transport-selected (decisions/005):
 //
-// The wasm module loads lazily on first mount; before the session exists
-// every query answers empty, so the editor never blocks on the engine.
+// - In the packaged app, language intelligence runs in the BACKEND — the
+//   host spawns `dcs-studio-cli lsp` and we speak LSP over IPC.
+// - In a plain browser (vite dev, Playwright) there is no Tauri IPC, so
+//   the same engine loads as wasm in the page — the dual-path convention
+//   established by `dcs-ws.ts`.
+//
+// Both implement the same LanguageProvider contract; everything above the
+// registry is transport-blind.
 
+import { isTauri } from "@tauri-apps/api/core";
 import init, { IdeSession } from "$lib/dcs-lua-wasm/dcs_lua_ide";
 import wasmUrl from "$lib/dcs-lua-wasm/dcs_lua_ide_bg.wasm?url";
+import { LspLuaProvider } from "./lsp-lua";
 import type {
   CompletionItem,
   Diagnostic,
@@ -18,7 +25,8 @@ import type {
   SourceFile,
 } from "./provider";
 
-class DcsLuaProvider implements LanguageProvider {
+/** Browser fallback: the engine compiled to wasm, in-page. */
+class WasmLuaProvider implements LanguageProvider {
   readonly id = "dcs-lua";
   readonly extensions = [".lua"];
 
@@ -37,37 +45,39 @@ class DcsLuaProvider implements LanguageProvider {
     this.session?.mount(files, rules);
   }
 
-  setSource(path: string, text: string): void {
+  async setSource(path: string, text: string): Promise<void> {
     this.session?.set_source(path, text);
   }
 
-  removeSource(path: string): void {
+  async removeSource(path: string): Promise<void> {
     this.session?.remove_source(path);
   }
 
-  diagnostics(): Diagnostic[] {
+  async diagnostics(): Promise<Diagnostic[]> {
     return this.session?.diagnostics() ?? [];
   }
 
-  documentSymbols(path: string): DocumentSymbol[] {
+  async documentSymbols(path: string): Promise<DocumentSymbol[]> {
     return this.session?.document_symbols(path) ?? [];
   }
 
-  foldingRanges(path: string): FoldingRange[] {
+  async foldingRanges(path: string): Promise<FoldingRange[]> {
     return this.session?.folding_ranges(path) ?? [];
   }
 
-  complete(path: string, offset: number): CompletionItem[] {
+  async complete(path: string, offset: number): Promise<CompletionItem[]> {
     return this.session?.complete(path, offset) ?? [];
   }
 
-  hover(path: string, offset: number): Hover | null {
+  async hover(path: string, offset: number): Promise<Hover | null> {
     return this.session?.hover(path, offset) ?? null;
   }
 
-  definition(path: string, offset: number): Location | null {
+  async definition(path: string, offset: number): Promise<Location | null> {
     return this.session?.definition(path, offset) ?? null;
   }
 }
 
-export const dcsLuaProvider: LanguageProvider = new DcsLuaProvider();
+export const dcsLuaProvider: LanguageProvider = isTauri()
+  ? new LspLuaProvider()
+  : new WasmLuaProvider();

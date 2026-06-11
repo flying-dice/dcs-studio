@@ -80,6 +80,11 @@ export interface Location {
   end: number;
 }
 
+/**
+ * Every method is async so one contract spans both transports: the
+ * backend-hosted LSP over IPC (packaged app) and the in-page wasm engine
+ * (browser fallback) — decisions/005.
+ */
 export interface LanguageProvider {
   /** Stable identifier, e.g. `"dcs-lua"`. */
   id: string;
@@ -93,21 +98,24 @@ export interface LanguageProvider {
    */
   mount(files: SourceFile[], rules: ProfileRule[]): Promise<void>;
 
-  /** Create or replace one source (edits, saves, generated files). */
-  setSource(path: string, text: string): void;
+  /**
+   * Create or replace one source (edits, saves, generated files).
+   * Resolves once the engine's findings for the file are current.
+   */
+  setSource(path: string, text: string): Promise<void>;
   /** Drop one source (file deleted or regenerated away). */
-  removeSource(path: string): void;
+  removeSource(path: string): Promise<void>;
 
   /** All current findings across the mounted workspace. */
-  diagnostics(): Diagnostic[];
+  diagnostics(): Promise<Diagnostic[]>;
   /** The declaration outline of one file. */
-  documentSymbols(path: string): DocumentSymbol[];
-  /** Foldable regions of one file (byte offsets). */
-  foldingRanges(path: string): FoldingRange[];
+  documentSymbols(path: string): Promise<DocumentSymbol[]>;
+  /** Foldable regions of one file (offsets into the document text). */
+  foldingRanges(path: string): Promise<FoldingRange[]>;
   /** Suggestions at a cursor offset. */
-  complete(path: string, offset: number): CompletionItem[];
+  complete(path: string, offset: number): Promise<CompletionItem[]>;
   /** Hover card for the symbol at an offset. */
-  hover(path: string, offset: number): Hover | null;
+  hover(path: string, offset: number): Promise<Hover | null>;
   /** Definition site of the symbol at an offset. */
-  definition(path: string, offset: number): Location | null;
+  definition(path: string, offset: number): Promise<Location | null>;
 }

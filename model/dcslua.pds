@@ -1,9 +1,25 @@
-//! context — dcs-lua-ls: a DCS-flavoured Lua 5.1 language engine, modelled
-//! on the LSP and consumed embedded (a wasm IdeSession inside dcs-studio's
-//! webview — decisions/002). Pure analysis: the engine never executes Lua
-//! and never touches the filesystem.
+//! dcslua — the DCS-flavoured Lua 5.1 language engine. Modelled on the
+//! LSP; consumed three ways, all over one core (decisions/005): the
+//! genuine stdio LSP served by dcs-studio-cli, the IDE's backend host
+//! relaying it over IPC, and the wasm IdeSession browser fallback. Pure
+//! analysis: the engine never executes Lua and never touches the
+//! filesystem — hosts feed sources in.
+
+/// One source handed to the engine by whichever host owns the I/O.
+public data SourceUnit { path: string, text: string }
 
 /// The language engine: error-tolerant syntax, a whole-workspace global
 /// graph partitioned by DCS environment profile, type inference, and
 /// LuaLS-compatible .d.lua definitions.
-public system DcsLuaLs;
+public system DcsLuaLs {
+  /// Mount a set of sources and report every finding — the CLI `check`
+  /// command, the MCP `check` tool, and the LSP initialize walk all land
+  /// here.
+  public Analyse(files: dcslua::SourceUnit[]): syntax::Diagnostic[] {
+    for (file in files) {
+      lspcore::Workspace.SetSource(file.path, file.text)
+    }
+    findings = syntax::Diagnostic[] from lspcore::Queries.AllFindings()
+    return findings
+  }
+}

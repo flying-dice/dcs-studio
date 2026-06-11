@@ -1,0 +1,46 @@
+# 005 — dcs-studio-cli: genuine stdio LSP + MCP for agents; IDE consumes the LSP over backend IPC
+
+Supersedes [002](002-wasm-only-edge.md). Affects: `crates/dcs-studio-cli`,
+`crates/app` (LSP process host), `src/lib/lang/`, `SPEC.md §1`.
+
+## Context
+
+Three requirements arrived together: the IDE gains Rust-toolchain support
+(rust-analyzer can only be consumed as a spawned LSP process); the Lua
+engine must be usable by external tooling over the Language Server
+Protocol; and agents need a standalone surface — project init, checking,
+MCP — without the Tauri app.
+
+## Decision
+
+Ship two artifacts: the Tauri app and **`dcs-studio-cli`** — one binary,
+agent-complete:
+
+- `dcs-studio-cli lsp` — genuine LSP over stdio (tower-lsp) on the
+  transport-neutral `dcs-lua-lsp-core`: initialize walks the workspace
+  root for Lua sources, full-document sync, push `publishDiagnostics`,
+  documentSymbol, foldingRange; completion/hover/definition arrive with
+  engine Phase 2.
+- `dcs-studio-cli mcp` — MCP server over stdio (newline-delimited
+  JSON-RPC): `init_project` and `check` tools first; build/deploy/
+  introspection tools follow their phases.
+- `dcs-studio-cli init` / `check` — direct subcommands for the same
+  operations (the `pds` pattern).
+- The IDE consumes language intelligence from the **backend**: a generic
+  LSP process host in `crates/app` spawns `dcs-studio-cli lsp` and pumps
+  framed JSON-RPC over Tauri IPC events; rust-analyzer is the second
+  hosted server (issue #6 R2).
+- The wasm `IdeSession` edge remains **only** as the browser-mode fallback
+  (vite dev, Playwright) where no Tauri IPC exists — the same dual-path
+  convention as `dcs-ws.ts`.
+
+## Consequences
+
+- One client stack serves every language; `LanguageProvider` stays the
+  seam, with queries async to span both transports.
+- An agent uses the CLI alone for everything: scaffold, check, LSP, MCP.
+- Project templates need a Rust home for `init`; the TypeScript templates
+  in `src/lib/templates.ts` migrate or delegate (tracked as follow-up —
+  duplicated content is a defect once both exist).
+- Three-plus edges over one core is the cost; each is a thin adapter, and
+  002's core promise (language intelligence implemented once) holds.

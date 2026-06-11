@@ -61,6 +61,10 @@ public container Queries for dcslua::DcsLuaLs {
   /// Foldable spans of one file: block statements, function literals,
   /// table constructors, and long comments (from cached trivia).
   public FoldingRanges(path: string): syntax::Span[];
+
+  /// Every finding across the mounted workspace, each paired with its
+  /// file path, ordered by path then offset.
+  public AllFindings(): syntax::Diagnostic[];
 }
 
 /// Editing one file re-analyses exactly that file.

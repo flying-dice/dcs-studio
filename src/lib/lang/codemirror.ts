@@ -1,10 +1,11 @@
 // CodeMirror wiring for the provider layer: lint (diagnostics + session
-// sync), folding, and hover. Hand-wired — there is no transport, so the
-// provider's synchronous queries plug straight into CodeMirror's sources.
+// sync), folding, and hover. Providers are async (LSP over IPC, or wasm
+// in-page); CodeMirror's lint and hover sources accept promises, and the
+// synchronous fold service reads ranges cached during each lint pass.
 
 import { foldService } from "@codemirror/language";
 import { linter, type Diagnostic as CmDiagnostic } from "@codemirror/lint";
-import type { Extension, Text } from "@codemirror/state";
+import type { Extension } from "@codemirror/state";
 import { hoverTooltip } from "@codemirror/view";
 import { lang } from "./intel.svelte";
 import { providerFor } from "./registry";
@@ -13,32 +14,29 @@ import type { Diagnostic, FoldingRange } from "./provider";
 /**
  * Language-intelligence extensions for `path`; `[]` when no provider
  * claims the file. The lint source doubles as the didChange pump: its
- * debounce feeds the session (`updateSource`) before pulling findings.
+ * debounce feeds the session (`updateSource`), refreshes the fold cache,
+ * then maps findings to squiggles.
  */
 export function langIntelFor(path: string | null): Extension {
   if (!path) return [];
   const provider = providerFor(path);
   if (!provider) return [];
 
-  const lintSource = linter((view) => {
+  // The fold service is queried synchronously per foldable line; the lint
+  // pass refreshes this cache after every (debounced) change.
+  let foldCache: FoldingRange[] = [];
+
+  const lintSource = linter(async (view) => {
     const text = view.state.doc.toString();
-    lang.updateSource(path, text);
+    await lang.updateSource(path, text);
+    foldCache = await provider.foldingRanges(path);
     return lang
       .fileDiagnostics(path)
       .map((d) => toCmDiagnostic(d, view.state.doc.length));
   });
 
-  // The fold service is queried per foldable line; cache the engine's
-  // ranges per document snapshot (Text values are immutable, so a WeakMap
-  // key is exactly "this doc version").
-  const foldCache = new WeakMap<Text, FoldingRange[]>();
   const folding = foldService.of((state, lineStart, lineEnd) => {
-    let ranges = foldCache.get(state.doc);
-    if (!ranges) {
-      ranges = provider.foldingRanges(path);
-      foldCache.set(state.doc, ranges);
-    }
-    for (const range of ranges) {
+    for (const range of foldCache) {
       if (range.start >= lineStart && range.start <= lineEnd) {
         const end = Math.min(range.end, state.doc.length);
         // Folding hides everything after the line of the opener up to the
@@ -49,8 +47,8 @@ export function langIntelFor(path: string | null): Extension {
     return null;
   });
 
-  const hover = hoverTooltip((view, pos) => {
-    const card = provider.hover(path, pos);
+  const hover = hoverTooltip(async (_view, pos) => {
+    const card = await provider.hover(path, pos);
     if (!card) return null;
     return {
       pos,

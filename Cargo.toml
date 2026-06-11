@@ -7,6 +7,7 @@ members = [
     "crates/dcs-lua-syntax",
     "crates/dcs-lua-lsp-core",
     "crates/dcs-lua-ide",
+    "crates/dcs-studio-cli",
 ]
 
 [workspace.package]

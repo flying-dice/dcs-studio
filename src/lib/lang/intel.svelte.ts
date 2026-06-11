@@ -49,7 +49,7 @@ class LangIntel {
       }
       if (generation !== this.mountGeneration) return;
       this.engineStatus = "ready";
-      this.refreshProblems();
+      await this.refreshProblems();
     } catch (error) {
       console.error("language engine failed to mount:", error);
       if (generation === this.mountGeneration) this.engineStatus = "failed";
@@ -68,26 +68,27 @@ class LangIntel {
    * the editor's lint cycle provides the debounce). Only Lua sources reach
    * the engine.
    */
-  updateSource(path: string, text: string): void {
+  async updateSource(path: string, text: string): Promise<void> {
     const provider = providerFor(path);
     if (!provider) return;
-    provider.setSource(path, text);
-    this.refreshProblems();
+    await provider.setSource(path, text);
+    await this.refreshProblems();
   }
 
   /** Drop a deleted file from the session (model `DropSource`). */
-  dropSource(path: string): void {
+  async dropSource(path: string): Promise<void> {
     const provider = providerFor(path);
     if (!provider) return;
-    provider.removeSource(path);
-    this.refreshProblems();
+    await provider.removeSource(path);
+    await this.refreshProblems();
   }
 
   /** Pull every provider's findings for the Problems panel and markers. */
-  private refreshProblems(): void {
-    this.diagnostics = allProviders().flatMap((provider) =>
-      provider.diagnostics(),
+  private async refreshProblems(): Promise<void> {
+    const perProvider = await Promise.all(
+      allProviders().map((provider) => provider.diagnostics()),
     );
+    this.diagnostics = perProvider.flat();
   }
 
   /** Every .lua / .d.lua file under the root (model `CollectLuaSources`). */

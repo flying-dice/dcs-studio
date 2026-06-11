@@ -7,10 +7,12 @@
 //! resolution-backed queries (completion, hover, definition) land with the
 //! model crate (plan Phase 2).
 
+pub mod analysis;
 pub mod fold;
 pub mod symbols;
 pub mod workspace;
 
+pub use analysis::all_findings;
 pub use fold::folding_ranges;
 pub use symbols::{DocumentSymbol, SymbolKind, document_symbols};
 pub use workspace::{FileEntry, Workspace};

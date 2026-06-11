@@ -2,6 +2,7 @@
 mod dcs;
 mod fs;
 mod inject;
+mod lsp;
 mod mission;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -10,9 +11,17 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(dcs::DcsState::default())
+        .manage(lsp::LspHosts::default())
         .setup(|app| {
             dcs::start(app.handle().clone());
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // No orphan language servers: Windows has no SIGTERM.
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                use tauri::Manager as _;
+                lsp::stop_all(window.app_handle());
+            }
         })
         .invoke_handler(tauri::generate_handler![
             fs::read_dir,
@@ -27,6 +36,10 @@ pub fn run() {
             inject::dcs_injection_status,
             inject::dcs_inject,
             inject::dcs_eject,
+            lsp::lsp_server_path,
+            lsp::lsp_start,
+            lsp::lsp_send,
+            lsp::lsp_stop,
             mission::dcs_detect_mission_scripts,
             mission::dcs_mission_script_status,
             mission::dcs_mission_script_set,

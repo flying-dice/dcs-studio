@@ -69,13 +69,27 @@ Two processes joined by WebSocket JSON-RPC on `ws://127.0.0.1:25569/ws`:
 In a plain browser (vite dev, Playwright) there is no Tauri IPC: `dcsCall` falls
 back to `src/lib/dcs-ws.ts`, speaking the same wire protocol directly.
 
-### Language intelligence (no LSP process)
+### Language intelligence (decisions/005)
 
-Lua diagnostics/outline/folding come from the **dcs-lua engine** — the
-`crates/dcs-lua-{syntax,lsp-core,ide}` workspace members — compiled to wasm
-and loaded in the webview, never a spawned language server. The artifact
-lives at `src/lib/dcs-lua-wasm/` (rebuild with `pnpm build:wasm` after
-engine changes, then commit it). Engine governance lives in this repo:
+Lua diagnostics/outline/folding come from the **dcs-lua engine**
+(`crates/dcs-lua-{syntax,lsp-core,ide}` + `crates/dcs-studio-cli`), reached
+two ways behind one `LanguageProvider` contract:
+
+- **Packaged app:** the backend host (`crates/app/src/lsp.rs`) spawns
+  `dcs-studio-cli lsp` — a genuine tower-lsp stdio server — and pumps
+  framed JSON-RPC over IPC events; `src/lib/lang/lsp-client.ts` +
+  `lsp-lua.ts` own the protocol. The CLI binary must sit next to the app
+  exe (`cargo build -p dcs-studio-cli`; `DCS_STUDIO_CLI` overrides).
+- **Plain browser (vite dev, Playwright):** the same engine as wasm
+  in-page (`src/lib/dcs-lua-wasm/`, rebuild with `pnpm build:wasm` and
+  commit). Same dual-path convention as `dcs-ws.ts`.
+
+**dcs-studio-cli is the agent surface**: `lsp` and `mcp` (tools:
+`init_project`, `check`) over stdio, plus direct `init` / `check`
+subcommands — an agent needs no Tauri app. rust-analyzer joins as the
+second hosted server with issue #6 R2.
+
+Engine governance lives in this repo:
 `SPEC.md` (dialect, diagnostic registry, annotations, profiles, `.d.lua`
 layering), `PATTERNS.md`, `decisions/` ADRs, `CONFORMANCE/` goldens
 (hand-written, never copied from the implementation), and `testdata/`
@@ -109,6 +123,8 @@ diagnostics, never a panic. The IDE side:
   only: no Tauri, no DCS. Cheap to run.
 - `cargo test -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide` — engine
   suites (units, conformance goldens, totality properties, corpus gate).
+- `cargo test -p dcs-studio-cli` — CLI suites incl. real-stdio LSP and MCP
+  end-to-end sessions.
 - `pnpm build:wasm` — rebuild `src/lib/dcs-lua-wasm/` after engine changes.
 
 For live work against DCS (deploy the DLL, launch/control the sim, eval Lua),

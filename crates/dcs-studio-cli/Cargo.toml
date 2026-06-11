@@ -1,0 +1,21 @@
+[package]
+name = "dcs-studio-cli"
+version.workspace = true
+edition = "2024"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "dcs-studio-cli"
+path = "src/main.rs"
+
+[dependencies]
+dcs-lua-lsp-core = { path = "../dcs-lua-lsp-core" }
+dcs-lua-syntax = { path = "../dcs-lua-syntax" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
+tower-lsp = "0.20"
+walkdir = "2"
