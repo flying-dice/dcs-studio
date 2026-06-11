@@ -15,6 +15,10 @@ variables:
   paths:
     - .cargo/registry
     - target
+    # tools/lua-runner is its own cargo workspace with its own target dir
+    # (issue #9) — cached alongside or its mlua vendored build recompiles
+    # every run.
+    - tools/lua-runner/target
   policy: pull-push
 
 rust:
@@ -32,6 +36,17 @@ rust:
     - apt-get update -qq
     - apt-get install -y -qq lua5.1
     - export DCS_PUC_LUAC=$(command -v luac5.1)
+    # issue #9: tools/lua-runner lives in its OWN cargo workspace (mlua
+    # `vendored` must never feature-unify with dcs-bridge's `module`), so
+    # the workspace-level cargo invocations below never touch it — it
+    # needs its own build/test/clippy. Built FIRST and pinned via
+    # DCS_LUA_RUNNER so the CLI `test`-subcommand integration tests run
+    # against the real runner instead of self-skipping (the host_ipc
+    # pattern: green-but-not-executed is the failure mode this prevents).
+    - cargo build --manifest-path tools/lua-runner/Cargo.toml
+    - cargo test --manifest-path tools/lua-runner/Cargo.toml
+    - cargo clippy --manifest-path tools/lua-runner/Cargo.toml --all-targets -- -D warnings
+    - export DCS_LUA_RUNNER=$CI_PROJECT_DIR/tools/lua-runner/target/debug/dcs-lua-runner
     - cargo test -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli
     - cargo clippy -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli --all-targets -- -D warnings
 
