@@ -2,7 +2,7 @@
 //! (model: `studio::installer::Installer.InstallProject`).
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use walkdir::WalkDir;
 
@@ -35,6 +35,12 @@ pub fn install(root: &Path, roots: &RootMap) -> Result<InstallReport, String> {
     }
     let mut copied = 0usize;
     for rule in &manifest.install {
+        if !stays_under(&rule.source) {
+            return Err(format!(
+                "install rule source '{}' escapes the project root",
+                rule.source
+            ));
+        }
         let dest = resolve_dest(&rule.dest, roots)?;
         let source = root.join(rule.source.trim_end_matches(['/', '\\']));
         if !source.exists() {
@@ -61,17 +67,37 @@ pub fn install(root: &Path, roots: &RootMap) -> Result<InstallReport, String> {
     Ok(InstallReport { copied })
 }
 
+/// Every component is a plain name — no `..`, no `.`, no absolute or
+/// drive-prefixed segments — so joining `path` under a root cannot escape
+/// it. Mirrors the scaffold guard (`scaffold::init`).
+fn stays_under(path: &str) -> bool {
+    Path::new(path)
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
+}
+
+/// The dest remainder after its named root, rejected unless it stays under
+/// that root.
+fn contained_rest<'a>(dest: &str, rest: &'a str) -> Result<&'a str, String> {
+    let rest = rest.trim_start_matches(['/', '\\']);
+    if stays_under(rest) {
+        Ok(rest)
+    } else {
+        Err(format!("install rule dest '{dest}' escapes its named root"))
+    }
+}
+
 /// Swap the leading named root for its per-machine path.
 fn resolve_dest(dest: &str, roots: &RootMap) -> Result<PathBuf, String> {
     if let Some(rest) = dest.strip_prefix("{SavedGames}") {
-        Ok(roots.saved_games.join(rest.trim_start_matches(['/', '\\'])))
+        Ok(roots.saved_games.join(contained_rest(dest, rest)?))
     } else if let Some(rest) = dest.strip_prefix("{GameInstall}") {
         let base = roots.game_install.as_ref().ok_or_else(|| {
             format!(
                 "install rule dest '{dest}' references {{GameInstall}}, which is not configured (pass --game-install)"
             )
         })?;
-        Ok(base.join(rest.trim_start_matches(['/', '\\'])))
+        Ok(base.join(contained_rest(dest, rest)?))
     } else {
         Err(format!(
             "install rule dest '{dest}' must start with a named root ({{SavedGames}} or {{GameInstall}})"
@@ -184,6 +210,58 @@ mod tests {
             "names the rule: {error}"
         );
         assert!(error.contains("build the project first"), "hints: {error}");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn dest_escaping_the_named_root_is_rejected() {
+        let base = temp_root("dest-escape");
+        let (project, saved) = (base.join("project"), base.join("saved"));
+        fs::create_dir_all(&project).expect("dirs");
+        fs::create_dir_all(&saved).expect("saved root");
+        fs::write(project.join("mod.dll"), b"dll bytes").expect("source file");
+        write_manifest(
+            &project,
+            "[[install]]\nsource = \"mod.dll\"\ndest = \"{SavedGames}/../escaped/bin\"\n",
+        );
+        let roots = RootMap {
+            saved_games: saved.clone(),
+            game_install: None,
+        };
+        let error = install(&project, &roots).expect_err("escaping dest must fail");
+        assert!(
+            error.contains("{SavedGames}/../escaped/bin"),
+            "names the rule: {error}"
+        );
+        assert!(
+            !base.join("escaped").exists(),
+            "nothing lands outside the named root"
+        );
+        assert_eq!(
+            fs::read_dir(&saved).expect("saved listable").count(),
+            0,
+            "nothing copied at all"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn source_escaping_the_project_root_is_rejected() {
+        let base = temp_root("source-escape");
+        let project = base.join("project");
+        fs::create_dir_all(&project).expect("dirs");
+        fs::write(base.join("outside.txt"), b"secret").expect("outside file");
+        write_manifest(
+            &project,
+            "[[install]]\nsource = \"../outside.txt\"\ndest = \"{SavedGames}/Scripts\"\n",
+        );
+        let roots = RootMap {
+            saved_games: base.join("saved"),
+            game_install: None,
+        };
+        let error = install(&project, &roots).expect_err("escaping source must fail");
+        assert!(error.contains("../outside.txt"), "names the rule: {error}");
+        assert!(!base.join("saved").exists(), "nothing copied");
         let _ = fs::remove_dir_all(&base);
     }
 

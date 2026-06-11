@@ -53,8 +53,7 @@ public container Workbench for studio::core::Studio {
   /// open it.
   #[manual]
   public NewProject(parent: string, name: string, templateId: string): Result<string, studio::files::IoError> {
-    files = studio::files::NewFile[] from self.TemplateFiles(templateId, name)
-    root = Result<string, studio::files::IoError> from studio::files::WorkspaceFs.CreateProject(parent, name, files)
+    root = Result<string, studio::files::IoError> from self.ScaffoldFromTemplate(parent, name, templateId)
     if (root.isErr) {
       return Err(root.error)
     }
@@ -62,10 +61,11 @@ public container Workbench for studio::core::Studio {
     return Ok(root.value)
   }
 
-  /// Render a template into its file set. Every template also emits a
-  /// dcs-studio.toml manifest describing the mod, its files, and install
-  /// mappings.
-  TemplateFiles(templateId: string, name: string): studio::files::NewFile[];
+  /// Delegates to the same project-kit scaffolding the CLI's Init uses
+  /// (studio::cli::Cli.Init): refuses an existing root, renders the
+  /// template files in Rust. Every template also emits a dcs-studio.toml
+  /// manifest describing the mod, its files, and install mappings.
+  ScaffoldFromTemplate(parent: string, name: string, templateId: string): Result<string, studio::files::IoError>;
 
   /// Lazy file-tree expansion: list a folder's children on first open.
   #[manual]

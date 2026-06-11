@@ -7,9 +7,7 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+dcs-lua-syntax = { path = "../dcs-lua-syntax" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 walkdir = "2"
-
-[dev-dependencies]
-dcs-lua-syntax = { path = "../dcs-lua-syntax" }

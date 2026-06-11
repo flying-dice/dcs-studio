@@ -64,10 +64,28 @@ pub fn slugify(name: &str) -> String {
     }
 }
 
-/// Valid Lua identifier derived from the project name.
+/// Rust keywords, strict and reserved (the rendered templates use the ident
+/// as a Cargo package/lib name and a `pub fn` name). Lua keywords come from
+/// the engine's own lexer (`dcs_lua_syntax::TokenKind::keyword`).
+const RUST_KEYWORDS: &[&str] = &[
+    "as", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false", "fn",
+    "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
+    "return", "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe",
+    "use", "where", "while", "async", "await", "abstract", "become", "box", "do", "final", "macro",
+    "override", "priv", "try", "typeof", "unsized", "virtual", "yield", "gen",
+];
+
+/// Whether `ident` is reserved in Rust or Lua and so cannot appear as a bare
+/// identifier in the rendered sources.
+fn is_keyword(ident: &str) -> bool {
+    RUST_KEYWORDS.contains(&ident) || dcs_lua_syntax::TokenKind::keyword(ident).is_some()
+}
+
+/// Valid Rust *and* Lua identifier derived from the project name; keywords
+/// in either language get the same `mod_` prefix as bad leading characters.
 fn lua_ident(name: &str) -> String {
     let ident = slugify(name).replace('-', "_");
-    if ident.starts_with(|c: char| c.is_ascii_lowercase() || c == '_') {
+    if ident.starts_with(|c: char| c.is_ascii_lowercase() || c == '_') && !is_keyword(&ident) {
         ident
     } else {
         format!("mod_{ident}")
@@ -437,6 +455,33 @@ mod tests {
             .find(suffix)
             .unwrap_or_else(|| panic!("{suffix:?} after {prefix:?}"));
         &text[start..start + end]
+    }
+
+    #[test]
+    fn keyword_names_are_prefixed_in_every_rendered_artifact() {
+        // "loop" and "type" are Rust keywords, "local" a Lua one: bare, they
+        // render an uncompilable `pub fn loop` / `[lib] name = "loop"` or a
+        // broken hook. All must take the mod_ prefix, everywhere.
+        for (name, ident) in [
+            ("loop", "mod_loop"),
+            ("type", "mod_type"),
+            ("local", "mod_local"),
+        ] {
+            let files = render("rust-dll", name).expect("known template");
+            let cargo: toml::Value =
+                toml::from_str(text_of(&files, "Cargo.toml")).expect("Cargo.toml parses as TOML");
+            assert_eq!(cargo["package"]["name"].as_str(), Some(ident));
+            assert_eq!(cargo["lib"]["name"].as_str(), Some(ident));
+            let lib_rs = text_of(&files, "src/lib.rs");
+            assert!(lib_rs.contains(&format!("pub fn {ident}")), "fn for {name}");
+            let manifest = text_of(&files, "dcs-studio.toml");
+            assert!(manifest.contains(&format!("target/release/{ident}.dll")));
+            let hook = text_of(&files, &format!("Scripts/Hooks/{ident}_hook.lua"));
+            assert!(hook.contains(&format!("require, \"{ident}\"")));
+        }
+        // Sanity on the reviewer's exact repro.
+        let files = render("rust-dll", "loop").expect("known template");
+        assert!(text_of(&files, "src/lib.rs").contains("pub fn mod_loop"));
     }
 
     #[test]

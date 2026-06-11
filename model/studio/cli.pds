@@ -91,6 +91,15 @@ public container Cli for studio::core::Studio {
   CountErrors(findings: syntax::Diagnostic[]): number;
 }
 
+/// Scaffolding never clobbers an existing folder (the app's New Project
+/// flow delegates here too).
+feature InitRefusesOverwrite for studio::cli::Cli {
+  given "a folder already exists at <parent>/<name>"
+  when "init is run with that template, parent, and name"
+  then "it fails with an 'already exists' error"
+  and "the existing folder is untouched"
+}
+
 /// An agent bootstraps and validates a mod without the app.
 feature AgentWorksWithoutTheApp for studio::cli::Cli {
   given "only the dcs-studio-cli binary on PATH"

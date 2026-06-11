@@ -63,58 +63,10 @@ pub fn path_exists(path: String) -> bool {
     Path::new(&path).exists()
 }
 
-/// One file to materialise inside a freshly created project. `path` is relative
-/// to the project root and may include nested directories (created on demand).
-#[derive(serde::Deserialize)]
-pub struct NewFile {
-    path: String,
-    contents: String,
-}
-
-/// A template path must stay under the project root: relative, with plain
-/// components only — no absolute paths, no `..` traversal, no drive prefixes.
-fn stays_under_root(path: &str) -> bool {
-    let p = Path::new(path);
-    !p.as_os_str().is_empty()
-        && p.components()
-            .all(|c| matches!(c, std::path::Component::Normal(_)))
-}
-
-/// Scaffold a new project: create `<parent>/<name>` (erroring if it already
-/// exists) and write every templated file beneath it. Returns the absolute path
-/// of the new project root so the caller can open it immediately.
-#[tauri::command]
-pub fn create_project(parent: String, name: String, files: Vec<NewFile>) -> Result<String, String> {
-    let root = Path::new(&parent).join(&name);
-    if root.exists() {
-        return Err(format!("'{}' already exists", root.display()));
-    }
-    if let Some(file) = files.iter().find(|f| !stays_under_root(&f.path)) {
-        return Err(format!(
-            "Template path '{}' would escape the project root",
-            file.path
-        ));
-    }
-    std::fs::create_dir_all(&root)
-        .map_err(|e| format!("Failed to create '{}': {}", root.display(), e))?;
-
-    for file in &files {
-        let target = root.join(&file.path);
-        if let Some(dir) = target.parent() {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| format!("Failed to create '{}': {}", dir.display(), e))?;
-        }
-        std::fs::write(&target, &file.contents)
-            .map_err(|e| format!("Failed to write '{}': {}", target.display(), e))?;
-    }
-
-    Ok(root.to_string_lossy().into_owned())
-}
-
 /// Scaffold `<parent>/<name>` from a named template (`blank`, `lua-script`,
 /// `rust-dll`) via the shared project kit (model/studio/cli.pds `Init`,
-/// issue #6 R1). Returns the new root path. Supersedes the TS-side file
-/// generation behind `create_project`, which stays for compatibility.
+/// issue #6 R1): refuses an existing root, renders the files in Rust.
+/// Returns the new root path.
 #[tauri::command]
 pub fn create_project_from_template(
     parent: String,
@@ -123,26 +75,4 @@ pub fn create_project_from_template(
 ) -> Result<String, String> {
     dcs_studio_project::scaffold::init(&template, Path::new(&parent), &name)
         .map(|root| root.to_string_lossy().into_owned())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::stays_under_root;
-
-    #[test]
-    fn plain_relative_paths_are_allowed() {
-        assert!(stays_under_root("README.md"));
-        assert!(stays_under_root("scripts/init.lua"));
-        assert!(stays_under_root("a/b/c.txt"));
-    }
-
-    #[test]
-    fn escaping_paths_are_rejected() {
-        assert!(!stays_under_root(""));
-        assert!(!stays_under_root("../outside.txt"));
-        assert!(!stays_under_root("a/../../outside.txt"));
-        assert!(!stays_under_root("/etc/passwd"));
-        assert!(!stays_under_root(r"C:\Windows\system32\evil.dll"));
-        assert!(!stays_under_root(r"\\server\share\evil"));
-    }
 }

@@ -30,24 +30,6 @@ export function pathExists(path: string): Promise<boolean> {
   return invoke<boolean>("path_exists", { path });
 }
 
-/** A file to materialise inside a new project; `path` is relative to the root. */
-export interface NewFile {
-  path: string;
-  contents: string;
-}
-
-/**
- * Scaffold a new project at `<parent>/<name>` and write the given template
- * files. Returns the absolute path of the new project root.
- */
-export function createProject(
-  parent: string,
-  name: string,
-  files: NewFile[],
-): Promise<string> {
-  return invoke<string>("create_project", { parent, name, files });
-}
-
 /**
  * Scaffold a new project at `<parent>/<name>` from a named template
  * (`blank`, `lua-script`, `rust-dll`) via the shared project kit.

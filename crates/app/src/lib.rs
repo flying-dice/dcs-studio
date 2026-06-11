@@ -32,7 +32,6 @@ pub fn run() {
             fs::write_text_file,
             fs::basename,
             fs::path_exists,
-            fs::create_project,
             fs::create_project_from_template,
             build::build_project,
             build::toolchain_status,
