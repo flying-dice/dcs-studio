@@ -343,6 +343,7 @@ fn rust_dll_cargo_toml(ident: &str) -> TemplateFile {
 }
 
 fn rust_dll_lib_rs(name: &str, ident: &str) -> TemplateFile {
+    let ident_upper = ident.to_uppercase();
     TemplateFile::text(
         "src/lib.rs",
         format!(
@@ -362,14 +363,30 @@ fn rust_dll_lib_rs(name: &str, ident: &str) -> TemplateFile {
              static FRAMES: AtomicU64 = AtomicU64::new(0);\n\n\
              #[mlua::lua_module]\n\
              pub fn {ident}(lua: &Lua) -> LuaResult<LuaTable> {{\n\
+             \x20   // The hook sets the {ident_upper} global BEFORE require() — the same\n\
+             \x20   // plain-global config pattern the DCS Studio bridge reads (DCS_BRIDGE).\n\
+             \x20   let config: Option<LuaTable> = lua.globals().get(\"{ident_upper}\").ok();\n\
+             \x20   let log_level: String = config\n\
+             \x20       .and_then(|t| t.get(\"log_level\").ok())\n\
+             \x20       .unwrap_or_else(|| \"info\".to_string());\n\
+             \x20   let verbose = log_level == \"debug\";\n\n\
              \x20   let exports = lua.create_table()?;\n\
              \x20   // Prove the load from Lua: print(require(\"{ident}\").version)\n\
-             \x20   exports.set(\"version\", env!(\"CARGO_PKG_VERSION\"))?;\n\n\
+             \x20   exports.set(\"version\", env!(\"CARGO_PKG_VERSION\"))?;\n\
+             \x20   // The effective level, so Lua can confirm what was honoured.\n\
+             \x20   exports.set(\"log_level\", log_level)?;\n\n\
              \x20   // Lua-callable Rust. Returning Err raises a Lua error the caller\n\
              \x20   // can pcall — error conversion stays on mlua's side of the line.\n\
-             \x20   let greet = lua.create_function(|_, who: String| {{\n\
+             \x20   // Verbose (log_level = \"debug\") appends the live frame count.\n\
+             \x20   let greet = lua.create_function(move |_, who: String| {{\n\
              \x20       if who.is_empty() {{\n\
              \x20           return Err(LuaError::runtime(\"greet: name must not be empty\"));\n\
+             \x20       }}\n\
+             \x20       if verbose {{\n\
+             \x20           return Ok(format!(\n\
+             \x20               \"Hello, {{who}} — from Rust (frame {{}})\",\n\
+             \x20               FRAMES.load(Ordering::Relaxed)\n\
+             \x20           ));\n\
              \x20       }}\n\
              \x20       Ok(format!(\"Hello, {{who}} — from Rust\"))\n\
              \x20   }})?;\n\
@@ -546,6 +563,11 @@ mod tests {
         assert!(lib_rs.contains("\"greet\""));
         assert!(lib_rs.contains("\"on_frame\""));
         assert!(lib_rs.contains("AtomicU64"));
+        // The config global is READ at require(), not just set by the hook:
+        // log_level comes off the table, and verbose mode actually uses it.
+        assert!(lib_rs.contains("globals().get"));
+        assert!(lib_rs.contains("\"log_level\""));
+        assert!(lib_rs.contains("verbose"));
         // No panic paths across the FFI line (the comment may say "unwrap",
         // the code must not call it).
         assert!(!lib_rs.contains("unwrap()"));
@@ -561,7 +583,10 @@ mod tests {
         );
         assert!(hook.contains("require, \"my_native_mod\""));
         // The lifecycle: config global, frame pump guarded by pcall, demo call.
+        // Hook and lib must reference the SAME global name, or the read above
+        // silently finds nil and the hook's table is decoration.
         assert!(hook.contains("MY_NATIVE_MOD = { log_level = \"info\" }"));
+        assert!(lib_rs.contains("MY_NATIVE_MOD"));
         let frame_cb = between(hook, "function cb.onSimulationFrame()", "\nend");
         assert!(frame_cb.contains("pcall(my_native_mod.on_frame)"));
         assert!(hook.contains("DCS.setUserCallbacks(cb)"));
