@@ -13,6 +13,8 @@ path = "src/lib.rs"
 [dependencies]
 dcs-lua-syntax = { path = "../dcs-lua-syntax" }
 serde = { version = "1", features = ["derive"] }
+# Facade only (wasm-safe); native binaries install the subscriber.
+tracing = { workspace = true }
 
 [dev-dependencies]
 cucumber = "0.21"

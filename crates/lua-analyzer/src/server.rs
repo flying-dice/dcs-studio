@@ -77,7 +77,10 @@ impl LanguageServer for Backend {
         if let Some(root_uri) = params.root_uri
             && let Ok(path) = root_uri.to_file_path()
         {
+            tracing::info!(root = %path.display(), "initialize");
             *self.root.lock().expect("root lock") = Some(path);
+        } else {
+            tracing::info!(root = "none", "initialize (no rootUri)");
         }
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
@@ -99,8 +102,12 @@ impl LanguageServer for Backend {
     async fn initialized(&self, _: InitializedParams) {
         // Mount the whole workspace so diagnostics cover unopened files.
         let root = self.root.lock().expect("root lock").clone();
-        let Some(root) = root else { return };
+        let Some(root) = root else {
+            tracing::warn!("initialized with no root — nothing to walk");
+            return;
+        };
         let files = dcs_studio_project::sources::collect(&root);
+        tracing::info!(root = %root.display(), files = files.len(), "workspace walk");
         {
             let mut walked = self.walked.lock().expect("walked lock");
             for (path, _) in &files {

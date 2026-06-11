@@ -106,37 +106,54 @@ export class LuaAnalyzerProvider implements LanguageProvider {
 
     if (!this.client) {
       this._status = "loading";
+      // Phase 1 — resolve and spawn the binary. The only failure here is the
+      // binary genuinely missing (lua_analyzer_path errs) or unspawnable.
+      // Report it as "disabled" with a build hint (non-fatal, like
+      // rust-analyzer), NOT an opaque "crashed": Lua intelligence is gone but
+      // the IDE stays usable (model `EngineFailureIsNonFatal`).
+      let client: LspClient;
       try {
-        this.client = await this.connect();
+        client = await this.connect();
+      } catch (error) {
+        this._status = "disabled";
+        this.client = null;
+        console.warn("lua-analyzer unavailable:", error);
+        return;
+      }
+      // Phase 2 — the binary is present; complete the handshake. A failure
+      // here is a crash or wedged server, NOT an absent binary — "failed".
+      this.client = client;
+      try {
+        client.onNotification("textDocument/publishDiagnostics", (params) =>
+          this.onPublish(
+            params as { uri: string; diagnostics: LspWireDiagnostic[] },
+          ),
+        );
+        client.onServerExit(() => {
+          // Unstick any lint pass awaiting a publish that will never come.
+          for (const [, release] of this.publishWaiters) release();
+          this.publishWaiters.clear();
+          // Forget the dead session so the next mount() reconnects afresh.
+          this.exited = true;
+          this._status = "failed";
+          this.client = null;
+          this.versions.clear();
+          this.mountedRoot = null;
+        });
+        await client.request("initialize", {
+          processId: null,
+          // lua-analyzer walks the project itself from here.
+          rootUri: pathToUri(root),
+          capabilities: {},
+        });
+        await client.notify("initialized", {});
+        this.exited = false; // a fresh, live session
+        this._status = "ready";
       } catch (error) {
         this._status = "failed";
-        throw error;
-      }
-      this.client.onNotification("textDocument/publishDiagnostics", (params) =>
-        this.onPublish(
-          params as { uri: string; diagnostics: LspWireDiagnostic[] },
-        ),
-      );
-      this.client.onServerExit(() => {
-        // Unstick any lint pass awaiting a publish that will never come.
-        for (const [, release] of this.publishWaiters) release();
-        this.publishWaiters.clear();
-        // Forget the dead session so the next mount() reconnects afresh.
-        this.exited = true;
-        this._status = "failed";
         this.client = null;
-        this.versions.clear();
-        this.mountedRoot = null;
-      });
-      await this.client.request("initialize", {
-        processId: null,
-        // lua-analyzer walks the project itself from here.
-        rootUri: pathToUri(root),
-        capabilities: {},
-      });
-      await this.client.notify("initialized", {});
-      this.exited = false; // a fresh, live session
-      this._status = "ready";
+        console.warn("lua-analyzer handshake failed:", error);
+      }
     }
   }
 

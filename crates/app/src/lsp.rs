@@ -97,9 +97,11 @@ pub fn lsp_start(
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("spawning {program}: {e}"))?;
+    tracing::info!(server = %server_id, %program, ?args, "spawning language server");
+    let mut child = command.spawn().map_err(|e| {
+        tracing::error!(server = %server_id, %program, error = %e, "spawn failed");
+        format!("spawning {program}: {e}")
+    })?;
 
     let stdin = child.stdin.take().ok_or("child stdin not piped")?;
     let stdout = child.stdout.take().ok_or("child stdout not piped")?;
@@ -117,6 +119,7 @@ pub fn lsp_start(
             // SPONTANEOUS end (crash, abort, EOF) still holds it — reap
             // and tell the client either way, so nothing hangs.
             let code = reap(&reader_hosts, &message_id);
+            tracing::info!(server = %message_id, ?code, "language server exited");
             let _ = message_app.emit(&format!("lsp://exit/{message_id}"), ExitPayload { code });
         });
     }
@@ -126,6 +129,10 @@ pub fn lsp_start(
         let stderr_id = server_id.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                // Fold the child server's stderr into the app's own log so a
+                // crash or its tracing output is visible locally, then relay
+                // it to the webview for the in-app console.
+                tracing::warn!(target: "lsp.child", server = %stderr_id, "{line}");
                 let _ = stderr_app.emit(&format!("lsp://stderr/{stderr_id}"), line);
             }
         });

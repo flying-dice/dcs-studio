@@ -26,6 +26,7 @@ pub fn check_types(workspace: &Workspace) -> Vec<(String, Diagnostic)> {
         check_file(workspace, path, entry, &table, &mut findings);
     }
     findings.sort_by(|a, b| (a.0.as_str(), a.1.span.start).cmp(&(b.0.as_str(), b.1.span.start)));
+    tracing::debug!(findings = findings.len(), "type check");
     findings
 }
 

@@ -110,6 +110,9 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    // Logs to stderr (stdout is reserved for `mcp`'s JSON-RPC and command
+    // output); quiet by default, raise with `DCS_LOG=debug`.
+    dcs_studio_project::logging::init("warn");
     match Cli::parse().command {
         Command::Mcp => match mcp::serve() {
             Ok(()) => ExitCode::SUCCESS,

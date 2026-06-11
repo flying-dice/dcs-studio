@@ -13,6 +13,11 @@
 mod server;
 
 fn main() {
+    // Logs go to STDERR (stdout is the LSP wire). Raise verbosity with e.g.
+    // `DCS_LOG=lua_analyzer=trace,info`. The host captures this stderr and
+    // folds it into the app's own log, so a crash here is visible there.
+    dcs_studio_project::logging::init("info");
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "lua-analyzer starting");
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

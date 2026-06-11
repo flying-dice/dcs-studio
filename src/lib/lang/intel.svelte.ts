@@ -76,6 +76,7 @@ export class LangIntel {
   // Per-provider install hints shown in the Problems panel notice.
   private static readonly INSTALL_HINTS: Record<string, string> = {
     "rust-analyzer": "rustup component add rust-analyzer",
+    "dcs-lua": "build it with `cargo build -p lua-analyzer` (it must sit next to the app executable)",
   };
   private static readonly PROVIDER_LABELS: Record<string, string> = {
     "rust-analyzer": "rust-analyzer",

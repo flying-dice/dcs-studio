@@ -16,6 +16,7 @@
 
 pub mod detect;
 pub mod install;
+pub mod logging;
 pub mod manifest;
 pub mod process;
 pub mod scaffold;
