@@ -19,6 +19,7 @@
 //! ```
 
 use std::fs;
+use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,7 +28,10 @@ use dcs_studio_project::{quiet_command, scaffold};
 
 /// Kill a process by id: `std::process::Child` can't be killed from a
 /// watchdog thread without sharing the handle, but the OS tools can
-/// (same pattern as `crates/app/tests/host_ipc.rs`).
+/// (same pattern as `crates/app/tests/host_ipc.rs`). The ordering matters
+/// as much as the mechanism: the watchdog is stood down only after both
+/// pipes hit EOF and BEFORE the child is reaped — after `wait()` the PID
+/// is free for reuse, so a freed PID is never killed.
 fn kill_by_id(id: u32) {
     #[cfg(windows)]
     let _ = Command::new("taskkill")
@@ -73,11 +77,12 @@ fn rust_dll_template_passes_cargo_check() {
         .current_dir(&root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let child = command.spawn().expect("spawn cargo check");
+    let mut child = command.spawn().expect("spawn cargo check");
 
     // Watchdog: a wedged cargo (e.g. a stale registry lock) would block
-    // wait_with_output to the job timeout. The budget is generous because
-    // a cold cache compiles mlua and its deps from scratch.
+    // the pipe drain below to the job timeout; a kill turns the blocked
+    // reads into EOF instead. The budget is generous because a cold cache
+    // compiles mlua and its deps from scratch.
     let watchdog_off = Arc::new(AtomicBool::new(false));
     let child_id = child.id();
     {
@@ -90,12 +95,33 @@ fn rust_dll_template_passes_cargo_check() {
         });
     }
 
-    let output = child.wait_with_output().expect("cargo check completes");
+    // Drain BOTH pipes to EOF first — the only phase that can wedge, so
+    // the watchdog stays armed through it. stderr drains on its own
+    // thread so neither pipe can deadlock the other on a full buffer.
+    let mut stderr_pipe = child.stderr.take().expect("stderr piped");
+    let stderr_drain = std::thread::spawn(move || {
+        let mut stderr = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut stderr);
+        stderr
+    });
+    let mut stdout = Vec::new();
+    let _ = child
+        .stdout
+        .take()
+        .expect("stdout piped")
+        .read_to_end(&mut stdout);
+    let stderr = stderr_drain.join().expect("stderr drain thread");
+
+    // Both pipes are at EOF, so cargo can no longer wedge: stand the
+    // watchdog down BEFORE reaping (host_ipc.rs ordering) — after wait()
+    // the PID is free for reuse and a late kill would hit an innocent
+    // process.
     watchdog_off.store(true, Ordering::SeqCst);
+    let status = child.wait().expect("cargo check completes");
     assert!(
-        output.status.success(),
+        status.success(),
         "cargo check of the scaffolded rust-dll project failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
+        String::from_utf8_lossy(&stderr)
     );
     let _ = fs::remove_dir_all(&parent);
 }

@@ -61,7 +61,10 @@ app:
 # links, so DCS's Windows-only lua import library is not needed here; a
 # full `cargo build` would have to link a real liblua and stays out of
 # scope. The lua-script probe goes through the real CLI: init, then
-# `check` (exit code = error-finding count) must come back clean.
+# `check` (exit code = error-finding count; a nonexistent root is an
+# error, not a clean workspace) must come back clean. The `test -f`
+# between them asserts init emitted the entry script where the template
+# says, so the clean check is proven to have analysed real files.
 template-compile:
   stage: test
   image: rust:1.92
@@ -77,6 +80,9 @@ template-compile:
   script:
     - cargo test -p dcs-studio-project --test template_compile
     - cargo run -p dcs-studio-cli -- init "Lua Probe" --template lua-script --parent /tmp/probe
+    # slugify("Lua Probe") = "lua-probe" (templates.rs); a moved entry
+    # script would otherwise leave the check below with nothing to analyse.
+    - test -f "/tmp/probe/Lua Probe/Scripts/lua-probe/main.lua"
     - cargo run -p dcs-studio-cli -- check "/tmp/probe/Lua Probe"
 
 web:
