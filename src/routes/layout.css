@@ -303,6 +303,19 @@
 	@apply text-muted-foreground;
 }
 
+/* --- cursor: sticky ease-in glide on position change ---------------------- */
+/* Starts slow (sticky feel) then accelerates to the new position.          */
+/* 80 ms keeps it imperceptible during rapid typing but visible on clicks.  */
+.cm-editor .cm-cursor {
+	transition: left 60ms cubic-bezier(0.2, 0, 0, 1), top 60ms cubic-bezier(0.2, 0, 0, 1);
+	border-left-width: 2px !important;
+}
+
+/* --- gutter: extra breathing room on line numbers ------------------------- */
+.cm-editor .cm-lineNumbers .cm-gutterElement {
+	padding: 0 12px 0 8px;
+}
+
 /* --- fold marker: muted pill --------------------------------------------- */
 .cm-editor .cm-foldPlaceholder {
 	@apply rounded-sm border border-border bg-muted px-1 text-muted-foreground;
