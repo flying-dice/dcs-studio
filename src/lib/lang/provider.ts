@@ -92,11 +92,14 @@ export interface LanguageProvider {
   extensions: string[];
 
   /**
-   * Load the engine and seed it with the workspace. Resolves once queries
-   * are live; rejects when the engine cannot load (the IDE stays usable —
+   * Load the engine and seed it with the workspace. `root` is the
+   * workspace root path: providers whose servers index the project
+   * themselves (rust-analyzer) pass it on as `rootUri`; embedded engines
+   * fed file-by-file ignore it. Resolves once queries are live; rejects
+   * when the engine cannot load (the IDE stays usable —
    * model/studio/lang.pds `EngineFailureIsNonFatal`).
    */
-  mount(files: SourceFile[], rules: ProfileRule[]): Promise<void>;
+  mount(files: SourceFile[], rules: ProfileRule[], root: string): Promise<void>;
 
   /**
    * Create or replace one source (edits, saves, generated files).
@@ -108,6 +111,13 @@ export interface LanguageProvider {
 
   /** All current findings across the mounted workspace. */
   diagnostics(): Promise<Diagnostic[]>;
+  /**
+   * Optional push channel: `cb` runs whenever new findings land outside a
+   * query (an LSP publishDiagnostics after `setSource` already resolved —
+   * rust-analyzer's first index can lag well past the publish grace).
+   * Consumers re-pull `diagnostics()` so slow findings still surface.
+   */
+  onDiagnostics?(cb: () => void): void;
   /** The declaration outline of one file. */
   documentSymbols(path: string): Promise<DocumentSymbol[]>;
   /** Foldable regions of one file (offsets into the document text). */

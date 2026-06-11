@@ -54,7 +54,12 @@ class WasmLuaProvider implements LanguageProvider {
     return this.offsets.get(path)?.utf16(byteOffset) ?? byteOffset;
   }
 
-  async mount(files: SourceFile[], rules: ProfileRule[]): Promise<void> {
+  // The session is fed file-by-file; the workspace root plays no part.
+  async mount(
+    files: SourceFile[],
+    rules: ProfileRule[],
+    _root: string,
+  ): Promise<void> {
     await this.ensureLoaded();
     this.texts.clear();
     this.offsets.clear();

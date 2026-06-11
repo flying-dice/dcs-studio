@@ -24,6 +24,15 @@ test("diagnostics arrive via push and convert to exact UTF-16 offsets", async ({
   await expect(page.getByTestId("lsp-marked")).toHaveText("marked: «(»");
 });
 
+test("a server-to-client request gets answered, not ignored", async ({
+  page,
+}) => {
+  // The fake server sends `client/registerCapability` (id 999) right
+  // after initialize — rust-analyzer stalls if such requests go
+  // unanswered, so the client must reply with result null.
+  await expect(page.getByTestId("lsp-server-req")).toHaveText("answered");
+});
+
 test("a server crash rejects the path instead of hanging", async ({
   page,
 }) => {

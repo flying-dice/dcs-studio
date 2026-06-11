@@ -24,7 +24,7 @@
       try {
         const provider = providerFor(PATH);
         if (!provider) throw new Error(`no provider for ${PATH}`);
-        await provider.mount([{ path: PATH, text: INITIAL }], []);
+        await provider.mount([{ path: PATH, text: INITIAL }], [], "lab");
         lang.engineStatus = "ready";
       } catch (error) {
         console.error("language engine failed to mount:", error);

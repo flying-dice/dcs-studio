@@ -69,10 +69,20 @@ public system DcsLua {
   public DefinitionOf(path: string, offset: number): Option<studio::lang::Location>;
 }
 
-/// Webview-side language-intelligence layer: decides which files the engine
-/// sees, keeps the session in sync with edits, and publishes findings to the
-/// Problems panel. Editor queries (completion, hover, definition) go straight
-/// to the engine's face; this container owns feeding and findings.
+/// rust-analyzer, the third-party Rust language server: the second hosted
+/// server behind the provider seam, spawned by the same backend host that
+/// serves DcsLua's LSP (decisions/005) and consumed through the identical
+/// provider contract. Detection goes via the Rust toolchain (PATH, then
+/// rustup which); absence is non-fatal — the IDE stays fully usable with
+/// Lua intelligence intact.
+public system RustAnalyzer;
+
+/// Webview-side language-intelligence layer: decides which files each engine
+/// sees, keeps the sessions in sync with edits, and publishes findings to the
+/// Problems panel. A provider registry routes files by extension — .lua to
+/// DcsLua, .rs to RustAnalyzer. Editor queries (completion, hover,
+/// definition) go straight to the owning engine's face; this container owns
+/// feeding and findings.
 public container LanguageIntel for studio::core::Studio {
   /// Mount the project into the engine when a workspace opens: collect every
   /// Lua source and .d.lua definition under the root, apply the manifest's
@@ -80,55 +90,88 @@ public container LanguageIntel for studio::core::Studio {
   /// without language intelligence, and the status bar says so.
   #[onevent(studio::core::ProjectOpened)]
   public MountWorkspace(opened: studio::core::ProjectOpened): void {
-    files = studio::lang::SourceFile[] from self.CollectLuaSources(opened.path)
+    files = studio::lang::SourceFile[] from self.CollectSources(opened.path)
     rules = studio::lang::ProfileRule[] from self.ProfileRules(opened.path)
     mounted = Result<void, studio::lang::EngineError> from studio::lang::DcsLua.Mount(files, rules)
     if (mounted.isErr) {
       self.ShowEngineStatus(mounted.error)
       return
     }
+    self.MountRustAnalyzer(opened.path)
     self.RefreshProblems()
   }
 
-  /// Every .lua and .d.lua file under the root, read via WorkspaceFs.
-  CollectLuaSources(root: string): studio::lang::SourceFile[];
+  /// Every registry-claimed source (.lua, .d.lua, .rs) under the root,
+  /// read via WorkspaceFs.
+  CollectSources(root: string): studio::lang::SourceFile[];
+
+  /// Spawn rust-analyzer through the backend host when the project has a
+  /// Cargo.toml; its late-published findings re-enter via the push
+  /// channel. A missing rust-analyzer or non-Cargo project is non-fatal.
+  MountRustAnalyzer(root: string): void;
 
   /// Profile rules parsed from the project's dcs-studio.toml; files matching
   /// no rule default to the mission profile.
   ProfileRules(root: string): studio::lang::ProfileRule[];
 
-  /// Keep the engine current as the developer edits (debounced): only Lua
-  /// sources reach the engine, then findings refresh.
+  /// Keep the owning engine current as the developer edits (debounced):
+  /// the registry routes by extension — Lua sources to DcsLua, Rust
+  /// sources to rust-analyzer's session — then findings refresh.
   #[manual]
   public UpdateSource(path: string, text: string): void {
-    supported = bool from self.IsLuaSource(path)
+    supported = bool from self.HasProviderFor(path)
     if (!supported) {
       return
     }
-    file = studio::lang::SourceFile from { path, text }
-    studio::lang::DcsLua.SetSource(file)
+    isLua = bool from self.IsLuaSource(path)
+    if (isLua) {
+      file = studio::lang::SourceFile from { path, text }
+      studio::lang::DcsLua.SetSource(file)
+    } else {
+      self.SyncRustSource(path, text)
+    }
     self.RefreshProblems()
   }
 
-  /// Drop a deleted file from the session and refresh findings.
+  /// Drop a deleted file from its owning session and refresh findings.
   public DropSource(path: string): void {
-    supported = bool from self.IsLuaSource(path)
+    supported = bool from self.HasProviderFor(path)
     if (!supported) {
       return
     }
-    studio::lang::DcsLua.RemoveSource(path)
+    isLua = bool from self.IsLuaSource(path)
+    if (isLua) {
+      studio::lang::DcsLua.RemoveSource(path)
+    } else {
+      self.DropRustSource(path)
+    }
     self.RefreshProblems()
   }
 
-  /// Whether a path is Lua source the engine should see (.lua or .d.lua).
+  /// Whether any registered provider claims the path (.lua, .d.lua, .rs).
+  HasProviderFor(path: string): bool;
+
+  /// Whether a path is Lua source DcsLua should see (.lua or .d.lua).
   IsLuaSource(path: string): bool;
 
-  /// Pull the workspace's findings and publish them to the Problems panel
+  /// Forward a Rust edit to rust-analyzer's session (didOpen/didChange);
+  /// a no-op while rust-analyzer is absent or the project has no Cargo.toml.
+  SyncRustSource(path: string, text: string): void;
+
+  /// Close a Rust source in rust-analyzer's session.
+  DropRustSource(path: string): void;
+
+  /// Pull every engine's findings and publish them to the Problems panel
   /// and the editor's inline markers.
   RefreshProblems(): void {
-    found = studio::lang::Diagnostic[] from studio::lang::DcsLua.Diagnostics()
-    self.PublishProblems(found)
+    luaFindings = studio::lang::Diagnostic[] from studio::lang::DcsLua.Diagnostics()
+    all = studio::lang::Diagnostic[] from self.MergeRustFindings(luaFindings)
+    self.PublishProblems(all)
   }
+
+  /// Append rust-analyzer's current findings to the Lua set — one merged
+  /// list feeds the panel regardless of which engine produced a finding.
+  MergeRustFindings(luaFindings: studio::lang::Diagnostic[]): studio::lang::Diagnostic[];
 
   /// Hand findings to the UI: the Problems panel list and per-file marker
   /// stores both read from this.
@@ -176,4 +219,12 @@ feature EngineFailureIsNonFatal for studio::lang::LanguageIntel {
   when "a project is opened"
   then "the IDE works normally without language intelligence"
   and "the status bar reports the engine as unavailable"
+}
+
+/// Rust projects get rust-analyzer findings through the same provider seam.
+feature RustProjectGetsDiagnostics for studio::lang::LanguageIntel {
+  given "a project with a Cargo.toml and rust-analyzer installed"
+  when "a Rust file is edited"
+  then "rust-analyzer findings surface in the editor and Problems panel"
+  but "a missing rust-analyzer leaves the IDE fully usable with Lua intelligence intact"
 }

@@ -20,6 +20,8 @@
   let serverAlive = $state(true);
   let afterCrashError = $state("");
   let ready = $state(false);
+  // Did the client answer our server→client request (id 999)?
+  let serverReq = $state("pending");
 
   // ---- the fake server ------------------------------------------------
   let emitMessage: (raw: string) => void = () => {};
@@ -63,6 +65,14 @@
     async send(raw: string) {
       const message = JSON.parse(raw);
       queueMicrotask(() => {
+        if (message.id !== undefined && message.method === undefined) {
+          // A client→server RESPONSE — the answer to our server→client
+          // request below. rust-analyzer stalls without these.
+          if (message.id === 999 && message.result === null) {
+            serverReq = "answered";
+          }
+          return;
+        }
         if (message.id !== undefined) {
           // Requests answer like the real server: initialize, symbol and
           // folding queries with empty results.
@@ -74,6 +84,18 @@
                 ? []
                 : null;
           emitMessage(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+          if (message.method === "initialize") {
+            // Like a real server: a server→client request right after
+            // the handshake; the client must answer it.
+            emitMessage(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: 999,
+                method: "client/registerCapability",
+                params: { registrations: [] },
+              }),
+            );
+          }
           return;
         }
         if (
@@ -98,7 +120,7 @@
 
   onMount(() => {
     void (async () => {
-      await provider.mount([{ path: PATH, text: BROKEN }], []);
+      await provider.mount([{ path: PATH, text: BROKEN }], [], "C:\\lab");
       await provider.setSource(PATH, BROKEN);
       findings = await provider.diagnostics();
       // The marked slice proves UTF-16 correctness end to end: with byte
@@ -127,6 +149,7 @@
   <button type="button" data-testid="lsp-crash" onclick={() => void crash()}>
     Crash server
   </button>
+  <div data-testid="lsp-server-req">{serverReq}</div>
   <div data-testid="lsp-marked">marked: «{markedText}»</div>
   <div data-testid="lsp-after-crash">{afterCrashError}</div>
   <ul>

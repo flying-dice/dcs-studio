@@ -7,7 +7,12 @@
 
 import { readDir, readTextFile, type DirEntry } from "$lib/api";
 import { allProviders, providerFor } from "./registry";
-import type { Diagnostic, ProfileRule, SourceFile } from "./provider";
+import type {
+  Diagnostic,
+  LanguageProvider,
+  ProfileRule,
+  SourceFile,
+} from "./provider";
 
 /** Folders never mounted into the engine. */
 const SKIPPED_DIRS = new Set([".git", "node_modules", "target", "build"]);
@@ -35,6 +40,9 @@ export class LangIntel {
   // Generation counter: opening another project mid-mount invalidates the
   // older walk, so a slow first mount can never clobber the newer one.
   private mountGeneration = 0;
+  // Providers whose push channel is already wired — registration must
+  // survive remounts without stacking duplicate callbacks.
+  private readonly pushWired = new WeakSet<LanguageProvider>();
 
   /** Findings of one file, for the editor's inline markers. */
   fileDiagnostics(path: string): Diagnostic[] {
@@ -50,7 +58,7 @@ export class LangIntel {
     const generation = ++this.mountGeneration;
     this.engineStatus = "loading";
     try {
-      const files = await this.collectLuaSources(root);
+      const files = await this.collectSources(root);
       if (generation !== this.mountGeneration) return; // superseded
       const rules = this.profileRules(root);
       for (const provider of allProviders()) {
@@ -58,7 +66,13 @@ export class LangIntel {
         const mine = files.filter((f) =>
           provider.extensions.some((ext) => lower(f.path).endsWith(ext)),
         );
-        await provider.mount(mine, rules);
+        // Late-push surfacing: slow servers (rust-analyzer's first index)
+        // publish findings after the lint pass timed out — re-pull then.
+        if (provider.onDiagnostics && !this.pushWired.has(provider)) {
+          this.pushWired.add(provider);
+          provider.onDiagnostics(() => void this.refreshProblems());
+        }
+        await provider.mount(mine, rules, root);
       }
       if (generation !== this.mountGeneration) return;
       this.engineStatus = "ready";
@@ -78,8 +92,8 @@ export class LangIntel {
 
   /**
    * Keep the engine current as the developer edits (model `UpdateSource`;
-   * the editor's lint cycle provides the debounce). Only Lua sources reach
-   * the engine.
+   * the editor's lint cycle provides the debounce). Only sources a
+   * registered provider claims reach an engine.
    */
   async updateSource(path: string, text: string): Promise<void> {
     const provider = providerFor(path);
@@ -116,8 +130,9 @@ export class LangIntel {
     this.diagnostics = perProvider.flat();
   }
 
-  /** Every .lua / .d.lua file under the root (model `CollectLuaSources`). */
-  private async collectLuaSources(root: string): Promise<SourceFile[]> {
+  /** Every provider-claimed file (.lua, .rs, …) under the root (model
+   * `CollectSources`). */
+  private async collectSources(root: string): Promise<SourceFile[]> {
     const files: SourceFile[] = [];
     // Symlink cycles must not recurse unboundedly: track visited dirs and
     // cap the depth (a real mod tree is a handful of levels).

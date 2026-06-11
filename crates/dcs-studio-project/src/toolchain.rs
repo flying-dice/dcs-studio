@@ -19,6 +19,29 @@ pub fn detect() -> ToolchainStatus {
     }
 }
 
+/// Locate a runnable `rust-analyzer` (model: `studio::lang::RustAnalyzer`
+/// detection): the binary on `PATH` first, else the rustup-managed
+/// component via `rustup which`. `None` when neither answers — absence is
+/// data here too.
+#[must_use]
+pub fn rust_analyzer() -> Option<String> {
+    if version_of("rust-analyzer").is_some() {
+        return Some("rust-analyzer".to_string());
+    }
+    let output = crate::process::quiet_command("rustup")
+        .args(["which", "rust-analyzer"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!path.is_empty() && std::path::Path::new(&path).exists()).then_some(path)
+}
+
 fn version_of(tool: &str) -> Option<String> {
     let output = crate::process::quiet_command(tool)
         .arg("--version")
@@ -47,5 +70,12 @@ mod tests {
         // that probing is total.
         let status = detect();
         let _ = (status.cargo, status.rustup);
+    }
+
+    #[test]
+    fn rust_analyzer_probe_never_panics() {
+        // Whether rust-analyzer is installed is machine-dependent; the
+        // contract is only that the probe is total.
+        let _ = rust_analyzer();
     }
 }
