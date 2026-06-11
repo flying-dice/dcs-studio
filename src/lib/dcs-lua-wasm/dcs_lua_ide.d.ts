@@ -121,9 +121,11 @@ export class IdeSession {
      */
     folding_ranges(path: string): FoldingRange[];
     /**
-     * Hover card at an offset. Phase 2.
+     * Hover card for the identifier at a byte offset: declaration kind
+     * and signature, the doc run above the declaration, and the shallow
+     * initializer-inferred type (lsp-core resolution).
      */
-    hover(_path: string, _offset: number): Hover | undefined;
+    hover(path: string, offset: number): Hover | undefined;
     /**
      * Seed the session with the workspace's Lua sources and profile rules.
      * Wholesale: any previously mounted workspace is replaced, so opening
@@ -151,11 +153,11 @@ export interface InitOutput {
     readonly idesession_diagnostics: (a: number) => [number, number];
     readonly idesession_document_symbols: (a: number, b: number, c: number) => [number, number];
     readonly idesession_folding_ranges: (a: number, b: number, c: number) => [number, number];
+    readonly idesession_hover: (a: number, b: number, c: number, d: number) => any;
     readonly idesession_mount: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly idesession_new: () => number;
     readonly idesession_remove_source: (a: number, b: number, c: number) => void;
     readonly idesession_set_source: (a: number, b: number, c: number, d: number, e: number) => void;
-    readonly idesession_hover: (a: number, b: number, c: number, d: number) => any;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;

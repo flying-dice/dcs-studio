@@ -123,7 +123,9 @@ fn function_symbol(
     }
 }
 
-fn render_func_name(name: &FuncName) -> String {
+/// `a.b.c` / `a.b:m` rendering of a function statement's name — shared
+/// with hover's headline.
+pub(crate) fn render_func_name(name: &FuncName) -> String {
     let mut rendered = name
         .segments
         .iter()

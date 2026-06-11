@@ -3,16 +3,20 @@
 //! Pure functions: `workspace + position -> LSP-shaped value`. Session
 //! state lives at the edge (`dcs-lua-ide`); nothing here does I/O.
 //!
-//! Phase 1 scope: diagnostics, document symbols, folding ranges. The
-//! resolution-backed queries (completion, hover, definition) land with the
-//! model crate (plan Phase 2).
+//! Phase 1 shipped diagnostics, document symbols, and folding ranges.
+//! Phase 2 (resolution) lands here slice by slice: hover is the first —
+//! identifier resolution (innermost scope → file globals → workspace
+//! globals), doc-comment bodies, and shallow initializer-inferred types.
 
 pub mod analysis;
 pub mod fold;
+pub mod hover;
+pub mod resolve;
 pub mod symbols;
 pub mod workspace;
 
 pub use analysis::all_findings;
 pub use fold::folding_ranges;
+pub use hover::{HoverInfo, hover};
 pub use symbols::{DocumentSymbol, SymbolKind, document_symbols};
 pub use workspace::{FileEntry, Workspace};

@@ -82,6 +82,7 @@ fn lsp_initialize_didopen_publishes_diagnostics() {
         json!("dcs-studio-cli")
     );
     assert_eq!(init["result"]["capabilities"]["textDocumentSync"], json!(1));
+    assert_eq!(init["result"]["capabilities"]["hoverProvider"], json!(true));
 
     // initialized triggers the workspace walk → diagnostics for broken.lua.
     lsp_send(
@@ -118,6 +119,26 @@ fn lsp_initialize_didopen_publishes_diagnostics() {
             .unwrap()
             .ends_with("broken.lua")
     );
+
+    // Hover over a documented local answers a markdown card with the
+    // declaration headline and the doc text.
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "method": "textDocument/didChange",
+                "params": {"textDocument": {"uri": file_uri, "version": 3},
+                           "contentChanges": [{"text": "--- Greets the pilot.\nlocal greet = \"hello\"\nprint(greet)\n"}]}}),
+    );
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 7, "method": "textDocument/hover",
+                "params": {"textDocument": {"uri": file_uri},
+                           "position": {"line": 2, "character": 8}}}),
+    );
+    let hover = lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(7)));
+    assert_eq!(hover["result"]["contents"]["kind"], json!("markdown"));
+    let card = hover["result"]["contents"]["value"].as_str().unwrap();
+    assert!(card.contains("local greet: string"), "card was: {card}");
+    assert!(card.contains("Greets the pilot."), "card was: {card}");
 
     lsp_send(
         &mut child,
