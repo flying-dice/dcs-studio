@@ -54,7 +54,7 @@ Diagnostic { severity, span, code, code_description, message }
 | `LUA-E0xx` | lexical | `LUA-E001` unexpected character · `LUA-E002` unterminated string · `LUA-E003` unterminated long bracket · `LUA-E004` malformed number |
 | `LUA-E1xx` | parse | `LUA-E100` unexpected token · `LUA-E101` expected token · `LUA-E102` unterminated block (missing `end`) · `LUA-E103` nesting too deep (recursion cap; totality on a 1 MiB stack) |
 | `LUA-Sxxx` | static (resolution) | reserved |
-| `LUA-Txxx` | types | reserved |
+| `LUA-Txxx` | types | `LUA-T001` argument type not assignable to the declared `@param` type |
 | `DCS-Wxxx` | DCS-flavoured lints | reserved |
 
 A code, once shipped, MUST NOT be reused for a different rule.
@@ -67,9 +67,15 @@ declaration. Tag set: `@class`, `@field`, `@param`, `@return`, `@type`,
 expressions: names, unions (`A|B`), optionals (`T?`), functions
 (`fun(a: T): R`), tables (`table<K, V>`), arrays (`T[]`), and literal types.
 
-The annotation grammar and its conformance layer (`CONFORMANCE/annot/`) are
-deferred until the annotation parser lands (plan Phase 3). The tag set and
-LuaLS compatibility are pinned now (decisions/003).
+The annotation parser reads a contiguous `---` run as the block attached to the
+following declaration and yields a structured `AnnotationBlock`. Type-carrying
+tags (`@param`, `@return`, `@type`, `@class`, `@field`, `@alias`, `@enum`) feed
+type checking; the remaining tags are parsed and surfaced (hover) but do not yet
+gate diagnostics. Parsing is total: an unknown tag or malformed type expression
+degrades to the `any` type and never fails the parse. The dialect targets the
+**DCS Lua 5.1/LuaJIT** runtime only — version-conditional semantics of other Lua
+runtimes are out of scope. Tag set and LuaLS compatibility are pinned by
+decisions/003; goldens live under `CONFORMANCE/annot/`.
 
 ## §5 Environment profiles
 

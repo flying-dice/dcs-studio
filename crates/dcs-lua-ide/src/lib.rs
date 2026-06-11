@@ -78,6 +78,17 @@ pub struct FoldingRange {
     pub end: u32,
 }
 
+/// One inferred-type inlay hint: a `: <type>` label drawn as ghost text
+/// after the byte `offset` (the end of the bound name).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct InlayHint {
+    pub offset: u32,
+    pub label: String,
+    /// LSP inlay-hint kind; currently always `"Type"`.
+    pub kind: String,
+}
+
 /// One completion suggestion (Phase 2; the port exists so the contract is
 /// stable from day one).
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
@@ -156,20 +167,17 @@ impl IdeSession {
         self.workspace.remove_source(path);
     }
 
-    /// All current findings across the mounted workspace.
+    /// All current findings across the mounted workspace: parse diagnostics
+    /// plus the type-checker's `LUA-Txxx` findings, via the shared
+    /// `all_findings` aggregation (the same one the CLI/MCP/LSP edges use).
     #[must_use]
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
-        let mut all: Vec<Diagnostic> = self
-            .workspace
-            .files()
-            .flat_map(|(path, entry)| {
+        let mut all: Vec<Diagnostic> = dcs_lua_lsp_core::all_findings(&self.workspace)
+            .into_iter()
+            .filter_map(|(path, diagnostic)| {
+                let entry = self.workspace.file(&path)?;
                 let index = LineIndex::new(&entry.source);
-                entry
-                    .parsed
-                    .diagnostics
-                    .iter()
-                    .map(move |diagnostic| convert_diagnostic(path, diagnostic, &index))
-                    .collect::<Vec<_>>()
+                Some(convert_diagnostic(&path, &diagnostic, &index))
             })
             .collect();
         all.sort_by(|a, b| (a.path.as_str(), a.start).cmp(&(b.path.as_str(), b.start)));
@@ -219,6 +227,19 @@ impl IdeSession {
     #[must_use]
     pub fn definition(&self, _path: &str, _offset: u32) -> Option<Location> {
         None
+    }
+
+    /// Inferred-type inlay hints for one file (lsp-core resolution).
+    #[must_use]
+    pub fn inlay_hints(&self, path: &str) -> Vec<InlayHint> {
+        dcs_lua_lsp_core::inlay_hints(&self.workspace, path)
+            .into_iter()
+            .map(|hint| InlayHint {
+                offset: hint.offset,
+                label: hint.label,
+                kind: hint.kind,
+            })
+            .collect()
     }
 }
 

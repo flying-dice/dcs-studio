@@ -6,14 +6,20 @@
 //! clock, or I/O. Analysis is total: lexing and parsing never fail on user
 //! input; anomalies ride alongside as diagnostics.
 
+pub mod annotation;
 pub mod ast;
 pub mod diagnostic;
 pub mod lexer;
 pub mod parser;
 pub mod span;
 pub mod token;
+pub mod ty;
+pub mod type_expr;
 
+pub use annotation::{AnnotationBlock, FieldAnno, ParamAnno, parse_block};
 pub use ast::Parsed;
 pub use diagnostic::{Diagnostic, Severity};
 pub use span::{LineIndex, Span};
 pub use token::{Lexed, SpannedTrivia, Token, TokenKind, Trivia};
+pub use ty::Type;
+pub use type_expr::parse_type;

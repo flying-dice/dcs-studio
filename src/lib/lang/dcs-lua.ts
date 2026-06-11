@@ -20,6 +20,7 @@ import type {
   DocumentSymbol,
   FoldingRange,
   Hover,
+  InlayHint,
   LanguageProvider,
   Location,
   ProfileRule,
@@ -143,6 +144,13 @@ class WasmLuaProvider implements LanguageProvider {
 
   async definition(path: string, offset: number): Promise<Location | null> {
     return this.session?.definition(path, this.toBytes(path, offset)) ?? null;
+  }
+
+  async inlayHints(path: string): Promise<InlayHint[]> {
+    return (this.session?.inlay_hints(path) ?? []).map((hint) => ({
+      ...hint,
+      offset: this.toUtf16(path, hint.offset),
+    }));
   }
 }
 
