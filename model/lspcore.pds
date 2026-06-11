@@ -1,0 +1,72 @@
+//! lspcore — transport-neutral language queries (crate `dcs-lua-lsp-core`).
+//!
+//! Pure functions over the mounted workspace; session state lives at the
+//! wasm edge. One lex per edit: the workspace caches the parse and the
+//! trivia so no query re-scans source.
+
+/// One mounted file: text, cached parse, and cached trivia.
+public data FileEntry { source: string, parsed: syntax::Parsed, trivia: syntax::SpannedTrivia[] }
+
+/// Maps workspace files to a DCS environment profile by glob (SPEC.md §5);
+/// held from mount time for the Phase-2 global graph.
+public data ProfileRule { glob: string, profile: string }
+
+/// The outline entry classes Phase 1 distinguishes.
+public data SymbolKind =
+  | Function
+  | Variable
+
+/// One outline entry: `selection` is the name, `span` the declaration;
+/// nested function declarations become children.
+public data DocumentSymbol { name: string, kind: lspcore::SymbolKind, span: syntax::Span, selection: syntax::Span, children: lspcore::DocumentSymbol[] }
+
+/// Every mounted file, keyed by workspace-relative path.
+/// #critical
+public container Workspace for dcslua::DcsLuaLs {
+  /// Create or replace one file: lex once, parse from that lex, cache
+  /// both. A content-identical update is a no-op.
+  public SetSource(path: string, text: string): void {
+    same = bool from self.IsUnchanged(path, text)
+    if (same) {
+      return
+    }
+    lexed = syntax::Lexed from syntax::Syntax.Lex(text)
+    parsed = syntax::Parsed from syntax::Syntax.ParseLexed(text, lexed)
+    entry = lspcore::FileEntry from { text, parsed, lexed }
+    self.Store(path, entry)
+  }
+
+  /// Whether the stored source for `path` already equals `text`.
+  IsUnchanged(path: string, text: string): bool;
+
+  /// Insert or replace the cached entry for `path`.
+  Store(path: string, entry: lspcore::FileEntry): void;
+
+  /// Drop one file from the workspace.
+  public RemoveSource(path: string): void;
+
+  /// The cached entry for `path`, if mounted.
+  public File(path: string): Option<lspcore::FileEntry>;
+}
+
+/// Query handlers: `workspace + position → LSP-shaped value`. Stateless
+/// per query; Phase 1 ships symbols and folding, resolution-backed queries
+/// land with the model crate (plan Phase 2).
+public container Queries for dcslua::DcsLuaLs {
+  /// The declaration outline of one file: functions (dotted/method names
+  /// rendered whole), locals, global writes; `local f = function` and
+  /// `G = function` outline as functions; empty when not mounted.
+  public DocumentSymbols(path: string): lspcore::DocumentSymbol[];
+
+  /// Foldable spans of one file: block statements, function literals,
+  /// table constructors, and long comments (from cached trivia).
+  public FoldingRanges(path: string): syntax::Span[];
+}
+
+/// Editing one file re-analyses exactly that file.
+feature PerFileMemoisation for lspcore::Workspace {
+  given "a workspace with many mounted files"
+  when "one file's source changes"
+  then "only that file is re-lexed and re-parsed"
+  and "every other file's cached parse is untouched"
+}

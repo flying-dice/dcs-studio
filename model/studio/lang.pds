@@ -36,9 +36,10 @@ public data FoldingRange { start: number, end: number }
 /// could not be fetched or instantiated).
 public data EngineError { message: string }
 
-/// The dcs-lua language engine (the dcs-lua-ls workspace compiled to wasm).
-/// Modelled on the LSP but embedded in the webview; these signatures are the
-/// contract its IdeSession must satisfy.
+/// The dcs-lua language engine (the crates/dcs-lua-* workspace members,
+/// compiled to wasm — see dcslua.pds for its internals). Modelled on the
+/// LSP but embedded in the webview; these signatures are the contract its
+/// IdeSession must satisfy.
 public system DcsLua {
   /// Instantiate the wasm module and seed the session with the workspace.
   public Mount(files: studio::lang::SourceFile[], rules: studio::lang::ProfileRule[]): Result<void, studio::lang::EngineError>;

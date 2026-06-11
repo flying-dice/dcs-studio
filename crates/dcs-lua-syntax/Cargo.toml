@@ -1,0 +1,17 @@
+[package]
+name = "dcs-lua-syntax"
+version.workspace = true
+edition = "2024"
+
+[lints]
+workspace = true
+
+[lib]
+name = "dcs_lua_syntax"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+proptest = "1"

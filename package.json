@@ -17,6 +17,7 @@
     "test:e2e": "playwright test",
     "test:lang": "playwright test -c playwright.lang.config.ts",
     "test:report": "playwright show-report",
+    "build:wasm": "wasm-pack build crates/dcs-lua-ide --release --target web --out-dir ../../src/lib/dcs-lua-wasm && node -e \"['.gitignore','package.json','README.md'].forEach(f=>{try{require('fs').unlinkSync('src/lib/dcs-lua-wasm/'+f)}catch{}})\"",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

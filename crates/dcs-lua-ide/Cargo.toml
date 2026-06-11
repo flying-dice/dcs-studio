@@ -1,0 +1,28 @@
+[package]
+name = "dcs-lua-ide"
+version.workspace = true
+edition = "2024"
+
+[lints]
+workspace = true
+
+[lib]
+name = "dcs_lua_ide"
+# `cdylib` is the single browser wasm artifact (`--target web` + wasm-bindgen);
+# `rlib` keeps it a normal Rust dependency so the workspace builds/tests it on
+# the host.
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+dcs-lua-lsp-core = { path = "../dcs-lua-lsp-core" }
+dcs-lua-syntax = { path = "../dcs-lua-syntax" }
+serde = { version = "1", features = ["derive"] }
+wasm-bindgen = "0.2"
+# Typed wasm boundary: the Rust DTOs are the source of truth, `tsify` emits
+# the real TS interfaces, values cross as objects — no hand-written TS, no
+# JSON.parse (decisions/002).
+tsify-next = { version = "0.5", default-features = false, features = ["js"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"

@@ -46,7 +46,11 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | `model/studio/link.pds` | `DcsLink` heartbeat + `BridgeClient` (`crates/app/src/dcs.rs`, `crates/dcs-bridge-client`) |
 | `model/studio/inject.pds` | `Injector` — bridge DLL/hook install (`crates/app/src/inject.rs`) |
 | `model/studio/mission.pds` | `MissionScripting` sanitization manager (`crates/app/src/mission.rs`) |
-| `model/studio/lang.pds` | `LanguageIntel` provider layer + `DcsLua` embedded wasm engine face (`src/lib/lang/`, dcs-lua-ls repo) |
+| `model/studio/lang.pds` | `LanguageIntel` provider layer + `DcsLua` embedded engine face (`src/lib/lang/`) |
+| `model/dcslua.pds` | `DcsLuaLs` engine system root |
+| `model/syntax.pds` | Lexer/parser/AST contract (`crates/dcs-lua-syntax`) |
+| `model/lspcore.pds` | Workspace + query layer (`crates/dcs-lua-lsp-core`) |
+| `model/ide.pds` | Wasm `IdeSession` edge (`crates/dcs-lua-ide`) |
 | `model/dcs/bridge.pds` | `Dcs` system: GameGUI hook, JSON-RPC server/router (`crates/dcs-bridge`) |
 
 ## Architecture
@@ -67,11 +71,18 @@ back to `src/lib/dcs-ws.ts`, speaking the same wire protocol directly.
 
 ### Language intelligence (no LSP process)
 
-Lua diagnostics/outline/folding come from the **dcs-lua-ls** engine
-(`C:\Users\jonat\Projects\dcs-lua-ls`, its own model-governed repo), compiled
-to wasm and loaded in the webview — never a spawned language server. The
-artifact lives at `src/lib/dcs-lua-wasm/` (built by wasm-pack from that repo;
-rebuild command in its README). The IDE side:
+Lua diagnostics/outline/folding come from the **dcs-lua engine** — the
+`crates/dcs-lua-{syntax,lsp-core,ide}` workspace members — compiled to wasm
+and loaded in the webview, never a spawned language server. The artifact
+lives at `src/lib/dcs-lua-wasm/` (rebuild with `pnpm build:wasm` after
+engine changes, then commit it). Engine governance lives in this repo:
+`SPEC.md` (dialect, diagnostic registry, annotations, profiles, `.d.lua`
+layering), `PATTERNS.md`, `decisions/` ADRs, `CONFORMANCE/` goldens
+(hand-written, never copied from the implementation), and `testdata/`
+(MIST + TSTL corpus — parsing it panic-free in budget is a test, not a
+benchmark). The engine crates are edition 2024 with clippy-pedantic
+workspace lints; the parser is total — any input yields a tree plus
+diagnostics, never a panic. The IDE side:
 
 - `src/lib/lang/provider.ts` — the LSP-shaped `LanguageProvider` extension
   point; DTO types re-exported from the wasm's generated `.d.ts`.
@@ -96,6 +107,9 @@ rebuild command in its README). The IDE side:
   cold start. Don't run it casually; report with `pnpm test:report`.
 - `pnpm test:lang` — language-engine Playwright suite (`e2e-lang/`), browser
   only: no Tauri, no DCS. Cheap to run.
+- `cargo test -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide` — engine
+  suites (units, conformance goldens, totality properties, corpus gate).
+- `pnpm build:wasm` — rebuild `src/lib/dcs-lua-wasm/` after engine changes.
 
 For live work against DCS (deploy the DLL, launch/control the sim, eval Lua),
 use the `dcs-dev` skill.

@@ -1,0 +1,9 @@
+//! context — dcs-lua-ls: a DCS-flavoured Lua 5.1 language engine, modelled
+//! on the LSP and consumed embedded (a wasm IdeSession inside dcs-studio's
+//! webview — decisions/002). Pure analysis: the engine never executes Lua
+//! and never touches the filesystem.
+
+/// The language engine: error-tolerant syntax, a whole-workspace global
+/// graph partitioned by DCS environment profile, type inference, and
+/// LuaLS-compatible .d.lua definitions.
+public system DcsLuaLs;

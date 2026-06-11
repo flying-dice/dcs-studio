@@ -1,0 +1,5 @@
+LOCAL@1:1 "local"
+NAME@1:7 "x"
+EQ@1:9 "="
+NIL@1:11 "nil"
+EOF@2:1 ""

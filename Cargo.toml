@@ -1,10 +1,26 @@
 [workspace]
 resolver = "2"
-members = ["crates/app", "crates/dcs-bridge-client", "crates/dcs-bridge"]
+members = [
+    "crates/app",
+    "crates/dcs-bridge-client",
+    "crates/dcs-bridge",
+    "crates/dcs-lua-syntax",
+    "crates/dcs-lua-lsp-core",
+    "crates/dcs-lua-ide",
+]
 
 [workspace.package]
 edition = "2021"
 version = "0.1.0"
+
+# Opt-in lints for the dcs-lua engine crates (`[lints] workspace = true`);
+# the app/bridge crates don't opt in and are unaffected.
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Spans and offsets are u32 by design (compact arena indices, rust-analyzer
+# style); source sizes are bounded well under u32::MAX, so usize -> u32 casts
+# are intentional and checked at the LineIndex boundary.
+cast_possible_truncation = "allow"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
