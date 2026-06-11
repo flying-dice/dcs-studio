@@ -133,8 +133,14 @@
         parkedScroll.delete(parked);
       }
     }
-    if (!view || path === shownPath) return;
+    if (!view) return;
+    // Every run invalidates older in-flight first-open reads — including
+    // runs that land on the already-shown tab. Switching BACK to the shown
+    // file while another file's read is in flight must defuse that read,
+    // or it would resolve later and hijack the view (tab strip says A,
+    // buffer shows B; model `LoadTab` superseded guard).
     const seq = ++loadSeq;
+    if (path === shownPath) return;
     if (!path || !doc) {
       parkCurrent();
       shownPath = null;
@@ -148,23 +154,46 @@
       parkCurrent();
       shownPath = path;
       view.setState(parked);
-      view.scrollDOM.scrollTop = parkedScroll.get(path) ?? 0;
+      // Restore scroll after the swapped-in state has been measured/laid
+      // out, not synchronously against stale geometry.
+      const scrollTop = parkedScroll.get(path) ?? 0;
+      view.requestMeasure({
+        read: () => null,
+        write: () => {
+          if (view && shownPath === path) view.scrollDOM.scrollTop = scrollTop;
+        },
+      });
       // The parked state may predate a theme change — re-sync it.
       view.dispatch({ effects: themeComp.reconfigure(app.cm) });
       applyPendingJump();
       return;
     }
-    // First activation: load from disk into a fresh state. Fresh states are
-    // inherently history-free, so the load itself is never undoable.
+    // First activation: load from disk into a fresh state (model `LoadTab`).
+    // Fresh states are inherently history-free, so the load itself is never
+    // undoable.
     const name = doc.name;
-    readFile(path).then((text) => {
-      if (!view || seq !== loadSeq) return; // superseded by a newer switch
+    void (async () => {
+      let text: string;
+      try {
+        text = await readFile(path);
+      } catch (error) {
+        // Failed read (model `LoadTab` Err arm): never leave an empty tab
+        // impersonating the file on disk — close it, unless a newer switch
+        // already owns the tab strip. No toast surface exists yet; log like
+        // the other fs/engine failures.
+        console.error(`failed to read ${path}:`, error);
+        if (seq === loadSeq) void app.closeFile(path);
+        return;
+      }
+      // Superseded while in flight (newer switch, or the tab was closed and
+      // a neighbour activated) — the stale text must not win the view.
+      if (!view || seq !== loadSeq || app.activePath !== path) return;
       parkCurrent();
       shownPath = path;
       view.setState(freshState(path, name, text));
       app.onDocLoaded(path, text);
       applyPendingJump();
-    });
+    })();
   });
 
   // A Problems click on the already-active file changes only pendingJump.

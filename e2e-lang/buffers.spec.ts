@@ -72,6 +72,44 @@ test("tab switch round-trip preserves an unsaved edit and its undo stack", async
   await expect(page.getByTestId("lab-status")).toContainText("dirty: false");
 });
 
+test("a stale in-flight read never hijacks the view after switching back", async ({
+  page,
+}) => {
+  // Race regression (pre-push review F1): A shown -> activate B (its first
+  // read still in flight) -> activate A again -> B's read lands. The stale
+  // read must be discarded, never shown. The lab's hold/release seam makes
+  // the in-flight window deterministic (model StaleLoadNeverHijacksView).
+  await page.getByTestId("open-a").click();
+  await expect(editor(page)).toContainText('print("hello")');
+
+  await page.getByTestId("hold-next-b").click();
+  await page.getByTestId("open-b").click();
+  // release-b arms only once b.lua's read is genuinely parked in flight.
+  await expect(page.getByTestId("release-b")).toBeEnabled();
+
+  // Switch back to A while B's read is in flight, then let it land.
+  await tab(page, "lab/a.lua").click();
+  await page.getByTestId("release-b").click();
+  await expect(page.getByTestId("release-b")).toBeDisabled();
+
+  // The view still shows A — the tab strip and the buffer agree.
+  await expect(editor(page)).toContainText('print("hello")');
+  await expect(editor(page)).not.toContainText("world");
+  await expect(tab(page, "lab/a.lua")).toHaveAttribute("data-active", "true");
+
+  // Edits route into A's buffer, never B's.
+  await editor(page).click();
+  await editor(page).fill('print("routed to a")\n');
+  await expect(page.getByTestId("lab-status")).toContainText("dirty: true");
+  await expect(tab(page, "lab/a.lua")).toHaveAttribute("data-dirty", "true");
+  await expect(tab(page, "lab/b.lua")).toHaveAttribute("data-dirty", "false");
+
+  // B still loads cleanly on a real activation afterwards.
+  await tab(page, "lab/b.lua").click();
+  await expect(editor(page)).toContainText('print("world")');
+  await expect(tab(page, "lab/b.lua")).toHaveAttribute("data-dirty", "false");
+});
+
 test("closing a dirty tab prompts; declining keeps the buffer", async ({
   page,
 }) => {

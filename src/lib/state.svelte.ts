@@ -16,6 +16,7 @@ import {
 } from "./api";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import { wsConnected } from "./dcs-ws";
 import { lang } from "./lang/intel.svelte";
 import type { Extension } from "@codemirror/state";
@@ -338,14 +339,16 @@ class AppState {
    * its edits are discarded; closing the active tab activates a neighbour,
    * and closing the last tab returns to the no-file-open state.
    */
-  closeFile(path: string) {
-    const idx = this.openFiles.findIndex((f) => f.path === path);
-    if (idx < 0) return;
-    const tab = this.openFiles[idx];
+  async closeFile(path: string): Promise<void> {
+    const tab = this.openFiles.find((f) => f.path === path);
+    if (!tab) return;
     if (tab.docText !== tab.savedText) {
-      const confirmed = this.confirmDiscard(tab.name);
+      const confirmed = await this.confirmDiscard(tab.name);
       if (!confirmed) return;
     }
+    // Re-locate the tab: the list may have changed while the dialog was up.
+    const idx = this.openFiles.findIndex((f) => f.path === path);
+    if (idx < 0) return;
     this.openFiles.splice(idx, 1);
     if (this.activePath === path) {
       const neighbour = this.openFiles[idx] ?? this.openFiles[idx - 1];
@@ -355,15 +358,26 @@ class AppState {
 
   /** Close the active tab, if any (File → Close Editor, tab × button). */
   closeActiveFile() {
-    if (this.activePath) this.closeFile(this.activePath);
+    if (this.activePath) void this.closeFile(this.activePath);
   }
 
-  /** Ask the developer before discarding a dirty tab (model `ConfirmDiscard`). */
-  private confirmDiscard(name: string): boolean {
-    if (typeof window === "undefined" || typeof window.confirm !== "function") {
-      return true;
+  /**
+   * Ask the developer before discarding a dirty tab (model `ConfirmDiscard`).
+   * Dual-path like dcsCall: the native dialog in the packaged app
+   * (window.confirm is a non-functional stub in Tauri's webview),
+   * window.confirm in a plain browser (vite dev, Playwright). With no
+   * confirm surface at all the answer is NO — never silently discard
+   * unsaved work.
+   */
+  private async confirmDiscard(name: string): Promise<boolean> {
+    const message = `${name} has unsaved changes. Close it and discard them?`;
+    if (isTauri()) {
+      return confirmDialog(message, { title: "Unsaved changes", kind: "warning" });
     }
-    return window.confirm(`${name} has unsaved changes. Close it and discard them?`);
+    if (typeof window !== "undefined" && typeof window.confirm === "function") {
+      return window.confirm(message);
+    }
+    return false;
   }
 
   /** Called by the editor once a file's contents have loaded from disk. */
@@ -389,8 +403,12 @@ class AppState {
     if (!doc || doc.docText === doc.savedText || this.saving) return;
     this.saving = true;
     try {
-      await writeTextFile(doc.path, doc.docText);
-      doc.savedText = doc.docText;
+      // Capture the buffer BEFORE the await: keystrokes that land while the
+      // write is in flight must keep the tab dirty, so the baseline is set
+      // to exactly what was written, not to the post-write buffer.
+      const text = doc.docText;
+      await writeTextFile(doc.path, text);
+      doc.savedText = text;
     } finally {
       this.saving = false;
     }

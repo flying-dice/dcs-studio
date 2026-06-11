@@ -80,24 +80,20 @@ public container Workbench for studio::core::Studio {
   }
 
   /// Open a file into the editor. An already-open tab is re-activated as-is
-  /// (its pending edits and undo history intact); otherwise the file is read
-  /// from disk into a fresh tab — with an empty undo history, so the load
-  /// itself is never undoable — appended to the tab strip, and activated.
+  /// (its pending edits and undo history intact); otherwise a fresh empty
+  /// tab is appended to the tab strip and activated — its text is loaded
+  /// lazily on first activation (`LoadTab`), so opening never blocks on disk.
   #[manual]
-  public OpenFile(path: string): Result<studio::core::Document, studio::files::IoError> {
+  public OpenFile(path: string): studio::core::Document {
     existing = Option<studio::core::Document> from self.FindOpen(path)
     if (existing.isSome) {
       self.ActivateTab(existing.value)
-      return Ok(existing.value)
+      return existing.value
     }
-    text = Result<string, studio::files::IoError> from studio::files::WorkspaceFs.ReadTextFile(path)
-    if (text.isErr) {
-      return Err(text.error)
-    }
-    doc = studio::core::Document from { path, text.value }
+    doc = studio::core::Document from { path }
     self.AppendTab(doc)
     self.ActivateTab(doc)
-    return Ok(doc)
+    return doc
   }
 
   /// The already-open tab for `path`, if any — opening never duplicates tabs.
@@ -109,8 +105,44 @@ public container Workbench for studio::core::Studio {
   /// Make `doc` the active tab: park the outgoing tab's whole buffer
   /// (pending edits, undo history, selection, scroll) and restore `doc`'s
   /// own. Another file's text is never spliced into the current buffer, so
-  /// undo can never resurrect a different file's content.
+  /// undo can never resurrect a different file's content. A tab activated
+  /// for the first time has no buffer yet — its text is fetched via
+  /// `LoadTab`.
   ActivateTab(doc: studio::core::Document): void;
+
+  /// Lazily load a first-activated tab's text from disk — into a fresh
+  /// buffer with an empty undo history, so the load itself is never
+  /// undoable. A failed read closes the tab and surfaces the error (an
+  /// empty buffer must never impersonate the file on disk). A load that
+  /// was superseded while the read was in flight — the developer activated
+  /// another tab (every activation invalidates older in-flight loads, even
+  /// re-activating the already-shown tab) or closed this one — is
+  /// discarded without touching the shown buffer.
+  #[manual]
+  LoadTab(doc: studio::core::Document): Result<string, studio::files::IoError> {
+    text = Result<string, studio::files::IoError> from studio::files::WorkspaceFs.ReadTextFile(doc.path)
+    superseded = bool from self.LoadSuperseded(doc)
+    if (text.isErr) {
+      if (!superseded) {
+        self.CloseFile(doc.path)
+      }
+      return Err(text.error)
+    }
+    if (superseded) {
+      return Ok(text.value)
+    }
+    self.ShowTab(doc, text.value)
+    return Ok(text.value)
+  }
+
+  /// Whether this load was overtaken while its read was in flight: the
+  /// developer activated another tab (or re-activated the shown one) or
+  /// closed this tab, so the result must not win the view.
+  LoadSuperseded(doc: studio::core::Document): bool;
+
+  /// Swap the freshly loaded text in as `doc`'s shown buffer and set both
+  /// the buffer and the on-disk baseline to it (the tab starts clean).
+  ShowTab(doc: studio::core::Document, text: string): void;
 
   /// The currently focused tab, if any file is open.
   ActiveTab(): Option<studio::core::Document>;
@@ -135,6 +167,10 @@ public container Workbench for studio::core::Studio {
   }
 
   /// Ask the developer to confirm discarding a dirty tab's unsaved edits.
+  /// Dual-path like DcsCall: a native dialog in the packaged app
+  /// (window.confirm is a stub under Tauri), window.confirm in a plain
+  /// browser. With no confirm surface at all the answer is NO — unsaved
+  /// work is never silently discarded.
   ConfirmDiscard(doc: studio::core::Document): bool;
 
   /// Drop the tab and its parked buffer (so reopening reloads from disk);
@@ -266,6 +302,15 @@ feature TabSwitchKeepsUnsavedEdits for studio::core::Workbench {
   when "the developer switches to file B and back to A"
   then "A's pending edits are still in its buffer and A is still dirty"
   and "undo still steps back through A's own edit history"
+}
+
+/// A first-open read that was overtaken mid-flight never hijacks the view:
+/// the tab strip, the shown buffer, and edit routing always agree.
+feature StaleLoadNeverHijacksView for studio::core::Workbench {
+  given "file A is shown and file B's first read is still in flight"
+  when "the developer activates A again before B's read lands"
+  then "the editor keeps showing A's buffer when the stale read resolves"
+  and "edits route into A's buffer, never B's"
 }
 
 /// Unsaved work is never silently discarded by closing a tab.

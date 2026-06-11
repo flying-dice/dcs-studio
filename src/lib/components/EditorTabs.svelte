@@ -48,7 +48,7 @@
         aria-label={`Close ${f.name}`}
         onclick={(e) => {
           e.stopPropagation();
-          app.closeFile(f.path);
+          void app.closeFile(f.path);
         }}
       >
         <X class="size-3.5" />

@@ -19,9 +19,25 @@
 
   let ready = $state(false);
 
+  // One-shot hold on the next read of b.lua: the race spec arms it, opens
+  // b (read parks in flight), switches back to a, then releases — making
+  // the stale-read window deterministic instead of timing-dependent
+  // (model StaleLoadNeverHijacksView / LoadTab superseded guard).
+  let holdNextB = false;
+  let releaseB = $state<(() => void) | null>(null);
+
   async function readFile(path: string): Promise<string> {
     const text = FILES.get(path);
     if (text === undefined) throw new Error(`no lab file: ${path}`);
+    if (holdNextB && path === "lab/b.lua") {
+      holdNextB = false;
+      await new Promise<void>((resolve) => {
+        releaseB = () => {
+          releaseB = null;
+          resolve();
+        };
+      });
+    }
     return text;
   }
 
@@ -67,6 +83,21 @@
       onclick={() => app.openFile("lab/b.lua", "b.lua")}
     >
       open b.lua
+    </button>
+    <button
+      class="rounded border px-2 py-0.5"
+      data-testid="hold-next-b"
+      onclick={() => (holdNextB = true)}
+    >
+      hold next b read
+    </button>
+    <button
+      class="rounded border px-2 py-0.5 disabled:opacity-40"
+      data-testid="release-b"
+      disabled={!releaseB}
+      onclick={() => releaseB?.()}
+    >
+      release b read
     </button>
   </div>
   <div class="flex h-9 shrink-0 items-center gap-1 overflow-x-auto rounded border px-2">
