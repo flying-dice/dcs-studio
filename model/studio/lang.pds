@@ -62,7 +62,9 @@ public system DcsLua {
   /// Suggestions at a cursor offset.
   public Complete(path: string, offset: number): studio::lang::CompletionItem[];
 
-  /// Hover card for the symbol at an offset, if any.
+  /// Hover card for the symbol at an offset, if any: the declaration kind
+  /// and signature, the `---` doc run above the declaration, and the
+  /// shallowly inferred initializer type.
   public HoverAt(path: string, offset: number): Option<studio::lang::Hover>;
 
   /// Definition site of the symbol at an offset, if known.

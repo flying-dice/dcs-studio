@@ -33,6 +33,17 @@ test("a server-to-client request gets answered, not ignored", async ({
   await expect(page.getByTestId("lsp-server-req")).toHaveText("answered");
 });
 
+test("hover answers convert to a title/body card", async ({ page }) => {
+  // The fake answers textDocument/hover with markdown MarkupContent;
+  // the provider strips the ** emphasis into the title and the rest
+  // becomes the body.
+  await page.getByTestId("lsp-hover").click();
+  await expect(page.getByTestId("lsp-hover-title")).toHaveText(
+    "local x: number",
+  );
+  await expect(page.getByTestId("lsp-hover-body")).toHaveText("the answer");
+});
+
 test("a server crash rejects the path instead of hanging", async ({
   page,
 }) => {

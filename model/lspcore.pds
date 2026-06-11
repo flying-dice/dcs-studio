@@ -20,6 +20,11 @@ public data SymbolKind =
 /// nested function declarations become children.
 public data DocumentSymbol { name: string, kind: lspcore::SymbolKind, span: syntax::Span, selection: syntax::Span, children: lspcore::DocumentSymbol[] }
 
+/// One hover card: the declaration headline (kind, name, signature or
+/// shallowly inferred type) and the body (the `---` doc run above the
+/// declaration; a cross-file global appends `defined in <path>:<line>`).
+public data HoverInfo { title: string, body: string }
+
 /// Every mounted file, keyed by workspace-relative path.
 /// #critical
 public container Workspace for dcslua::DcsLuaLs {
@@ -65,6 +70,29 @@ public container Queries for dcslua::DcsLuaLs {
   /// Every finding across the mounted workspace, each paired with its
   /// file path, ordered by path then offset.
   public AllFindings(): syntax::Diagnostic[];
+
+  /// The hover card for the identifier at a byte offset; none over
+  /// whitespace or non-identifiers. Resolution order: innermost lexical
+  /// scope first (locals, `local function`s, function parameters, for
+  /// bindings — walking block and function nesting, shadowing-aware; a
+  /// plain `local` becomes visible only after its declaring statement
+  /// completes, so `local x = x` resolves the RHS to the outer binding,
+  /// while a `local function` name is visible inside its own body),
+  /// then file-level globals, then workspace-level globals (the first
+  /// global assignment or function declaration with that name across all
+  /// mounted files — the global-first model). Types come from shallow
+  /// initializer inference only: literals, table and function
+  /// constructors, arithmetic/concat/comparison/unary operators; calls,
+  /// `and`/`or`, and field chains stay `unknown`.
+  public HoverAt(path: string, offset: number): Option<lspcore::HoverInfo>;
+}
+
+/// Hover explains a declaration: kind, inferred type, and its doc text.
+feature HoverExplainsDeclarations for lspcore::Queries {
+  given "a documented local with a string initializer"
+  when "the developer hovers its name"
+  then "the card titles it as a local with the inferred string type"
+  and "the doc comment text above the declaration appears in the body"
 }
 
 /// Editing one file re-analyses exactly that file.

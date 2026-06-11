@@ -79,15 +79,17 @@ export class IdeSession {
         return v2;
     }
     /**
-     * Hover card at an offset. Phase 2.
-     * @param {string} _path
-     * @param {number} _offset
+     * Hover card for the identifier at a byte offset: declaration kind
+     * and signature, the doc run above the declaration, and the shallow
+     * initializer-inferred type (lsp-core resolution).
+     * @param {string} path
+     * @param {number} offset
      * @returns {Hover | undefined}
      */
-    hover(_path, _offset) {
-        const ptr0 = passStringToWasm0(_path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    hover(path, offset) {
+        const ptr0 = passStringToWasm0(path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.idesession_hover(this.__wbg_ptr, ptr0, len0, _offset);
+        const ret = wasm.idesession_hover(this.__wbg_ptr, ptr0, len0, offset);
         return ret;
     }
     /**

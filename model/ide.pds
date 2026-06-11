@@ -39,6 +39,12 @@ public container IdeSession for dcslua::DcsLuaLs {
   /// Every finding across the workspace, line/column resolved per file,
   /// sorted by path then offset.
   public Diagnostics(): ide::WireDiagnostic[];
+
+  /// Hover card for the identifier at a byte offset, if any: delegates
+  /// to lspcore's resolution-backed query.
+  public HoverAt(path: string, offset: number): Option<lspcore::HoverInfo> {
+    return lspcore::Queries.HoverAt(path, offset)
+  }
 }
 
 /// The session answers from wholesale-replaced state only.

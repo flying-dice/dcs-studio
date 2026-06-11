@@ -10,19 +10,36 @@
   import { providerFor } from "$lib/lang/registry";
   import { langIntelFor } from "$lib/lang/codemirror";
   import { lang } from "$lib/lang/intel.svelte";
+  import type { LanguageProvider } from "$lib/lang/provider";
 
   const PATH = "lab/main.lua";
-  const INITIAL = "function f() end\n";
+  // The multibyte comment line makes UTF-16 and byte offsets diverge
+  // before `f` — the probe's indexOf offset (UTF-16) only resolves if
+  // the provider converts to bytes at the engine boundary.
+  const INITIAL =
+    "-- наводка °\n--- Doc for f.\nlocal f = function() end\nfunction g() end\n";
 
   let host: HTMLDivElement;
   let ready = $state(false);
+  let provider: LanguageProvider | null = null;
+  let hoverTitle = $state("");
+  let hoverBody = $state("");
+
+  // Hover probe: ask the real provider for the card over `f`'s
+  // declaration in the seeded text, render it for the e2e suite.
+  async function probeHover(): Promise<void> {
+    const offset = INITIAL.indexOf("local f") + "local ".length;
+    const hover = (await provider?.hover(PATH, offset)) ?? null;
+    hoverTitle = hover?.title ?? "(none)";
+    hoverBody = hover?.body ?? "";
+  }
 
   onMount(() => {
     let view: EditorView | undefined;
     void (async () => {
       lang.engineStatus = "loading";
       try {
-        const provider = providerFor(PATH);
+        provider = providerFor(PATH);
         if (!provider) throw new Error(`no provider for ${PATH}`);
         await provider.mount([{ path: PATH, text: INITIAL }], [], "lab");
         lang.engineStatus = "ready";
@@ -47,6 +64,19 @@
 <div class="flex h-screen flex-col gap-2 p-3" data-testid="lua-lab">
   <div class="text-xs text-muted-foreground" data-testid="lab-engine-status">
     engine: {lang.engineStatus}{ready ? " · editor ready" : ""}
+  </div>
+  <div class="flex items-center gap-2 text-xs">
+    <button
+      class="rounded border px-2 py-0.5"
+      data-testid="hover-probe"
+      onclick={probeHover}
+    >
+      hover probe
+    </button>
+    <span data-testid="hover-title">{hoverTitle}</span>
+    <span class="text-muted-foreground" data-testid="hover-body"
+      >{hoverBody}</span
+    >
   </div>
   <div
     class="min-h-0 flex-1 overflow-hidden rounded border [&_.cm-editor]:h-full"

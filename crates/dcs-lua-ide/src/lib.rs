@@ -204,10 +204,15 @@ impl IdeSession {
         Vec::new()
     }
 
-    /// Hover card at an offset. Phase 2.
+    /// Hover card for the identifier at a byte offset: declaration kind
+    /// and signature, the doc run above the declaration, and the shallow
+    /// initializer-inferred type (lsp-core resolution).
     #[must_use]
-    pub fn hover(&self, _path: &str, _offset: u32) -> Option<Hover> {
-        None
+    pub fn hover(&self, path: &str, offset: u32) -> Option<Hover> {
+        dcs_lua_lsp_core::hover(&self.workspace, path, offset).map(|info| Hover {
+            title: info.title,
+            body: info.body,
+        })
     }
 
     /// Definition site of the symbol at an offset. Phase 2.
@@ -286,6 +291,15 @@ mod tests {
         assert_eq!(symbols[0].name, "f");
         assert_eq!(symbols[0].kind, "function");
         assert!(!session.folding_ranges("main.lua").is_empty());
+
+        // Hover over a documented local crosses the boundary intact.
+        let documented = "--- Radio callsign.\nlocal callsign = \"Maverick\"\nprint(callsign)\n";
+        session.set_source("main.lua", documented);
+        let offset = documented.rfind("callsign").expect("use site") as u32;
+        let hover = session.hover("main.lua", offset).expect("hover card");
+        assert!(hover.title.contains("callsign"));
+        assert!(hover.body.contains("Radio callsign."));
+        assert!(session.hover("main.lua", 0).is_none());
 
         session.remove_source("main.lua");
         assert!(session.diagnostics().is_empty());

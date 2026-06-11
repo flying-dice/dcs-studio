@@ -17,10 +17,10 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability, InitializeParams,
-    InitializeResult, InitializedParams, NumberOrString, OneOf, Position, Range,
-    ServerCapabilities, ServerInfo, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind,
-    Url,
+    FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability, Hover, HoverContents,
+    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+    MarkupContent, MarkupKind, NumberOrString, OneOf, Position, Range, ServerCapabilities,
+    ServerInfo, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
@@ -85,6 +85,7 @@ impl LanguageServer for Backend {
                 )),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -176,6 +177,28 @@ impl LanguageServer for Backend {
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let position_params = params.text_document_position_params;
+        let Some(path) = uri_path(&position_params.text_document.uri) else {
+            return Ok(None);
+        };
+        let workspace = self.workspace.lock().expect("workspace lock");
+        let Some(entry) = workspace.file(&path) else {
+            return Ok(None);
+        };
+        let offset = offset_of(&entry.source, position_params.position);
+        let Some(card) = dcs_lua_lsp_core::hover(&workspace, &path, offset) else {
+            return Ok(None);
+        };
+        Ok(Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: format!("**{}**\n\n{}", card.title, card.body),
+            }),
+            range: None,
+        }))
+    }
+
     async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
         let Some(path) = uri_path(&params.text_document.uri) else {
             return Ok(None);
@@ -248,6 +271,31 @@ fn position(src: &str, index: &LineIndex, offset: u32) -> Position {
         .get(line_start..offset as usize)
         .map_or(byte_col - 1, |prefix| prefix.encode_utf16().count() as u32);
     Position::new(line - 1, character)
+}
+
+/// LSP `Position` (0-based line, UTF-16 column) → engine byte offset —
+/// the inverse of [`position`]. Out-of-range lines and columns clamp to
+/// the line end / source end, mirroring the protocol's leniency.
+fn offset_of(src: &str, position: Position) -> u32 {
+    let mut line_start = 0usize;
+    for _ in 0..position.line {
+        match src[line_start..].find('\n') {
+            Some(newline) => line_start += newline + 1,
+            None => return src.len() as u32,
+        }
+    }
+    let line_end = src[line_start..]
+        .find('\n')
+        .map_or(src.len(), |newline| line_start + newline);
+    let line = &src[line_start..line_end];
+    let mut units = 0u32;
+    for (byte, ch) in line.char_indices() {
+        if units >= position.character {
+            return (line_start + byte) as u32;
+        }
+        units += ch.len_utf16() as u32;
+    }
+    line_end as u32
 }
 
 fn convert_symbol(symbol: CoreSymbol, src: &str, index: &LineIndex) -> DocumentSymbol {

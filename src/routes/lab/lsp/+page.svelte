@@ -22,6 +22,8 @@
   let ready = $state(false);
   // Did the client answer our server→client request (id 999)?
   let serverReq = $state("pending");
+  let hoverTitle = $state("");
+  let hoverBody = $state("");
 
   // ---- the fake server ------------------------------------------------
   // The crash button kills the CURRENT server; each connect() builds a
@@ -85,7 +87,14 @@
                 : message.method === "textDocument/documentSymbol" ||
                     message.method === "textDocument/foldingRange"
                   ? []
-                  : null;
+                  : message.method === "textDocument/hover"
+                    ? {
+                        contents: {
+                          kind: "markdown",
+                          value: "**local x: number**\n\nthe answer",
+                        },
+                      }
+                    : null;
             emitMessage(
               JSON.stringify({ jsonrpc: "2.0", id: message.id, result }),
             );
@@ -160,6 +169,13 @@
     markedText = first ? BROKEN.slice(first.start, first.end) : "";
     serverAlive = true;
   }
+
+  // The hover probe: markdown contents from the wire, split title/body.
+  async function probeHover() {
+    const card = await provider.hover(PATH, 0);
+    hoverTitle = card?.title ?? "";
+    hoverBody = card?.body ?? "";
+  }
 </script>
 
 <div class="flex h-screen flex-col gap-2 p-3 text-sm" data-testid="lsp-lab">
@@ -172,7 +188,12 @@
   <button type="button" data-testid="lsp-remount" onclick={() => void remount()}>
     Remount
   </button>
+  <button type="button" data-testid="lsp-hover" onclick={() => void probeHover()}>
+    Hover
+  </button>
   <div data-testid="lsp-server-req">{serverReq}</div>
+  <div data-testid="lsp-hover-title">{hoverTitle}</div>
+  <div data-testid="lsp-hover-body">{hoverBody}</div>
   <div data-testid="lsp-marked">marked: «{markedText}»</div>
   <div data-testid="lsp-after-crash">{afterCrashError}</div>
   <ul>

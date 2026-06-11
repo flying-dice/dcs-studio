@@ -16,7 +16,7 @@ export function lineStarts(text: string): number[] {
   return starts;
 }
 
-/** Byte→UTF-16 offset converter for one text snapshot. */
+/** Byte↔UTF-16 offset converter for one text snapshot. */
 export class ByteOffsets {
   /** `byteBefore[i]` = UTF-8 bytes before UTF-16 index `i`. */
   private readonly byteBefore: Uint32Array;
@@ -55,5 +55,14 @@ export class ByteOffsets {
       else high = mid - 1;
     }
     return low;
+  }
+
+  /** The UTF-8 byte offset of the character at UTF-16 index `utf16Offset`. */
+  bytes(utf16Offset: number): number {
+    if (this.ascii) {
+      return Math.min(utf16Offset, this.byteBefore.length - 1);
+    }
+    // byteBefore IS the UTF-16→byte mapping; clamp into [0, text.length].
+    return this.byteBefore[Math.min(utf16Offset, this.byteBefore.length - 1)];
   }
 }
