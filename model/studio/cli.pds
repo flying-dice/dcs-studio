@@ -113,6 +113,10 @@ public container Cli for studio::core::Studio {
       return 1
     }
     specs = string[] from self.DiscoverSpecs(root)
+    none = bool from self.NoSpecs(specs)
+    if (none) {
+      return 0
+    }
     results = studio::cli::FileResult[] from studio::cli::TestRunner.RunFiles(root, specs)
     self.RenderReport(results, reporter)
     failed = bool from self.AnyFailed(results)
@@ -129,6 +133,11 @@ public container Cli for studio::core::Studio {
   /// Spec files per the manifest's [test] table (directory + suffix),
   /// defaulting to tests/**/*.test.lua.
   DiscoverSpecs(root: string): string[];
+
+  /// Whether discovery found nothing: a project with no spec files is
+  /// clean, not failing (blank and rust-dll projects run `test` too) —
+  /// but the output says so explicitly.
+  NoSpecs(specs: string[]): bool;
 
   /// Pretty terminal output, or JUnit XML on disk for `--reporter junit`.
   RenderReport(results: studio::cli::FileResult[], reporter: string): void;

@@ -16,6 +16,43 @@ pub struct Manifest {
     /// (or field) formats with house-style defaults.
     #[serde(default)]
     pub format: dcs_lua_fmt::FormatConfig,
+    /// `[test]` — Lua test discovery (issue #9); an absent section means
+    /// the defaults (`tests/**/*.test.lua`).
+    #[serde(default)]
+    pub test: TestConfig,
+    /// `[build]` — Lua bundling (issue #9). Optional: bundling without a
+    /// declared entry is an error, never a guess.
+    #[serde(default)]
+    pub build: BuildConfig,
+}
+
+/// `[test]` — where `dcs-studio-cli test` discovers spec files.
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct TestConfig {
+    /// Project-relative directory walked for specs.
+    pub dir: String,
+    /// Filename suffix a spec must carry.
+    pub suffix: String,
+}
+
+impl Default for TestConfig {
+    fn default() -> Self {
+        Self {
+            dir: "tests".to_string(),
+            suffix: ".test.lua".to_string(),
+        }
+    }
+}
+
+/// `[build]` — what `dcs-studio-cli bundle` amalgamates.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct BuildConfig {
+    /// Project-relative entry script the require graph grows from.
+    pub entry: Option<String>,
+    /// Bundle filename under `dist/`; defaults to `<project slug>.lua`.
+    pub output: Option<String>,
 }
 
 /// `[project]` metadata; only the fields the toolchain acts on.
@@ -107,6 +144,28 @@ mod tests {
                 .expect("tolerant parse");
         assert_eq!(manifest.project.name, "x");
         assert!(manifest.install.is_empty());
+    }
+
+    #[test]
+    fn absent_test_and_build_sections_mean_defaults() {
+        let manifest = parse("[project]\nname = \"x\"\n").expect("parse");
+        assert_eq!(manifest.test.dir, "tests");
+        assert_eq!(manifest.test.suffix, ".test.lua");
+        assert_eq!(manifest.build.entry, None);
+        assert_eq!(manifest.build.output, None);
+    }
+
+    #[test]
+    fn test_and_build_sections_parse_per_field() {
+        let manifest = parse(
+            "[project]\nname = \"x\"\n\n[test]\ndir = \"specs\"\n\n[build]\nentry = \"main.lua\"\noutput = \"bundle.lua\"\n",
+        )
+        .expect("parse");
+        assert_eq!(manifest.test.dir, "specs");
+        // Untouched field keeps its default.
+        assert_eq!(manifest.test.suffix, ".test.lua");
+        assert_eq!(manifest.build.entry.as_deref(), Some("main.lua"));
+        assert_eq!(manifest.build.output.as_deref(), Some("bundle.lua"));
     }
 
     #[test]

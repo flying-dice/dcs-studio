@@ -6,11 +6,13 @@
 //! stdio. The IDE's backend spawns `dcs-studio-cli lsp` as its Lua
 //! language server.
 
+mod bundle;
 mod check;
 mod fmt;
 mod lsp;
 mod mcp;
 mod sources;
+mod test;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -69,6 +71,31 @@ enum Command {
     /// Build the project: `cargo build --release` for Rust projects,
     /// a no-op for everything else.
     Build {
+        /// Project root.
+        #[arg(default_value = ".")]
+        root: PathBuf,
+    },
+    /// Run the project's Lua unit tests outside DCS (issue #9): specs
+    /// from the manifest's [test] table (default tests/**/*.test.lua)
+    /// execute in the external dcs-lua-runner, each file in a fresh
+    /// Lua 5.1 state with the DCS stub environment. Any failing test —
+    /// or a missing runner — exits nonzero.
+    Test {
+        /// Project root.
+        #[arg(default_value = ".")]
+        root: PathBuf,
+        /// Output format; `junit` also writes XML to --junit-out.
+        #[arg(long, value_enum, default_value = "pretty")]
+        reporter: test::Reporter,
+        /// Where `--reporter junit` writes its XML.
+        #[arg(long, default_value = "junit.xml")]
+        junit_out: PathBuf,
+    },
+    /// Bundle a lua-script project into one dist/ file (issue #9):
+    /// the require graph from the manifest's [build] entry becomes
+    /// package.preload entries plus the entry body — require semantics
+    /// preserved, DCS-provided modules left untouched.
+    Bundle {
         /// Project root.
         #[arg(default_value = ".")]
         root: PathBuf,
@@ -138,6 +165,12 @@ fn main() -> ExitCode {
             ExitCode::from(u8::try_from(report.error_count.min(100)).unwrap_or(100))
         }
         Command::Fmt { paths, check } => fmt::run(&paths, check),
+        Command::Test {
+            root,
+            reporter,
+            junit_out,
+        } => test::run(&root, reporter, &junit_out),
+        Command::Bundle { root } => bundle::run(&root),
         Command::Build { root } => build(&root),
         Command::Install {
             root,
