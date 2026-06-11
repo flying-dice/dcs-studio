@@ -279,6 +279,17 @@ feature ProblemsClickOpensFile for studio::lang::LanguageIntel {
   and "the caret lands on the finding's line and column"
 }
 
+/// Status-bar problem counts are live navigation, not decoration.
+/// (Severity ordering and filter toggles inside the panel are presentation
+/// state, panel-local — deliberately not modelled.)
+feature StatusBarCountsOpenProblems for studio::lang::LanguageIntel {
+  given "the workspace has published findings"
+  when "the developer reads the status bar"
+  then "error and warning chips show the live finding counts"
+  and "clicking a chip opens the Problems panel"
+  but "zero counts render subdued instead of vanishing"
+}
+
 /// Language intelligence is an enhancement, never a gate.
 feature EngineFailureIsNonFatal for studio::lang::LanguageIntel {
   given "the wasm engine fails to load"

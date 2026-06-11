@@ -9,6 +9,7 @@
   import LuaConsole from "$lib/components/LuaConsole.svelte";
   import MissionScriptingManager from "$lib/components/MissionScriptingManager.svelte";
   import Problems from "$lib/components/Problems.svelte";
+  import ProblemChips from "$lib/components/ProblemChips.svelte";
   import Structure from "$lib/components/Structure.svelte";
   import Editor from "$lib/components/Editor.svelte";
   import EditorTabs from "$lib/components/EditorTabs.svelte";
@@ -483,6 +484,13 @@
           Lua: off
         {/if}
       </span>
+      <!-- Problem count chips: click opens the Problems panel
+           (model StatusBarCountsOpenProblems). -->
+      <ProblemChips
+        onOpen={() => {
+          if (app.bottomTool !== "problems") app.toggleTool("bottom", "problems");
+        }}
+      />
       <Separator orientation="vertical" class="!h-3" />
       <!-- DCS link: dot = WS liveness (green = mission running, amber = in menu). -->
       <span class="flex shrink-0 items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground">
