@@ -1,7 +1,7 @@
 //! `dcs-studio-cli mcp` — Model Context Protocol over stdio
 //! (newline-delimited JSON-RPC, protocol 2024-11-05). Tools:
-//! `init_project`, `check`. Build/deploy/introspection tools follow their
-//! phases (decisions/005).
+//! `init_project`, `check`, `build`. Deploy/introspection tools follow
+//! their phases (decisions/005).
 
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -76,13 +76,13 @@ fn tools_list() -> Value {
         "tools": [
             {
                 "name": "init_project",
-                "description": "Scaffold a new DCS Studio project from a template (lua-script or blank). Creates <parent>/<name> with a dcs-studio.toml manifest and starter files.",
+                "description": "Scaffold a new DCS Studio project from a template (lua-script, rust-dll, or blank). Creates <parent>/<name> with a dcs-studio.toml manifest and starter files.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "name": { "type": "string", "description": "Project name; also the folder name" },
                         "parent": { "type": "string", "description": "Directory to create the project under" },
-                        "template": { "type": "string", "enum": ["lua-script", "blank"], "description": "Template id (default lua-script)" }
+                        "template": { "type": "string", "enum": ["lua-script", "rust-dll", "blank"], "description": "Template id (default lua-script)" }
                     },
                     "required": ["name", "parent"]
                 }
@@ -94,6 +94,17 @@ fn tools_list() -> Value {
                     "type": "object",
                     "properties": {
                         "root": { "type": "string", "description": "Workspace root to analyse" }
+                    },
+                    "required": ["root"]
+                }
+            },
+            {
+                "name": "build",
+                "description": "Build the project at a root: runs `cargo build --release` for Rust projects (rust-dll) and reports a no-op for everything else. Returns the tail of the build output.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "root": { "type": "string", "description": "Project root to build" }
                     },
                     "required": ["root"]
                 }
@@ -122,7 +133,7 @@ fn tools_call(params: &Value) -> Result<Value, String> {
                 .get("template")
                 .and_then(Value::as_str)
                 .unwrap_or("lua-script");
-            match crate::scaffold::init(template, Path::new(parent), project) {
+            match dcs_studio_project::scaffold::init(template, Path::new(parent), project) {
                 Ok(root) => Ok(tool_text(&format!("created {}", root.display()), false)),
                 Err(message) => Ok(tool_text(&message, true)),
             }
@@ -135,8 +146,51 @@ fn tools_call(params: &Value) -> Result<Value, String> {
             let report = crate::check::run(Path::new(root));
             Ok(tool_text(&report.rendered, report.error_count > 0))
         }
+        "build" => {
+            let root = arguments
+                .get("root")
+                .and_then(Value::as_str)
+                .ok_or("build requires 'root'")?;
+            Ok(build_tool(Path::new(root)))
+        }
         other => Err(format!("unknown tool: {other}")),
     }
+}
+
+/// The `Build` subcommand's logic with captured (not inherited) output:
+/// the agent gets the tail of the cargo transcript, not our stdio.
+fn build_tool(root: &Path) -> Value {
+    if !root.join("Cargo.toml").is_file() {
+        return tool_text("no build step (not a Rust project)", false);
+    }
+    if dcs_studio_project::toolchain::detect().cargo.is_none() {
+        return tool_text(
+            "cargo not found — install the Rust toolchain via https://rustup.rs",
+            true,
+        );
+    }
+    match dcs_studio_project::quiet_command("cargo")
+        .args(["build", "--release"])
+        .current_dir(root)
+        .output()
+    {
+        Ok(output) => {
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            tool_text(&tail_lines(&combined, 50), !output.status.success())
+        }
+        Err(error) => tool_text(&format!("running cargo: {error}"), true),
+    }
+}
+
+/// Last `count` lines of `text` (cargo transcripts get long; the verdict
+/// and errors live at the end).
+fn tail_lines(text: &str, count: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    lines[lines.len().saturating_sub(count)..].join("\n")
 }
 
 fn tool_text(text: &str, is_error: bool) -> Value {

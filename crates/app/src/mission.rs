@@ -93,10 +93,7 @@ fn line_state(line: &str, name: &str) -> Option<bool> {
 /// Toggle one line between sanitized (active) and desanitized (commented out),
 /// preserving its indentation. `None` when the line matches none of the
 /// requested items, or is already in the desired state.
-fn toggled_line(
-    line: &str,
-    desired: &std::collections::HashMap<String, bool>,
-) -> Option<String> {
+fn toggled_line(line: &str, desired: &std::collections::HashMap<String, bool>) -> Option<String> {
     let (&want, active) = desired
         .iter()
         .find_map(|(name, want)| line_state(line, name).map(|active| (want, active)))?;
@@ -200,13 +197,21 @@ fn probe_installs() -> Vec<(String, PathBuf)> {
     let mut found = Vec::new();
     for drive in ['C', 'D', 'E'] {
         for leaf in ["DCS World", "DCS World OpenBeta", "DCS World Server"] {
-            let root = PathBuf::from(format!(
-                r"{drive}:\Program Files\Eagle Dynamics\{leaf}"
-            ));
+            let root = PathBuf::from(format!(r"{drive}:\Program Files\Eagle Dynamics\{leaf}"));
             found.push((leaf.to_string(), root));
         }
     }
     found
+}
+
+/// First existing DCS game install root (registry first, then fixed-drive
+/// probes): the `{GameInstall}` root for manifest installs.
+pub fn default_game_install() -> Option<PathBuf> {
+    registry_installs()
+        .into_iter()
+        .chain(probe_installs())
+        .map(|(_, root)| root)
+        .find(|root| root.is_dir())
 }
 
 /// Find candidate MissionScripting.lua files: registry installs first, then
@@ -217,9 +222,7 @@ pub fn dcs_detect_mission_scripts() -> Vec<MissionScriptFile> {
     let mut seen: Vec<String> = Vec::new();
     let mut out = Vec::new();
 
-    let candidates = registry_installs()
-        .into_iter()
-        .chain(probe_installs());
+    let candidates = registry_installs().into_iter().chain(probe_installs());
 
     for (variant, root) in candidates {
         if !root.is_dir() {
@@ -257,11 +260,15 @@ pub fn dcs_mission_script_set(
     let desired: std::collections::HashMap<String, bool> =
         serde_json::from_value(items).map_err(|e| format!("Bad items map: {e}"))?;
 
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read '{path}': {e}"))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read '{path}': {e}"))?;
 
     // Preserve the file's dominant line ending.
-    let eol = if content.contains("\r\n") { "\r\n" } else { "\n" };
+    let eol = if content.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
     let mut lines: Vec<String> = content
         .split('\n')
         .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
@@ -319,7 +326,10 @@ mod tests {
 
     #[test]
     fn lines_already_in_the_desired_state_are_untouched() {
-        assert_eq!(toggled_line("\tsanitizeModule('io')", &desire("io", true)), None);
+        assert_eq!(
+            toggled_line("\tsanitizeModule('io')", &desire("io", true)),
+            None
+        );
         assert_eq!(
             toggled_line("\t-- _G['require'] = nil", &desire("require", false)),
             None
@@ -329,7 +339,10 @@ mod tests {
     #[test]
     fn unrelated_lines_are_untouched() {
         assert_eq!(toggled_line("local x = 1", &desire("lfs", false)), None);
-        assert_eq!(toggled_line("\tsanitizeModule('os')", &desire("lfs", false)), None);
+        assert_eq!(
+            toggled_line("\tsanitizeModule('os')", &desire("lfs", false)),
+            None
+        );
     }
 
     #[test]

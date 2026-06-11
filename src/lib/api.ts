@@ -48,6 +48,60 @@ export function createProject(
   return invoke<string>("create_project", { parent, name, files });
 }
 
+/**
+ * Scaffold a new project at `<parent>/<name>` from a named template
+ * (`blank`, `lua-script`, `rust-dll`) via the shared project kit.
+ * Returns the absolute path of the new project root.
+ */
+export function createProjectFromTemplate(
+  parent: string,
+  name: string,
+  template: string,
+): Promise<string> {
+  return invoke<string>("create_project_from_template", {
+    parent,
+    name,
+    template,
+  });
+}
+
+/** Detected Rust toolchain; null = the tool is not on PATH. */
+export interface ToolchainStatus {
+  cargo: string | null;
+  rustup: string | null;
+}
+
+/** How a build run ended (`build://done` payload). */
+export interface BuildDone {
+  succeeded: boolean;
+  exit_code: number;
+  no_op: boolean;
+}
+
+/** What an install run did. */
+export interface InstallReport {
+  copied: number;
+}
+
+/**
+ * Start a build of the project at `root`. Resolves once cargo is spawned
+ * (or immediately for non-Rust projects); output and completion arrive as
+ * `build://output` / `build://done` events.
+ */
+export function buildProject(root: string): Promise<void> {
+  return invoke<void>("build_project", { root });
+}
+
+/** Probe `cargo` / `rustup` on PATH; absence is data, never an error. */
+export function toolchainStatus(): Promise<ToolchainStatus> {
+  return invoke<ToolchainStatus>("toolchain_status");
+}
+
+/** Apply the project's dcs-studio.toml [[install]] rules to this machine. */
+export function installProject(root: string): Promise<InstallReport> {
+  return invoke<InstallReport>("install_project", { root });
+}
+
 /** Snapshot of the editor↔DCS link state (see `dcs_status` in dcs.rs). */
 export interface DcsStatus {
   connected: boolean;

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { app } from "$lib/state.svelte";
   import { pickFolder, pathExists } from "$lib/api";
-  import { TEMPLATES, slugify } from "$lib/templates";
+  import { TEMPLATES } from "$lib/templates";
   import { EDITOR_THEMES, editorThemeById } from "$lib/themes";
   import { cn } from "$lib/utils.js";
   import { Button } from "$lib/components/ui/button/index.js";

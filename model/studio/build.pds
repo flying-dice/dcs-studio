@@ -1,0 +1,72 @@
+//! studio::build — building projects from the IDE and CLI (issue #6 R1).
+//! Rust projects spawn cargo with output streamed live to the Output
+//! panel; everything else (lua-script, blank) builds as a no-op.
+
+/// Detected build toolchain; a None version means the tool is not on PATH.
+public data ToolchainStatus { cargoVersion: Option<string>, rustupVersion: Option<string> }
+
+/// How a build run ended.
+public data BuildOutcome { succeeded: bool, exitCode: number }
+
+/// Build service shared by the IDE's Build action and the CLI `build`
+/// subcommand.
+public container Builder for studio::core::Studio {
+  /// Probe `cargo --version` and `rustup --version`; absence is data,
+  /// never an error.
+  public DetectToolchain(): studio::build::ToolchainStatus;
+
+  /// Build the project at `root`: Rust projects spawn cargo and stream
+  /// its output line-by-line to the Output panel; anything else succeeds
+  /// as a no-op. A missing cargo fails with install guidance.
+  #[manual]
+  public RunBuild(root: string): Result<studio::build::BuildOutcome, studio::files::IoError> {
+    buildable = bool from self.IsRustProject(root)
+    if (!buildable) {
+      noop = studio::build::BuildOutcome from { true }
+      return Ok(noop)
+    }
+    status = studio::build::ToolchainStatus from self.DetectToolchain()
+    if (status.cargoVersion.isNone) {
+      missing = studio::files::IoError from { "cargo not found - install Rust via rustup" }
+      return Err(missing)
+    }
+    outcome = studio::build::BuildOutcome from self.SpawnCargo(root)
+    return Ok(outcome)
+  }
+
+  /// Whether a Cargo.toml sits at the project root — any Rust project
+  /// builds, not just ones scaffolded from the rust-dll template.
+  IsRustProject(root: string): bool;
+
+  /// Spawn `cargo build` in `root`, forwarding each stdout/stderr line to
+  /// StreamLine as it arrives, and report how the process exited.
+  SpawnCargo(root: string): studio::build::BuildOutcome;
+
+  /// Append one build-output line to the Output panel, live.
+  StreamLine(line: string): void;
+}
+
+/// Building a Rust project streams cargo output live.
+feature BuildStreamsToOutputPanel for studio::build::Builder {
+  given "a rust-dll project with the Rust toolchain installed"
+  when "the developer runs a build"
+  then "cargo runs against the project root"
+  and "its output lines appear in the Output panel as they are emitted"
+  and "the final success or failure lands in the panel"
+}
+
+/// A missing toolchain fails the build with guidance, not a crash.
+feature MissingToolchainIsGuided for studio::build::Builder {
+  given "a rust-dll project on a machine without cargo"
+  when "the developer runs a build"
+  then "the build fails with guidance to install Rust via rustup"
+  and "the IDE stays responsive and unharmed"
+}
+
+/// Non-Rust projects have nothing to compile.
+feature NonRustProjectsBuildAsNoOp for studio::build::Builder {
+  given "a lua-script or blank project"
+  when "a build is run"
+  then "it succeeds immediately as a no-op"
+  and "no toolchain is required"
+}

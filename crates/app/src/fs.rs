@@ -111,6 +111,20 @@ pub fn create_project(parent: String, name: String, files: Vec<NewFile>) -> Resu
     Ok(root.to_string_lossy().into_owned())
 }
 
+/// Scaffold `<parent>/<name>` from a named template (`blank`, `lua-script`,
+/// `rust-dll`) via the shared project kit (model/studio/cli.pds `Init`,
+/// issue #6 R1). Returns the new root path. Supersedes the TS-side file
+/// generation behind `create_project`, which stays for compatibility.
+#[tauri::command]
+pub fn create_project_from_template(
+    parent: String,
+    name: String,
+    template: String,
+) -> Result<String, String> {
+    dcs_studio_project::scaffold::init(&template, Path::new(&parent), &name)
+        .map(|root| root.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::stays_under_root;

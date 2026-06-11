@@ -10,7 +10,7 @@ import {
   basename,
   pickFolder,
   writeTextFile,
-  createProject as scaffoldProject,
+  createProjectFromTemplate,
   dcsCall,
   dcsStatus,
 } from "./api";
@@ -18,7 +18,6 @@ import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { wsConnected } from "./dcs-ws";
 import { lang } from "./lang/intel.svelte";
-import { templateById } from "./templates";
 import type { Extension } from "@codemirror/state";
 
 const EDITOR_THEME_KEY = "dcs.editorTheme";
@@ -241,8 +240,7 @@ class AppState {
    * Returns the new root path, or throws if creation fails (e.g. already exists).
    */
   async createProject(parent: string, name: string, templateId: string) {
-    const template = templateById(templateId);
-    const path = await scaffoldProject(parent, name, template.files(name));
+    const path = await createProjectFromTemplate(parent, name, templateId);
     await this.openPath(path);
     return path;
   }

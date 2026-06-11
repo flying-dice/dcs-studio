@@ -1148,6 +1148,7 @@ name = "dcs-studio"
 version = "0.1.0"
 dependencies = [
  "dcs-bridge-client",
+ "dcs-studio-project",
  "serde",
  "serde_json",
  "tauri",
@@ -1165,10 +1166,21 @@ dependencies = [
  "clap",
  "dcs-lua-lsp-core",
  "dcs-lua-syntax",
+ "dcs-studio-project",
  "serde",
  "serde_json",
  "tokio",
  "tower-lsp",
+ "walkdir",
+]
+
+[[package]]
+name = "dcs-studio-project"
+version = "0.1.0"
+dependencies = [
+ "dcs-lua-syntax",
+ "serde",
+ "toml 0.8.2",
  "walkdir",
 ]
 

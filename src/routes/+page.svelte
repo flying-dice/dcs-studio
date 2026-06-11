@@ -4,6 +4,7 @@
   import { fileIconFor } from "$lib/file-icons";
   import FileIcon from "$lib/components/FileIcon.svelte";
   import FileTree from "$lib/components/FileTree.svelte";
+  import BuildOutput from "$lib/components/BuildOutput.svelte";
   import InjectionManager from "$lib/components/InjectionManager.svelte";
   import LuaConsole from "$lib/components/LuaConsole.svelte";
   import MissionScriptingManager from "$lib/components/MissionScriptingManager.svelte";
@@ -448,6 +449,8 @@
                 <LuaConsole />
               {:else if app.bottomTool === "problems"}
                 <Problems />
+              {:else if app.bottomTool === "output"}
+                <BuildOutput />
               {:else}
                 {@render placeholder(labelFor(bottomTools, app.bottomTool))}
               {/if}

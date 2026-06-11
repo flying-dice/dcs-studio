@@ -183,7 +183,7 @@ fn mcp_agent_inits_a_project_and_checks_it() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, vec!["init_project", "check"]);
+    assert_eq!(names, vec!["init_project", "check", "build"]);
 
     mcp_send(
         &mut child,
@@ -219,6 +219,21 @@ fn mcp_agent_inits_a_project_and_checks_it() {
             .as_str()
             .unwrap()
             .contains("LUA-E")
+    );
+
+    // Lua projects have no build step — the build tool says so, cleanly.
+    mcp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call",
+                "params": {"name": "build", "arguments": {"root": project.to_string_lossy()}}}),
+    );
+    let built = mcp_read(&mut reader);
+    assert_eq!(built["result"]["isError"], json!(false));
+    assert!(
+        built["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("no build step")
     );
 
     drop(child.stdin.take()); // EOF ends the serve loop
