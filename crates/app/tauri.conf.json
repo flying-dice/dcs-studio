@@ -25,7 +25,8 @@
     "active": true,
     "targets": "all",
     "externalBin": [
-      "binaries/lua-analyzer"
+      "binaries/lua-analyzer",
+      "binaries/dcs-studio-cli"
     ],
     "icon": [
       "icons/32x32.png",
