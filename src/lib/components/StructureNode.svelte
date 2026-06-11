@@ -33,7 +33,13 @@
   onclick={() => onopen(symbol)}
   role="button"
   tabindex="0"
-  onkeydown={(e) => (e.key === "Enter" || e.key === " ") && onopen(symbol)}
+  onkeydown={(e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    // Navigation focuses the editor mid-keypress: without preventDefault
+    // the same Enter/Space would then type into the freshly focused editor.
+    e.preventDefault();
+    onopen(symbol);
+  }}
 >
   {#if symbol.kind === "function"}
     <SquareFunction class="size-4 shrink-0 text-purple-500" />
