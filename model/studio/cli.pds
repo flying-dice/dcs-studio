@@ -108,11 +108,19 @@ public container Cli for studio::core::Studio {
   /// test exits nonzero.
   #[manual]
   public Test(root: string, reporter: string): number {
+    exists = bool from self.RootExists(root)
+    if (!exists) {
+      return 1
+    }
+    config = Result<studio::cli::TestConfig, studio::files::IoError> from self.ReadTestConfig(root)
+    if (config.isErr) {
+      return 1
+    }
     runner = Option<string> from self.FindRunner()
     if (runner.isNone) {
       return 1
     }
-    specs = string[] from self.DiscoverSpecs(root)
+    specs = string[] from self.DiscoverSpecs(root, config.value)
     none = bool from self.NoSpecs(specs)
     if (none) {
       return 0
@@ -126,13 +134,22 @@ public container Cli for studio::core::Studio {
     return 0
   }
 
+  /// Whether the root directory exists on disk (a nonexistent root is an
+  /// error, never a clean run — analysing nothing must not gate as success).
+  RootExists(root: string): bool;
+
+  /// The [test] dir and suffix from the manifest, or defaults when no
+  /// manifest exists; a malformed manifest is a hard error (defaulting
+  /// would silently redirect discovery away from the configured specs).
+  ReadTestConfig(root: string): Result<studio::cli::TestConfig, studio::files::IoError>;
+
   /// The lua-runner binary next to the CLI exe; DCS_LUA_RUNNER overrides
   /// (the same pattern as DCS_STUDIO_CLI for the app).
   FindRunner(): Option<string>;
 
   /// Spec files per the manifest's [test] table (directory + suffix),
   /// defaulting to tests/**/*.test.lua.
-  DiscoverSpecs(root: string): string[];
+  DiscoverSpecs(root: string, config: studio::cli::TestConfig): string[];
 
   /// Whether discovery found nothing: a project with no spec files is
   /// clean, not failing (blank and rust-dll projects run `test` too) —
@@ -156,6 +173,10 @@ public container Cli for studio::core::Studio {
     return 0
   }
 }
+
+/// The [test] configuration read from the manifest (or defaults when no
+/// manifest exists): the discovery directory and file suffix.
+public data TestConfig { dir: string, suffix: string }
 
 /// One executed test case: its full describe-path name, outcome, and —
 /// for failures — the matcher's message and the source line it raised at.
@@ -223,9 +244,9 @@ public container TestRunner for studio::core::Studio {
 /// their targets are not bundled.
 public container Bundler for studio::core::Studio {
   /// Bundle the project at `root` into dist/: no declared [build] entry
-  /// is an error (bundling never guesses an entry), an unresolvable
-  /// graph (cycle, unreadable module) is an error, and the write reports
-  /// its own failure.
+  /// is an error (bundling never guesses an entry), a missing entry file
+  /// is an error, an unresolvable graph (cycle, unreadable module) is an
+  /// error, and the write reports its own failure.
   #[manual]
   public BundleProject(root: string): Result<studio::cli::BundleReport, studio::files::IoError> {
     entry = Option<string> from self.ReadBuildEntry(root)
@@ -233,7 +254,12 @@ public container Bundler for studio::core::Studio {
       missing = studio::files::IoError from { root }
       return Err(missing)
     }
-    graph = Result<string[], studio::files::IoError> from self.ResolveRequireGraph(root, entry.value)
+    entryExists = bool from self.EntryFileExists(root, entry.value)
+    if (!entryExists) {
+      notFound = studio::files::IoError from { entry }
+      return Err(notFound)
+    }
+    graph = Result<string[], studio::files::IoError> from self.WalkRequires(root, entry.value)
     if (graph.isErr) {
       return Err(graph.error)
     }
@@ -246,35 +272,20 @@ public container Bundler for studio::core::Studio {
     return Ok(report)
   }
 
+  /// Whether the manifest's [build] entry file exists on disk.
+  EntryFileExists(root: string, entry: string): bool;
+
   /// The [build] entry script from dcs-studio.toml; None when the table
   /// or field is absent.
   ReadBuildEntry(root: string): Option<string>;
 
-  /// Walk string-literal require() calls via the dcs-lua-syntax AST,
-  /// depth-first from the entry: project-local modules (module path
-  /// resolved against the entry's folder, then the project root) recurse
-  /// and bundle in dependency order; anything else stays external. A
-  /// require cycle is an error naming the cycle path.
-  #[manual]
-  public ResolveRequireGraph(root: string, entry: string): Result<string[], studio::files::IoError> {
-    walked = Result<string[], studio::files::IoError> from self.WalkRequires(root, entry)
-    if (walked.isErr) {
-      return Err(walked.error)
-    }
-    cyclic = bool from self.HasCycle(walked.value)
-    if (cyclic) {
-      cycle = studio::files::IoError from { entry }
-      return Err(cycle)
-    }
-    return Ok(walked.value)
-  }
-
-  /// Depth-first require scan from the entry; an unreadable or
-  /// unparseable project-local module is an error.
+  /// Depth-first require scan from the entry: project-local modules
+  /// (path resolved against the entry's folder, then the project root)
+  /// recurse and collect in dependency order; anything else stays
+  /// external.  An unreadable or unparseable project-local module is an
+  /// error, as is a cycle (detected by the in-progress stack and named
+  /// in the error message — there is no separate HasCycle step).
   WalkRequires(root: string, entry: string): Result<string[], studio::files::IoError>;
-
-  /// Whether the walk re-entered a module still on its own require path.
-  HasCycle(modules: string[]): bool;
 
   /// package.preload entries in dependency order, then the entry body.
   EmitBundle(root: string, entry: string, modules: string[]): string;

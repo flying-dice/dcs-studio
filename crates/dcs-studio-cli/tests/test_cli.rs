@@ -9,37 +9,19 @@
 //! (eprintln + success) when neither yields a binary; the
 //! runner-missing/contract tests run everywhere.
 
+#[path = "common/mod.rs"]
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// The built dcs-lua-runner, or None (callers skip).
 fn runner_binary() -> Option<PathBuf> {
-    if let Some(pinned) = std::env::var_os("DCS_LUA_RUNNER") {
-        let path = PathBuf::from(pinned);
-        return path.is_file().then_some(path);
-    }
-    let name = if cfg!(windows) {
-        "dcs-lua-runner.exe"
-    } else {
-        "dcs-lua-runner"
-    };
-    let local = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tools/lua-runner/target/debug")
-        .join(name);
-    local.is_file().then_some(local)
+    common::runner_binary()
 }
 
 fn temp_project(tag: &str, manifest: &str, files: &[(&str, &str)]) -> PathBuf {
-    let root = std::env::temp_dir().join(format!("dcs-test-cli-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).expect("temp root");
-    std::fs::write(root.join("dcs-studio.toml"), manifest).expect("manifest");
-    for (path, contents) in files {
-        let full = root.join(path);
-        std::fs::create_dir_all(full.parent().expect("parent")).expect("dirs");
-        std::fs::write(full, contents).expect("file");
-    }
-    root
+    common::temp_project("dcs-test-cli", tag, manifest, files)
 }
 
 fn run_test_subcommand(root: &Path, runner: &Path, extra: &[&str]) -> Output {
@@ -310,6 +292,47 @@ fn no_spec_files_is_clean_but_says_so() {
     assert!(output.status.success(), "no tests is clean, not failing");
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("no test files found under tests/"),
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A2: a failure message that contains a raw newline (e.g. from a
+/// multi-line `error()` string) must be escaped to `&#xA;` in the
+/// `JUnit` `<failure message="…">` attribute — raw newlines break XML
+/// attribute values and trip up CI parsers.
+#[test]
+fn junit_escapes_newlines_in_failure_message() {
+    let Some(runner) = runner_binary() else {
+        eprintln!("SKIP test_cli: build tools/lua-runner first or set DCS_LUA_RUNNER");
+        return;
+    };
+    let root = temp_project(
+        "junit-newline",
+        MINIMAL_MANIFEST,
+        &[(
+            "tests/newline.test.lua",
+            // The failure message will contain a literal newline.
+            "test(\"multiline failure\", function()\n  error(\"line1\\nline2\")\nend)\n",
+        )],
+    );
+    let junit_path = root.join("report.xml");
+
+    let output = run_test_subcommand(
+        &root,
+        &runner,
+        &["--reporter", "junit", "--junit-out", junit_path.to_str().expect("utf8")],
+    );
+
+    assert!(!output.status.success(), "failing test must gate");
+    let xml = std::fs::read_to_string(&junit_path).expect("junit written");
+    // The newline must appear as &#xA; in an attribute, never as a raw \n.
+    assert!(
+        xml.contains("&#xA;"),
+        "newline in attribute must be escaped to &#xA;: {xml}"
+    );
+    assert!(
+        !xml.contains("message=\"line1\nline2\""),
+        "raw newline must not appear in a message attribute: {xml}"
     );
     let _ = std::fs::remove_dir_all(&root);
 }

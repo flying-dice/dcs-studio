@@ -31,22 +31,21 @@ struct Output {
 }
 
 fn main() -> ExitCode {
-    let text = match std::env::args().nth(1) {
-        Some(path) => match std::fs::read_to_string(&path) {
+    let text = if let Some(path) = std::env::args().nth(1) {
+        match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) => {
                 eprintln!("dcs-lua-runner: reading spec {path}: {error}");
                 return ExitCode::FAILURE;
             }
-        },
-        None => {
-            let mut text = String::new();
-            if let Err(error) = std::io::stdin().read_to_string(&mut text) {
-                eprintln!("dcs-lua-runner: reading spec from stdin: {error}");
-                return ExitCode::FAILURE;
-            }
-            text
         }
+    } else {
+        let mut text = String::new();
+        if let Err(error) = std::io::stdin().read_to_string(&mut text) {
+            eprintln!("dcs-lua-runner: reading spec from stdin: {error}");
+            return ExitCode::FAILURE;
+        }
+        text
     };
 
     let spec: Spec = match serde_json::from_str(&text) {

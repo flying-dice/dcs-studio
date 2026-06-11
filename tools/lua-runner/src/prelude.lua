@@ -323,6 +323,16 @@ setmetatable(_G, {
 
 runner = stub_table("runner", {
   advanceTime = function(seconds)
+    if type(seconds) ~= "number" then
+      error("advanceTime: expected a number, got " .. type(seconds), 2)
+    end
+    -- NaN check: NaN is the only value not equal to itself.
+    if seconds ~= seconds then
+      error("advanceTime: seconds must not be NaN", 2)
+    end
+    if seconds < 0 then
+      error("advanceTime: seconds must be non-negative, got " .. tostring(seconds), 2)
+    end
     local target = clock + seconds
     while true do
       -- Earliest due deadline wins; equal deadlines fire FIFO by seq.

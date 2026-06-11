@@ -30,3 +30,10 @@ path = "src/main.rs"
 mlua = { version = "0.10", features = ["lua51", "vendored"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Mirror the root workspace's pedantic lint posture. This is a separate
+# cargo workspace (mlua vendored vs module conflict) so workspace = true
+# is unavailable; the same rules are declared inline.
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+cast_possible_truncation = "allow"

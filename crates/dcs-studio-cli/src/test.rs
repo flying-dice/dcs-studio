@@ -286,9 +286,14 @@ fn write_junit(output: &RunnerOutput, junit_out: &Path) -> Result<(), String> {
 }
 
 fn escape(text: &str) -> String {
+    // XML attribute values must not contain raw newlines or carriage
+    // returns — escape them as character references so any well-formed
+    // XML parser recovers them verbatim (XML 1.0 §3.3.3).
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+        .replace('\n', "&#xA;")
+        .replace('\r', "&#xD;")
 }

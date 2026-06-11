@@ -156,7 +156,7 @@ end)
     );
 
     let only = case(&run, 0, "stubs record every call, in order");
-    assert_eq!(only["passed"], true, "stub log spec failed: {:?}", only);
+    assert_eq!(only["passed"], true, "stub log spec failed: {only:?}");
 }
 
 #[test]
@@ -384,6 +384,37 @@ fn garbage_spec_fails_the_runner_itself() {
         String::from_utf8_lossy(&output.stderr).contains("parsing spec"),
         "stderr names the failure"
     );
+}
+
+/// A4: advanceTime validates its argument — non-numbers, NaN, and negatives
+/// must all error inside the test harness (so the test fails, not panics).
+#[test]
+fn advance_time_rejects_non_number_nan_and_negative() {
+    let run = run_spec(
+        "advance-guard",
+        &[(
+            "tests/advance_guard.test.lua",
+            r#"test("advanceTime(-1) is an error", function()
+  expect(function() runner.advanceTime(-1) end).toThrow("non-negative")
+end)
+test("advanceTime(0/0) NaN is an error", function()
+  expect(function() runner.advanceTime(0/0) end).toThrow("NaN")
+end)
+test("advanceTime('x') non-number is an error", function()
+  expect(function() runner.advanceTime("x") end).toThrow("number")
+end)
+"#,
+        )],
+    );
+
+    for name in [
+        "advanceTime(-1) is an error",
+        "advanceTime(0/0) NaN is an error",
+        "advanceTime('x') non-number is an error",
+    ] {
+        let result = case(&run, 0, name);
+        assert_eq!(result["passed"], true, "{name} failed: {result:?}");
+    }
 }
 
 #[test]

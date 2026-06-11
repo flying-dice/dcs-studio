@@ -162,15 +162,26 @@ impl Walk<'_> {
 
     /// Lua's `?`-substitution against the entry folder, then the root:
     /// `a.b.c` -> `a/b/c.lua`, then `a/b/c/init.lua`.
+    ///
+    /// The candidate is canonicalized and must remain under the project
+    /// root or the entry's directory — a `require("../..")` must never
+    /// escape the project tree and bundle an arbitrary file.
     fn resolve(&self, name: &str) -> Option<PathBuf> {
         let relative = name.replace('.', "/");
+        let root_canon = std::fs::canonicalize(self.root).ok()?;
         for base in [self.entry_dir.as_path(), self.root] {
+            let base_canon = std::fs::canonicalize(base).ok().unwrap_or_else(|| base.to_path_buf());
             for candidate in [
                 base.join(format!("{relative}.lua")),
                 base.join(relative.as_str()).join("init.lua"),
             ] {
-                if candidate.is_file() {
-                    return Some(candidate);
+                // Canonicalize to resolve any `..` components and
+                // confirm the file still lives under the project root.
+                if candidate.is_file()
+                    && let Ok(canon) = std::fs::canonicalize(&candidate)
+                    && (canon.starts_with(&root_canon) || canon.starts_with(&base_canon))
+                {
+                    return Some(canon);
                 }
             }
         }
@@ -287,8 +298,32 @@ fn emit(entry: &str, entry_source: &str, walk: &Walk<'_>) -> String {
 }
 
 /// Quote a module name as a Lua string literal.
+///
+/// Escapes `\`, `"`, and all ASCII control characters (`\xHH`) so that
+/// the generated Lua is syntactically valid regardless of what characters
+/// appear in the module name.  A module name that would require a control
+/// character escape is unusual enough that the bundle will still parse
+/// under any well-formed Lua 5.1 interpreter; the escape prevents the
+/// generated source from being syntactically broken.
 fn lua_quote(name: &str) -> String {
-    format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
+    let mut out = String::with_capacity(name.len() + 2);
+    out.push('"');
+    for c in name.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_ascii_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\{}", c as u8);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 #[cfg(test)]
@@ -329,5 +364,30 @@ end
         let result = requires_in("broken.lua", "local = require('x')");
         let message = result.expect_err("must refuse");
         assert!(message.contains("broken.lua has parse errors"), "{message}");
+    }
+
+    /// A3: control characters in a module name must be escaped so the
+    /// generated `package.preload["…"]` line is valid Lua syntax.
+    #[test]
+    fn lua_quote_escapes_control_characters() {
+        // Ordinary name: unchanged other than wrapping quotes.
+        assert_eq!(lua_quote("a.b.c"), "\"a.b.c\"");
+        // Backslash and double-quote must be escaped.
+        assert_eq!(lua_quote("a\\b"), "\"a\\\\b\"");
+        assert_eq!(lua_quote("a\"b"), "\"a\\\"b\"");
+        // Newline, carriage-return, tab.
+        assert_eq!(lua_quote("a\nb"), "\"a\\nb\"");
+        assert_eq!(lua_quote("a\rb"), "\"a\\rb\"");
+        assert_eq!(lua_quote("a\tb"), "\"a\\tb\"");
+        // Other ASCII control characters use the decimal escape.
+        let bell = lua_quote("a\x07b");
+        assert!(
+            bell.starts_with('"') && bell.ends_with('"'),
+            "must be a quoted string: {bell}"
+        );
+        assert!(
+            !bell.contains('\x07'),
+            "raw BEL must not appear in the quoted string: {bell}"
+        );
     }
 }
