@@ -131,7 +131,7 @@ test("switching files never shows the previous file's outline", async ({
   // synchronously on the switch, before the async outline query for the
   // new file resolves. Without that clear, a stale row clicked here would
   // navigate the editor to the old file's offsets.
-  const visible = await entries.allTextContents();
+  const visible = (await entries.allTextContents()).map((t) => t.trim());
   for (const stale of ["top", "outer", "inner", "helper"]) {
     expect(visible).not.toContain(stale);
   }
