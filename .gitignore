@@ -17,3 +17,6 @@ vite.config.ts.timestamp-*
 # Playwright
 /test-results
 /playwright-report
+
+# Agent worktrees (Claude Code)
+/.claude/worktrees/
