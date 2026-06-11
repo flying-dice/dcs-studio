@@ -54,7 +54,10 @@ enum Command {
     },
     /// Format .lua files in place (house style, decisions/006); a
     /// directory walks like `check`. Unparseable files are reported and
-    /// skipped — parse errors are `check`'s job.
+    /// skipped — parse errors are `check`'s job. An internal guard trip
+    /// leaves the file unchanged and the walk continues, but the run
+    /// exits nonzero in both modes — a trip is a formatter bug leaving
+    /// a file non-canonical, and a gate built on fmt must go red.
     Fmt {
         /// Files or directories to format.
         #[arg(default_value = ".")]

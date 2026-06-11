@@ -26,14 +26,18 @@ any mismatch the input text is returned unchanged with the result's
 `guard_tripped` flag raised. A guard trip is signalled, never an abort: the
 CLI ships next to the editor and walks whole directories, so the earlier
 `debug_assert!` abort was dropped outright in favour of the explicit flag —
-the CLI prints a loud stderr warning naming the file and continues the
-walk, and the corpus property tests assert the flag stays false (the same
-loudness the debug assert provided, without taking a format run down).
+the CLI prints a loud stderr warning naming the file, continues the walk
+(so every affected file gets named), and folds the trip into a failing
+exit code in both modes (in-place and `--check`): a trip is an internal
+formatter bug leaving a file non-canonical, and a gate built on fmt must
+go red, not green. The corpus property tests assert the flag stays false
+(the same loudness the debug assert provided, without taking a format run
+down).
 
 Config lives in `dcs-studio.toml` under `[format]` (parsed by
 `dcs-studio-project`, every field defaulted): `indent_width` (4),
 `indent_style` (`"space"` | `"tab"`), `quote_style` (`"double"` |
-`"single"`), `max_width` (100; values below 20 clamp to 20), `trailing_comma`
+`"single"`), `max_width` (100, in UTF-8 bytes; values below 20 clamp to 20), `trailing_comma`
 (`"multiline"` | `"never"`).
 
 ### House style
@@ -41,7 +45,7 @@ Config lives in `dcs-studio.toml` under `[format]` (parsed by
 | Rule | Choice | Example |
 | --- | --- | --- |
 | Indentation | 4 spaces per block level (configurable width/style) | `if x then` → body at 4 spaces |
-| Line width | 100 columns; lines break at the outermost breakable construct (table fields, call arguments — one per line); a line with nothing breakable may exceed the width | `f(\n    a,\n    b\n)` |
+| Line width | 100, measured in UTF-8 **bytes**, not display columns — a deterministic, cheap proxy (no Unicode width tables to version); non-ASCII text wraps early, which is the conservative direction. Lines break at the outermost breakable construct (table fields, call arguments — one per line); a line with nothing breakable may exceed the width | `f(\n    a,\n    b\n)` |
 | Quotes | Double quotes preferred; a string whose content contains `"` keeps its original quotes; other escapes and all content bytes (non-ASCII included) are preserved verbatim; long-bracket strings are never touched | `'hi'` → `"hi"`, `'héllo'` → `"héllo"`, `'say "hi"'` stays |
 | Long-bracket keys | A `[`/`]` index or table key whose key text itself starts with `[` (a long-bracket string) is padded with one space on each side so the brackets cannot fuse into a long-bracket opener | `t[ [[s]] ]`, `{ [ [[k]] ] = 1 }` |
 | Tables: single vs multiline | The author's choice is respected: a table written on one line stays single-line while it fits and holds no comments; a table containing a newline stays multiline; over-width tables break | `{ 1, 2 }` stays; `{\n    1,\n}` stays |
@@ -67,6 +71,9 @@ Config lives in `dcs-studio.toml` under `[format]` (parsed by
 - The structural-equality guard means a printer bug degrades to "file left
   unchanged" plus a raised `guard_tripped` flag, never to changed runtime
   behaviour of a mission script — and never to a process abort mid-walk.
+  The CLI folds a trip into a failing exit code in both modes while the
+  walk continues: the file is non-canonical through no fault of the user,
+  and a green gate over a known formatter bug would hide it.
 - `dcs-studio-cli fmt` writes in place through a same-directory temp file
   renamed over the original, so a crash or full disk mid-write can never
   truncate a mission script; the file is reported only after a successful
@@ -75,6 +82,7 @@ Config lives in `dcs-studio.toml` under `[format]` (parsed by
   mission data tables stable instead of collapsing them at 99 columns.
 - `dcs-studio-cli fmt` exits 0 even when files are skipped for parse errors
   (they are reported on stderr; surfacing syntax errors is `check`'s job);
-  `fmt --check` exits 1 only when a file would change.
+  `fmt --check` exits 1 when a file would change — and both modes exit
+  nonzero on a guard trip or a failed write.
 - The editor's format-on-demand (issue #18) reuses the same crate, so IDE
   and CI can never disagree about canonical shape.

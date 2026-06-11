@@ -1,9 +1,10 @@
 //! The `fmt` subcommand's contract (model: `fmt::Fmt`; decisions/006):
 //! in-place formatting walks directories like `check`, `--check` is the
-//! CI gate (exit 1 only when a file would change), unparseable files are
-//! reported and skipped without affecting the exit code (parse errors
-//! are `check`'s job), and `[format]` in `dcs-studio.toml` governs the
-//! output. Pins the real binary, not `fmt::run` in isolation.
+//! CI gate (exit 1 when a file would change or the internal guard
+//! trips), unparseable files are reported and skipped without affecting
+//! the exit code (parse errors are `check`'s job), and `[format]` in
+//! `dcs-studio.toml` governs the output. Pins the real binary, not
+//! `fmt::run` in isolation.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -171,9 +172,11 @@ fn invalid_manifest_format_falls_back_to_defaults_with_a_note() {
 }
 
 /// The guard-trip arm: warn loudly on stderr, leave the file unchanged,
-/// keep walking, and do not fail the exit code (decisions/006: a trip
-/// degrades, never aborts). A real trip requires a formatter bug, so the
-/// debug-only `DCS_STUDIO_FMT_FORCE_GUARD_TRIP` hook forces one.
+/// keep walking — and fail the exit code in BOTH modes (decisions/006:
+/// a trip is an internal formatter bug leaving a file non-canonical, so
+/// a gate built on fmt must go red; the walk still continues so every
+/// affected file gets named). A real trip requires a formatter bug, so
+/// the debug-only `DCS_STUDIO_FMT_FORCE_GUARD_TRIP` hook forces one.
 #[test]
 fn guard_trip_warns_leaves_file_unchanged_and_continues() {
     let dir = temp_project("trip");
@@ -181,24 +184,26 @@ fn guard_trip_warns_leaves_file_unchanged_and_continues() {
     std::fs::write(dir.join("a.lua"), original).expect("write");
     std::fs::write(dir.join("b.lua"), original).expect("write");
 
-    let output = fmt_with_env(&["."], &dir, &[("DCS_STUDIO_FMT_FORCE_GUARD_TRIP", "1")]);
-    assert!(
-        output.status.success(),
-        "a guard trip must not fail the walk, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(
-        stderr.matches("formatter guard tripped").count(),
-        2,
-        "both files must warn (the walk continues): {stderr}"
-    );
-    for name in ["a.lua", "b.lua"] {
-        assert_eq!(
-            std::fs::read_to_string(dir.join(name)).expect("read back"),
-            original,
-            "{name}: a tripped file must come back byte-identical"
+    for args in [&["."][..], &["--check", "."][..]] {
+        let output = fmt_with_env(args, &dir, &[("DCS_STUDIO_FMT_FORCE_GUARD_TRIP", "1")]);
+        assert!(
+            !output.status.success(),
+            "fmt {args:?}: a guard trip must fail the exit code, stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr.matches("formatter guard tripped").count(),
+            2,
+            "fmt {args:?}: both files must warn (the walk continues): {stderr}"
+        );
+        for name in ["a.lua", "b.lua"] {
+            assert_eq!(
+                std::fs::read_to_string(dir.join(name)).expect("read back"),
+                original,
+                "fmt {args:?}: {name}: a tripped file must come back byte-identical"
+            );
+        }
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

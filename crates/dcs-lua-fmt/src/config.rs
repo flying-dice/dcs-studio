@@ -4,7 +4,7 @@
 
 use serde::Deserialize;
 
-/// Floor for the effective column budget: configured `max_width` values
+/// Floor for the effective width budget: configured `max_width` values
 /// below this clamp up (SPEC.md §7).
 pub const MIN_WIDTH: usize = 20;
 
@@ -42,9 +42,13 @@ pub struct FormatConfig {
     pub indent_width: u8,
     pub indent_style: IndentStyle,
     pub quote_style: QuoteStyle,
-    /// Column budget; lines with nothing breakable may exceed it. Values
-    /// below [`MIN_WIDTH`] clamp up — a degenerate budget must not force
-    /// every construct to break (SPEC.md §7 config table).
+    /// Line-width budget, measured in UTF-8 **bytes**, not display
+    /// columns — a deterministic, cheap proxy (no Unicode width tables
+    /// to version); non-ASCII text wraps early, which is the
+    /// conservative direction. Lines with nothing breakable may exceed
+    /// it. Values below [`MIN_WIDTH`] clamp up — a degenerate budget
+    /// must not force every construct to break (SPEC.md §7 config
+    /// table).
     pub max_width: usize,
     pub trailing_comma: TrailingComma,
 }
@@ -62,8 +66,8 @@ impl Default for FormatConfig {
 }
 
 impl FormatConfig {
-    /// The effective column budget: `max_width` clamped to at least
-    /// [`MIN_WIDTH`].
+    /// The effective width budget in UTF-8 bytes: `max_width` clamped
+    /// to at least [`MIN_WIDTH`].
     #[must_use]
     pub(crate) fn width_budget(&self) -> usize {
         self.max_width.max(MIN_WIDTH)

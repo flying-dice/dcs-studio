@@ -9,16 +9,18 @@
 
 /// Formatting options, read from `dcs-studio.toml` `[format]` by the
 /// project kit; every field has a default so an absent section formats
-/// with house style (4 spaces, double quotes, 100 columns, trailing
-/// comma in multiline tables). `maxWidth` values below 20 clamp to 20 —
-/// a degenerate budget must not force every construct to break.
+/// with house style (4 spaces, double quotes, 100-byte line budget,
+/// trailing comma in multiline tables). `maxWidth` is measured in UTF-8
+/// bytes, not display columns — a deterministic, cheap proxy; non-ASCII
+/// wraps early, conservatively. Values below 20 clamp to 20 — a
+/// degenerate budget must not force every construct to break.
 public data FormatConfig { indentWidth: number, indentStyle: string, quoteStyle: string, maxWidth: number, trailingComma: string }
 
 /// A successful formatting outcome. `guardTripped` raised means the
 /// semantic guard rejected the printed text and `text` is the input
 /// returned unchanged — always a formatter bug, surfaced loudly by
-/// callers (the CLI warns on stderr and continues its walk; nothing
-/// aborts).
+/// callers (the CLI warns on stderr, continues its walk, and fails the
+/// run's exit code in both modes; nothing aborts).
 public data Formatted { text: string, guardTripped: bool }
 
 /// `crates/dcs-lua-fmt`. The deterministic formatter face: whole-file and

@@ -147,7 +147,7 @@ Config keys (`dcs-studio.toml` `[format]`, parsed by
 | `indent_width` | 1–16 | `4` |
 | `indent_style` | `"space"` \| `"tab"` | `"space"` |
 | `quote_style` | `"double"` \| `"single"` | `"double"` |
-| `max_width` | columns; values below 20 clamp to 20 | `100` |
+| `max_width` | line-width budget in UTF-8 **bytes**, not display columns (deterministic, cheap proxy; non-ASCII wraps early — conservative); values below 20 clamp to 20 | `100` |
 | `trailing_comma` | `"multiline"` \| `"never"` | `"multiline"` |
 
 The house style (spacing, quoting, wrapping, blank-line rules) is pinned in

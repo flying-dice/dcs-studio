@@ -113,3 +113,41 @@ fn golden_outputs_load_under_puc_lua() {
     }
     assert!(checked > 0, "no .formatted.lua goldens checked");
 }
+
+/// The same PUC-validity claim over the real-world corpus (issue #27):
+/// the in-crate semantic guard re-parses with our own *tolerant* parser,
+/// so by construction it cannot catch output our parser accepts but PUC
+/// Lua rejects — only a real `luac` can. Formats `testdata/` (MIST +
+/// TSTL) and runs `luac -p` on the OUTPUT via a temp file, one
+/// invocation per corpus file. Gated like the golden gate: skips
+/// hermetically without `DCS_PUC_LUAC`; CI always sets it.
+#[test]
+fn formatted_corpus_loads_under_puc_lua() {
+    let Ok(luac) = std::env::var("DCS_PUC_LUAC") else {
+        eprintln!("skipped: set DCS_PUC_LUAC to a PUC Lua 5.1 luac binary");
+        return;
+    };
+    let config = FormatConfig::default();
+    let corpus = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata");
+    for name in ["mist.lua", "tstl-bundle.lua"] {
+        let path = corpus.join(name);
+        let source = read_normalised(&path);
+        let formatted = dcs_lua_fmt::format(&source, &config)
+            .unwrap_or_else(|d| panic!("{name}: corpus file must format: {d:?}"));
+        assert!(!formatted.guard_tripped, "{name}: semantic guard tripped");
+        let tmp = std::env::temp_dir().join(format!("dcs-fmt-puc-{}-{name}", std::process::id()));
+        fs::write(&tmp, &formatted.text)
+            .unwrap_or_else(|e| panic!("writing {}: {e}", tmp.display()));
+        let output = std::process::Command::new(&luac)
+            .arg("-p")
+            .arg(&tmp)
+            .output()
+            .unwrap_or_else(|e| panic!("spawning {luac}: {e}"));
+        let _ = fs::remove_file(&tmp);
+        assert!(
+            output.status.success(),
+            "{name}: PUC luac rejected the formatted corpus output:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

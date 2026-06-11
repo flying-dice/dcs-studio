@@ -7,7 +7,10 @@
 //! syntax errors is `check`'s job, and gating fmt on them would make a
 //! broken file block formatting the rest. A nonexistent path is an
 //! error, never a no-op. A semantic-guard trip (decisions/006) warns
-//! loudly on stderr, leaves the file unchanged, and the walk continues.
+//! loudly on stderr, leaves the file unchanged, and the walk continues
+//! — but the run exits FAILURE in both modes (in-place and `--check`):
+//! a trip is an internal formatter bug leaving a file non-canonical,
+//! and a gate built on fmt must go red, not green.
 //! In-place writes go through a same-directory temp file renamed over
 //! the original, so a crash mid-write can never truncate a script; a
 //! file is reported on stdout only after its write succeeded.
@@ -48,6 +51,10 @@ pub fn run(paths: &[PathBuf], check: bool) -> ExitCode {
                         "fmt: {file}: internal formatter guard tripped; \
                          file left unchanged — please report this file"
                     );
+                    // A trip is a formatter bug leaving the file
+                    // non-canonical: fail the run (both modes), but keep
+                    // walking so every affected file gets named.
+                    failed = true;
                 }
                 Ok(formatted) if formatted.text == text => {}
                 Ok(formatted) => {
