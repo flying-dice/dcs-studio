@@ -179,10 +179,36 @@ export class LspClient {
       }
       return;
     }
+    if (message.id !== undefined && message.method !== undefined) {
+      // Server→client REQUEST: must be answered or servers that gate on
+      // the reply (rust-analyzer does) stall their pipelines.
+      this.respond(message.id, message.method, message.params);
+      return;
+    }
     if (message.method) {
-      // Server-to-client requests are unsupported; notifications dispatch.
       this.notificationHandlers.get(message.method)?.(message.params);
     }
+  }
+
+  /** Answer a server→client request with the minimal honest reply. */
+  private respond(id: number, method: string, params: unknown): void {
+    let reply: { result: unknown } | { error: unknown };
+    if (method === "workspace/configuration") {
+      // "No opinion" per requested item keeps server defaults in force.
+      const items = (params as { items?: unknown[] } | null)?.items ?? [];
+      reply = { result: items.map(() => null) };
+    } else if (
+      method === "client/registerCapability" ||
+      method === "client/unregisterCapability" ||
+      method === "window/workDoneProgress/create"
+    ) {
+      reply = { result: null };
+    } else {
+      reply = { error: { code: -32601, message: "method not found" } };
+    }
+    this.send({ jsonrpc: "2.0", id, ...reply }).catch(() => {
+      /* a dying transport already surfaces via onExit */
+    });
   }
 
   private onExit(): void {

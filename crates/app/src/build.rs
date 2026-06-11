@@ -31,6 +31,17 @@ pub fn toolchain_status() -> dcs_studio_project::ToolchainStatus {
     dcs_studio_project::toolchain::detect()
 }
 
+/// Locate rust-analyzer for the second hosted language server (issue #6
+/// R2, model `studio::lang::RustAnalyzer`): `PATH` first, then the
+/// rustup-managed component. A miss carries install guidance — the
+/// webview provider treats it as non-fatal.
+#[tauri::command]
+pub fn rust_analyzer_path() -> Result<String, String> {
+    dcs_studio_project::toolchain::rust_analyzer().ok_or_else(|| {
+        "rust-analyzer not found — install it with `rustup component add rust-analyzer`".to_string()
+    })
+}
+
 /// Run a build of the project at `root` (model `Builder.RunBuild`).
 /// Returns as soon as cargo is spawned; output and completion arrive as
 /// `build://output` / `build://done` events.

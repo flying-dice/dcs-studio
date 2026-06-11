@@ -2,13 +2,22 @@
 // backend, spoken to over IPC (decisions/005). Implements the same
 // LanguageProvider contract as the wasm fallback.
 //
-// Offsets: LSP positions are line + UTF-16 character; JS strings are
-// UTF-16, so document offsets convert exactly via line starts — no byte
-// math, and squiggles stay precise on non-ASCII lines.
+// Wire shapes and position conversion live in lsp-wire.ts, shared with
+// the rust-analyzer provider.
 
 import { invoke } from "@tauri-apps/api/core";
 import { LspClient } from "./lsp-client";
 import { lineStarts } from "./offsets";
+import {
+  convertDiagnostic,
+  convertSymbol,
+  lineEnd,
+  lineStart,
+  pathToUri,
+  uriToPath,
+  type LspWireDiagnostic,
+  type LspWireSymbol,
+} from "./lsp-wire";
 import type {
   CompletionItem,
   Diagnostic,
@@ -20,16 +29,6 @@ import type {
   ProfileRule,
   SourceFile,
 } from "./provider";
-
-interface LspPosition {
-  line: number;
-  character: number;
-}
-
-interface LspRange {
-  start: LspPosition;
-  end: LspPosition;
-}
 
 const PUBLISH_TIMEOUT_MS = 3000;
 
@@ -44,17 +43,27 @@ export class LspLuaProvider implements LanguageProvider {
   readonly extensions = [".lua"];
 
   private client: LspClient | null = null;
+  // Distinguishes "crashed, awaiting remount" (edits must surface the
+  // failure) from "never mounted" (edits are quietly ignored).
+  private exited = false;
   private readonly texts = new Map<string, string>();
   private readonly versions = new Map<string, number>();
   private readonly findings = new Map<string, Diagnostic[]>();
   private readonly publishWaiters = new Map<string, () => void>();
+  private readonly publishListeners: (() => void)[] = [];
 
   /** `connect` is injectable so `/lab/lsp` drives this exact class. */
   constructor(
     private readonly connect: () => Promise<LspClient> = connectViaHost,
   ) {}
 
-  async mount(files: SourceFile[], _rules: ProfileRule[]): Promise<void> {
+  // The IDE feeds files itself (it owns the file tree), so the workspace
+  // root is irrelevant here — no root walk on the server side.
+  async mount(
+    files: SourceFile[],
+    _rules: ProfileRule[],
+    _root: string,
+  ): Promise<void> {
     if (!this.client) {
       this.client = await this.connect();
       this.client.onNotification("textDocument/publishDiagnostics", (params) =>
@@ -66,14 +75,19 @@ export class LspLuaProvider implements LanguageProvider {
         // Unstick any lint pass awaiting a publish that will never come.
         for (const [, release] of this.publishWaiters) release();
         this.publishWaiters.clear();
+        // Forget the dead session so the next mount() reconnects and
+        // didOpens afresh (mount clears texts/findings wholesale).
+        this.exited = true;
+        this.client = null;
+        this.versions.clear();
       });
       await this.client.request("initialize", {
         processId: null,
-        // The IDE feeds files itself (it owns the file tree); no root walk.
         rootUri: null,
         capabilities: {},
       });
       await this.client.notify("initialized", {});
+      this.exited = false; // a fresh, live session
     }
     // Wholesale remount: close anything from a previous project.
     for (const path of [...this.texts.keys()]) {
@@ -99,7 +113,12 @@ export class LspLuaProvider implements LanguageProvider {
   }
 
   async setSource(path: string, text: string): Promise<void> {
-    if (!this.client) return;
+    if (!this.client) {
+      // A crashed session must surface the failure (the status bar says
+      // "failed"); a never-mounted one quietly ignores edits.
+      if (this.exited) throw new Error("language server exited");
+      return;
+    }
     if (!this.client.isAlive) throw new Error("language server exited");
     this.texts.set(path, text);
     const published = this.nextPublish(path);
@@ -138,6 +157,11 @@ export class LspLuaProvider implements LanguageProvider {
     return [...this.findings.values()]
       .flat()
       .sort((a, b) => a.path.localeCompare(b.path) || a.start - b.start);
+  }
+
+  /** Late-push surfacing: `cb` runs on every publishDiagnostics. */
+  onDiagnostics(cb: () => void): void {
+    this.publishListeners.push(cb);
   }
 
   async documentSymbols(path: string): Promise<DocumentSymbol[]> {
@@ -190,6 +214,7 @@ export class LspLuaProvider implements LanguageProvider {
     );
     this.publishWaiters.get(path)?.();
     this.publishWaiters.delete(path);
+    for (const listener of this.publishListeners) listener();
   }
 
   /** Resolves on the next publish for `path`, or after a grace timeout. */
@@ -202,80 +227,4 @@ export class LspLuaProvider implements LanguageProvider {
       });
     });
   }
-}
-
-// ---- wire shapes and conversions -------------------------------------------
-
-interface LspWireDiagnostic {
-  range: LspRange;
-  severity?: number;
-  code?: string | number;
-  codeDescription?: { href?: string };
-  message: string;
-}
-
-interface LspWireSymbol {
-  name: string;
-  kind: number;
-  range: LspRange;
-  selectionRange: LspRange;
-  children?: LspWireSymbol[];
-}
-
-function pathToUri(path: string): string {
-  return `file:///${path.replace(/\\/g, "/").replace(/^\//, "")}`;
-}
-
-function uriToPath(uri: string): string {
-  let path = decodeURIComponent(uri.replace(/^file:\/\/\//, ""));
-  if (!path.startsWith("/") && !/^[A-Za-z]:/.test(path)) path = `/${path}`;
-  return path.replace(/\//g, "\\");
-}
-
-function lineStart(starts: number[], line: number): number {
-  return starts[Math.min(line, starts.length - 1)];
-}
-
-function lineEnd(text: string, starts: number[], line: number): number {
-  const next = line + 1 < starts.length ? starts[line + 1] - 1 : text.length;
-  return next;
-}
-
-function positionToOffset(starts: number[], position: LspPosition): number {
-  return lineStart(starts, position.line) + position.character;
-}
-
-function convertDiagnostic(
-  wire: LspWireDiagnostic,
-  path: string,
-  starts: number[],
-): Diagnostic {
-  return {
-    path,
-    severity:
-      wire.severity === 2 ? "warning" : wire.severity === 1 ? "error" : "info",
-    code: String(wire.code ?? ""),
-    code_description: wire.codeDescription?.href ?? "",
-    message: wire.message,
-    start: positionToOffset(starts, wire.range.start),
-    end: positionToOffset(starts, wire.range.end),
-    start_line: wire.range.start.line + 1,
-    start_col: wire.range.start.character + 1,
-    end_line: wire.range.end.line + 1,
-    end_col: wire.range.end.character + 1,
-  };
-}
-
-function convertSymbol(wire: LspWireSymbol, text: string): DocumentSymbol {
-  const starts = lineStarts(text);
-  return {
-    name: wire.name,
-    // LSP SymbolKind: 12 = Function, everything else we emit is Variable.
-    kind: wire.kind === 12 ? "function" : "variable",
-    start: positionToOffset(starts, wire.range.start),
-    end: positionToOffset(starts, wire.range.end),
-    selection_start: positionToOffset(starts, wire.selectionRange.start),
-    selection_end: positionToOffset(starts, wire.selectionRange.end),
-    children: (wire.children ?? []).map((child) => convertSymbol(child, text)),
-  };
 }

@@ -35,6 +35,7 @@ pub fn run() {
             fs::create_project_from_template,
             build::build_project,
             build::toolchain_status,
+            build::rust_analyzer_path,
             install_cmd::install_project,
             dcs::dcs_call,
             dcs::dcs_status,

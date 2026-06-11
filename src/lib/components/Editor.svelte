@@ -8,6 +8,7 @@
   import { toml } from "@codemirror/legacy-modes/mode/toml";
   import { json } from "@codemirror/lang-json";
   import { markdown } from "@codemirror/lang-markdown";
+  import { rust } from "@codemirror/lang-rust";
   import { app } from "$lib/state.svelte";
   import { readTextFile } from "$lib/api";
   import { langIntelFor } from "$lib/lang/codemirror";
@@ -28,6 +29,7 @@
   function languageFor(name: string): Extension {
     const n = name.toLowerCase();
     if (n.endsWith(".lua")) return StreamLanguage.define(lua);
+    if (n.endsWith(".rs")) return rust();
     if (n.endsWith(".toml")) return StreamLanguage.define(toml);
     if (n.endsWith(".json")) return json();
     if (n.endsWith(".md") || n.endsWith(".markdown")) return markdown();

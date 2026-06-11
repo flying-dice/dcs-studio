@@ -48,7 +48,7 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | `model/studio/build.pds` | `Builder` — toolchain detection + cargo build with streamed output (issue #6 R1) |
 | `model/studio/installer.pds` | `Installer` — manifest-driven `[[install]]` deploy to SavedGames/GameInstall roots (issue #6 R1) |
 | `model/studio/mission.pds` | `MissionScripting` sanitization manager (`crates/app/src/mission.rs`) |
-| `model/studio/lang.pds` | `LanguageIntel` provider layer + `DcsLua` embedded engine face (`src/lib/lang/`) |
+| `model/studio/lang.pds` | `LanguageIntel` provider layer + `DcsLua` embedded engine face + `RustAnalyzer` hosted-server face (`src/lib/lang/`) |
 | `model/dcslua.pds` | `DcsLuaLs` engine system root |
 | `model/syntax.pds` | Lexer/parser/AST contract (`crates/dcs-lua-syntax`) |
 | `model/lspcore.pds` | Workspace + query layer (`crates/dcs-lua-lsp-core`) |
@@ -89,7 +89,19 @@ two ways behind one `LanguageProvider` contract:
 **dcs-studio-cli is the agent surface**: `lsp` and `mcp` (tools:
 `init_project`, `check`, `build`) over stdio, plus direct `init` /
 `check` / `build` / `install` subcommands — an agent needs no Tauri
-app. rust-analyzer joins as the second hosted server with issue #6 R2.
+app.
+
+**rust-analyzer is the second hosted server** (issue #6 R2):
+`src/lib/lang/rust-analyzer.ts` mounts `.rs` files through the same
+provider seam, spawned by the same backend host with a real `rootUri`
+(rust-analyzer indexes the project itself — no didOpen of the world).
+Detection goes through `dcs-studio-project::toolchain::rust_analyzer()`
+(PATH, then `rustup which`); a missing binary or a root without a
+Cargo.toml is non-fatal — Lua intelligence stays intact. Shared LSP
+wire conversion lives in `src/lib/lang/lsp-wire.ts`; the client answers
+server→client requests (`workspace/configuration`,
+`client/registerCapability`, …) or rust-analyzer stalls. `/lab/rust` +
+`e2e-lang/rust-provider.spec.ts` cover the path browser-only.
 
 Project tooling lives in **`crates/dcs-studio-project`** (the shared kit
 both the CLI and the app consume): templates — `blank`, `lua-script`,

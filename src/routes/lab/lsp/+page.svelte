@@ -20,9 +20,12 @@
   let serverAlive = $state(true);
   let afterCrashError = $state("");
   let ready = $state(false);
+  // Did the client answer our server→client request (id 999)?
+  let serverReq = $state("pending");
 
   // ---- the fake server ------------------------------------------------
-  let emitMessage: (raw: string) => void = () => {};
+  // The crash button kills the CURRENT server; each connect() builds a
+  // fresh transport (fresh emit fns), like the host respawning the CLI.
   let emitExit: () => void = () => {};
 
   function lineCharOf(text: string, index: number): { line: number; character: number } {
@@ -55,50 +58,75 @@
     });
   }
 
-  const fakeTransport: LspTransport = {
-    async start(onMessage, onExit) {
-      emitMessage = onMessage;
-      emitExit = onExit;
-    },
-    async send(raw: string) {
-      const message = JSON.parse(raw);
-      queueMicrotask(() => {
-        if (message.id !== undefined) {
-          // Requests answer like the real server: initialize, symbol and
-          // folding queries with empty results.
-          const result =
-            message.method === "initialize"
-              ? { capabilities: {}, serverInfo: { name: "fake" } }
-              : message.method === "textDocument/documentSymbol" ||
-                  message.method === "textDocument/foldingRange"
-                ? []
-                : null;
-          emitMessage(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
-          return;
-        }
-        if (
-          message.method === "textDocument/didOpen" ||
-          message.method === "textDocument/didChange"
-        ) {
-          const uri = message.params.textDocument.uri;
-          const text =
-            message.method === "textDocument/didOpen"
-              ? message.params.textDocument.text
-              : message.params.contentChanges[0].text;
-          emitMessage(diagnosticsFor(uri, text));
-        }
-      });
-    },
-    async stop() {},
-  };
+  function makeTransport(): LspTransport {
+    let emitMessage: (raw: string) => void = () => {};
+    return {
+      async start(onMessage, onExit) {
+        emitMessage = onMessage;
+        emitExit = onExit;
+      },
+      async send(raw: string) {
+        const message = JSON.parse(raw);
+        queueMicrotask(() => {
+          if (message.id !== undefined && message.method === undefined) {
+            // A client→server RESPONSE — the answer to our server→client
+            // request below. rust-analyzer stalls without these.
+            if (message.id === 999 && message.result === null) {
+              serverReq = "answered";
+            }
+            return;
+          }
+          if (message.id !== undefined) {
+            // Requests answer like the real server: initialize, symbol and
+            // folding queries with empty results.
+            const result =
+              message.method === "initialize"
+                ? { capabilities: {}, serverInfo: { name: "fake" } }
+                : message.method === "textDocument/documentSymbol" ||
+                    message.method === "textDocument/foldingRange"
+                  ? []
+                  : null;
+            emitMessage(
+              JSON.stringify({ jsonrpc: "2.0", id: message.id, result }),
+            );
+            if (message.method === "initialize") {
+              // Like a real server: a server→client request right after
+              // the handshake; the client must answer it.
+              emitMessage(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: 999,
+                  method: "client/registerCapability",
+                  params: { registrations: [] },
+                }),
+              );
+            }
+            return;
+          }
+          if (
+            message.method === "textDocument/didOpen" ||
+            message.method === "textDocument/didChange"
+          ) {
+            const uri = message.params.textDocument.uri;
+            const text =
+              message.method === "textDocument/didOpen"
+                ? message.params.textDocument.text
+                : message.params.contentChanges[0].text;
+            emitMessage(diagnosticsFor(uri, text));
+          }
+        });
+      },
+      async stop() {},
+    };
+  }
 
   const provider = new LspLuaProvider(() =>
-    LspClient.withTransport(fakeTransport),
+    LspClient.withTransport(makeTransport()),
   );
 
   onMount(() => {
     void (async () => {
-      await provider.mount([{ path: PATH, text: BROKEN }], []);
+      await provider.mount([{ path: PATH, text: BROKEN }], [], "C:\\lab");
       await provider.setSource(PATH, BROKEN);
       findings = await provider.diagnostics();
       // The marked slice proves UTF-16 correctness end to end: with byte
@@ -117,6 +145,20 @@
     } catch (error) {
       afterCrashError = error instanceof Error ? error.message : String(error);
     }
+    // Blank the findings so the remount below provably restores them.
+    findings = [];
+    markedText = "";
+  }
+
+  // The recovery path: mount() after a crash must reconnect (a fresh
+  // transport) and re-open the workspace cleanly on the same root.
+  async function remount() {
+    await provider.mount([{ path: PATH, text: BROKEN }], [], "C:\\lab");
+    await provider.setSource(PATH, BROKEN);
+    findings = await provider.diagnostics();
+    const first = findings[0];
+    markedText = first ? BROKEN.slice(first.start, first.end) : "";
+    serverAlive = true;
   }
 </script>
 
@@ -127,6 +169,10 @@
   <button type="button" data-testid="lsp-crash" onclick={() => void crash()}>
     Crash server
   </button>
+  <button type="button" data-testid="lsp-remount" onclick={() => void remount()}>
+    Remount
+  </button>
+  <div data-testid="lsp-server-req">{serverReq}</div>
   <div data-testid="lsp-marked">marked: «{markedText}»</div>
   <div data-testid="lsp-after-crash">{afterCrashError}</div>
   <ul>
