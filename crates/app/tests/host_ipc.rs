@@ -13,7 +13,7 @@ use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
-use dcs_studio_lib::lsp::read_frame;
+use dcs_studio_lib::read_frame;
 use serde_json::{json, Value};
 
 /// Kill a process by id: std::process::Child can't be killed from a
@@ -95,11 +95,19 @@ fn host_frame_reader_drives_a_real_dcs_studio_cli_lsp() {
     // Watchdog: a wedged server would otherwise block read_line forever
     // and stall CI to the job timeout. Killing the child after the budget
     // turns every blocked read into EOF, failing the test fast instead.
+    // Stood down once the test reaps the child - after wait() the PID is
+    // free for reuse and a late kill would hit an innocent process.
+    let watchdog_off = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let child_id = child.id();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(60));
-        kill_by_id(child_id);
-    });
+    {
+        let watchdog_off = std::sync::Arc::clone(&watchdog_off);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            if !watchdog_off.load(std::sync::atomic::Ordering::SeqCst) {
+                kill_by_id(child_id);
+            }
+        });
+    }
 
     // initialize with no rootUri — the in-memory didOpen below is the
     // only document, so no workspace walk competes for diagnostics.
@@ -161,6 +169,7 @@ fn host_frame_reader_drives_a_real_dcs_studio_cli_lsp() {
     );
     read_until(&mut reader, |m| m.get("id") == Some(&json!(2)));
     send(&mut child, &json!({"jsonrpc": "2.0", "method": "exit"}));
+    watchdog_off.store(true, std::sync::atomic::Ordering::SeqCst);
     let status = child.wait().expect("child exit");
     assert!(status.success(), "server exited {status:?}");
 }

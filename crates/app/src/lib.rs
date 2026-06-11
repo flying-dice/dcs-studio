@@ -4,7 +4,9 @@ mod dcs;
 mod fs;
 mod inject;
 mod install_cmd;
-pub mod lsp;
+mod lsp;
+// Exposed for the host-IPC integration test - exactly one item wide.
+pub use lsp::read_frame;
 mod mission;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

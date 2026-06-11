@@ -251,7 +251,7 @@ pub fn read_frame(reader: &mut BufReader<impl Read>) -> Option<String> {
     String::from_utf8(body).ok()
 }
 
-#[cfg(windows)]
+#[cfg(all(test, windows))]
 fn throwaway_child() -> Child {
     Command::new("cmd")
         .args(["/c", "exit"])
@@ -262,7 +262,7 @@ fn throwaway_child() -> Child {
         .expect("spawn throwaway")
 }
 
-#[cfg(not(windows))]
+#[cfg(all(test, not(windows)))]
 fn throwaway_child() -> Child {
     Command::new("true")
         .stdin(Stdio::piped())

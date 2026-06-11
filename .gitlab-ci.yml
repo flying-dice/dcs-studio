@@ -51,6 +51,7 @@ app:
     - mkdir -p build # tauri codegen requires the frontendDist dir to exist
     - cargo build -p dcs-studio-cli
     - cargo test -p dcs-studio --lib --tests
+    - cargo clippy -p dcs-studio --all-targets -- -D warnings
 
 web:
   stage: test
