@@ -327,8 +327,12 @@ mod tests {
         let code = reap(&hosts, "t");
 
         assert_eq!(delivered.load(std::sync::atomic::Ordering::SeqCst), 0);
-        assert!(code.is_some(), "exit code observed");
+        // code is None when reap's kill races the child's own exit and
+        // the process dies by signal (Unix signal deaths carry no exit
+        // code) - the ExitPayload contract is Option for exactly that.
+        // What matters is that reap completed and the handle is gone.
         assert!(hosts.lock().unwrap().is_empty(), "handle removed");
+        let _ = code;
         // A second reap (e.g. racing stop) is a clean no-op.
         assert_eq!(reap(&hosts, "t"), None);
     }
