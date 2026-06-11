@@ -211,6 +211,10 @@ public container LanguageIntel for studio::core::Studio {
   /// file with zero declarations ("No symbols"), and a file no provider
   /// claims ("No structure for this file type"). An engine failure marks
   /// the engine failed in the status bar and publishes an empty outline.
+  /// Switching files clears the previous file's rows synchronously (a
+  /// stale row clicked against the new file would navigate to the old
+  /// file's offsets), and a response — success or failure — for a query
+  /// that has since been superseded is discarded, never published.
   #[manual]
   public RefreshOutline(path: Option<string>): void {
     if (path.isNone) {
@@ -290,6 +294,15 @@ feature ClickSymbolNavigatesEditor for studio::lang::LanguageIntel {
   then "the editor caret lands on the symbol's name and scrolls into view"
   and "the outline follows edits on the diagnostics debounce"
   but "an empty Lua file shows 'No symbols' and a file no provider claims shows 'No structure for this file type'"
+}
+
+/// The outline never lies about which file it describes.
+feature OutlineNeverGoesStale for studio::lang::LanguageIntel {
+  given "the Structure panel outlines a Lua file"
+  when "the developer switches to another file"
+  then "the previous file's rows clear before the new outline arrives"
+  and "a slow or failing response for a superseded query is discarded"
+  but "editing a file the panel does not outline leaves the outline alone"
 }
 
 /// Rust projects get rust-analyzer findings through the same provider seam.
