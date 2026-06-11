@@ -12,6 +12,8 @@ import type {
   DocumentSymbol,
   LanguageProvider,
   ProfileRule,
+  ProviderNotice,
+  ProviderStatus,
   SourceFile,
 } from "./provider";
 
@@ -43,6 +45,10 @@ export class LangIntel {
   diagnostics = $state<Diagnostic[]>([]);
   /** The embedded engine's lifecycle, surfaced in the status bar. */
   engineStatus = $state<EngineStatus>("off");
+  /** Per-provider lifecycle states keyed by provider id. */
+  providerStatuses = $state<Record<string, ProviderStatus>>({});
+  /** Current background task label per provider, null when idle. */
+  providerProgress = $state<Record<string, string | null>>({});
   /** The outlined file's symbols, for the Structure panel (model
    * `RefreshOutline`). */
   symbols = $state<DocumentSymbol[]>([]);
@@ -57,13 +63,70 @@ export class LangIntel {
   // Generation counter: opening another project mid-mount invalidates the
   // older walk, so a slow first mount can never clobber the newer one.
   private mountGeneration = 0;
-  // Providers whose push channel is already wired — registration must
+  // Providers whose push channels are already wired — registration must
   // survive remounts without stacking duplicate callbacks.
   private readonly pushWired = new WeakSet<LanguageProvider>();
+  private readonly progressWired = new WeakSet<LanguageProvider>();
+  // Editor repaint subscribers: the CodeMirror wiring registers here so a
+  // late diagnostics publish forces a re-lint of the open editor (model
+  // `LateDiagnosticsPaintWithoutEditing`). One way out — intel never imports
+  // the editor layer.
+  private readonly repaintListeners = new Set<() => void>();
+
+  // Per-provider install hints shown in the Problems panel notice.
+  private static readonly INSTALL_HINTS: Record<string, string> = {
+    "rust-analyzer": "rustup component add rust-analyzer",
+  };
+  private static readonly PROVIDER_LABELS: Record<string, string> = {
+    "rust-analyzer": "rust-analyzer",
+    "dcs-lua": "Lua language server",
+  };
+
+  /**
+   * Tooling-availability notices derived from provider statuses. Shown in
+   * the Problems panel above file diagnostics when a provider is disabled
+   * (binary not found) or has crashed (model `ProviderNoticesInProblems`).
+   * Reactive: reads `providerStatuses` so the panel updates instantly.
+   */
+  get providerNotices(): ProviderNotice[] {
+    const notices: ProviderNotice[] = [];
+    for (const [id, pStatus] of Object.entries(this.providerStatuses)) {
+      const label = LangIntel.PROVIDER_LABELS[id] ?? id;
+      if (pStatus === "disabled") {
+        notices.push({
+          providerId: id,
+          severity: "warning",
+          message: `${label} not found — diagnostics for this language are unavailable`,
+          hint: LangIntel.INSTALL_HINTS[id],
+        });
+      } else if (pStatus === "failed") {
+        notices.push({
+          providerId: id,
+          severity: "error",
+          message: `${label} crashed`,
+          hint: "Restart the IDE, or check the developer console for details",
+        });
+      }
+    }
+    return notices;
+  }
 
   /** Findings of one file, for the editor's inline markers. */
   fileDiagnostics(path: string): Diagnostic[] {
     return this.diagnostics.filter((d) => d.path === path);
+  }
+
+  /**
+   * Subscribe to repaint pings: fired when a provider pushes diagnostics
+   * after the lint pass already ran, so the editor wiring can force a
+   * re-lint and paint the late findings (model `LateDiagnosticsPaintWithoutEditing`).
+   * Returns an unsubscribe. Kept as a push channel — not the reactive
+   * `diagnostics` store — so the lint pass's own refresh can't feed back
+   * into a repaint loop; only a genuine server publish pings.
+   */
+  onDiagnosticsRepaint(cb: () => void): () => void {
+    this.repaintListeners.add(cb);
+    return () => this.repaintListeners.delete(cb);
   }
 
   /**
@@ -86,17 +149,57 @@ export class LangIntel {
         );
         // Late-push surfacing: slow servers (rust-analyzer's first index)
         // publish findings after the lint pass timed out — re-pull then.
+        // Re-read provider status on push so a transitioning server
+        // (loading → ready) updates the status bar chip in real time.
         if (provider.onDiagnostics && !this.pushWired.has(provider)) {
           this.pushWired.add(provider);
-          provider.onDiagnostics(() => void this.refreshProblems());
+          provider.onDiagnostics(() => {
+            if (provider.status) {
+              this.providerStatuses = {
+                ...this.providerStatuses,
+                [provider.id]: provider.status,
+              };
+            }
+            // Refresh the aggregated store FIRST, then repaint: this publish
+            // landed after the lint pass returned, so the editor squiggles are
+            // stale until a forced re-lint — which reads the store, so the
+            // store must be fresh before the re-lint runs (model
+            // `LateDiagnosticsPaintWithoutEditing`).
+            void this.refreshProblems().then(() => {
+              for (const cb of this.repaintListeners) cb();
+            });
+          });
         }
+        // Background progress feedback: pulses the status-bar chip while
+        // the server is indexing or running cargo check (model ProgressFeedback).
+        if (provider.onProgress && !this.progressWired.has(provider)) {
+          this.progressWired.add(provider);
+          provider.onProgress((msg) => {
+            this.providerProgress = {
+              ...this.providerProgress,
+              [provider.id]: msg,
+            };
+          });
+        }
+        this.providerStatuses = {
+          ...this.providerStatuses,
+          [provider.id]: "loading",
+        };
         // One engine failing to mount never takes the others down
         // (model `MountRustAnalyzer` is non-fatal; `RefreshProblems`
         // runs unconditionally).
         try {
           await provider.mount(mine, rules, root);
+          this.providerStatuses = {
+            ...this.providerStatuses,
+            [provider.id]: provider.status ?? "ready",
+          };
           anyMounted = true;
         } catch (error) {
+          this.providerStatuses = {
+            ...this.providerStatuses,
+            [provider.id]: "failed",
+          };
           console.error(
             `language provider '${provider.id}' failed to mount:`,
             error,
@@ -118,6 +221,8 @@ export class LangIntel {
     this.outlineGeneration += 1;
     this.diagnostics = [];
     this.engineStatus = "off";
+    this.providerStatuses = {};
+    this.providerProgress = {};
     this.symbols = [];
     this.outlinePath = null;
     this.cursor = null;
@@ -182,6 +287,12 @@ export class LangIntel {
       // bar; the IDE keeps working without intelligence.
       console.error("language engine failed:", error);
       this.engineStatus = "failed";
+      if (provider.status) {
+        this.providerStatuses = {
+          ...this.providerStatuses,
+          [provider.id]: provider.status,
+        };
+      }
     }
   }
 

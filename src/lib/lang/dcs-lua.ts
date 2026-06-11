@@ -23,6 +23,7 @@ import type {
   LanguageProvider,
   Location,
   ProfileRule,
+  ProviderStatus,
   SourceFile,
 } from "./provider";
 
@@ -37,6 +38,11 @@ class WasmLuaProvider implements LanguageProvider {
   private initPromise: Promise<void> | null = null;
   private readonly texts = new Map<string, string>();
   private readonly offsets = new Map<string, ByteOffsets>();
+  private _status: ProviderStatus = "off";
+
+  get status(): ProviderStatus {
+    return this._status;
+  }
 
   private async ensureLoaded(): Promise<void> {
     this.initPromise ??= init({ module_or_path: wasmUrl }).then(() => {
@@ -64,11 +70,18 @@ class WasmLuaProvider implements LanguageProvider {
     rules: ProfileRule[],
     _root: string,
   ): Promise<void> {
-    await this.ensureLoaded();
+    this._status = "loading";
+    try {
+      await this.ensureLoaded();
+    } catch (error) {
+      this._status = "failed";
+      throw error;
+    }
     this.texts.clear();
     this.offsets.clear();
     for (const file of files) this.remember(file.path, file.text);
     this.session?.mount(files, rules);
+    this._status = "ready";
   }
 
   async setSource(path: string, text: string): Promise<void> {

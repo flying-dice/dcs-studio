@@ -113,12 +113,35 @@
     {/each}
   </div>
   <div class="min-h-0 flex-1 overflow-auto px-2 py-1.5">
-    {#if lang.diagnostics.length === 0}
-      <div class="flex h-full items-center justify-center text-muted-foreground">
-        {lang.engineStatus === "failed"
-          ? "Language engine unavailable"
-          : "No problems detected"}
+    <!-- Provider notices: tooling-availability issues, not filtered by severity -->
+    {#each lang.providerNotices as notice (notice.providerId)}
+      <div
+        class={cn(
+          "mb-2 rounded border border-border/50 px-2 py-1.5",
+          notice.severity === "error" ? "bg-red-500/10" : "bg-amber-500/10",
+        )}
+        data-testid="provider-notice-{notice.providerId}"
+      >
+        <div class="flex items-center gap-1.5">
+          {@render severityIcon(notice.severity)}
+          <span class="font-medium">{notice.message}</span>
+        </div>
+        {#if notice.hint}
+          <div class="mt-1 pl-5 font-mono text-[10px] text-muted-foreground">
+            {notice.hint}
+          </div>
+        {/if}
       </div>
+    {/each}
+
+    {#if lang.diagnostics.length === 0}
+      {#if lang.providerNotices.length === 0}
+        <div class="flex h-full items-center justify-center text-muted-foreground">
+          {lang.engineStatus === "failed"
+            ? "Language engine unavailable"
+            : "No problems detected"}
+        </div>
+      {/if}
     {:else if groups.length === 0}
       <!-- Findings exist but every one is filtered out: say which filters. -->
       <div

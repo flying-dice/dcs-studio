@@ -4,7 +4,11 @@
 // synchronous fold service reads ranges cached during each lint pass.
 
 import { foldService } from "@codemirror/language";
-import { linter, type Diagnostic as CmDiagnostic } from "@codemirror/lint";
+import {
+  linter,
+  forceLinting,
+  type Diagnostic as CmDiagnostic,
+} from "@codemirror/lint";
 import type { Extension } from "@codemirror/state";
 import { EditorView, hoverTooltip, ViewPlugin } from "@codemirror/view";
 import { lang } from "./intel.svelte";
@@ -14,6 +18,23 @@ import type { Diagnostic, FoldingRange } from "./provider";
 // Live editor views by file path, registered while a langIntel extension
 // is mounted — the Structure panel's symbol navigation dispatches here.
 const editors = new Map<string, EditorView>();
+
+/**
+ * Force a re-lint of every live editor so diagnostics that arrived after the
+ * last lint pass — rust-analyzer's lagging first index and cargo check
+ * publish through the late push channel — paint as squiggles without another
+ * keystroke (model/studio/lang.pds `LateDiagnosticsPaintWithoutEditing`). The
+ * forced lint's `updateSource` is a no-op for the unchanged buffer (the LSP
+ * providers skip an identical re-send), so this can't loop.
+ */
+function repaintDiagnostics(): void {
+  for (const view of editors.values()) forceLinting(view);
+}
+
+// One subscription for the whole editor layer: intel pings on every late
+// publish. Registered at module load (intel never imports this file — the
+// dependency points one way), so it survives across tab mounts.
+lang.onDiagnosticsRepaint(repaintDiagnostics);
 
 /** How long a caret must rest before the Structure highlight follows. */
 const CURSOR_DEBOUNCE_MS = 150;

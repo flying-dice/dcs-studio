@@ -84,6 +84,24 @@
   const labelFor = (list: Tool[], id: string | null) =>
     list.find((t) => t.id === id)?.label ?? "";
 
+  const providerShortLabel: Record<string, string> = {
+    "dcs-lua": "Lua",
+    "rust-analyzer": "Rust",
+  };
+  function providerLabel(id: string): string {
+    return providerShortLabel[id] ?? id;
+  }
+  function providerStatusTitle(id: string, pStatus: string): string {
+    const label = providerLabel(id);
+    const progress = lang.providerProgress[id];
+    if (pStatus === "ready" && progress) return `${label}: ${progress}`;
+    if (pStatus === "ready") return `${label}: running`;
+    if (pStatus === "loading") return `${label}: starting…`;
+    if (pStatus === "disabled") return `${label}: binary not found — run: rustup component add rust-analyzer`;
+    if (pStatus === "failed") return `${label}: crashed`;
+    return `${label}: off`;
+  }
+
   // Top-left application menu. Items with an `action` are wired; the rest are
   // representative placeholders. View items toggle the panel islands.
   type MenuItem = { label?: string; shortcut?: string; action?: () => void; sep?: boolean };
@@ -465,30 +483,48 @@
           <span class="shrink-0 font-mono text-[11px] text-primary">● {app.saving ? "saving…" : "modified"}</span>
         {/if}
       </div>
-      <!-- Language engine: findings count while ready, plain status otherwise. -->
-      <span
-        class="flex shrink-0 items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground"
-        data-testid="engine-status"
-      >
+      <!-- Per-provider language intelligence status chips. Only providers
+           that are not "off" or "not-applicable" get a chip — "not-applicable"
+           means the provider has nothing to do (e.g. no Cargo.toml), which is
+           expected and not worth surfacing. "disabled" means applicable but
+           broken (binary not found) — shown amber so it's actionable. -->
+      {#each Object.entries(lang.providerStatuses).filter(([, s]) => s !== "off" && s !== "not-applicable") as [id, pStatus]}
+        {@const busy = Boolean(lang.providerProgress[id])}
         <span
-          class={cn(
-            "size-1.5 rounded-full",
-            lang.engineStatus === "ready" && "bg-emerald-500",
-            lang.engineStatus === "loading" && "bg-amber-500",
-            lang.engineStatus === "failed" && "bg-red-500",
-            lang.engineStatus === "off" && "bg-muted-foreground/40",
-          )}
-        ></span>
-        {#if lang.engineStatus === "ready"}
-          Lua: {lang.diagnostics.length === 0 ? "no problems" : `${lang.diagnostics.length} problem${lang.diagnostics.length === 1 ? "" : "s"}`}
-        {:else if lang.engineStatus === "loading"}
-          Lua: loading
-        {:else if lang.engineStatus === "failed"}
-          Lua: unavailable
-        {:else}
-          Lua: off
-        {/if}
-      </span>
+          class="flex shrink-0 items-center gap-1 font-mono text-[11px] tracking-wide text-muted-foreground"
+          data-testid="provider-status-{id}"
+          title={providerStatusTitle(id, pStatus)}
+        >
+          <span
+            class={cn(
+              "size-1.5 rounded-full",
+              pStatus === "ready" && !busy && "bg-emerald-500",
+              pStatus === "ready" && busy && "animate-pulse bg-amber-400",
+              (pStatus === "loading") && "animate-pulse bg-amber-500",
+              pStatus === "disabled" && "bg-amber-500",
+              pStatus === "failed" && "bg-red-500",
+            )}
+          ></span>
+          {providerLabel(id)}
+        </span>
+      {/each}
+      <!-- Fallback while no project is open (no provider has mounted yet). -->
+      {#if Object.keys(lang.providerStatuses).length === 0}
+        <span
+          class="flex shrink-0 items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground"
+          data-testid="engine-status"
+        >
+          <span
+            class={cn(
+              "size-1.5 rounded-full",
+              lang.engineStatus === "loading" && "bg-amber-500",
+              lang.engineStatus === "failed" && "bg-red-500",
+              (lang.engineStatus === "off" || lang.engineStatus === "ready") && "bg-muted-foreground/40",
+            )}
+          ></span>
+          {lang.engineStatus === "off" ? "No project" : lang.engineStatus}
+        </span>
+      {/if}
       <!-- Problem count chips: click opens the Problems panel
            (model StatusBarCountsOpenProblems). -->
       <ProblemChips

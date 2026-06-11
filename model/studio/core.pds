@@ -125,16 +125,27 @@ public container Workbench for studio::core::Studio {
   /// lazily on first activation (`LoadTab`), so opening never blocks on disk.
   #[manual]
   public OpenFile(path: string): studio::core::Document {
-    existing = Option<studio::core::Document> from self.FindOpen(path)
+    canonical = string from self.CanonicalPath(path)
+    existing = Option<studio::core::Document> from self.FindOpen(canonical)
     if (existing.isSome) {
       self.ActivateTab(existing.value)
       return existing.value
     }
-    doc = studio::core::Document from { path }
+    doc = studio::core::Document from { canonical }
     self.AppendTab(doc)
     self.ActivateTab(doc)
     return doc
   }
+
+  /// Reduce a filesystem path to one canonical identity regardless of its
+  /// source, so the same file is never two tabs. The OS file tree yields an
+  /// upper-case Windows drive letter (`C:\...`), while a language server's
+  /// `file://` URI round-trips to a lower-case one (`c:\...`); without a
+  /// single form the same file opens twice — a tree tab and a Problems-click
+  /// tab — and its diagnostics, keyed by the server's path, never match the
+  /// tree tab's. Upper-cases a leading drive letter; a POSIX path (no drive)
+  /// passes through unchanged.
+  CanonicalPath(path: string): string;
 
   /// The already-open tab for `path`, if any — opening never duplicates tabs.
   FindOpen(path: string): Option<studio::core::Document>;
@@ -399,6 +410,18 @@ feature DecliningProjectSwitchKeepsEverything for studio::core::Workbench {
   and "the switch/close is aborted: project, tabs, buffers, and dirty flags all unchanged"
   and "accepting instead proceeds and discards the tabs"
   and "with no dirty tabs no prompt appears at all"
+}
+
+/// The same file is one tab and one buffer no matter how it was opened.
+/// Opening from the file tree and clicking that file's diagnostic in the
+/// Problems panel — whose path comes round-trip through a language server's
+/// `file://` URI, lower-casing the Windows drive letter — must converge on
+/// one identity (issue: rust-analyzer diagnostics opened a duplicate tab).
+feature OpenFileHasOneIdentity for studio::core::Workbench {
+  given "a Rust file is open from the file tree"
+  when "the developer clicks that file's diagnostic in the Problems panel"
+  then "the existing tab is re-activated, not duplicated"
+  and "the file's diagnostics show inline in that one tab"
 }
 
 /// A fresh project opens immediately after scaffolding.

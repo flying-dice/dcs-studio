@@ -30,6 +30,7 @@ import type {
   LanguageProvider,
   Location,
   ProfileRule,
+  ProviderStatus,
   SourceFile,
 } from "./provider";
 
@@ -49,6 +50,11 @@ export class LspLuaProvider implements LanguageProvider {
   // Distinguishes "crashed, awaiting remount" (edits must surface the
   // failure) from "never mounted" (edits are quietly ignored).
   private exited = false;
+  private _status: ProviderStatus = "off";
+
+  get status(): ProviderStatus {
+    return this._status;
+  }
   private readonly texts = new Map<string, string>();
   private readonly versions = new Map<string, number>();
   private readonly findings = new Map<string, Diagnostic[]>();
@@ -68,7 +74,13 @@ export class LspLuaProvider implements LanguageProvider {
     _root: string,
   ): Promise<void> {
     if (!this.client) {
-      this.client = await this.connect();
+      this._status = "loading";
+      try {
+        this.client = await this.connect();
+      } catch (error) {
+        this._status = "failed";
+        throw error;
+      }
       this.client.onNotification("textDocument/publishDiagnostics", (params) =>
         this.onPublish(
           params as { uri: string; diagnostics: LspWireDiagnostic[] },
@@ -81,6 +93,7 @@ export class LspLuaProvider implements LanguageProvider {
         // Forget the dead session so the next mount() reconnects and
         // didOpens afresh (mount clears texts/findings wholesale).
         this.exited = true;
+        this._status = "failed";
         this.client = null;
         this.versions.clear();
       });
@@ -91,6 +104,7 @@ export class LspLuaProvider implements LanguageProvider {
       });
       await this.client.notify("initialized", {});
       this.exited = false; // a fresh, live session
+      this._status = "ready";
     }
     // Wholesale remount: close anything from a previous project.
     for (const path of [...this.texts.keys()]) {
@@ -123,6 +137,11 @@ export class LspLuaProvider implements LanguageProvider {
       return;
     }
     if (!this.client.isAlive) throw new Error("language server exited");
+    // Skip a no-op re-lint (an unchanged buffer re-linted because a late
+    // publish forced a repaint): re-sending didChange with identical text
+    // only churns the server and restarts the publish wait. The file is
+    // didOpen-ed by mount, so the first lint may already find it versioned.
+    if (this.versions.has(path) && this.texts.get(path) === text) return;
     this.texts.set(path, text);
     const published = this.nextPublish(path);
     if (this.versions.has(path)) {

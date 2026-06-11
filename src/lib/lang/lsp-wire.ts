@@ -4,6 +4,7 @@
 // byte math, and squiggles stay precise on non-ASCII lines.
 
 import { lineStarts } from "./offsets";
+import { canonicalPath } from "../paths";
 import type { Diagnostic, DocumentSymbol, Hover } from "./provider";
 
 export interface LspPosition {
@@ -47,7 +48,11 @@ export function pathToUri(path: string): string {
 export function uriToPath(uri: string): string {
   let path = decodeURIComponent(uri.replace(/^file:\/\/\//, ""));
   if (!path.startsWith("/") && !/^[A-Za-z]:/.test(path)) path = `/${path}`;
-  return path.replace(/\//g, "\\");
+  // Canonicalise so a server's lower-case drive letter (rust-analyzer emits
+  // `file:///c:/…`) matches the file tree's upper-case one — otherwise the
+  // tab opened from the tree and this finding's path are two identities
+  // (model/studio/core.pds CanonicalPath, OpenFileHasOneIdentity).
+  return canonicalPath(path.replace(/\//g, "\\"));
 }
 
 export function lineStart(starts: number[], line: number): number {

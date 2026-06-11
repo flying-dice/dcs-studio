@@ -17,6 +17,7 @@ import {
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
+import { canonicalPath } from "./paths";
 import { wsConnected } from "./dcs-ws";
 import { lang } from "./lang/intel.svelte";
 import { todos } from "./todos.svelte";
@@ -393,14 +394,20 @@ class AppState {
    * activation and reports it via `onDocLoaded`.
    */
   openFile(path: string, name: string, jumpTo?: { line: number; col: number }) {
+    // One identity per file no matter the source: the file tree gives an
+    // upper-case Windows drive letter, a Problems-click's path comes round-
+    // trip through a language server's file:// URI (lower-cased). Canonicalise
+    // before the dedup or the same file opens twice (model/studio/core.pds
+    // CanonicalPath, OpenFileHasOneIdentity).
+    const canonical = canonicalPath(path);
     this.pendingJump = jumpTo ?? null;
-    const existing = this.openFiles.find((f) => f.path === path);
+    const existing = this.openFiles.find((f) => f.path === canonical);
     if (existing) {
-      this.activePath = path;
+      this.activePath = canonical;
       return;
     }
-    this.openFiles.push({ path, name, docText: "", savedText: "" });
-    this.activePath = path;
+    this.openFiles.push({ path: canonical, name, docText: "", savedText: "" });
+    this.activePath = canonical;
   }
 
   /** Make an already-open tab the active one (model `ActivateTab`). */
