@@ -74,7 +74,10 @@ public container Queries for dcslua::DcsLuaLs {
   /// The hover card for the identifier at a byte offset; none over
   /// whitespace or non-identifiers. Resolution order: innermost lexical
   /// scope first (locals, `local function`s, function parameters, for
-  /// bindings — walking block and function nesting, shadowing-aware),
+  /// bindings — walking block and function nesting, shadowing-aware; a
+  /// plain `local` becomes visible only after its declaring statement
+  /// completes, so `local x = x` resolves the RHS to the outer binding,
+  /// while a `local function` name is visible inside its own body),
   /// then file-level globals, then workspace-level globals (the first
   /// global assignment or function declaration with that name across all
   /// mounted files — the global-first model). Types come from shallow

@@ -13,7 +13,11 @@
   import type { LanguageProvider } from "$lib/lang/provider";
 
   const PATH = "lab/main.lua";
-  const INITIAL = "--- Doc for f.\nlocal f = function() end\nfunction g() end\n";
+  // The multibyte comment line makes UTF-16 and byte offsets diverge
+  // before `f` — the probe's indexOf offset (UTF-16) only resolves if
+  // the provider converts to bytes at the engine boundary.
+  const INITIAL =
+    "-- наводка °\n--- Doc for f.\nlocal f = function() end\nfunction g() end\n";
 
   let host: HTMLDivElement;
   let ready = $state(false);

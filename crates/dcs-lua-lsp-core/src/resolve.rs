@@ -253,8 +253,11 @@ fn lookup_scopes<'a>(parsed: &'a Parsed, name: &str, offset: u32) -> Option<Decl
         .map(|candidate| candidate.decl)
 }
 
-/// `local` / `local function` declarations visible at `offset`: in a block
-/// containing it, declared no later than it.
+/// `local` / `local function` declarations visible at `offset`, in a block
+/// containing it. A plain `local`'s binding becomes visible only AFTER its
+/// declaring statement completes (Lua 5.1 §2.4.7) — the RHS of
+/// `local x = x` still sees the outer `x`. A `local function`'s name is
+/// visible from the statement's start (its body recurses through it).
 fn local_candidates<'a>(
     candidates: &mut Vec<Candidate<'a>>,
     ast: &'a Ast,
@@ -268,11 +271,11 @@ fn local_candidates<'a>(
         let scope_len = block.span.end - block.span.start;
         for &stat_id in &block.stats {
             let stat = ast.stat(stat_id);
-            if stat.span.start > offset {
-                continue;
-            }
             match &stat.kind {
                 StatKind::LocalAssign { names, values } => {
+                    if stat.span.end > offset {
+                        continue;
+                    }
                     for (position, decl_name) in names.iter().enumerate() {
                         if decl_name.text == name {
                             candidates.push(Candidate {
@@ -292,6 +295,9 @@ fn local_candidates<'a>(
                     name: decl_name,
                     func,
                 } => {
+                    if stat.span.start > offset {
+                        continue;
+                    }
                     if decl_name.text == name {
                         candidates.push(Candidate {
                             scope_len,

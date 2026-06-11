@@ -54,6 +54,10 @@ class WasmLuaProvider implements LanguageProvider {
     return this.offsets.get(path)?.utf16(byteOffset) ?? byteOffset;
   }
 
+  private toBytes(path: string, utf16Offset: number): number {
+    return this.offsets.get(path)?.bytes(utf16Offset) ?? utf16Offset;
+  }
+
   // The session is fed file-by-file; the workspace root plays no part.
   async mount(
     files: SourceFile[],
@@ -113,16 +117,19 @@ class WasmLuaProvider implements LanguageProvider {
     }));
   }
 
+  // Editor offsets are UTF-16; the session is byte-indexed (offsets.ts),
+  // so every positional query converts on the way in — the LSP sibling
+  // does the equivalent via line/character on the wire.
   async complete(path: string, offset: number): Promise<CompletionItem[]> {
-    return this.session?.complete(path, offset) ?? [];
+    return this.session?.complete(path, this.toBytes(path, offset)) ?? [];
   }
 
   async hover(path: string, offset: number): Promise<Hover | null> {
-    return this.session?.hover(path, offset) ?? null;
+    return this.session?.hover(path, this.toBytes(path, offset)) ?? null;
   }
 
   async definition(path: string, offset: number): Promise<Location | null> {
-    return this.session?.definition(path, offset) ?? null;
+    return this.session?.definition(path, this.toBytes(path, offset)) ?? null;
   }
 }
 

@@ -295,6 +295,34 @@ mod tests {
     }
 
     #[test]
+    fn rhs_of_self_shadowing_local_resolves_to_the_outer_binding() {
+        // A plain local's binding is visible only after its declaring
+        // statement completes — the RHS `x` still sees the outer `x`.
+        let src = "local x = 1\nlocal x = x\n";
+        let ws = single(src);
+        let card = hover(&ws, "main.lua", at(src, "x", 2)).expect("hover");
+        assert_eq!(card.title, "local x: number");
+    }
+
+    #[test]
+    fn capture_idiom_rhs_does_not_resolve_to_its_own_local() {
+        // `local print = print`: nothing in the workspace declares a
+        // global `print`, so the RHS resolves to nothing — and in
+        // particular NOT to the local being declared.
+        let src = "local print = print\n";
+        let ws = single(src);
+        assert_eq!(hover(&ws, "main.lua", at(src, "print", 1)), None);
+    }
+
+    #[test]
+    fn forward_use_after_redeclaration_resolves_to_the_new_binding() {
+        let src = "local x = 1\nlocal x = \"two\"\nreturn x\n";
+        let ws = single(src);
+        let card = hover(&ws, "main.lua", at(src, "x", 2)).expect("hover");
+        assert_eq!(card.title, "local x: string");
+    }
+
+    #[test]
     fn dotted_global_assign_resolves() {
         let src = "M = {}\nM.helper = function(a) end\nM.helper(1)\n";
         let ws = single(src);
