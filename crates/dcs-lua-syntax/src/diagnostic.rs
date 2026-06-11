@@ -50,4 +50,7 @@ pub mod codes {
     pub const EXPECTED_TOKEN: &str = "LUA-E101";
     pub const UNTERMINATED_BLOCK: &str = "LUA-E102";
     pub const NESTING_TOO_DEEP: &str = "LUA-E103";
+
+    /// An argument's type is not assignable to the declared `@param` type.
+    pub const ARGUMENT_TYPE_MISMATCH: &str = "LUA-T001";
 }

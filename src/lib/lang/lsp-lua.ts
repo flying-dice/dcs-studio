@@ -27,6 +27,7 @@ import type {
   DocumentSymbol,
   FoldingRange,
   Hover,
+  InlayHint,
   LanguageProvider,
   Location,
   ProfileRule,
@@ -225,6 +226,30 @@ export class LspLuaProvider implements LanguageProvider {
 
   async definition(_path: string, _offset: number): Promise<Location | null> {
     return null;
+  }
+
+  // The CLI LSP does not advertise `inlayHintProvider` yet; the request
+  // returns null and we surface nothing. The wasm path delivers hints today
+  // (plan "Out of scope"); this keeps provider parity for when it lands.
+  async inlayHints(path: string): Promise<InlayHint[]> {
+    if (!this.client) return [];
+    const text = this.texts.get(path) ?? "";
+    const starts = lineStarts(text);
+    const lastLine = Math.max(0, starts.length - 1);
+    const response = (await this.client.request("textDocument/inlayHint", {
+      textDocument: { uri: pathToUri(path) },
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: lastLine, character: 0 },
+      },
+    })) as
+      | { position: { line: number; character: number }; label: unknown }[]
+      | null;
+    return (response ?? []).map((hint) => ({
+      offset: lineStart(starts, hint.position.line) + hint.position.character,
+      label: typeof hint.label === "string" ? hint.label : String(hint.label),
+      kind: "Type",
+    }));
   }
 
   // ---- diagnostics push ----------------------------------------------------

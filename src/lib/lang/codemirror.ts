@@ -9,11 +9,65 @@ import {
   forceLinting,
   type Diagnostic as CmDiagnostic,
 } from "@codemirror/lint";
-import type { Extension } from "@codemirror/state";
-import { EditorView, hoverTooltip, ViewPlugin } from "@codemirror/view";
+import { StateEffect, StateField, type Extension, type Range } from "@codemirror/state";
+import {
+  Decoration,
+  EditorView,
+  hoverTooltip,
+  ViewPlugin,
+  WidgetType,
+  type DecorationSet,
+} from "@codemirror/view";
 import { lang } from "./intel.svelte";
 import { providerFor } from "./registry";
-import type { Diagnostic, FoldingRange } from "./provider";
+import type { Diagnostic, FoldingRange, InlayHint } from "./provider";
+
+// ---- inferred-type inlay hints (ghost text) --------------------------------
+
+/** A dimmed `: <type>` label drawn inline after a binding, like VS Code. */
+class InlayHintWidget extends WidgetType {
+  constructor(private readonly label: string) {
+    super();
+  }
+  eq(other: InlayHintWidget): boolean {
+    return other.label === this.label;
+  }
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "cm-inlay-hint";
+    span.textContent = this.label;
+    return span;
+  }
+}
+
+/** Replace the file's inlay hints with a fresh set (from the lint pass). */
+const setInlayHints = StateEffect.define<InlayHint[]>();
+
+/** Holds the inlay-hint decorations; remaps across edits, swaps on effect. */
+const inlayHintField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(deco, tr) {
+    deco = deco.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (effect.is(setInlayHints)) {
+        const docLength = tr.state.doc.length;
+        const marks: Range<Decoration>[] = effect.value
+          .filter((hint) => hint.offset >= 0 && hint.offset <= docLength)
+          .map((hint) =>
+            Decoration.widget({
+              widget: new InlayHintWidget(hint.label),
+              side: 1,
+            }).range(hint.offset),
+          );
+        deco = Decoration.set(marks, true);
+      }
+    }
+    return deco;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
 
 // Live editor views by file path, registered while a langIntel extension
 // is mounted — the Structure panel's symbol navigation dispatches here.
@@ -75,6 +129,10 @@ export function langIntelFor(path: string | null): Extension {
     const text = view.state.doc.toString();
     await lang.updateSource(path, text);
     foldCache = await provider.foldingRanges(path);
+    // Refresh inferred-type ghost text on the same debounced cadence; a
+    // provider without inferred-type support simply yields none.
+    const hints = (await provider.inlayHints?.(path)) ?? [];
+    view.dispatch({ effects: setInlayHints.of(hints) });
     return lang
       .fileDiagnostics(path)
       .map((d) => toCmDiagnostic(d, view.state.doc.length));
@@ -135,7 +193,7 @@ export function langIntelFor(path: string | null): Extension {
     };
   });
 
-  return [lintSource, folding, hover, cursorTracker];
+  return [lintSource, folding, hover, cursorTracker, inlayHintField];
 }
 
 function toCmDiagnostic(d: Diagnostic, docLength: number): CmDiagnostic {

@@ -81,6 +81,17 @@ export interface Location {
 }
 
 /**
+ * One inferred-type inlay hint: a `: <type>` label the editor draws as
+ * ghost text after the byte `offset` (the end of the bound name).
+ */
+export interface InlayHint {
+  offset: number;
+  label: string;
+  /** LSP inlay-hint kind; currently always `"Type"`. */
+  kind: string;
+}
+
+/**
  * Lifecycle state of a language provider.
  * - `"off"` — never mounted (initial state, project closed)
  * - `"not-applicable"` — provider has no work in this project (e.g. no
@@ -172,4 +183,10 @@ export interface LanguageProvider {
   hover(path: string, offset: number): Promise<Hover | null>;
   /** Definition site of the symbol at an offset. */
   definition(path: string, offset: number): Promise<Location | null>;
+  /**
+   * Inferred-type inlay hints for one file, drawn as ghost text on
+   * unannotated local bindings. Optional: a provider without inferred-type
+   * support (rust-analyzer is hosted; some engines lack it) may omit it.
+   */
+  inlayHints?(path: string): Promise<InlayHint[]>;
 }

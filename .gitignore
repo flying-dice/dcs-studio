@@ -20,3 +20,7 @@ vite.config.ts.timestamp-*
 
 # Agent worktrees (Claude Code)
 /.claude/worktrees/
+
+# LuaLS read-only reference clone for the type-layer parity work (plan
+# "Parity strategy") — never a build/runtime dependency.
+/reference/

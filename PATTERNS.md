@@ -55,6 +55,16 @@ the `.d.ts`, values cross as objects.
 
 ## Conformance harness
 
-Each layer's goldens run from a cucumber test (`tests/conformance.rs`,
-`harness = false`) that globs `CONFORMANCE/<layer>/` and diffs rendered
+Each layer's goldens run from a golden-diffing test (`dcs-lua-syntax`'s
+`tests/conformance.rs`) that globs `CONFORMANCE/<layer>/` and diffs rendered
 output against the golden, mirroring pseudoscript's harness.
+
+## Type-layer parity harness (Cucumber)
+
+The type layer (annotations, inference, `LUA-T001`, inlay hints) is covered by
+a real Cucumber suite in `dcs-lua-lsp-core` (`tests/parity.rs`, `harness =
+false`; `.feature` files under `tests/features/`). Scenarios are authored from
+lua-language-server's `test/` categories (type_inference, diagnostics,
+inlay_hint, crossfile) but scoped to the **DCS Lua 5.1 dialect** — the cloned
+LuaLS repo under `reference/` (gitignored) is a read-only reference, never a
+dependency. Run with `cargo test -p dcs-lua-lsp-core --test parity`.

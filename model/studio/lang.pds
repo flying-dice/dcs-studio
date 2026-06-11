@@ -34,6 +34,10 @@ public data DocumentSymbol { name: string, kind: string, start: number, end: num
 /// One foldable region, in byte offsets; the editor folds by line.
 public data FoldingRange { start: number, end: number }
 
+/// One inferred-type inlay hint: a `: <type>` label drawn as ghost text
+/// after the byte `offset` (the end of the bound name).
+public data InlayHint { offset: number, label: string, kind: string }
+
 /// The embedded engine failed to load or initialise (e.g. the wasm module
 /// could not be fetched or instantiated).
 public data EngineError { message: string }
@@ -71,6 +75,10 @@ public system DcsLua {
 
   /// Definition site of the symbol at an offset, if known.
   public DefinitionOf(path: string, offset: number): Option<studio::lang::Location>;
+
+  /// Inferred-type inlay hints for one file, drawn as ghost text by the
+  /// editor on unannotated local bindings.
+  public InlayHints(path: string): studio::lang::InlayHint[];
 }
 
 /// rust-analyzer, the third-party Rust language server: the second hosted

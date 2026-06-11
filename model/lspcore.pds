@@ -25,6 +25,22 @@ public data DocumentSymbol { name: string, kind: lspcore::SymbolKind, span: synt
 /// declaration; a cross-file global appends `defined in <path>:<line>`).
 public data HoverInfo { title: string, body: string }
 
+/// One inferred-type inlay hint: the label (`: <type>`) and the byte offset
+/// it sits after (the end of the bound name). `kind` is the LSP inlay-hint
+/// kind (`Type`).
+public data InlayHint { offset: number, label: string, kind: string }
+
+/// A workspace-wide table of declared named types built from `@class`,
+/// `@alias`, and `@enum` annotation blocks across all mounted files;
+/// resolves `Type.Named` during compatibility checks.
+public data TypeTable { classes: lspcore::ClassDef[], aliases: lspcore::AliasDef[], enums: string[] }
+
+/// A `@class` definition: its name, optional parent, and declared fields.
+public data ClassDef { name: string, parent: Option<string>, fields: syntax::FieldAnno[] }
+
+/// An `@alias` definition: a name bound to a type expression.
+public data AliasDef { name: string, ty: syntax::Type }
+
 /// Every mounted file, keyed by workspace-relative path.
 /// #critical
 public container Workspace for dcslua::DcsLuaLs {
@@ -68,8 +84,49 @@ public container Queries for dcslua::DcsLuaLs {
   public FoldingRanges(path: string): syntax::Span[];
 
   /// Every finding across the mounted workspace, each paired with its
-  /// file path, ordered by path then offset.
-  public AllFindings(): syntax::Diagnostic[];
+  /// file path, ordered by path then offset. Combines parse diagnostics
+  /// with the type-checker's `LUA-Txxx` findings (`CheckTypes`).
+  public AllFindings(): syntax::Diagnostic[] {
+    return self.MergeParseAndTypeFindings()
+  }
+
+  /// Collect parse diagnostics from every file and append the workspace
+  /// type-check findings, re-sorted by path then offset.
+  MergeParseAndTypeFindings(): syntax::Diagnostic[];
+
+  /// Build the named-type table from every `@class`/`@alias`/`@enum` block
+  /// across the workspace.
+  public BuildTypeTable(): lspcore::TypeTable;
+
+  /// The inferred type of an expression: literals and operator shapes,
+  /// identifiers resolved to their declaration's `@type`/`@param` type or
+  /// initializer type, field access against the type table, and call
+  /// results from the callee's `@return`. Unresolvable shapes are
+  /// `Type.Unknown`.
+  public InferType(path: string, expr: syntax::Expr): syntax::Type;
+
+  /// Whether a value of type `arg` may be passed where `param` is expected,
+  /// resolving named types through `table`. Conservative: `Any`/`Unknown`
+  /// are compatible both ways; `nil` satisfies an optional; a union is
+  /// assignable iff every member is; a named type matches via its `@class`
+  /// parent chain or `@alias`/`@enum` resolution; arrays and dicts are
+  /// covariant on their element types.
+  public Assignable(arg: syntax::Type, param: syntax::Type, table: lspcore::TypeTable): bool;
+
+  /// Walk every call across the workspace; for a callee that carries
+  /// `@param` types, infer each argument's type and report `LUA-T001` at the
+  /// argument's span when it is not `Assignable` to the parameter. Each
+  /// finding is paired with its file path. Cross-file: a callee declared in
+  /// another file is checked, resolving named types through the workspace
+  /// type table. An `@overload` set flags only when no overload matches;
+  /// optional and vararg parameters relax arity. Unresolved callees and
+  /// generics never flag.
+  public CheckTypes(): syntax::Diagnostic[];
+
+  /// Inferred-type inlay hints for one file: one `: <type>` hint after each
+  /// `local` binding that has no explicit `@type`/`@param` annotation and
+  /// whose inferred type is concrete (never `Unknown`/`Any`).
+  public InlayHints(path: string): lspcore::InlayHint[];
 
   /// The hover card for the identifier at a byte offset; none over
   /// whitespace or non-identifiers. Resolution order: innermost lexical
@@ -93,6 +150,22 @@ feature HoverExplainsDeclarations for lspcore::Queries {
   when "the developer hovers its name"
   then "the card titles it as a local with the inferred string type"
   and "the doc comment text above the declaration appears in the body"
+}
+
+/// A type-incompatible argument is reported against the declared `@param`.
+/// #critical
+feature ArgumentTypeIsChecked for lspcore::Queries {
+  given "a function with a `---@param msg string` annotation"
+  when "it is called with a number literal argument"
+  then "a LUA-T001 diagnostic is reported at the argument's span"
+  but "calling it with a string argument reports nothing"
+}
+
+/// Inferred types are surfaced as inlay hints on unannotated locals.
+feature InferredTypesShowAsInlayHints for lspcore::Queries {
+  given "a local assigned a string literal with no `@type` annotation"
+  when "inlay hints for the file are requested"
+  then "a `: string` hint is returned at the end of the bound name"
 }
 
 /// Editing one file re-analyses exactly that file.

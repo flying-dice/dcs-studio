@@ -129,3 +129,11 @@
 		@apply m-0 h-full overflow-hidden bg-background text-foreground;
 	}
 }
+
+/* Inferred-type inlay hints, drawn as dimmed inline ghost text. */
+.cm-inlay-hint {
+	@apply text-muted-foreground/70;
+	font-style: italic;
+	opacity: 0.75;
+	padding-left: 1px;
+}
