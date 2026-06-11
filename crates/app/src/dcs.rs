@@ -60,7 +60,6 @@ pub fn start(app: AppHandle) {
         let sim_running = state.sim_running.clone();
         let latency_ms = state.latency_ms.clone();
         let _ = state.client.set(client.clone());
-        drop(state);
 
         // Connection watcher: relay WS up/down to the frontend. The first
         // iteration emits the current state once at startup.

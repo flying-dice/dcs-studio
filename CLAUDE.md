@@ -150,6 +150,8 @@ diagnostics, never a panic. The IDE side:
   suites (units, conformance goldens, totality properties, corpus gate).
 - `cargo test -p dcs-studio-cli` — CLI suites incl. real-stdio LSP and MCP
   end-to-end sessions.
+- `cargo test -p dcs-studio --tests` — host↔real-server IPC integration
+  (needs `cargo build -p dcs-studio-cli` first; auto-skips without the binary).
 - `pnpm build:wasm` — rebuild `src/lib/dcs-lua-wasm/` after engine changes.
 
 For live work against DCS (deploy the DLL, launch/control the sim, eval Lua),

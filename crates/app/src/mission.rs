@@ -230,7 +230,7 @@ pub fn dcs_detect_mission_scripts() -> Vec<MissionScriptFile> {
         }
         let lua = root.join("Scripts").join("MissionScripting.lua");
         let key = lua.to_string_lossy().to_lowercase();
-        if seen.iter().any(|s| *s == key) {
+        if seen.contains(&key) {
             continue;
         }
         seen.push(key);

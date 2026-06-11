@@ -223,7 +223,11 @@ fn pump_messages(stdout: impl Read, deliver: impl Fn(String)) {
 
 /// Parse one `Content-Length`-framed message; `None` on EOF, error, or an
 /// implausible length (`MAX_FRAME_BYTES`) ends the session cleanly.
-fn read_frame(reader: &mut BufReader<impl Read>) -> Option<String> {
+///
+/// `pub` solely so the host-IPC integration test (`tests/host_ipc.rs`)
+/// can drive the host's own frame reader against a real spawned
+/// `dcs-studio-cli lsp`; production code reaches it via `pump_messages`.
+pub fn read_frame(reader: &mut BufReader<impl Read>) -> Option<String> {
     let mut content_length: Option<usize> = None;
     loop {
         let mut line = String::new();
@@ -247,7 +251,7 @@ fn read_frame(reader: &mut BufReader<impl Read>) -> Option<String> {
     String::from_utf8(body).ok()
 }
 
-#[cfg(windows)]
+#[cfg(all(test, windows))]
 fn throwaway_child() -> Child {
     Command::new("cmd")
         .args(["/c", "exit"])
@@ -258,7 +262,7 @@ fn throwaway_child() -> Child {
         .expect("spawn throwaway")
 }
 
-#[cfg(not(windows))]
+#[cfg(all(test, not(windows)))]
 fn throwaway_child() -> Child {
     Command::new("true")
         .stdin(Stdio::piped())
@@ -323,8 +327,12 @@ mod tests {
         let code = reap(&hosts, "t");
 
         assert_eq!(delivered.load(std::sync::atomic::Ordering::SeqCst), 0);
-        assert!(code.is_some(), "exit code observed");
+        // code is None when reap's kill races the child's own exit and
+        // the process dies by signal (Unix signal deaths carry no exit
+        // code) - the ExitPayload contract is Option for exactly that.
+        // What matters is that reap completed and the handle is gone.
         assert!(hosts.lock().unwrap().is_empty(), "handle removed");
+        let _ = code;
         // A second reap (e.g. racing stop) is a clean no-op.
         assert_eq!(reap(&hosts, "t"), None);
     }
