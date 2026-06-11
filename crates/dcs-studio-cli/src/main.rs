@@ -95,6 +95,11 @@ fn main() -> ExitCode {
         } => match dcs_studio_project::scaffold::init(&template, &parent, &name) {
             Ok(root) => {
                 println!("created {}", root.display());
+                // Per-template guidance (model: `studio::cli::Cli.PrintNextSteps`).
+                let steps = dcs_studio_project::templates::next_steps(&template);
+                if !steps.is_empty() {
+                    println!("{steps}");
+                }
                 ExitCode::SUCCESS
             }
             Err(error) => {
