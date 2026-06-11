@@ -61,7 +61,13 @@ pub fn run(root: &Path, reporter: Reporter, junit_out: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let (dir, suffix) = test_config(root);
+    let (dir, suffix) = match test_config(root) {
+        Ok(config) => config,
+        Err(message) => {
+            eprintln!("test: {message}");
+            return ExitCode::FAILURE;
+        }
+    };
     let specs = discover(root, &dir, &suffix);
     if specs.is_empty() {
         println!("no test files found under {dir}/ (suffix {suffix})");
@@ -101,20 +107,16 @@ pub fn run(root: &Path, reporter: Reporter, junit_out: &Path) -> ExitCode {
 }
 
 /// `[test]` from the manifest when one exists; defaults otherwise (a
-/// manifest-less folder is still testable). A malformed manifest is NOT
-/// ignored — it would silently change discovery.
-fn test_config(root: &Path) -> (String, String) {
-    let defaults = dcs_studio_project::manifest::TestConfig::default();
+/// manifest-less folder is still testable). A malformed manifest is a
+/// hard error, never a fallback — defaulting would silently redirect
+/// discovery away from the configured specs.
+fn test_config(root: &Path) -> Result<(String, String), String> {
     if !root.join("dcs-studio.toml").is_file() {
-        return (defaults.dir, defaults.suffix);
+        let defaults = dcs_studio_project::manifest::TestConfig::default();
+        return Ok((defaults.dir, defaults.suffix));
     }
-    match dcs_studio_project::manifest::load(root) {
-        Ok(manifest) => (manifest.test.dir, manifest.test.suffix),
-        Err(message) => {
-            eprintln!("test: {message} — using default [test] discovery");
-            (defaults.dir, defaults.suffix)
-        }
-    }
+    let manifest = dcs_studio_project::manifest::load(root)?;
+    Ok((manifest.test.dir, manifest.test.suffix))
 }
 
 /// Root-relative spec paths under `<root>/<dir>`, sorted for stable

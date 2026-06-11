@@ -195,6 +195,37 @@ fn missing_runner_is_a_clear_error_never_a_silent_pass() {
 }
 
 #[test]
+fn malformed_manifest_is_an_error_not_a_discovery_fallback() {
+    let root = temp_project(
+        "bad-manifest",
+        "[test\ndir = broken",
+        &[(
+            "tests/present.test.lua",
+            "test(\"would pass\", function() end)\n",
+        )],
+    );
+    // The runner is irrelevant here, but pin one anyway so the failure
+    // cannot be the missing-runner arm.
+    let missing_arm_proof = std::env::current_exe().expect("self");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_dcs-studio-cli"))
+        .arg("test")
+        .arg(&root)
+        .env("DCS_LUA_RUNNER", &missing_arm_proof)
+        .output()
+        .expect("spawn dcs-studio-cli test");
+
+    assert!(
+        !output.status.success(),
+        "a malformed manifest must not fall back to default discovery"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("dcs-studio.toml"),
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn nonexistent_root_is_an_error() {
     let missing_root =
         std::env::temp_dir().join(format!("dcs-test-cli-missing-{}", std::process::id()));
