@@ -12,6 +12,10 @@ pub struct Manifest {
     pub project: ProjectMeta,
     #[serde(default)]
     pub install: Vec<InstallRule>,
+    /// `[format]` — Lua formatter options (SPEC.md §7); an absent section
+    /// (or field) formats with house-style defaults.
+    #[serde(default)]
+    pub format: dcs_lua_fmt::FormatConfig,
 }
 
 /// `[project]` metadata; only the fields the toolchain acts on.
@@ -103,5 +107,27 @@ mod tests {
                 .expect("tolerant parse");
         assert_eq!(manifest.project.name, "x");
         assert!(manifest.install.is_empty());
+    }
+
+    #[test]
+    fn absent_format_section_means_house_defaults() {
+        let manifest = parse("[project]\nname = \"x\"\n").expect("parse");
+        assert_eq!(manifest.format, dcs_lua_fmt::FormatConfig::default());
+    }
+
+    #[test]
+    fn format_section_overrides_per_field() {
+        let manifest = parse(
+            "[project]\nname = \"x\"\n\n[format]\nindent_width = 2\nquote_style = \"single\"\nfuture_knob = true\n",
+        )
+        .expect("parse");
+        assert_eq!(manifest.format.indent_width, 2);
+        assert_eq!(manifest.format.quote_style, dcs_lua_fmt::QuoteStyle::Single);
+        // Untouched fields keep their defaults; unknown keys are tolerated.
+        assert_eq!(manifest.format.max_width, 100);
+        assert_eq!(
+            manifest.format.trailing_comma,
+            dcs_lua_fmt::TrailingComma::Multiline
+        );
     }
 }

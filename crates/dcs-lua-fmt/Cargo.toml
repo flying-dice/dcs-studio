@@ -1,14 +1,15 @@
 [package]
-name = "dcs-studio-project"
+name = "dcs-lua-fmt"
 version.workspace = true
 edition = "2024"
 
 [lints]
 workspace = true
 
+[lib]
+name = "dcs_lua_fmt"
+path = "src/lib.rs"
+
 [dependencies]
-dcs-lua-fmt = { path = "../dcs-lua-fmt" }
 dcs-lua-syntax = { path = "../dcs-lua-syntax" }
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
-walkdir = "2"

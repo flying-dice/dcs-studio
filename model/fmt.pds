@@ -1,0 +1,150 @@
+//! fmt — deterministic Lua 5.1 formatter (crate `dcs-lua-fmt`).
+//!
+//! One formatter shared by the editor and the CLI (SPEC.md §7,
+//! decisions/006). Built on the lossless syntax front-end: the lexer's
+//! full-fidelity trivia anchors comments and blank lines to the printed
+//! tree, so they survive verbatim while indentation, spacing, and quotes
+//! normalise. Pure and WASM-safe — no I/O, no clock; CLI plumbing
+//! (file walks, in-place writes, `--check`) stays outside the model.
+
+/// Formatting options, read from `dcs-studio.toml` `[format]` by the
+/// project kit; every field has a default so an absent section formats
+/// with house style (4 spaces, double quotes, 100-byte line budget,
+/// trailing comma in multiline tables). `maxWidth` is measured in UTF-8
+/// bytes, not display columns — a deterministic, cheap proxy; non-ASCII
+/// wraps early, conservatively. Values below 20 clamp to 20 — a
+/// degenerate budget must not force every construct to break.
+public data FormatConfig { indentWidth: number, indentStyle: string, quoteStyle: string, maxWidth: number, trailingComma: string }
+
+/// A successful formatting outcome. `guardTripped` raised means the
+/// semantic guard rejected the printed text and `text` is the input
+/// returned unchanged — always a formatter bug, surfaced loudly by
+/// callers (the CLI warns on stderr, continues its walk, and fails the
+/// run's exit code in both modes; nothing aborts).
+public data Formatted { text: string, guardTripped: bool }
+
+/// `crates/dcs-lua-fmt`. The deterministic formatter face: whole-file and
+/// range formatting over the shared parse. Semantic preservation is a
+/// hard invariant — a formatter bug must never change what a mission
+/// script does.
+/// #critical
+public container Fmt for dcslua::DcsLuaLs {
+  /// Format whole source text. A file that does not parse cleanly is
+  /// returned via Err with the parse diagnostics — never half-formatted.
+  /// Before returning, the printed text is re-parsed and structurally
+  /// compared (spans ignored, strings by decoded value) against the
+  /// input tree; on any mismatch the original text is returned unchanged
+  /// with `guardTripped` raised — safety beats prettiness, and the trip
+  /// is signalled, never an abort.
+  public Format(text: string, config: fmt::FormatConfig): Result<fmt::Formatted, syntax::Diagnostic[]> {
+    parsed = syntax::Parsed from syntax::Syntax.Parse(text)
+    failed = bool from self.HasErrors(parsed)
+    if (failed) {
+      return Err(parsed.diagnostics)
+    }
+    printed = string from fmt::Printer.Print(text, parsed, config)
+    safe = bool from self.PreservesSemantics(text, printed)
+    if (!safe) {
+      unchanged = fmt::Formatted from { text }
+      return Ok(unchanged)
+    }
+    formatted = fmt::Formatted from { printed }
+    return Ok(formatted)
+  }
+
+  /// Format the smallest run of whole statements enclosing a byte range;
+  /// every byte outside the spliced run is identical to the input. The
+  /// run lives in the deepest statement-reachable block containing the
+  /// range (function-literal bodies nested inside expressions widen to
+  /// their enclosing statement).
+  public FormatRange(text: string, range: syntax::Span, config: fmt::FormatConfig): Result<fmt::Formatted, syntax::Diagnostic[]> {
+    parsed = syntax::Parsed from syntax::Syntax.Parse(text)
+    failed = bool from self.HasErrors(parsed)
+    if (failed) {
+      return Err(parsed.diagnostics)
+    }
+    printed = string from fmt::Printer.PrintRun(text, parsed, range, config)
+    safe = bool from self.PreservesSemantics(text, printed)
+    if (!safe) {
+      unchanged = fmt::Formatted from { text }
+      return Ok(unchanged)
+    }
+    formatted = fmt::Formatted from { printed }
+    return Ok(formatted)
+  }
+
+  /// Whether the parse carries any error-severity diagnostic.
+  HasErrors(parsed: syntax::Parsed): bool;
+
+  /// The runtime guard: re-parse the printed text and compare trees
+  /// structurally (spans ignored, short strings by decoded value), and
+  /// require the multiset of comment texts to survive into the output
+  /// trivia (a comment may move to a line end, never change or vanish).
+  PreservesSemantics(before: string, after: string): bool;
+}
+
+/// Trivia-anchored printer over the shared AST (decisions/006). Walks the
+/// tree in source order with one cursor into the lexed trivia stream:
+/// comments flush before the statement (or table field) they precede,
+/// same-line comments stay trailing, blank-line runs are preserved capped
+/// at two. Width-aware: expressions render flat first; a line over the
+/// budget breaks at its outermost breakable construct (table fields or
+/// call arguments, one per line). Deterministic by construction — no
+/// map iteration, no randomness; same input and config, same output.
+/// #critical
+component Printer for fmt::Fmt {
+  /// Print the whole chunk: statements one per line at their block depth,
+  /// trivia flushed in source order, exactly one trailing newline (none
+  /// for a token-free file). Line endings follow the input: CRLF when the
+  /// source contains CRLF, LF otherwise.
+  Print(text: string, parsed: syntax::Parsed, config: fmt::FormatConfig): string;
+
+  /// Locate the deepest statement-reachable block containing `range`,
+  /// widen to whole statements (plus their leading line and same-line
+  /// trailing comments), print that run at the block's depth, and splice
+  /// it back between untouched bytes. The `(`-statement merge guard is
+  /// suppressed when the untouched prefix already ends with a `;`
+  /// separator — the splice must never produce `;;`, which PUC Lua 5.1
+  /// rejects.
+  PrintRun(text: string, parsed: syntax::Parsed, range: syntax::Span, config: fmt::FormatConfig): string;
+}
+
+/// Formatting twice is formatting once.
+/// #critical
+feature FormatIsIdempotent for fmt::Fmt {
+  given "any source text that formats successfully"
+  when "the formatter runs on its own output"
+  then "the second output is byte-identical to the first"
+}
+
+/// Comments and intentional blank lines survive formatting.
+/// #critical
+feature CommentsSurviveFormatting for fmt::Fmt {
+  given "source with line comments, long-bracket comments, `---` doc runs, and blank-line gaps"
+  when "the file is formatted"
+  then "every comment's text appears verbatim in the output"
+  and "blank-line gaps between statements survive, capped at two"
+  but "a comment inside an expression may move to the end of its statement's line"
+}
+
+/// A file that does not parse is never half-formatted.
+/// #critical
+feature UnparseableFileReturnsUnchanged for fmt::Fmt {
+  given "source with a syntax error anywhere in the file"
+  when "the formatter runs"
+  then "the result is Err carrying the parse diagnostics"
+  and "the caller keeps the original text byte-for-byte"
+}
+
+/// Formatting never changes what a script does — and the output always
+/// loads under real PUC Lua 5.1, whose grammar (`chunk ::= {stat [';']}`)
+/// admits `;` only after a statement.
+/// #critical
+feature FormattingPreservesSemantics for fmt::Fmt {
+  given "any source that formats successfully"
+  when "the output is re-parsed"
+  then "its tree is structurally identical to the input's (spans ignored, strings by decoded value)"
+  and "a statement beginning with `(` keeps a leading `;` only when a statement precedes it in its block, so boundaries cannot merge and a block-start statement never gains an illegal `;`"
+  and "a range splice never doubles a `;` the untouched prefix already carries"
+  and "a tripped guard returns the input unchanged with `guardTripped` raised — signalled to the caller, never an abort"
+}

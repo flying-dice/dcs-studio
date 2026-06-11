@@ -23,8 +23,17 @@ rust:
   cache: *rust-cache
   script:
     - rustup component add clippy
-    - cargo test -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli
-    - cargo clippy -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli --all-targets -- -D warnings
+    # PUC validity gates (issue #27): the formatter's semantic guard
+    # re-parses with our own tolerant parser, so the tolerant-accepts /
+    # PUC-rejects divergence class is only caught by a real `luac -p`.
+    # Debian's lua5.1 package is PUC Lua 5.1.5; with DCS_PUC_LUAC set the
+    # goldens + formatted-corpus luac gates in dcs-lua-fmt always run here
+    # (they skip hermetically when the env var is absent).
+    - apt-get update -qq
+    - apt-get install -y -qq lua5.1
+    - export DCS_PUC_LUAC=$(command -v luac5.1)
+    - cargo test -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli
+    - cargo clippy -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli --all-targets -- -D warnings
 
 # App-compile + host<->real-server gate: builds the Tauri crate against
 # the webkit2gtk stack and runs its suites, including tests/host_ipc.rs —

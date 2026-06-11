@@ -7,6 +7,7 @@
 //! language server.
 
 mod check;
+mod fmt;
 mod lsp;
 mod mcp;
 mod sources;
@@ -50,6 +51,20 @@ enum Command {
         /// Workspace root to analyse.
         #[arg(default_value = ".")]
         root: PathBuf,
+    },
+    /// Format .lua files in place (house style, decisions/006); a
+    /// directory walks like `check`. Unparseable files are reported and
+    /// skipped — parse errors are `check`'s job. An internal guard trip
+    /// leaves the file unchanged and the walk continues, but the run
+    /// exits nonzero in both modes — a trip is a formatter bug leaving
+    /// a file non-canonical, and a gate built on fmt must go red.
+    Fmt {
+        /// Files or directories to format.
+        #[arg(default_value = ".")]
+        paths: Vec<PathBuf>,
+        /// Write nothing; list files that would change and exit 1 if any.
+        #[arg(long)]
+        check: bool,
     },
     /// Build the project: `cargo build --release` for Rust projects,
     /// a no-op for everything else.
@@ -122,6 +137,7 @@ fn main() -> ExitCode {
             // Exit codes above 100 are reserved for runner failures.
             ExitCode::from(u8::try_from(report.error_count.min(100)).unwrap_or(100))
         }
+        Command::Fmt { paths, check } => fmt::run(&paths, check),
         Command::Build { root } => build(&root),
         Command::Install {
             root,

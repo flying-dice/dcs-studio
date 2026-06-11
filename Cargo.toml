@@ -5,6 +5,7 @@ members = [
     "crates/dcs-bridge-client",
     "crates/dcs-bridge",
     "crates/dcs-lua-syntax",
+    "crates/dcs-lua-fmt",
     "crates/dcs-lua-lsp-core",
     "crates/dcs-lua-ide",
     "crates/dcs-studio-cli",
