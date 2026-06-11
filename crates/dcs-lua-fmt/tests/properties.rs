@@ -323,6 +323,153 @@ fn format_range_end_does_not_merge_with_the_suffix() {
     );
 }
 
+/// BUG fix pin (PUC validity): a range splice must not double a `;` the
+/// untouched prefix already carries — `;;` does not load under PUC Lua
+/// 5.1, and the tolerant in-house re-parse cannot catch it.
+#[test]
+fn format_range_does_not_double_a_prefix_semicolon() {
+    use dcs_lua_fmt::Span;
+    let config = FormatConfig::default();
+    let source = "local x = print;\n(x or print)(\"hi\")\n";
+    let start = source.find("(x").expect("marker") as u32;
+    let formatted =
+        dcs_lua_fmt::format_range(source, Span::new(start, start + 3), &config).expect("formats");
+    assert!(!formatted.guard_tripped);
+    assert_eq!(
+        formatted.text, "local x = print;\n(x or print)(\"hi\")\n",
+        "the prefix `;` already separates — adding another would print `;;`"
+    );
+}
+
+/// The complement: a mid-block run whose prefix carries no `;` still
+/// gains the merge guard (valid: `;` follows a statement).
+#[test]
+fn format_range_midblock_paren_gains_its_semi() {
+    use dcs_lua_fmt::Span;
+    let config = FormatConfig::default();
+    let source = "local x = 1\n(f or print)(\"hi\")\n";
+    let start = source.find("(f").expect("marker") as u32;
+    let formatted =
+        dcs_lua_fmt::format_range(source, Span::new(start, start + 3), &config).expect("formats");
+    assert!(!formatted.guard_tripped);
+    assert_eq!(formatted.text, "local x = 1\n;(f or print)(\"hi\")\n");
+}
+
+/// The start-side widening is a fixpoint: a straddling comment can pull
+/// the splice start onto a line owned by an earlier statement, which must
+/// then join the run — a single pass would drop that statement's bytes.
+#[test]
+fn format_range_start_widening_interleaves_comments_and_statements() {
+    use dcs_lua_fmt::Span;
+    let config = FormatConfig::default();
+    let source = "a=1 --[[x\ny]] b=2\nc=3\n";
+    let start = source.find("b=2").expect("marker") as u32;
+    let formatted =
+        dcs_lua_fmt::format_range(source, Span::new(start, start + 3), &config).expect("formats");
+    assert!(!formatted.guard_tripped, "{}", formatted.text);
+    assert_eq!(formatted.text, "a = 1 --[[x\ny]]\nb = 2\nc=3\n");
+}
+
+/// The end-side extension is the same fixpoint mirrored: a same-line
+/// straddling comment moves the splice end onto a line carrying a further
+/// statement, which must join the run (here gaining its `;` guard — the
+/// suffix would otherwise merge into the printed text).
+#[test]
+fn format_range_end_extension_interleaves_comments_and_statements() {
+    use dcs_lua_fmt::Span;
+    let config = FormatConfig::default();
+    let source = "x=f; --[[c\nd]] (g or print)(\"k\")\nuntouched=1\n";
+    let formatted =
+        dcs_lua_fmt::format_range(source, Span::new(0, 3), &config).expect("formats");
+    assert!(!formatted.guard_tripped, "{}", formatted.text);
+    assert_eq!(
+        formatted.text,
+        "x = f --[[c\nd]]\n;(g or print)(\"k\")\nuntouched=1\n"
+    );
+}
+
+/// BUG fix pin extension: the `;` merge guard walks the whole prefix
+/// chain of an assignment target — `(g or f)().x = 1` starts with `(`
+/// through Call and Field nodes.
+#[test]
+fn assign_target_paren_chain_gets_the_semi_guard() {
+    let config = FormatConfig::default();
+    let formatted =
+        dcs_lua_fmt::format("do\nlocal g = f;\n(g or f)().x = 1\nend\n", &config)
+            .expect("formats");
+    assert!(!formatted.guard_tripped);
+    assert_eq!(
+        formatted.text,
+        "do\n    local g = f\n    ;(g or f)().x = 1\nend\n"
+    );
+}
+
+/// Call sugar gains parentheses for every sugar form, long brackets
+/// included — `f([[s]])`, never a token merge.
+#[test]
+fn call_sugar_gains_parentheses() {
+    let config = FormatConfig::default();
+    for (input, expected) in [
+        ("f[[s]]\n", "f([[s]])\n"),
+        ("f \"s\"\n", "f(\"s\")\n"),
+        ("f{1}\n", "f({ 1 })\n"),
+        ("x = f [[s]]\n", "x = f([[s]])\n"),
+    ] {
+        let formatted = dcs_lua_fmt::format(input, &config).expect("formats");
+        assert!(!formatted.guard_tripped, "{input:?}");
+        assert_eq!(formatted.text, expected, "{input:?}");
+    }
+}
+
+/// After a line comment nothing else can ride the line: a later pending
+/// comment flushes onto its own line instead of being swallowed into the
+/// line comment's text.
+#[test]
+fn pending_comment_after_a_line_comment_gets_its_own_line() {
+    let config = FormatConfig::default();
+    let formatted = dcs_lua_fmt::format("f(1, --a\n--b\n2)\n", &config).expect("formats");
+    assert!(!formatted.guard_tripped);
+    assert_eq!(formatted.text, "f(1, 2) --a\n--b\n");
+}
+
+/// Blank runs at a block's start are dropped even when a comment follows
+/// them — SPEC.md §7: runs at file start/end and block edges go.
+#[test]
+fn leading_blanks_before_a_comment_are_dropped() {
+    let config = FormatConfig::default();
+    let formatted =
+        dcs_lua_fmt::format("\n\n-- header\nlocal a = 1\n", &config).expect("formats");
+    assert_eq!(formatted.text, "-- header\nlocal a = 1\n");
+    let formatted =
+        dcs_lua_fmt::format("do\n\n    -- note\n    f()\nend\n", &config).expect("formats");
+    assert_eq!(formatted.text, "do\n    -- note\n    f()\nend\n");
+}
+
+/// Blank-line trivia inside an otherwise-empty block is printer-owned
+/// layout: the block still collapses (counting it would break
+/// idempotency).
+#[test]
+fn empty_block_with_blank_lines_still_collapses() {
+    let config = FormatConfig::default();
+    let formatted = dcs_lua_fmt::format("do\n\nend\n", &config).expect("formats");
+    assert_eq!(formatted.text, "do end\n");
+}
+
+/// The broken-path unary spacing mirrors the flat path: `- -x` keeps the
+/// inner space even when the budget forces the expression down the
+/// recursive emitter — `--` would lex as a comment.
+#[test]
+fn broken_path_double_negation_keeps_its_space() {
+    let config = FormatConfig {
+        max_width: 0, // clamps to the 20-column floor
+        ..FormatConfig::default()
+    };
+    let formatted =
+        dcs_lua_fmt::format("neg = - -abcdefghijklmnopqrstuvwxy\n", &config).expect("formats");
+    assert!(!formatted.guard_tripped);
+    assert_eq!(formatted.text, "neg = - -abcdefghijklmnopqrstuvwxy\n");
+}
+
 #[test]
 fn quote_and_indent_config_are_honoured() {
     let config = FormatConfig {

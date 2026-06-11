@@ -42,7 +42,7 @@ pub fn run(paths: &[PathBuf], check: bool) -> ExitCode {
         let config = config_for(path);
         for (file, text) in files {
             checked += 1;
-            match dcs_lua_fmt::format(&text, &config) {
+            match formatted_with_test_hook(&text, &config) {
                 Ok(formatted) if formatted.guard_tripped => {
                     eprintln!(
                         "fmt: {file}: internal formatter guard tripped; \
@@ -86,6 +86,28 @@ pub fn run(paths: &[PathBuf], check: bool) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// [`dcs_lua_fmt::format`], plus a debug-build-only test hook: a real
+/// guard trip requires a formatter bug, so the CLI's warn-and-continue
+/// arm is otherwise untestable. With `DCS_STUDIO_FMT_FORCE_GUARD_TRIP`
+/// set, a debug binary reports every file as tripped (input unchanged) —
+/// release builds compile the hook out.
+fn formatted_with_test_hook(
+    text: &str,
+    config: &FormatConfig,
+) -> Result<dcs_lua_fmt::Formatted, Vec<dcs_lua_fmt::Diagnostic>> {
+    let result = dcs_lua_fmt::format(text, config);
+    if cfg!(debug_assertions)
+        && result.is_ok()
+        && std::env::var_os("DCS_STUDIO_FMT_FORCE_GUARD_TRIP").is_some()
+    {
+        return Ok(dcs_lua_fmt::Formatted {
+            text: text.to_string(),
+            guard_tripped: true,
+        });
+    }
+    result
 }
 
 /// Write via a sibling temp file renamed over the original, so a crash or

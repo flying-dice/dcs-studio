@@ -100,7 +100,10 @@ component Printer for fmt::Fmt {
   /// Locate the deepest statement-reachable block containing `range`,
   /// widen to whole statements (plus their leading line and same-line
   /// trailing comments), print that run at the block's depth, and splice
-  /// it back between untouched bytes.
+  /// it back between untouched bytes. The `(`-statement merge guard is
+  /// suppressed when the untouched prefix already ends with a `;`
+  /// separator — the splice must never produce `;;`, which PUC Lua 5.1
+  /// rejects.
   PrintRun(text: string, parsed: syntax::Parsed, range: syntax::Span, config: fmt::FormatConfig): string;
 }
 
@@ -140,5 +143,6 @@ feature FormattingPreservesSemantics for fmt::Fmt {
   when "the output is re-parsed"
   then "its tree is structurally identical to the input's (spans ignored, strings by decoded value)"
   and "a statement beginning with `(` keeps a leading `;` only when a statement precedes it in its block, so boundaries cannot merge and a block-start statement never gains an illegal `;`"
+  and "a range splice never doubles a `;` the untouched prefix already carries"
   and "a tripped guard returns the input unchanged with `guardTripped` raised — signalled to the caller, never an abort"
 }

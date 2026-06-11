@@ -17,9 +17,9 @@ mod semantics;
 mod strings;
 
 pub use config::{FormatConfig, IndentStyle, MIN_WIDTH, QuoteStyle, TrailingComma};
-pub use dcs_lua_syntax::Span;
+pub use dcs_lua_syntax::{Diagnostic, Span};
 
-use dcs_lua_syntax::{Diagnostic, Severity};
+use dcs_lua_syntax::Severity;
 
 /// A successful formatting outcome (model: `fmt::Formatted`).
 #[derive(Debug, Clone, PartialEq, Eq)]

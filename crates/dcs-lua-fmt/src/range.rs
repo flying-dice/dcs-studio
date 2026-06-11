@@ -93,6 +93,19 @@ pub(crate) fn format_range(
         }
     }
 
+    // The run's first statement needs no `;` merge guard when it starts
+    // its block — or when the untouched prefix already ends with a `;`
+    // separator (between the previous statement and the splice start only
+    // separators, whitespace, and comments can sit): doubling it would
+    // print `;;`, which PUC Lua 5.1 rejects and the tolerant in-house
+    // re-parse cannot catch.
+    let first_separated = first == 0
+        || semi_separates(
+            src,
+            trivia,
+            parsed.ast.stat(stats[first - 1]).span.end,
+            splice_start,
+        );
     let run = &stats[first..=last];
     let formatted = printer::print_run(
         src,
@@ -102,13 +115,29 @@ pub(crate) fn format_range(
         run,
         depth,
         splice_start,
-        first == 0,
+        first_separated,
     );
     let mut out = String::with_capacity(src.len() + 64);
     out.push_str(&src[..splice_start as usize]);
     out.push_str(&formatted);
     out.push_str(&src[splice_end as usize..]);
     out
+}
+
+/// Whether a real `;` statement separator (a `;` byte outside any
+/// comment) sits in `src[from..to)`.
+fn semi_separates(src: &str, trivia: &[SpannedTrivia], from: u32, to: u32) -> bool {
+    src[from as usize..to as usize]
+        .bytes()
+        .enumerate()
+        .any(|(i, byte)| {
+            byte == b';' && {
+                let pos = from + u32::try_from(i).unwrap_or(u32::MAX);
+                !trivia
+                    .iter()
+                    .any(|t| t.span.start <= pos && pos < t.span.end)
+            }
+        })
 }
 
 /// Offset of the start of the line containing `offset`.

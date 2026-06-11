@@ -135,7 +135,9 @@ never a second parser — and it MUST hold these invariants:
   the range to the smallest run of whole statements in the deepest
   statement-reachable block containing it (blocks inside expression-level
   function literals widen to their enclosing statement) and MUST leave
-  every byte outside the spliced run identical.
+  every byte outside the spliced run identical. The `(`-statement merge
+  guard is suppressed when the untouched prefix already ends with a `;`
+  separator: the splice MUST NOT produce `;;`, which PUC Lua 5.1 rejects.
 
 Config keys (`dcs-studio.toml` `[format]`, parsed by
 `crates/dcs-studio-project`; absent section or field → default):

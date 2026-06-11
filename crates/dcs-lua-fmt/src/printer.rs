@@ -39,10 +39,11 @@ pub(crate) fn print(
 
 /// Print one statement run for range formatting: trivia cursor starts at
 /// the splice boundary and the final newline is trimmed so the run sits
-/// flush against the untouched tail. `starts_block` says whether the run
-/// begins at its block's first statement — only then may a `(`-starting
-/// first statement drop its `;` merge guard (Lua 5.1 admits `;` solely
-/// after a statement).
+/// flush against the untouched tail. `first_separated` says the run's
+/// first statement needs no `;` merge guard: it starts its block (where
+/// Lua 5.1 rejects a leading `;` — `;` is admitted solely after a
+/// statement), or the untouched prefix already ends with a `;` separator
+/// (doubling it would print `;;`, which PUC Lua rejects).
 #[expect(
     clippy::too_many_arguments,
     reason = "the splice parameters are one explicit set with a single caller"
@@ -55,11 +56,11 @@ pub(crate) fn print_run(
     stats: &[StatId],
     depth: usize,
     splice_start: u32,
-    starts_block: bool,
+    first_separated: bool,
 ) -> String {
     let mut printer = Printer::new(src, parsed, trivia, config);
     printer.ti = trivia.partition_point(|t| t.span.start < splice_start);
-    printer.print_stat_run(stats, depth, starts_block);
+    printer.print_stat_run(stats, depth, first_separated);
     if printer.out.ends_with(printer.newline) {
         let len = printer.out.len() - printer.newline.len();
         printer.out.truncate(len);
@@ -214,28 +215,29 @@ impl<'a> Printer<'a> {
         self.print_stat_run(stats, depth, true);
     }
 
-    /// `starts_block`: the first of `stats` is its block's first statement,
-    /// so a `(`-starting statement there must not gain the `;` merge guard
-    /// — Lua 5.1's `chunk ::= {stat [';']}` admits `;` only *after* a
-    /// statement, and PUC Lua rejects a block-start `;`.
-    fn print_stat_run(&mut self, stats: &[StatId], depth: usize, starts_block: bool) {
+    /// `first_separated`: the first of `stats` must not gain the `;` merge
+    /// guard — it is its block's first statement (Lua 5.1's
+    /// `chunk ::= {stat [';']}` admits `;` only *after* a statement, and
+    /// PUC Lua rejects a block-start `;`), or, in range mode, the
+    /// untouched prefix already carries the separator.
+    fn print_stat_run(&mut self, stats: &[StatId], depth: usize, first_separated: bool) {
         for (i, &sid) in stats.iter().enumerate() {
             let span = self.ast.stat(sid).span;
             self.flush_trivia(span.start, depth, i == 0, false);
             self.push_indent(depth);
-            self.print_stat(sid, depth, starts_block && i == 0);
+            self.print_stat(sid, depth, first_separated && i == 0);
             self.trailing_comments(span.end);
             self.push_newline();
         }
     }
 
     #[expect(clippy::too_many_lines, reason = "one arm per statement form")]
-    fn print_stat(&mut self, sid: StatId, depth: usize, first_in_block: bool) {
+    fn print_stat(&mut self, sid: StatId, depth: usize, separated: bool) {
         let ast = self.ast;
         let span = ast.stat(sid).span;
         match &ast.stat(sid).kind {
             StatKind::Assign { targets, values } => {
-                if !first_in_block && self.starts_with_paren(targets[0]) {
+                if !separated && self.starts_with_paren(targets[0]) {
                     self.out.push(';');
                 }
                 self.emit_expr_list(targets, depth);
@@ -251,7 +253,7 @@ impl<'a> Printer<'a> {
                 }
             }
             StatKind::CallStat { call } => {
-                if !first_in_block && self.starts_with_paren(*call) {
+                if !separated && self.starts_with_paren(*call) {
                     self.out.push(';');
                 }
                 self.emit_expr(*call, depth);

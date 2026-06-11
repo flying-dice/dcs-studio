@@ -9,12 +9,16 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn fmt(args: &[&str], cwd: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_dcs-studio-cli"))
-        .arg("fmt")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("spawn dcs-studio-cli fmt")
+    fmt_with_env(args, cwd, &[])
+}
+
+fn fmt_with_env(args: &[&str], cwd: &Path, env: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_dcs-studio-cli"));
+    command.arg("fmt").args(args).current_dir(cwd);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    command.output().expect("spawn dcs-studio-cli fmt")
 }
 
 fn temp_project(name: &str) -> PathBuf {
@@ -131,6 +135,112 @@ fn nonexistent_path_is_an_error() {
     assert!(!output.status.success(), "a missing path must not exit 0");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("does not exist"), "got: {stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An invalid `[format]` value is reported on stderr and falls back to
+/// house defaults — a typo in the manifest must not block formatting.
+#[test]
+fn invalid_manifest_format_falls_back_to_defaults_with_a_note() {
+    let dir = temp_project("badcfg");
+    std::fs::write(
+        dir.join("dcs-studio.toml"),
+        "[project]\nname = \"cfg\"\n\n[format]\nquote_style = \"sideways\"\n",
+    )
+    .expect("write manifest");
+    let file = dir.join("script.lua");
+    std::fs::write(&file, "local s = 'x'\n").expect("write");
+
+    let output = fmt(&["."], &dir);
+    assert!(
+        output.status.success(),
+        "an invalid manifest must not fail fmt, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("using default format config"),
+        "the fallback must be reported: {stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("read back"),
+        "local s = \"x\"\n",
+        "house defaults (double quotes) must govern"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The guard-trip arm: warn loudly on stderr, leave the file unchanged,
+/// keep walking, and do not fail the exit code (decisions/006: a trip
+/// degrades, never aborts). A real trip requires a formatter bug, so the
+/// debug-only `DCS_STUDIO_FMT_FORCE_GUARD_TRIP` hook forces one.
+#[test]
+fn guard_trip_warns_leaves_file_unchanged_and_continues() {
+    let dir = temp_project("trip");
+    let original = "local x   =   1\n";
+    std::fs::write(dir.join("a.lua"), original).expect("write");
+    std::fs::write(dir.join("b.lua"), original).expect("write");
+
+    let output = fmt_with_env(&["."], &dir, &[("DCS_STUDIO_FMT_FORCE_GUARD_TRIP", "1")]);
+    assert!(
+        output.status.success(),
+        "a guard trip must not fail the walk, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr.matches("formatter guard tripped").count(),
+        2,
+        "both files must warn (the walk continues): {stderr}"
+    );
+    for name in ["a.lua", "b.lua"] {
+        assert_eq!(
+            std::fs::read_to_string(dir.join(name)).expect("read back"),
+            original,
+            "{name}: a tripped file must come back byte-identical"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The atomic-write error arm: when the rename over the original fails,
+/// the temp file is cleaned up, the failure is reported, and fmt exits
+/// nonzero. Windows-only: an open handle without `FILE_SHARE_DELETE`
+/// makes the rename fail while reads still succeed.
+#[cfg(windows)]
+#[test]
+fn failed_rename_cleans_up_the_temp_file_and_fails() {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 1;
+
+    let dir = temp_project("renamefail");
+    let file = dir.join("messy.lua");
+    std::fs::write(&file, "local x   =   1\n").expect("write");
+    // Hold the destination open allowing reads but not delete/rename.
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&file)
+        .expect("open with restrictive share mode");
+
+    let output = fmt(&["."], &dir);
+    assert!(!output.status.success(), "a failed write must exit nonzero");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("fmt: writing"),
+        "the failure must be reported: {stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("read back"),
+        "local x   =   1\n",
+        "the original must be intact"
+    );
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .expect("list dir")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(names, vec!["messy.lua"], "the temp file must be cleaned up");
+    drop(lock);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
