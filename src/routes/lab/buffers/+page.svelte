@@ -15,6 +15,7 @@
   const FILES = new Map<string, string>([
     ["lab/a.lua", 'print("hello")\n'],
     ["lab/b.lua", 'print("world")\n'],
+    ["lab/c.lua", 'print("third")\n'],
   ]);
 
   let ready = $state(false);
@@ -83,6 +84,13 @@
       onclick={() => app.openFile("lab/b.lua", "b.lua")}
     >
       open b.lua
+    </button>
+    <button
+      class="rounded border px-2 py-0.5"
+      data-testid="open-c"
+      onclick={() => app.openFile("lab/c.lua", "c.lua")}
+    >
+      open c.lua
     </button>
     <button
       class="rounded border px-2 py-0.5"

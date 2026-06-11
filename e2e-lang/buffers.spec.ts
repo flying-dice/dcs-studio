@@ -133,19 +133,27 @@ test("closing the active tab activates its neighbour and shows its buffer", asyn
 test("closing a non-active tab never steals focus from the active one", async ({
   page,
 }) => {
-  // model CloseActiveTabActivatesNeighbour (non-active arm): closing a's ×
-  // while b is active removes a's tab and leaves b's view untouched.
+  // model CloseActiveTabActivatesNeighbour (non-active arm). Three tabs, not
+  // two: with only a + b, a's neighbour IS the active b, so "no steal" and
+  // "steal-to-neighbour" are indistinguishable and the spec can't fail. With
+  // c active, a buggy steal would hand focus to a's neighbour b — not c.
   await page.getByTestId("open-a").click();
   await expect(editor(page)).toContainText('print("hello")');
   await page.getByTestId("open-b").click();
   await expect(editor(page)).toContainText('print("world")');
+  await page.getByTestId("open-c").click();
+  await expect(editor(page)).toContainText('print("third")');
+  await expect(tab(page, "lab/c.lua")).toHaveAttribute("data-active", "true");
 
   await tab(page, "lab/a.lua").getByTestId("tab-close").click();
 
   await expect(tab(page, "lab/a.lua")).toHaveCount(0);
-  await expect(tab(page, "lab/b.lua")).toHaveAttribute("data-active", "true");
-  await expect(editor(page)).toContainText('print("world")');
+  // c stays active — focus must not jump to a's neighbour b.
+  await expect(tab(page, "lab/c.lua")).toHaveAttribute("data-active", "true");
+  await expect(tab(page, "lab/b.lua")).toHaveAttribute("data-active", "false");
+  await expect(editor(page)).toContainText('print("third")');
   await expect(editor(page)).not.toContainText("hello");
+  await expect(editor(page)).not.toContainText("world");
 });
 
 test("File → Close Editor closes the active tab and falls back to the neighbour", async ({
