@@ -19,8 +19,9 @@ use tower_lsp::lsp_types::{
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability, Hover, HoverContents,
     HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-    MarkupContent, MarkupKind, NumberOrString, OneOf, Position, Range, ServerCapabilities,
-    ServerInfo, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    InlayHint, InlayHintKind, InlayHintLabel, InlayHintParams, MarkupContent, MarkupKind,
+    NumberOrString, OneOf, Position, Range, ServerCapabilities, ServerInfo,
+    TextDocumentSyncCapability, TextDocumentSyncKind, SymbolKind, Url,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
@@ -95,6 +96,7 @@ impl LanguageServer for Backend {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -243,6 +245,31 @@ impl LanguageServer for Backend {
             })
             .collect();
         Ok(Some(ranges))
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let Some(path) = uri_path(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        let workspace = self.workspace.lock().expect("workspace lock");
+        let Some(entry) = workspace.file(&path) else {
+            return Ok(None);
+        };
+        let index = LineIndex::new(&entry.source);
+        let hints = dcs_lua_lsp_core::inlay_hints(&workspace, &path)
+            .into_iter()
+            .map(|hint| InlayHint {
+                position: position(&entry.source, &index, hint.offset),
+                label: InlayHintLabel::String(hint.label),
+                kind: Some(InlayHintKind::TYPE),
+                text_edits: None,
+                tooltip: None,
+                padding_left: Some(true),
+                padding_right: None,
+                data: None,
+            })
+            .collect();
+        Ok(Some(hints))
     }
 }
 

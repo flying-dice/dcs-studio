@@ -130,10 +130,16 @@ export function langIntelFor(path: string | null): Extension {
     const text = view.state.doc.toString();
     await lang.updateSource(path, text);
     foldCache = await provider.foldingRanges(path);
-    // Refresh inferred-type ghost text on the same debounced cadence; a
-    // provider without inferred-type support simply yields none.
-    const hints = (await provider.inlayHints?.(path)) ?? [];
-    view.dispatch({ effects: setInlayHints.of(hints) });
+    // Refresh inferred-type ghost text on the same debounced cadence —
+    // best-effort: a provider that lacks inlay hints (the LSP server answers
+    // textDocument/inlayHint with an error) must NEVER abort the lint pass,
+    // or diagnostics would stop painting as squiggles.
+    try {
+      const hints = (await provider.inlayHints?.(path)) ?? [];
+      view.dispatch({ effects: setInlayHints.of(hints) });
+    } catch {
+      view.dispatch({ effects: setInlayHints.of([]) });
+    }
     return lang
       .fileDiagnostics(path)
       .map((d) => toCmDiagnostic(d, view.state.doc.length));

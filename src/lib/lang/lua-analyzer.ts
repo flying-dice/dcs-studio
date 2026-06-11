@@ -259,23 +259,30 @@ export class LuaAnalyzerProvider implements LanguageProvider {
     return null;
   }
 
-  // The CLI LSP does not advertise `inlayHintProvider` yet; the request
-  // returns null and we surface nothing. The wasm path delivers hints today
-  // (plan "Out of scope"); this keeps provider parity for when it lands.
+  // lua-analyzer advertises `inlayHintProvider` and answers from the same
+  // engine inlay-hint query as the wasm path. Defensive `[]` on any error so
+  // a server that lacks it can never abort the editor's lint pass.
   async inlayHints(path: string): Promise<InlayHint[]> {
     if (!this.client) return [];
     const text = this.texts.get(path) ?? "";
     const starts = lineStarts(text);
     const lastLine = Math.max(0, starts.length - 1);
-    const response = (await this.client.request("textDocument/inlayHint", {
-      textDocument: { uri: pathToUri(path) },
-      range: {
-        start: { line: 0, character: 0 },
-        end: { line: lastLine, character: 0 },
-      },
-    })) as
+    let response:
       | { position: { line: number; character: number }; label: unknown }[]
       | null;
+    try {
+      response = (await this.client.request("textDocument/inlayHint", {
+        textDocument: { uri: pathToUri(path) },
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: lastLine, character: 0 },
+        },
+      })) as
+        | { position: { line: number; character: number }; label: unknown }[]
+        | null;
+    } catch {
+      return []; // server lacks inlay hints — surface none, never throw
+    }
     return (response ?? []).map((hint) => ({
       offset: lineStart(starts, hint.position.line) + hint.position.character,
       label: typeof hint.label === "string" ? hint.label : String(hint.label),

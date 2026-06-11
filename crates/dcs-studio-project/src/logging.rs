@@ -13,6 +13,7 @@
 
 use std::fs::OpenOptions;
 use std::path::Path;
+use std::sync::Mutex;
 
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
@@ -31,31 +32,19 @@ pub fn init(default: &str) {
     let _ = base(default).with_writer(std::io::stderr).try_init();
 }
 
-/// Like [`init`], but also appends every event to `path`. Falls back to
+/// Like [`init`], but also appends every event to `path` (an append-mode
+/// file behind a `Mutex`, so writes never interleave). Falls back to
 /// stderr-only when the file cannot be opened. Returns the path actually
-/// logged to (for surfacing in a startup message), or `None` on fallback.
+/// logged to (for a startup message), or `None` on fallback.
 pub fn init_to_file(default: &str, path: &Path) -> Option<std::path::PathBuf> {
-    match OpenOptions::new().create(true).append(true).open(path) {
-        Ok(file) => {
-            // The closure re-derives a handle per event; on an append-mode
-            // file every write lands at EOF, so concurrent writers are safe.
-            let make_file = move || file.try_clone().unwrap_or_else(|_| {
-                OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(default_log_path())
-                    .expect("reopen log file")
-            });
-            let _ = base(default)
-                .with_writer(std::io::stderr.and(make_file))
-                .try_init();
-            Some(path.to_path_buf())
-        }
-        Err(_) => {
-            init(default);
-            None
-        }
-    }
+    let Ok(file) = OpenOptions::new().create(true).append(true).open(path) else {
+        init(default);
+        return None;
+    };
+    let _ = base(default)
+        .with_writer(std::io::stderr.and(Mutex::new(file)))
+        .try_init();
+    Some(path.to_path_buf())
 }
 
 fn base(default: &str) -> tracing_subscriber::fmt::SubscriberBuilder<
