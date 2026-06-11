@@ -10,6 +10,7 @@
   import { markdown } from "@codemirror/lang-markdown";
   import { app } from "$lib/state.svelte";
   import { readTextFile } from "$lib/api";
+  import { langIntelFor } from "$lib/lang/codemirror";
 
   let host: HTMLDivElement;
   let view: EditorView | undefined;
@@ -20,6 +21,9 @@
 
   const themeComp = new Compartment();
   const langComp = new Compartment();
+  // Language intelligence (diagnostics, folding, hover) from the embedded
+  // engine — reconfigured per file alongside the syntax mode.
+  const langIntelComp = new Compartment();
 
   function languageFor(name: string): Extension {
     const n = name.toLowerCase();
@@ -54,6 +58,7 @@
           }),
           themeComp.of(app.cm),
           langComp.of([]),
+          langIntelComp.of([]),
           EditorView.theme({
             "&": { height: "100%" },
             ".cm-scroller": { fontFamily: "var(--font-mono)" },
@@ -71,7 +76,10 @@
     if (!view) return;
     if (!path) {
       loadingDoc = true;
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "" },
+        effects: langIntelComp.reconfigure([]),
+      });
       loadingDoc = false;
       return;
     }
@@ -80,7 +88,10 @@
       loadingDoc = true;
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: text },
-        effects: langComp.reconfigure(languageFor(name)),
+        effects: [
+          langComp.reconfigure(languageFor(name)),
+          langIntelComp.reconfigure(langIntelFor(path)),
+        ],
       });
       loadingDoc = false;
       app.onDocLoaded(text);

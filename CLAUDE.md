@@ -46,6 +46,7 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | `model/studio/link.pds` | `DcsLink` heartbeat + `BridgeClient` (`crates/app/src/dcs.rs`, `crates/dcs-bridge-client`) |
 | `model/studio/inject.pds` | `Injector` — bridge DLL/hook install (`crates/app/src/inject.rs`) |
 | `model/studio/mission.pds` | `MissionScripting` sanitization manager (`crates/app/src/mission.rs`) |
+| `model/studio/lang.pds` | `LanguageIntel` provider layer + `DcsLua` embedded wasm engine face (`src/lib/lang/`, dcs-lua-ls repo) |
 | `model/dcs/bridge.pds` | `Dcs` system: GameGUI hook, JSON-RPC server/router (`crates/dcs-bridge`) |
 
 ## Architecture
@@ -64,6 +65,24 @@ Two processes joined by WebSocket JSON-RPC on `ws://127.0.0.1:25569/ws`:
 In a plain browser (vite dev, Playwright) there is no Tauri IPC: `dcsCall` falls
 back to `src/lib/dcs-ws.ts`, speaking the same wire protocol directly.
 
+### Language intelligence (no LSP process)
+
+Lua diagnostics/outline/folding come from the **dcs-lua-ls** engine
+(`C:\Users\jonat\Projects\dcs-lua-ls`, its own model-governed repo), compiled
+to wasm and loaded in the webview — never a spawned language server. The
+artifact lives at `src/lib/dcs-lua-wasm/` (built by wasm-pack from that repo;
+rebuild command in its README). The IDE side:
+
+- `src/lib/lang/provider.ts` — the LSP-shaped `LanguageProvider` extension
+  point; DTO types re-exported from the wasm's generated `.d.ts`.
+- `src/lib/lang/dcs-lua.ts` — the wasm-backed provider (`IdeSession`).
+- `src/lib/lang/intel.svelte.ts` — `lang` singleton: mounts the workspace on
+  project open, holds the findings store + engine status.
+- `src/lib/lang/codemirror.ts` — lint/fold/hover wiring; the lint debounce
+  doubles as the didChange pump into the session.
+- `/lab/lua` route — browser test surface (like `/console`), driven by the
+  `e2e-lang/` Playwright suite: no Tauri, no DCS.
+
 ## Commands
 
 - `pnpm dev` — frontend only at `http://localhost:1420`
@@ -75,6 +94,8 @@ back to `src/lib/dcs-ws.ts`, speaking the same wire protocol directly.
 - `pnpm test:e2e` — Playwright suite (`e2e/`); drives the real UI against a real
   DCS instance, launching DCS if the bridge isn't already up. One worker, ~1 min
   cold start. Don't run it casually; report with `pnpm test:report`.
+- `pnpm test:lang` — language-engine Playwright suite (`e2e-lang/`), browser
+  only: no Tauri, no DCS. Cheap to run.
 
 For live work against DCS (deploy the DLL, launch/control the sim, eval Lua),
 use the `dcs-dev` skill.

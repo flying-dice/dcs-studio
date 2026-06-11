@@ -17,6 +17,7 @@ import {
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { wsConnected } from "./dcs-ws";
+import { lang } from "./lang/intel.svelte";
 import { templateById } from "./templates";
 import type { Extension } from "@codemirror/state";
 
@@ -229,6 +230,10 @@ class AppState {
     this.fileName = "";
     this.leftTool = "project";
     this.remember(path, this.rootName);
+    // Project-opened announcement: mount the workspace into the language
+    // engine (model/studio/lang.pds MountWorkspace). Fire-and-forget — an
+    // engine failure is non-fatal and surfaces in the status bar.
+    void lang.mountWorkspace(path);
   }
 
   /**
@@ -248,6 +253,7 @@ class AppState {
     this.rootName = "";
     this.filePath = null;
     this.fileName = "";
+    lang.reset();
   }
 
   /** Record (or bump) a project in the recents list. */
