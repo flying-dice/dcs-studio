@@ -17,7 +17,7 @@ pub struct Report {
 pub fn run(root: &Path) -> Report {
     use std::fmt::Write as _;
 
-    let files = crate::sources::collect(root);
+    let files = dcs_studio_project::sources::collect(root);
     let mut workspace = Workspace::new();
     for (path, text) in &files {
         workspace.set_source(path, text);

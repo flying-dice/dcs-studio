@@ -1,11 +1,9 @@
-//! `dcs-studio-cli lsp` — the genuine Language Server Protocol edge over
-//! `dcs-lua-lsp-core` (decisions/005). Any LSP client works: editors, the
-//! IDE's backend host, LLM agents.
+//! The tower-lsp server over `dcs-lua-lsp-core`.
 //!
-//! initialize walks the workspace root for Lua sources, so workspace-wide
-//! diagnostics publish from boot; edits arrive as full-document sync.
-//! Positions are UTF-16 (the protocol default), derived from the engine's
-//! byte spans at this edge.
+//! `initialize` records the workspace `rootUri`; `initialized` walks it for
+//! Lua sources so workspace-wide diagnostics publish from boot. Edits arrive
+//! as full-document sync. Positions are UTF-16 (the protocol default),
+//! derived from the engine's byte spans at this edge.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -83,7 +81,7 @@ impl LanguageServer for Backend {
         }
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
-                name: "dcs-studio-cli".to_string(),
+                name: "lua-analyzer".to_string(),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
             capabilities: ServerCapabilities {
@@ -102,7 +100,7 @@ impl LanguageServer for Backend {
         // Mount the whole workspace so diagnostics cover unopened files.
         let root = self.root.lock().expect("root lock").clone();
         let Some(root) = root else { return };
-        let files = crate::sources::collect(&root);
+        let files = dcs_studio_project::sources::collect(&root);
         {
             let mut walked = self.walked.lock().expect("walked lock");
             for (path, _) in &files {

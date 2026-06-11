@@ -1,20 +1,14 @@
 //! studio::cli — dcs-studio-cli, the agent-complete companion binary
 //! (decisions/005). Everything an agent needs without the Tauri app:
-//! scaffold projects, check workspaces, serve the genuine LSP, serve MCP.
-//! The IDE's backend spawns `dcs-studio-cli lsp` as its language server.
+//! scaffold projects, check workspaces, serve MCP. The Lua Language Server
+//! is its own binary, `lua-analyzer` (studio::lang::LuaAnalyzer), hosted
+//! like rust-analyzer; agents and the IDE spawn that directly.
 
 /// One file produced by scaffolding, relative to the new project root.
 public data TemplateFile { path: string, contents: string }
 
 /// The dcs-studio-cli binary.
 public container Cli for studio::core::Studio {
-  /// Serve the Language Server Protocol over stdio: initialize walks the
-  /// workspace root for Lua sources, edits arrive as full-document sync,
-  /// findings publish per file. Speaks to any LSP client — editors, the
-  /// IDE's backend host, LLM agents.
-  #[manual]
-  public Lsp(): void;
-
   /// Serve MCP over stdio (newline-delimited JSON-RPC): `init_project`
   /// and `check` tools first; build, deploy, and introspection tools
   /// follow their phases.

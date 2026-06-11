@@ -41,12 +41,13 @@ struct ExitPayload {
     code: Option<i32>,
 }
 
-/// Resolve the dcs-studio-cli binary: next to the app executable (both
-/// dev `target/debug` and packaged installs lay them out side by side),
-/// overridable via `DCS_STUDIO_CLI`.
+/// Resolve the `lua-analyzer` binary — the Lua language server, hosted like
+/// rust-analyzer (a standalone process the backend spawns). It sits next to
+/// the app executable (both dev `target/debug` and packaged installs lay them
+/// out side by side), overridable via `DCS_LUA_ANALYZER`.
 #[tauri::command]
-pub fn lsp_server_path() -> Result<String, String> {
-    if let Ok(overridden) = std::env::var("DCS_STUDIO_CLI") {
+pub fn lua_analyzer_path() -> Result<String, String> {
+    if let Ok(overridden) = std::env::var("DCS_LUA_ANALYZER") {
         return Ok(overridden);
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -54,15 +55,15 @@ pub fn lsp_server_path() -> Result<String, String> {
         .parent()
         .ok_or("executable has no parent directory")?
         .join(if cfg!(windows) {
-            "dcs-studio-cli.exe"
+            "lua-analyzer.exe"
         } else {
-            "dcs-studio-cli"
+            "lua-analyzer"
         });
     if sibling.is_file() {
         Ok(sibling.display().to_string())
     } else {
         Err(format!(
-            "dcs-studio-cli not found at {} (build it with `cargo build -p dcs-studio-cli`)",
+            "lua-analyzer not found at {} (build it with `cargo build -p lua-analyzer`)",
             sibling.display()
         ))
     }

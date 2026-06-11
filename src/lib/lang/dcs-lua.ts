@@ -12,7 +12,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import init, { IdeSession } from "$lib/dcs-lua-wasm/dcs_lua_ide";
 import wasmUrl from "$lib/dcs-lua-wasm/dcs_lua_ide_bg.wasm?url";
-import { LspLuaProvider } from "./lsp-lua";
+import { LuaAnalyzerProvider } from "./lua-analyzer";
 import { ByteOffsets, lineStarts } from "./offsets";
 import type {
   CompletionItem,
@@ -155,5 +155,5 @@ class WasmLuaProvider implements LanguageProvider {
 }
 
 export const dcsLuaProvider: LanguageProvider = isTauri()
-  ? new LspLuaProvider()
+  ? new LuaAnalyzerProvider()
   : new WasmLuaProvider();

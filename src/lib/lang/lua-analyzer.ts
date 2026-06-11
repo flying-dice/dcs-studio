@@ -1,6 +1,7 @@
-// The packaged-app Lua provider: `dcs-studio-cli lsp` hosted by the
-// backend, spoken to over IPC (decisions/005). Implements the same
-// LanguageProvider contract as the wasm fallback.
+// The packaged-app Lua provider: the standalone `lua-analyzer` binary
+// hosted by the backend, spoken to over IPC (decisions/005) — hosted exactly
+// like rust-analyzer (it indexes the project from the rootUri). Implements
+// the same LanguageProvider contract as the wasm fallback.
 //
 // Wire shapes and position conversion live in lsp-wire.ts, shared with
 // the rust-analyzer provider.
@@ -37,17 +38,31 @@ import type {
 
 const PUBLISH_TIMEOUT_MS = 3000;
 
-/** Production connection: ask the backend where the CLI lives, host it. */
+// A fresh host id per spawn — same reasoning as rust-analyzer.ts: a project
+// switch stops the old server and reconnects, but the backend host map lingers
+// until the old process is reaped, so a shared id would hit lsp_start's
+// idempotent guard and the new client would talk to a dying server. The
+// logical provider id stays "dcs-lua" (below); only the host connection id is
+// sequenced.
+let hostConnectionSeq = 0;
+
+/** Production connection: ask the backend for the lua-analyzer binary, host
+ * it as a standalone process — exactly how rust-analyzer is hosted. */
 async function connectViaHost(): Promise<LspClient> {
-  const program = await invoke<string>("lsp_server_path");
-  return LspClient.start("dcs-lua", program, ["lsp"]);
+  const program = await invoke<string>("lua_analyzer_path");
+  hostConnectionSeq += 1;
+  return LspClient.start(`dcs-lua#${hostConnectionSeq}`, program, []);
 }
 
-export class LspLuaProvider implements LanguageProvider {
+export class LuaAnalyzerProvider implements LanguageProvider {
+  // The LOGICAL provider id is shared with the wasm engine (dcs-lua.ts): the
+  // app sees one "dcs-lua" Lua provider whichever transport backs it. The
+  // BINARY is lua-analyzer; only the host connection id (above) is sequenced.
   readonly id = "dcs-lua";
   readonly extensions = [".lua"];
 
   private client: LspClient | null = null;
+  private mountedRoot: string | null = null;
   // Distinguishes "crashed, awaiting remount" (edits must surface the
   // failure) from "never mounted" (edits are quietly ignored).
   private exited = false;
@@ -67,13 +82,28 @@ export class LspLuaProvider implements LanguageProvider {
     private readonly connect: () => Promise<LspClient> = connectViaHost,
   ) {}
 
-  // The IDE feeds files itself (it owns the file tree), so the workspace
-  // root is irrelevant here — no root walk on the server side.
+  // lua-analyzer indexes the project itself from the rootUri (like
+  // rust-analyzer) — mount hands it the root and lets its initialize walk
+  // find every Lua source, instead of didOpen-ing the world.
   async mount(
     files: SourceFile[],
     _rules: ProfileRule[],
-    _root: string,
+    root: string,
   ): Promise<void> {
+    // Project switch: a server initialized on the old rootUri cannot be
+    // re-rooted — stop it and reconnect against the new project.
+    if (this.client && this.mountedRoot !== root) {
+      await this.client.stop();
+      this.client = null;
+    }
+    this.mountedRoot = root;
+    this.texts.clear();
+    this.versions.clear();
+    this.findings.clear();
+    // Sources are remembered (not opened) so late publishes for files the
+    // server found on disk still convert positions against real text.
+    for (const file of files) this.texts.set(file.path, file.text);
+
     if (!this.client) {
       this._status = "loading";
       try {
@@ -91,42 +121,22 @@ export class LspLuaProvider implements LanguageProvider {
         // Unstick any lint pass awaiting a publish that will never come.
         for (const [, release] of this.publishWaiters) release();
         this.publishWaiters.clear();
-        // Forget the dead session so the next mount() reconnects and
-        // didOpens afresh (mount clears texts/findings wholesale).
+        // Forget the dead session so the next mount() reconnects afresh.
         this.exited = true;
         this._status = "failed";
         this.client = null;
         this.versions.clear();
+        this.mountedRoot = null;
       });
       await this.client.request("initialize", {
         processId: null,
-        rootUri: null,
+        // lua-analyzer walks the project itself from here.
+        rootUri: pathToUri(root),
         capabilities: {},
       });
       await this.client.notify("initialized", {});
       this.exited = false; // a fresh, live session
       this._status = "ready";
-    }
-    // Wholesale remount: close anything from a previous project.
-    for (const path of [...this.texts.keys()]) {
-      await this.client.notify("textDocument/didClose", {
-        textDocument: { uri: pathToUri(path) },
-      });
-    }
-    this.texts.clear();
-    this.versions.clear();
-    this.findings.clear();
-    for (const file of files) {
-      this.texts.set(file.path, file.text);
-      this.versions.set(file.path, 1);
-      await this.client.notify("textDocument/didOpen", {
-        textDocument: {
-          uri: pathToUri(file.path),
-          languageId: "lua",
-          version: 1,
-          text: file.text,
-        },
-      });
     }
   }
 

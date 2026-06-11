@@ -685,7 +685,7 @@ fn severity_name(severity: Severity) -> &'static str {
 
 /// Mount the root and report every engine finding, structured.
 fn lua_diagnostics_tool(root: &Path) -> Value {
-    let files = crate::sources::collect(root);
+    let files = dcs_studio_project::sources::collect(root);
     let mut workspace = Workspace::new();
     for (path, text) in &files {
         workspace.set_source(path, text);
@@ -720,7 +720,7 @@ fn lua_hover_tool(args: &Value) -> Result<Value, ToolError> {
     let line = require_u32(args, "line", "lua_hover")?;
     let character = require_u32(args, "character", "lua_hover")?;
 
-    let files = crate::sources::collect(Path::new(root));
+    let files = dcs_studio_project::sources::collect(Path::new(root));
     let mut workspace = Workspace::new();
     for (file_path, text) in &files {
         workspace.set_source(file_path, text);

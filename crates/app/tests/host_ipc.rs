@@ -1,13 +1,13 @@
 //! Host <-> real-server IPC seam (decisions/005): drives the app's frame
-//! reader (`lsp.rs`) against an actual spawned `dcs-studio-cli lsp`
-//! process — the exact byte path the Tauri host pumps, minus the webview
-//! layer that /lab/lsp can only fake.
+//! reader (`lsp.rs`) against an actual spawned `lua-analyzer` process — the
+//! exact byte path the Tauri host pumps, minus the webview layer that
+//! /lab/lsp can only fake.
 //!
-//! Binary resolution: `DCS_STUDIO_CLI` env var, else the test target dir
-//! (test executables live in `target/debug/deps`; the CLI sits one level
+//! Binary resolution: `DCS_LUA_ANALYZER` env var, else the test target dir
+//! (test executables live in `target/debug/deps`; the binary sits one level
 //! up). When neither yields a binary the test SKIPS (eprintln + success)
-//! so machines without a built CLI don't fail; CI builds the CLI first
-//! and pins `DCS_STUDIO_CLI`.
+//! so machines without a built binary don't fail; CI builds lua-analyzer
+//! first and pins `DCS_LUA_ANALYZER`.
 
 use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
@@ -27,17 +27,17 @@ fn kill_by_id(id: u32) {
     let _ = Command::new("kill").args(["-9", &id.to_string()]).output();
 }
 
-/// `DCS_STUDIO_CLI`, else `<target dir of this test exe>/dcs-studio-cli`.
-fn cli_path() -> Option<PathBuf> {
-    if let Ok(overridden) = std::env::var("DCS_STUDIO_CLI") {
+/// `DCS_LUA_ANALYZER`, else `<target dir of this test exe>/lua-analyzer`.
+fn analyzer_path() -> Option<PathBuf> {
+    if let Ok(overridden) = std::env::var("DCS_LUA_ANALYZER") {
         return Some(PathBuf::from(overridden));
     }
     let exe = std::env::current_exe().ok()?; // target/debug/deps/host_ipc-…
     let target_dir = exe.parent()?.parent()?; // target/debug
     let candidate = target_dir.join(if cfg!(windows) {
-        "dcs-studio-cli.exe"
+        "lua-analyzer.exe"
     } else {
-        "dcs-studio-cli"
+        "lua-analyzer"
     });
     if candidate.is_file() {
         Some(candidate)
@@ -68,18 +68,17 @@ fn read_until(reader: &mut BufReader<impl Read>, predicate: impl Fn(&Value) -> b
 }
 
 #[test]
-fn host_frame_reader_drives_a_real_dcs_studio_cli_lsp() {
-    let Some(cli) = cli_path() else {
+fn host_frame_reader_drives_a_real_lua_analyzer() {
+    let Some(analyzer) = analyzer_path() else {
         eprintln!(
-            "SKIP host_ipc: dcs-studio-cli binary not found — build it with \
-             `cargo build -p dcs-studio-cli` or set DCS_STUDIO_CLI"
+            "SKIP host_ipc: lua-analyzer binary not found — build it with \
+             `cargo build -p lua-analyzer` or set DCS_LUA_ANALYZER"
         );
         return;
     };
 
-    let mut command = Command::new(&cli);
+    let mut command = Command::new(&analyzer);
     command
-        .arg("lsp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -89,7 +88,7 @@ fn host_frame_reader_drives_a_real_dcs_studio_cli_lsp() {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let mut child = command.spawn().expect("spawn dcs-studio-cli lsp");
+    let mut child = command.spawn().expect("spawn lua-analyzer");
     let mut reader = BufReader::new(child.stdout.take().expect("stdout piped"));
 
     // Watchdog: a wedged server would otherwise block read_line forever
@@ -117,10 +116,7 @@ fn host_frame_reader_drives_a_real_dcs_studio_cli_lsp() {
                 "params": {"processId": null, "rootUri": null, "capabilities": {}}}),
     );
     let init = read_until(&mut reader, |m| m.get("id") == Some(&json!(1)));
-    assert_eq!(
-        init["result"]["serverInfo"]["name"],
-        json!("dcs-studio-cli")
-    );
+    assert_eq!(init["result"]["serverInfo"]["name"], json!("lua-analyzer"));
 
     send(
         &mut child,

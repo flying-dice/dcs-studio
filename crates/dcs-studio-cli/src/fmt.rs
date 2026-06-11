@@ -27,7 +27,7 @@ pub fn run(paths: &[PathBuf], check: bool) -> ExitCode {
 
     for path in paths {
         let files = if path.is_dir() {
-            crate::sources::collect(path)
+            dcs_studio_project::sources::collect(path)
         } else if path.is_file() {
             match std::fs::read_to_string(path) {
                 Ok(text) => vec![(path.display().to_string(), text)],

@@ -47,13 +47,13 @@ rust:
     - cargo test --manifest-path tools/lua-runner/Cargo.toml
     - cargo clippy --manifest-path tools/lua-runner/Cargo.toml --all-targets -- -D warnings
     - export DCS_LUA_RUNNER=$CI_PROJECT_DIR/tools/lua-runner/target/debug/dcs-lua-runner
-    - cargo test -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli -p studio-services
-    - cargo clippy -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli -p studio-services --all-targets -- -D warnings
+    - cargo test -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli -p lua-analyzer -p studio-services
+    - cargo clippy -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli -p lua-analyzer -p studio-services --all-targets -- -D warnings
 
 # App-compile + host<->real-server gate: builds the Tauri crate against
 # the webkit2gtk stack and runs its suites, including tests/host_ipc.rs —
-# the host's framing pump driven against a real `dcs-studio-cli lsp`
-# (built first; DCS_STUDIO_CLI pins the path so the test cannot skip).
+# the host's framing pump driven against a real `lua-analyzer` process
+# (built first; DCS_LUA_ANALYZER pins the path so the test cannot skip).
 # Webview-layer e2e stays /lab-based (decisions/005); tauri-driver judged
 # unnecessary for now.
 app:
@@ -68,12 +68,12 @@ app:
       - target
     policy: pull-push
   variables:
-    DCS_STUDIO_CLI: $CI_PROJECT_DIR/target/debug/dcs-studio-cli
+    DCS_LUA_ANALYZER: $CI_PROJECT_DIR/target/debug/lua-analyzer
   script:
     - apt-get update -qq
     - apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev pkg-config
     - mkdir -p build # tauri codegen requires the frontendDist dir to exist
-    - cargo build -p dcs-studio-cli
+    - cargo build -p lua-analyzer
     - cargo test -p dcs-studio --lib --tests
     - rustup component add clippy
     - cargo clippy -p dcs-studio --all-targets -- -D warnings

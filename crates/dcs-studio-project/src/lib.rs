@@ -19,6 +19,7 @@ pub mod install;
 pub mod manifest;
 pub mod process;
 pub mod scaffold;
+pub mod sources;
 pub mod templates;
 pub mod todos;
 pub mod toolchain;

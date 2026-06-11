@@ -42,10 +42,12 @@ public data InlayHint { offset: number, label: string, kind: string }
 /// could not be fetched or instantiated).
 public data EngineError { message: string }
 
-/// The dcs-lua language engine (the crates/dcs-lua-* workspace members,
-/// compiled to wasm — see dcslua.pds for its internals). Modelled on the
-/// LSP but embedded in the webview; these signatures are the contract its
-/// IdeSession must satisfy.
+/// The dcs-lua language engine (the crates/dcs-lua-* workspace members —
+/// see dcslua.pds for its internals). Reached two ways behind one provider
+/// contract (decisions/005): compiled to wasm and embedded in the webview
+/// (browser/dev), or hosted as the native `lua-analyzer` binary that the
+/// backend spawns (packaged app — see studio::lang::LuaAnalyzer). These
+/// signatures are the contract both transports satisfy.
 public system DcsLua {
   /// Instantiate the wasm module and seed the session with the workspace.
   public Mount(files: studio::lang::SourceFile[], rules: studio::lang::ProfileRule[]): Result<void, studio::lang::EngineError>;
@@ -81,12 +83,22 @@ public system DcsLua {
   public InlayHints(path: string): studio::lang::InlayHint[];
 }
 
-/// rust-analyzer, the third-party Rust language server: the second hosted
-/// server behind the provider seam, spawned by the same backend host that
-/// serves DcsLua's LSP (decisions/005) and consumed through the identical
-/// provider contract. Detection goes via the Rust toolchain (PATH, then
-/// rustup which); absence is non-fatal — the IDE stays fully usable with
-/// Lua intelligence intact.
+/// lua-analyzer, the DCS Lua language server: the native `lua-analyzer`
+/// binary (crates/lua-analyzer) hosting the DcsLua engine over stdio LSP,
+/// spawned by the backend host as the packaged app's Lua transport. It
+/// indexes the project itself from the `initialize` rootUri (like
+/// rust-analyzer), so the host hands it the workspace root rather than
+/// opening every file. Located next to the app executable (overridable via
+/// `DCS_LUA_ANALYZER`); a missing binary surfaces in the status bar but the
+/// IDE stays usable (model `EngineFailureIsNonFatal`).
+public system LuaAnalyzer;
+
+/// rust-analyzer, the third-party Rust language server: a hosted server
+/// behind the provider seam, spawned by the same backend host as
+/// lua-analyzer (decisions/005) and consumed through the identical provider
+/// contract. Detection goes via the Rust toolchain (PATH, then rustup
+/// which); absence is non-fatal — the IDE stays fully usable with Lua
+/// intelligence intact.
 public system RustAnalyzer;
 
 /// Lifecycle state of a language-intelligence provider surfaced in the

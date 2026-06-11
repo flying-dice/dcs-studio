@@ -1,6 +1,6 @@
 <script lang="ts">
   // Browser test surface for the PRODUCTION LSP client path — the exact
-  // `LspClient` + `LspLuaProvider` classes the packaged app uses — over an
+  // `LspClient` + `LuaAnalyzerProvider` classes the packaged app uses — over an
   // injected in-page transport that behaves like `dcs-studio-cli lsp` on
   // the wire (framed JSON-RPC, request/response, publishDiagnostics push).
   // Covers what only the Tauri runtime would otherwise reach: request
@@ -8,7 +8,7 @@
   // crash path (server exit → pending requests rejected → engine failed).
   import { onMount } from "svelte";
   import { LspClient, type LspTransport } from "$lib/lang/lsp-client";
-  import { LspLuaProvider } from "$lib/lang/lsp-lua";
+  import { LuaAnalyzerProvider } from "$lib/lang/lua-analyzer";
   import type { Diagnostic } from "$lib/lang/provider";
 
   const PATH = "C:\\lab\\main.lua";
@@ -129,7 +129,7 @@
     };
   }
 
-  const provider = new LspLuaProvider(() =>
+  const provider = new LuaAnalyzerProvider(() =>
     LspClient.withTransport(makeTransport()),
   );
 

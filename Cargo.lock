@@ -1281,7 +1281,6 @@ dependencies = [
  "serde_json",
  "studio-services",
  "tokio",
- "tower-lsp",
  "tungstenite",
  "walkdir",
 ]
@@ -2926,6 +2925,18 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "url",
+]
+
+[[package]]
+name = "lua-analyzer"
+version = "0.1.0"
+dependencies = [
+ "dcs-lua-lsp-core",
+ "dcs-lua-syntax",
+ "dcs-studio-project",
+ "serde_json",
+ "tokio",
+ "tower-lsp",
 ]
 
 [[package]]

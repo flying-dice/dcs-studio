@@ -1,5 +1,5 @@
 // LSP wire shapes and conversions shared by every hosted-server provider
-// (lsp-lua, rust-analyzer). LSP speaks line + UTF-16 character; JS strings
+// (lua-analyzer, rust-analyzer). LSP speaks line + UTF-16 character; JS strings
 // are UTF-16, so document offsets convert exactly via line starts — no
 // byte math, and squiggles stay precise on non-ASCII lines.
 

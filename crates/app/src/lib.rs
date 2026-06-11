@@ -49,7 +49,7 @@ pub fn run() {
             inject::dcs_injection_status,
             inject::dcs_inject,
             inject::dcs_eject,
-            lsp::lsp_server_path,
+            lsp::lua_analyzer_path,
             lsp::lsp_start,
             lsp::lsp_send,
             lsp::lsp_stop,

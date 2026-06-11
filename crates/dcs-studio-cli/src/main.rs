@@ -1,17 +1,14 @@
 //! dcs-studio-cli — the agent-complete companion binary (decisions/005).
 //!
 //! Everything an agent needs without the Tauri app: `init` scaffolds a
-//! project, `check` analyses a workspace, `lsp` serves the genuine
-//! Language Server Protocol over stdio, `mcp` serves MCP tools over
-//! stdio. The IDE's backend spawns `dcs-studio-cli lsp` as its Lua
-//! language server.
+//! project, `check` analyses a workspace, `mcp` serves MCP tools over
+//! stdio. The Lua Language Server is its own binary, `lua-analyzer`
+//! (hosted like rust-analyzer); agents and the IDE spawn that directly.
 
 mod bundle;
 mod check;
 mod fmt;
-mod lsp;
 mod mcp;
-mod sources;
 mod test;
 
 use std::path::{Path, PathBuf};
@@ -23,7 +20,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "dcs-studio-cli",
     version,
-    about = "DCS Studio companion CLI: project scaffolding, workspace checking, LSP and MCP over stdio"
+    about = "DCS Studio companion CLI: project scaffolding, workspace checking, and MCP over stdio"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -32,8 +29,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Serve the Lua language server over stdio (LSP).
-    Lsp,
     /// Serve project tools over stdio (Model Context Protocol).
     Mcp,
     /// Scaffold a new project from a template.
@@ -116,14 +111,6 @@ enum Command {
 
 fn main() -> ExitCode {
     match Cli::parse().command {
-        Command::Lsp => {
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .expect("tokio runtime construction cannot fail with default settings")
-                .block_on(lsp::serve());
-            ExitCode::SUCCESS
-        }
         Command::Mcp => match mcp::serve() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
