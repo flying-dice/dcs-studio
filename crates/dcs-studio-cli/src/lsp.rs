@@ -31,6 +31,7 @@ pub async fn serve() {
         client,
         workspace: Mutex::new(Workspace::new()),
         root: Mutex::new(None),
+        walked: Mutex::new(std::collections::HashSet::new()),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
@@ -39,6 +40,10 @@ struct Backend {
     client: Client,
     workspace: Mutex<Workspace>,
     root: Mutex<Option<PathBuf>>,
+    /// Files mounted by the initialize walk. A `didClose` on anything
+    /// else (client-pushed, e.g. the IDE proxying a file delete) unmounts
+    /// it; walked files outlive editors so workspace findings persist.
+    walked: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Backend {
@@ -90,6 +95,12 @@ impl LanguageServer for Backend {
         let root = self.root.lock().expect("root lock").clone();
         let Some(root) = root else { return };
         let files = crate::sources::collect(&root);
+        {
+            let mut walked = self.walked.lock().expect("walked lock");
+            for (path, _) in &files {
+                walked.insert(path.clone());
+            }
+        }
         let batches = {
             let mut workspace = self.workspace.lock().expect("workspace lock");
             for (path, text) in &files {
@@ -127,8 +138,23 @@ impl LanguageServer for Backend {
         self.publish(batches).await;
     }
 
-    async fn did_close(&self, _: DidCloseTextDocumentParams) {
-        // The file stays mounted: workspace-wide findings outlive editors.
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        // Walk-mounted files stay (workspace findings outlive editors);
+        // a client-pushed file closing means the client is done with it —
+        // unmount and clear its findings, so deletes leave no ghosts.
+        let Some(path) = uri_path(&params.text_document.uri) else {
+            return;
+        };
+        if self.walked.lock().expect("walked lock").contains(&path) {
+            return;
+        }
+        self.workspace
+            .lock()
+            .expect("workspace lock")
+            .remove_source(&path);
+        self.client
+            .publish_diagnostics(params.text_document.uri, Vec::new(), None)
+            .await;
     }
 
     async fn document_symbol(

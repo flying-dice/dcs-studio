@@ -84,16 +84,28 @@ export class LangIntel {
   async updateSource(path: string, text: string): Promise<void> {
     const provider = providerFor(path);
     if (!provider) return;
-    await provider.setSource(path, text);
-    await this.refreshProblems();
+    try {
+      await provider.setSource(path, text);
+      await this.refreshProblems();
+    } catch (error) {
+      // Engine death (server crash, wasm trap) surfaces in the status
+      // bar; the IDE keeps working without intelligence.
+      console.error("language engine failed:", error);
+      this.engineStatus = "failed";
+    }
   }
 
   /** Drop a deleted file from the session (model `DropSource`). */
   async dropSource(path: string): Promise<void> {
     const provider = providerFor(path);
     if (!provider) return;
-    await provider.removeSource(path);
-    await this.refreshProblems();
+    try {
+      await provider.removeSource(path);
+      await this.refreshProblems();
+    } catch (error) {
+      console.error("language engine failed:", error);
+      this.engineStatus = "failed";
+    }
   }
 
   /** Pull every provider's findings for the Problems panel and markers. */
@@ -107,12 +119,19 @@ export class LangIntel {
   /** Every .lua / .d.lua file under the root (model `CollectLuaSources`). */
   private async collectLuaSources(root: string): Promise<SourceFile[]> {
     const files: SourceFile[] = [];
-    const walk = async (dir: string): Promise<void> => {
+    // Symlink cycles must not recurse unboundedly: track visited dirs and
+    // cap the depth (a real mod tree is a handful of levels).
+    const visited = new Set<string>();
+    const MAX_DEPTH = 32;
+    const walk = async (dir: string, depth: number): Promise<void> => {
+      const key = dir.toLowerCase();
+      if (depth > MAX_DEPTH || visited.has(key)) return;
+      visited.add(key);
       const entries = await this.fs.readDir(dir);
       for (const entry of entries) {
         if (entry.is_dir) {
           if (!SKIPPED_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
-            await walk(entry.path);
+            await walk(entry.path, depth + 1);
           }
           continue;
         }
@@ -127,7 +146,7 @@ export class LangIntel {
         }
       }
     };
-    await walk(root);
+    await walk(root, 0);
     return files;
   }
 

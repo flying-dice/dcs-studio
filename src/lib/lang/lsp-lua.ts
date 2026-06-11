@@ -33,6 +33,12 @@ interface LspRange {
 
 const PUBLISH_TIMEOUT_MS = 3000;
 
+/** Production connection: ask the backend where the CLI lives, host it. */
+async function connectViaHost(): Promise<LspClient> {
+  const program = await invoke<string>("lsp_server_path");
+  return LspClient.start("dcs-lua", program, ["lsp"]);
+}
+
 export class LspLuaProvider implements LanguageProvider {
   readonly id = "dcs-lua";
   readonly extensions = [".lua"];
@@ -43,15 +49,24 @@ export class LspLuaProvider implements LanguageProvider {
   private readonly findings = new Map<string, Diagnostic[]>();
   private readonly publishWaiters = new Map<string, () => void>();
 
+  /** `connect` is injectable so `/lab/lsp` drives this exact class. */
+  constructor(
+    private readonly connect: () => Promise<LspClient> = connectViaHost,
+  ) {}
+
   async mount(files: SourceFile[], _rules: ProfileRule[]): Promise<void> {
     if (!this.client) {
-      const program = await invoke<string>("lsp_server_path");
-      this.client = await LspClient.start("dcs-lua", program, ["lsp"]);
+      this.client = await this.connect();
       this.client.onNotification("textDocument/publishDiagnostics", (params) =>
         this.onPublish(
           params as { uri: string; diagnostics: LspWireDiagnostic[] },
         ),
       );
+      this.client.onServerExit(() => {
+        // Unstick any lint pass awaiting a publish that will never come.
+        for (const [, release] of this.publishWaiters) release();
+        this.publishWaiters.clear();
+      });
       await this.client.request("initialize", {
         processId: null,
         // The IDE feeds files itself (it owns the file tree); no root walk.
@@ -85,6 +100,7 @@ export class LspLuaProvider implements LanguageProvider {
 
   async setSource(path: string, text: string): Promise<void> {
     if (!this.client) return;
+    if (!this.client.isAlive) throw new Error("language server exited");
     this.texts.set(path, text);
     const published = this.nextPublish(path);
     if (this.versions.has(path)) {

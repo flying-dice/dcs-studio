@@ -1,0 +1,64 @@
+# CI gates for dcs-studio (issue #7). Mirrors the local gates the MRs
+# quote: engine + CLI Rust suites with pedantic clippy, svelte-check, the
+# browser e2e suite, and a wasm-bindings sync check.
+#
+# The Tauri app crate (`dcs-studio`) is not built here yet — it needs the
+# webkit2gtk/gtk system stack on Linux; tracked in #7 as the follow-up
+# desktop-build job.
+
+stages:
+  - test
+
+variables:
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+
+.rust-cache: &rust-cache
+  key: rust-$CI_COMMIT_REF_SLUG
+  paths:
+    - .cargo/registry
+    - target
+  policy: pull-push
+
+rust:
+  stage: test
+  image: rust:1.92
+  cache: *rust-cache
+  script:
+    - rustup component add clippy
+    - cargo test -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-cli
+    - cargo clippy -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-cli --all-targets -- -D warnings
+
+web:
+  stage: test
+  image: node:22
+  script:
+    - npm i -g pnpm@9
+    - pnpm install --frozen-lockfile
+    - pnpm check
+
+e2e:
+  stage: test
+  image: node:22
+  script:
+    - npm i -g pnpm@9
+    - pnpm install --frozen-lockfile
+    - pnpm exec playwright install --with-deps chromium
+    - pnpm test:lang
+  artifacts:
+    when: on_failure
+    paths:
+      - playwright-report
+    expire_in: 7 days
+
+# The committed wasm bindings must match the crates that claim to produce
+# them. The .wasm binary itself is excluded (wasm-opt versions vary); the
+# generated .js/.d.ts contract is the drift that bites.
+wasm-sync:
+  stage: test
+  image: rust:1.92
+  cache: *rust-cache
+  script:
+    - rustup target add wasm32-unknown-unknown
+    - curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+    - wasm-pack build crates/dcs-lua-ide --release --target web --out-dir ../../src/lib/dcs-lua-wasm
+    - git diff --exit-code -- src/lib/dcs-lua-wasm/dcs_lua_ide.js src/lib/dcs-lua-wasm/dcs_lua_ide.d.ts

@@ -16,6 +16,8 @@ export default defineConfig({
     command: "pnpm dev",
     port: 1420,
     reuseExistingServer: true,
-    timeout: 60_000,
+    // Cold vite starts (dependency optimisation, fresh wasm) can crawl;
+    // TIME_WAIT remnants of a previous server also delay the port.
+    timeout: 120_000,
   },
 });
