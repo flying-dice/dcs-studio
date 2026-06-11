@@ -1,0 +1,15 @@
+[package]
+name = "dcs-lua-lsp-core"
+version.workspace = true
+edition = "2024"
+
+[lints]
+workspace = true
+
+[lib]
+name = "dcs_lua_lsp_core"
+path = "src/lib.rs"
+
+[dependencies]
+dcs-lua-syntax = { path = "../dcs-lua-syntax" }
+serde = { version = "1", features = ["derive"] }

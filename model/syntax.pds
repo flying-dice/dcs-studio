@@ -1,0 +1,343 @@
+//! syntax — source text to tokens and an AST (crate `dcs-lua-syntax`).
+//!
+//! The foundation context every other crate depends on: tokens, spans, the
+//! Lua 5.1 AST (SPEC.md §2, decisions/004), and the one `Diagnostic` type
+//! every crate emits (SPEC.md §3). WASM-safe — no threads, filesystem,
+//! clock, or I/O.
+//!
+//! One lexer pass yields two surfaces: the conformance token stream
+//! (`KIND@line:col "lexeme"`) and full-fidelity trivia. Parsing is
+//! infallible — it always returns a tree (recovered on error) plus
+//! diagnostics, because a half-written script must still analyse.
+
+/// A half-open byte range `[start, end)` into one file's source. Offsets
+/// are bytes; line/col derive via `LineIndex` only at the rendering edge.
+public data Span { start: number, end: number }
+
+/// A lexical token: kind and source span. The lexeme is the source slice
+/// of the span — tokens never copy text.
+public data Token { kind: syntax::TokenKind, span: syntax::Span }
+
+/// Every lexical token class (SPEC.md §2). The conformance golden's KIND
+/// renders keywords and punctuation individually (CONFORMANCE/lexical);
+/// `Error` carries bytes no rule matches, always paired with LUA-E001.
+public data TokenKind =
+  | Keyword
+  | Name
+  | Number
+  | Str
+  | Punct
+  | Error
+
+/// Non-token source between tokens. `DocComment` is a `---` run — the
+/// Phase-3 annotation parser reads it from trivia; the statement grammar
+/// never sees it.
+public data Trivia =
+  | LineComment { text: string }
+  | LongComment { text: string }
+  | DocComment { text: string }
+  | BlankLines { count: number }
+
+/// A trivia element paired with the source span it occupies.
+public data SpannedTrivia { trivia: syntax::Trivia, span: syntax::Span }
+
+/// The full result of lexing: the token stream (trivia-free) plus the
+/// interleaved trivia, both in source order.
+public data Lexed { tokens: syntax::Token[], trivia: syntax::SpannedTrivia[], diagnostics: syntax::Diagnostic[] }
+
+/// One message about a span of source — the single diagnostic type every
+/// stage emits (SPEC.md §3). `code` is from the §3.1 registry;
+/// `codeDescription` is the rule's article URL, empty when none exists.
+public data Diagnostic { severity: syntax::Severity, span: syntax::Span, code: string, codeDescription: string, message: string }
+
+/// Diagnostic severity (SPEC.md §3): `Error` marks input the engine cannot
+/// fully analyse; `Warning`/`Info` advise and never block analysis.
+public data Severity =
+  | Error
+  | Warning
+  | Info
+
+/// One parsed file: the top-level block and its trailing span.
+public data Chunk { body: syntax::Block, span: syntax::Span }
+
+/// A statement sequence. Lua 5.1 allows `return`/`break` only in final
+/// position; the parser reports a misplaced one and keeps parsing.
+public data Block { stats: syntax::Stat[], span: syntax::Span }
+
+/// A statement (Lua 5.1 §2.4). `Assign` covers multi-target assignment;
+/// `CallStat` is an expression-statement (only calls are legal there).
+public data Stat =
+  | Assign { targets: syntax::Expr[], values: syntax::Expr[] }
+  | LocalAssign { names: string[], values: syntax::Expr[] }
+  | CallStat { call: syntax::Expr }
+  | Do { body: syntax::Block }
+  | While { cond: syntax::Expr, body: syntax::Block }
+  | Repeat { body: syntax::Block, cond: syntax::Expr }
+  | If { arms: syntax::IfArm[], elseBody: Option<syntax::Block> }
+  | NumericFor { name: string, low: syntax::Expr, high: syntax::Expr, step: Option<syntax::Expr>, body: syntax::Block }
+  | GenericFor { names: string[], exprs: syntax::Expr[], body: syntax::Block }
+  | FunctionDecl { name: syntax::FuncName, funcBody: syntax::FuncBody }
+  | LocalFunction { name: string, funcBody: syntax::FuncBody }
+  | Return { values: syntax::Expr[] }
+  | Break
+
+/// One `if`/`elseif` arm: condition and consequent block.
+public data IfArm { cond: syntax::Expr, body: syntax::Block }
+
+/// A function statement's name path: `a.b.c` segments plus an optional
+/// trailing `:method` (which implies a leading `self` parameter).
+public data FuncName { segments: string[], method: Option<string> }
+
+/// A function literal's signature and body. `isVararg` marks a trailing
+/// `...` parameter.
+public data FuncBody { params: string[], isVararg: bool, body: syntax::Block, span: syntax::Span }
+
+/// An expression (Lua 5.1 §2.5). `Field` is `obj.name` (kept distinct
+/// from `Index`, which is `obj[key]`, so member queries keep the
+/// identifier); `Missing` is the recovery placeholder where an expression
+/// was required but absent.
+public data Expr =
+  | Nil
+  | Bool { value: bool }
+  | NumberLit { raw: string }
+  | StringLit { raw: string }
+  | Vararg
+  | FunctionLit { funcBody: syntax::FuncBody }
+  | NameRef { name: string }
+  | Field { obj: syntax::Expr, name: string }
+  | Index { obj: syntax::Expr, key: syntax::Expr }
+  | Call { callee: syntax::Expr, args: syntax::Expr[] }
+  | MethodCall { obj: syntax::Expr, method: string, args: syntax::Expr[] }
+  | Paren { inner: syntax::Expr }
+  | TableLit { fields: syntax::TableField[] }
+  | Binary { op: syntax::BinOp, lhs: syntax::Expr, rhs: syntax::Expr }
+  | Unary { op: syntax::UnOp, operand: syntax::Expr }
+  | Missing
+
+/// One table-constructor field: positional, `name = v`, or `[k] = v`.
+public data TableField =
+  | Positional { value: syntax::Expr }
+  | NamedField { name: string, value: syntax::Expr }
+  | KeyedField { key: syntax::Expr, value: syntax::Expr }
+
+/// Binary operators with Lua 5.1 precedence and associativity (`..` and
+/// `^` are right-associative).
+public data BinOp =
+  | Add
+  | Sub
+  | Mul
+  | Div
+  | Mod
+  | Pow
+  | Concat
+  | Eq
+  | Ne
+  | Lt
+  | Gt
+  | Le
+  | Ge
+  | And
+  | Or
+
+/// Unary operators: `not`, `-`, `#`.
+public data UnOp =
+  | Not
+  | Neg
+  | Len
+
+/// Parser output: the tree (always present, recovered on error) plus all
+/// diagnostics collected while lexing and parsing. Parsing never fails.
+public data Parsed { chunk: syntax::Chunk, diagnostics: syntax::Diagnostic[] }
+
+/// `crates/dcs-lua-syntax`. The foundation crate: source text to tokens and
+/// a typed arena AST, emitting the shared `Diagnostic`. WASM-safe, I/O-free.
+/// #critical
+public container Syntax for dcslua::DcsLuaLs {
+  /// Render the conformance token stream for source text.
+  public RenderTokens(text: string): string {
+    return syntax::Lexer.RenderTokens(text)
+  }
+
+  /// Lex source text: tokens, trivia, and lexical diagnostics.
+  public Lex(text: string): syntax::Lexed {
+    return syntax::Lexer.Lex(text)
+  }
+
+  /// Parse source text into a tree plus diagnostics.
+  public Parse(text: string): syntax::Parsed {
+    return syntax::Parser.Parse(text)
+  }
+
+  /// Parse from an existing lex of the same text — lets a caller that
+  /// also needs the trivia lex exactly once.
+  public ParseLexed(text: string, lexed: syntax::Lexed): syntax::Parsed {
+    return syntax::Parser.ParseLexed(text, lexed)
+  }
+}
+
+/// Hand-written one-pass lexer (SPEC.md §2, decisions/001). Dispatches on
+/// the leading byte; trivia (comments, blank-line runs, `---` doc runs) is
+/// captured alongside the token stream, never inside it. Infallible:
+/// anomalies surface as LUA-E0xx diagnostics, never a failed lex.
+/// #critical
+component Lexer for syntax::Syntax {
+  /// One pass over `text`: tokens, trivia, and lexical diagnostics.
+  /// Dispatches on the leading byte: whitespace, `-` (minus / comment /
+  /// doc run), a quote (short string), `[` (bracket or long string), a
+  /// digit (number), an identifier start, or punctuation.
+  Lex(text: string): syntax::Lexed;
+
+  /// Disambiguate a leading `-`: `--[=*[` opens a long comment (level
+  /// matched exactly), `---` opens a doc run, plain `--` a line comment,
+  /// a lone `-` the minus token. An unterminated long comment is LUA-E003,
+  /// closed at end of input.
+  LexDash(text: string): syntax::Lexed;
+
+  /// A short string to its closing quote, honouring the 5.1 escape set; a
+  /// newline or end of input before the close is LUA-E002, recovered by
+  /// closing at that point. A `[=*[` long string matches its level exactly
+  /// or is LUA-E003.
+  LexString(text: string): syntax::Token;
+
+  /// Decimal (with fraction/exponent) or `0x` hex integer; trailing
+  /// identifier bytes make it LUA-E004 (e.g. `3a`), recovered greedily.
+  LexNumber(text: string): syntax::Token;
+
+  /// Greedy identifier run, then a keyword-table lookup: a reserved
+  /// spelling becomes its keyword kind, anything else stays `Name`.
+  LexIdent(text: string): syntax::Token;
+
+  /// The conformance rendering: one `KIND@line:col "lexeme"` line per
+  /// token plus a final EOF line, positions via `LineIndex`.
+  public RenderTokens(text: string): string {
+    lexed = syntax::Lexed from self.Lex(text)
+    syntax::LineIndex.Build(text)
+    return self.RenderStream(lexed)
+  }
+
+  /// Format the stream, escaping interior `"` and `\` in lexemes.
+  RenderStream(lexed: syntax::Lexed): string;
+}
+
+/// Precomputed newline offsets turning a byte offset into a 1-based
+/// (line, col) pair in O(log n); columns count bytes.
+public component LineIndex for syntax::Syntax {
+  /// Build the index by scanning `src` for newline bytes.
+  Build(src: string): syntax::LineIndex;
+
+  /// The 1-based `line:col` for an offset; past-the-end clamps.
+  public LineCol(offset: number): string;
+}
+
+/// Recursive-descent parser for the Lua 5.1 grammar with error recovery
+/// (decisions/001): on unexpected input it records a LUA-E1xx diagnostic,
+/// resynchronises to the next statement boundary, and continues. Always
+/// yields a (possibly partial) `Chunk`; never panics.
+/// #critical
+component Parser for syntax::Syntax {
+  /// Lex, then build the chunk; bundle the tree with lexical and parse
+  /// diagnostics in source order.
+  public Parse(text: string): syntax::Parsed {
+    lexed = syntax::Lexed from syntax::Lexer.Lex(text)
+    chunk = syntax::Chunk from self.ParseChunk(lexed)
+    diagnostics = syntax::Diagnostic[] from self.Diagnostics()
+    return syntax::Parsed from { chunk, diagnostics }
+  }
+
+  /// The diagnostics accumulated while parsing, in source order.
+  Diagnostics(): syntax::Diagnostic[];
+
+  /// Build the chunk from an existing lex of `text`, bundling its lexical
+  /// diagnostics with the parse diagnostics.
+  ParseLexed(text: string, lexed: syntax::Lexed): syntax::Parsed;
+
+  /// Top-level block to end of input. A token that starts no statement is
+  /// reported once and skipped (`RecoverToStat`) so the loop always makes
+  /// progress.
+  ParseChunk(lexed: syntax::Lexed): syntax::Chunk;
+
+  /// A statement sequence until a block terminator (`end`, `else`,
+  /// `elseif`, `until`, end of input). `return`/`break` parse anywhere but
+  /// a non-final position is reported (Lua 5.1 last-statement rule).
+  ParseBlock(): syntax::Block;
+
+  /// One statement, dispatched on the leading token; expression statements
+  /// that are not calls, and assignment targets that are not a name, field,
+  /// or index, are reported (Lua 5.1 rejects both) but kept in the tree for
+  /// downstream analysis.
+  ParseStat(): syntax::Stat;
+
+  /// An expression via the Lua 5.1 precedence cascade: `or` → `and` →
+  /// comparisons → `..` (right) → `+ -` → `* / %` → unary (`not # -`) →
+  /// `^` (right, binds tighter than unary on its left) → postfix chain
+  /// over a primary.
+  ParseExpr(): syntax::Expr;
+
+  /// A primary plus its postfix chain: `.name`, `[expr]`, `(args)`,
+  /// `"s"` / `{t}` call sugar, and `:method(args)`.
+  ParseSuffixed(): syntax::Expr;
+
+  /// `function` body: parameter list (with `...`), block, `end`-matched.
+  ParseFuncBody(): syntax::FuncBody;
+
+  /// A missing terminator (`end`, `until`, `then`, …) is LUA-E102/E101,
+  /// reported at the opener's line for usability; the open block closes at
+  /// the recovery point so enclosing structure survives.
+  ExpectEnd(opener: syntax::Span): void;
+
+  /// Skip to the next statement boundary (a statement-starting keyword, a
+  /// block terminator, or end of input), consuming at least one token.
+  RecoverToStat(): void;
+}
+
+/// Parsing always yields a tree, even on malformed input.
+/// #critical
+feature ParsingIsInfallible for syntax::Parser {
+  given "source text that may contain syntax errors"
+  when "the parser runs"
+  then "a syntax tree is returned, recovered around the errors"
+  and "each error rides alongside as a LUA-E1xx diagnostic"
+  but "parsing never throws or aborts"
+}
+
+/// Totality holds at the deployment target's stack budget.
+/// #critical
+feature DeepNestingRecoversNotOverflows for syntax::Parser {
+  given "pathologically deep nesting (thousands of parens or blocks)"
+  when "the chunk is parsed on a wasm-sized 1 MiB stack"
+  then "recursion stops at the nesting cap with a LUA-E103 diagnostic"
+  and "the surrounding source still parses into the tree"
+  but "the stack never overflows"
+}
+
+/// A missing `end` is reported but does not destroy enclosing structure.
+feature MissingEndRecovers for syntax::Parser {
+  given "a function body whose `end` was not yet typed"
+  when "the chunk is parsed"
+  then "an unterminated-block diagnostic points at the opener"
+  and "statements after the gap still parse into the tree"
+}
+
+/// The lexer is greedy and never stalls on bad input.
+feature LexerNeverStalls for syntax::Lexer {
+  given "source containing an unknown byte or an unterminated string"
+  when "the lexer scans it"
+  then "an LUA-E0xx diagnostic is recorded and the scan continues"
+  and "lexing reaches the end of input"
+}
+
+/// Long brackets match by level, exactly.
+feature LongBracketLevels for syntax::Lexer {
+  given "a long string opened with `[==[`"
+  when "the lexer scans for its close"
+  then "only `]==]` closes it"
+  and "a `]]` or `]=]` inside stays part of the string"
+}
+
+/// Doc-comment runs are trivia, preserved for the annotation parser.
+feature DocRunsAreTrivia for syntax::Lexer {
+  given "a `---@param` line above a function"
+  when "the file is lexed"
+  then "the token stream carries no comment token"
+  and "the doc run is captured as DocComment trivia with its span"
+}

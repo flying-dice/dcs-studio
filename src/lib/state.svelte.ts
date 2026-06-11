@@ -17,6 +17,7 @@ import {
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { wsConnected } from "./dcs-ws";
+import { lang } from "./lang/intel.svelte";
 import { templateById } from "./templates";
 import type { Extension } from "@codemirror/state";
 
@@ -229,6 +230,10 @@ class AppState {
     this.fileName = "";
     this.leftTool = "project";
     this.remember(path, this.rootName);
+    // Project-opened announcement: mount the workspace into the language
+    // engine (model/studio/lang.pds MountWorkspace). Fire-and-forget — an
+    // engine failure is non-fatal and surfaces in the status bar.
+    void lang.mountWorkspace(path);
   }
 
   /**
@@ -248,6 +253,7 @@ class AppState {
     this.rootName = "";
     this.filePath = null;
     this.fileName = "";
+    lang.reset();
   }
 
   /** Record (or bump) a project in the recents list. */
@@ -266,9 +272,17 @@ class AppState {
     saveRecents(this.recents);
   }
 
-  openFile(path: string, name: string) {
+  /**
+   * Where the editor should land once the next file finishes loading
+   * (1-based line/column, UTF-16 columns) — set when a Problems entry is
+   * opened, consumed by the editor, then cleared.
+   */
+  pendingJump = $state<{ line: number; col: number } | null>(null);
+
+  openFile(path: string, name: string, jumpTo?: { line: number; col: number }) {
     this.filePath = path || null;
     this.fileName = name;
+    this.pendingJump = jumpTo ?? null;
     // Reset the document baseline; the editor refills it once the file loads.
     this.docText = "";
     this.savedText = "";

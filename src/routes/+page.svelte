@@ -7,8 +7,10 @@
   import InjectionManager from "$lib/components/InjectionManager.svelte";
   import LuaConsole from "$lib/components/LuaConsole.svelte";
   import MissionScriptingManager from "$lib/components/MissionScriptingManager.svelte";
+  import Problems from "$lib/components/Problems.svelte";
   import Editor from "$lib/components/Editor.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
+  import { lang } from "$lib/lang/intel.svelte";
   import { cn } from "$lib/utils.js";
 
   import { Button } from "$lib/components/ui/button/index.js";
@@ -444,6 +446,8 @@
             <div class="min-h-0 flex-1">
               {#if app.bottomTool === "lua"}
                 <LuaConsole />
+              {:else if app.bottomTool === "problems"}
+                <Problems />
               {:else}
                 {@render placeholder(labelFor(bottomTools, app.bottomTool))}
               {/if}
@@ -468,6 +472,31 @@
           <span class="shrink-0 font-mono text-[11px] text-primary">● {app.saving ? "saving…" : "modified"}</span>
         {/if}
       </div>
+      <!-- Language engine: findings count while ready, plain status otherwise. -->
+      <span
+        class="flex shrink-0 items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground"
+        data-testid="engine-status"
+      >
+        <span
+          class={cn(
+            "size-1.5 rounded-full",
+            lang.engineStatus === "ready" && "bg-emerald-500",
+            lang.engineStatus === "loading" && "bg-amber-500",
+            lang.engineStatus === "failed" && "bg-red-500",
+            lang.engineStatus === "off" && "bg-muted-foreground/40",
+          )}
+        ></span>
+        {#if lang.engineStatus === "ready"}
+          Lua: {lang.diagnostics.length === 0 ? "no problems" : `${lang.diagnostics.length} problem${lang.diagnostics.length === 1 ? "" : "s"}`}
+        {:else if lang.engineStatus === "loading"}
+          Lua: loading
+        {:else if lang.engineStatus === "failed"}
+          Lua: unavailable
+        {:else}
+          Lua: off
+        {/if}
+      </span>
+      <Separator orientation="vertical" class="!h-3" />
       <!-- DCS link: dot = WS liveness (green = mission running, amber = in menu). -->
       <span class="flex shrink-0 items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground">
         <span

@@ -1,0 +1,179 @@
+//! studio::lang — LSP-style language intelligence for Lua, served by the
+//! embedded dcs-lua engine (a separate Rust workspace compiled to wasm and
+//! loaded into the webview — never a spawned language-server process). The
+//! IDE owns all file I/O and feeds sources to the engine; the engine answers
+//! LSP-shaped queries: diagnostics, completion, hover, definition.
+
+/// A workspace source fed to the engine. The engine never touches the
+/// filesystem; every file arrives through this shape.
+public data SourceFile { path: string, text: string }
+
+/// Maps workspace files to a DCS Lua environment profile (mission/gui/export)
+/// by glob, sourced from the project's dcs-studio.toml manifest.
+public data ProfileRule { glob: string, profile: string }
+
+/// One engine finding over a byte-offset span, with a stable namespaced
+/// code (LUA-Exxx parse, LUA-Sxxx static, DCS-Wxxx lints).
+public data Diagnostic { path: string, severity: string, code: string, message: string, start: number, end: number }
+
+/// One completion suggestion at a cursor offset.
+public data CompletionItem { label: string, kind: string, detail: string }
+
+/// Markdown hover card for the symbol under the cursor.
+public data Hover { title: string, body: string }
+
+/// A span in a workspace file — a go-to-definition target.
+public data Location { path: string, start: number, end: number }
+
+/// One outline entry: a function, local, or global declaration, with
+/// nested declarations as children.
+public data DocumentSymbol { name: string, kind: string, start: number, end: number, children: studio::lang::DocumentSymbol[] }
+
+/// One foldable region, in byte offsets; the editor folds by line.
+public data FoldingRange { start: number, end: number }
+
+/// The embedded engine failed to load or initialise (e.g. the wasm module
+/// could not be fetched or instantiated).
+public data EngineError { message: string }
+
+/// The dcs-lua language engine (the crates/dcs-lua-* workspace members,
+/// compiled to wasm — see dcslua.pds for its internals). Modelled on the
+/// LSP but embedded in the webview; these signatures are the contract its
+/// IdeSession must satisfy.
+public system DcsLua {
+  /// Instantiate the wasm module and seed the session with the workspace.
+  public Mount(files: studio::lang::SourceFile[], rules: studio::lang::ProfileRule[]): Result<void, studio::lang::EngineError>;
+
+  /// Create or replace one source (editor edits, saves, generated files).
+  public SetSource(file: studio::lang::SourceFile): void;
+
+  /// Drop one source (file deleted or regenerated away).
+  public RemoveSource(path: string): void;
+
+  /// All current findings across the mounted workspace.
+  public Diagnostics(): studio::lang::Diagnostic[];
+
+  /// The declaration outline of one file (functions, locals, globals).
+  public DocumentSymbols(path: string): studio::lang::DocumentSymbol[];
+
+  /// Foldable regions of one file (blocks, function bodies, long comments).
+  public FoldingRanges(path: string): studio::lang::FoldingRange[];
+
+  /// Suggestions at a cursor offset.
+  public Complete(path: string, offset: number): studio::lang::CompletionItem[];
+
+  /// Hover card for the symbol at an offset, if any.
+  public HoverAt(path: string, offset: number): Option<studio::lang::Hover>;
+
+  /// Definition site of the symbol at an offset, if known.
+  public DefinitionOf(path: string, offset: number): Option<studio::lang::Location>;
+}
+
+/// Webview-side language-intelligence layer: decides which files the engine
+/// sees, keeps the session in sync with edits, and publishes findings to the
+/// Problems panel. Editor queries (completion, hover, definition) go straight
+/// to the engine's face; this container owns feeding and findings.
+public container LanguageIntel for studio::core::Studio {
+  /// Mount the project into the engine when a workspace opens: collect every
+  /// Lua source and .d.lua definition under the root, apply the manifest's
+  /// profile rules. An engine failure is non-fatal — the IDE stays usable
+  /// without language intelligence, and the status bar says so.
+  #[onevent(studio::core::ProjectOpened)]
+  public MountWorkspace(opened: studio::core::ProjectOpened): void {
+    files = studio::lang::SourceFile[] from self.CollectLuaSources(opened.path)
+    rules = studio::lang::ProfileRule[] from self.ProfileRules(opened.path)
+    mounted = Result<void, studio::lang::EngineError> from studio::lang::DcsLua.Mount(files, rules)
+    if (mounted.isErr) {
+      self.ShowEngineStatus(mounted.error)
+      return
+    }
+    self.RefreshProblems()
+  }
+
+  /// Every .lua and .d.lua file under the root, read via WorkspaceFs.
+  CollectLuaSources(root: string): studio::lang::SourceFile[];
+
+  /// Profile rules parsed from the project's dcs-studio.toml; files matching
+  /// no rule default to the mission profile.
+  ProfileRules(root: string): studio::lang::ProfileRule[];
+
+  /// Keep the engine current as the developer edits (debounced): only Lua
+  /// sources reach the engine, then findings refresh.
+  #[manual]
+  public UpdateSource(path: string, text: string): void {
+    supported = bool from self.IsLuaSource(path)
+    if (!supported) {
+      return
+    }
+    file = studio::lang::SourceFile from { path, text }
+    studio::lang::DcsLua.SetSource(file)
+    self.RefreshProblems()
+  }
+
+  /// Drop a deleted file from the session and refresh findings.
+  public DropSource(path: string): void {
+    supported = bool from self.IsLuaSource(path)
+    if (!supported) {
+      return
+    }
+    studio::lang::DcsLua.RemoveSource(path)
+    self.RefreshProblems()
+  }
+
+  /// Whether a path is Lua source the engine should see (.lua or .d.lua).
+  IsLuaSource(path: string): bool;
+
+  /// Pull the workspace's findings and publish them to the Problems panel
+  /// and the editor's inline markers.
+  RefreshProblems(): void {
+    found = studio::lang::Diagnostic[] from studio::lang::DcsLua.Diagnostics()
+    self.PublishProblems(found)
+  }
+
+  /// Hand findings to the UI: the Problems panel list and per-file marker
+  /// stores both read from this.
+  PublishProblems(found: studio::lang::Diagnostic[]): void;
+
+  /// A Problems entry navigates to its finding: the file opens and the
+  /// caret lands on the finding's line and column. A vanished file is
+  /// ignored.
+  #[manual]
+  public OpenProblem(finding: studio::lang::Diagnostic): void {
+    opened = Result<studio::core::Document, studio::files::IoError> from studio::core::Workbench.OpenFile(finding.path)
+    if (opened.isErr) {
+      return
+    }
+    self.JumpTo(finding)
+  }
+
+  /// Place the editor caret at a finding's location and scroll it into
+  /// view.
+  JumpTo(finding: studio::lang::Diagnostic): void;
+
+  /// Status-bar note that language intelligence is unavailable.
+  ShowEngineStatus(failure: studio::lang::EngineError): void;
+}
+
+/// Broken Lua surfaces immediately, no save needed.
+feature BrokenLuaShowsDiagnostic for studio::lang::LanguageIntel {
+  given "a project is open with the engine mounted"
+  when "the developer types syntactically broken Lua into the editor"
+  then "a parse diagnostic appears inline in the editor"
+  and "the same finding is listed in the Problems panel"
+}
+
+/// Problems entries navigate to their findings.
+feature ProblemsClickOpensFile for studio::lang::LanguageIntel {
+  given "the Problems panel lists a finding in another file"
+  when "the developer clicks the entry"
+  then "that file opens in the editor"
+  and "the caret lands on the finding's line and column"
+}
+
+/// Language intelligence is an enhancement, never a gate.
+feature EngineFailureIsNonFatal for studio::lang::LanguageIntel {
+  given "the wasm engine fails to load"
+  when "a project is opened"
+  then "the IDE works normally without language intelligence"
+  and "the status bar reports the engine as unavailable"
+}

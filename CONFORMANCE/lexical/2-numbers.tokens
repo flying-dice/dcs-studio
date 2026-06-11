@@ -1,0 +1,6 @@
+NAME@1:1 "n"
+EQ@1:3 "="
+NUMBER@1:5 "0x1F"
+PLUS@1:10 "+"
+NUMBER@1:12 "3.5e-1"
+EOF@2:1 ""

@@ -16,6 +16,10 @@ public data Document { path: string, text: string, savedText: string }
 /// A recently opened project, persisted to localStorage (most recent first).
 public data RecentProject { path: string, name: string, openedAt: datetime }
 
+/// Broadcast when a folder becomes the active workspace; tool windows that
+/// track the project (language intelligence, file tree) subscribe to it.
+public data ProjectOpened { path: string }
+
 /// One Lua-console run: the code and its rendered result or error.
 data ConsoleEntry { code: string, ok: bool, output: string }
 
@@ -27,17 +31,23 @@ public system Studio;
 /// manager panels. Runs inside the Tauri webview (or a plain browser for dev
 /// and the Playwright e2e suite).
 public container Workbench for studio::core::Studio {
-  /// Open a folder as the project workspace and remember it as recent.
+  /// Open a folder as the project workspace, remember it as recent, and
+  /// announce it to project-tracking tool windows.
   #[manual]
   public OpenProject(path: string): void {
     name = string from studio::files::WorkspaceFs.Basename(path)
     recent = studio::core::RecentProject from { path, name }
     self.RememberRecent(recent)
+    opened = studio::core::ProjectOpened from { path }
+    self.Announce(opened)
   }
 
   /// Keep `recent` at the head of the recents list: dedupe by path, cap at
   /// RECENTS_MAX, persist to localStorage.
   RememberRecent(recent: studio::core::RecentProject): void;
+
+  /// Broadcast a workspace-opened signal to subscribed tool windows.
+  Announce(opened: studio::core::ProjectOpened): void;
 
   /// Scaffold a new project from a template into `<parent>/<name>`, then
   /// open it.

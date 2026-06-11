@@ -1,0 +1,50 @@
+//! ide — THE edge: the wasm IdeSession dcs-studio embeds (crate
+//! `dcs-lua-ide`, decisions/002). Holds the workspace; every query
+//! delegates to lspcore. The boundary is typed (tsify DTOs → .d.ts);
+//! dcs-studio's `studio::lang::DcsLua` face mirrors these ports.
+
+/// One workspace source crossing the boundary.
+public data SourceFile { path: string, text: string }
+
+/// One finding for the editor: byte span plus 1-based line/column
+/// endpoints so the host never re-indexes the source.
+public data WireDiagnostic { path: string, severity: string, code: string, codeDescription: string, message: string, start: number, end: number, startLine: number, startCol: number, endLine: number, endCol: number }
+
+/// The embedded language engine session. The host pushes sources in
+/// (mount/set/remove); the editor pulls answers out.
+/// #critical
+public container IdeSession for dcslua::DcsLuaLs {
+  /// Seed the session wholesale: any previously mounted workspace is
+  /// replaced, so opening a different project never leaks files.
+  public Mount(files: ide::SourceFile[], rules: lspcore::ProfileRule[]): void {
+    self.ReplaceWorkspace(rules)
+    for (file in files) {
+      lspcore::Workspace.SetSource(file.path, file.text)
+    }
+  }
+
+  /// Discard the current workspace and hold the new profile rules.
+  ReplaceWorkspace(rules: lspcore::ProfileRule[]): void;
+
+  /// Create or replace one source.
+  public SetSource(path: string, text: string): void {
+    lspcore::Workspace.SetSource(path, text)
+  }
+
+  /// Drop one source.
+  public RemoveSource(path: string): void {
+    lspcore::Workspace.RemoveSource(path)
+  }
+
+  /// Every finding across the workspace, line/column resolved per file,
+  /// sorted by path then offset.
+  public Diagnostics(): ide::WireDiagnostic[];
+}
+
+/// The session answers from wholesale-replaced state only.
+feature MountReplacesWholesale for ide::IdeSession {
+  given "a session mounted with project A's files"
+  when "project B is mounted"
+  then "queries answer from B's files only"
+  and "no finding from A survives the remount"
+}
