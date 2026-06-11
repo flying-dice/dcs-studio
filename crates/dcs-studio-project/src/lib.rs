@@ -12,6 +12,7 @@
 //! - [`detect`] — find the local DCS Saved Games write dir.
 //! - [`toolchain`] — detect the Rust toolchain for `rust-dll` builds.
 //! - [`process`] — spawn child processes without console-window flashes.
+//! - [`todos`] — workspace comment-tag scanner (Todos panel, issue #16).
 
 pub mod detect;
 pub mod install;
@@ -19,6 +20,7 @@ pub mod manifest;
 pub mod process;
 pub mod scaffold;
 pub mod templates;
+pub mod todos;
 pub mod toolchain;
 
 pub use detect::default_saved_games;
