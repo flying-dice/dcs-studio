@@ -12,6 +12,15 @@ Default verdict is **FAIL** until measurement proves otherwise. The author's
 report is not evidence. A green local run is evidence only for what it
 actually executed.
 
+## How it runs
+
+- Barricade is executed by a **dedicated Fable-model subagent** (Agent tool,
+  `model: "fable"`), never inline in the orchestrator's own context and
+  never by the agent that wrote the change — the author reviewing the
+  author proves nothing.
+- The subagent works in the branch's worktree and reports the full verdict
+  (checklist + mutation table) back to the orchestrator.
+
 ## Phase 0 — CI parity (don't let the pipeline find it first)
 
 Map the diff to the pipeline jobs (`.gitlab-ci.yml`) and run the SAME
@@ -109,8 +118,14 @@ pipeline-gap issue, don't paper over it with a one-off manual run.
 
 ## Verdict
 
-Post (to the orchestrator / MR description draft) the checklist — pass,
-fail, or `N/A — <reason>`, no blanks:
+The report is **MR evidence, not a private artifact**: the MR description
+(or, for an already-open MR, a top-level note on it) must carry a
+`## Barricade report` section containing the checklist and the mutation
+table verbatim, plus the commands run with their counts. The reviewer
+re-measures claims — an MR without a barricade report is not ready for
+review.
+
+The checklist — pass, fail, or `N/A — <reason>`, no blanks:
 
 - [ ] CI parity run locally — counts per command, zero failures
 - [ ] New behaviour has tests — every model feature ↔ named test
