@@ -32,8 +32,8 @@ rust:
     - apt-get update -qq
     - apt-get install -y -qq lua5.1
     - export DCS_PUC_LUAC=$(command -v luac5.1)
-    - cargo test -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli
-    - cargo clippy -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli --all-targets -- -D warnings
+    - cargo test -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli -p studio-services
+    - cargo clippy -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli -p studio-services --all-targets -- -D warnings
 
 # App-compile + host<->real-server gate: builds the Tauri crate against
 # the webkit2gtk stack and runs its suites, including tests/host_ipc.rs —

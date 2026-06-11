@@ -1,0 +1,274 @@
+//! studio::mcp — the MCP server inside dcs-studio-cli (issue #8): the IDE's
+//! services exposed headless to LLM agents over stdio (newline-delimited
+//! JSON-RPC, protocol 2024-11-05). Every tool delegates to the owning
+//! container — workspace fs, the project kit, the injection and mission
+//! scripting managers, the DCS link, and the dcs-lua engine — so an agent
+//! and the IDE always run the same logic (crates/studio-services). Calls
+//! into the sim target the dcs::bridge::Dcs published face only.
+
+/// LLM agent driving `dcs-studio-cli mcp` over stdio — no Tauri app, no IDE.
+public person Agent;
+
+/// Snapshot answered by the dcs_status tool. Unlike the app's scheduled
+/// heartbeat, each call pings on demand; simRunning derives from the pong's
+/// dcsTime advancing past 0 — never from mere ping success.
+public data DcsStatus { connected: bool, simRunning: bool, latencyMs: Option<number>, dcsTime: Option<number> }
+
+/// A tool whose engine capability does not exist yet: the tool name is
+/// reserved and the error is stable, so agent contracts don't churn.
+public data NotImplemented { message: string }
+
+/// MCP server (`dcs-studio-cli mcp`): newline-delimited JSON-RPC over stdio
+/// — stdout is the wire, so nothing else may print to it. Tools are thin
+/// delegates; the only logic owned here is the lazy DCS link and the
+/// on-demand status ping.
+///
+/// Recorded decision: the workspace fs tools take absolute host paths with
+/// no sandbox root, exactly like the IDE's own fs commands they delegate to
+/// — the server runs on the agent's machine with the agent's rights, and the
+/// MCP host (not this server) owns tool-permission policy.
+public container McpServer for studio::core::Studio {
+  /// init_project — scaffold a project from a template (same kit as the
+  /// CLI `init` and the app's New Project flow).
+  public InitProject(template: string, parent: string, name: string): Result<string, studio::files::IoError> {
+    root = Result<string, studio::files::IoError> from studio::cli::Cli.Init(template, parent, name)
+    if (root.isErr) {
+      return Err(root.error)
+    }
+    return Ok(root.value)
+  }
+
+  /// check — analyse a workspace root; the result text carries findings
+  /// with stable codes and the tool errs on error-severity findings.
+  public Check(root: string): number {
+    errors = number from studio::cli::Cli.Check(root)
+    return errors
+  }
+
+  /// build — cargo build for Rust projects, a clean no-op otherwise.
+  public Build(root: string): number {
+    code = number from studio::cli::Cli.Build(root)
+    return code
+  }
+
+  /// read_dir — list a folder, directories first.
+  public ReadDir(path: string): Result<studio::files::DirEntry[], studio::files::IoError> {
+    entries = Result<studio::files::DirEntry[], studio::files::IoError> from studio::files::WorkspaceFs.ReadDir(path)
+    if (entries.isErr) {
+      return Err(entries.error)
+    }
+    return Ok(entries.value)
+  }
+
+  /// read_text_file — a UTF-8 file's contents.
+  public ReadTextFile(path: string): Result<string, studio::files::IoError> {
+    text = Result<string, studio::files::IoError> from studio::files::WorkspaceFs.ReadTextFile(path)
+    if (text.isErr) {
+      return Err(text.error)
+    }
+    return Ok(text.value)
+  }
+
+  /// write_text_file — create or truncate a file with the given contents.
+  public WriteTextFile(path: string, contents: string): Result<void, studio::files::IoError> {
+    written = Result<void, studio::files::IoError> from studio::files::WorkspaceFs.WriteTextFile(path, contents)
+    if (written.isErr) {
+      return Err(written.error)
+    }
+    return Ok(written.value)
+  }
+
+  /// path_exists — whether a path exists on disk.
+  public PathExists(path: string): bool {
+    found = bool from studio::files::WorkspaceFs.PathExists(path)
+    return found
+  }
+
+  /// dcs_status — on-demand link probe. Works without DCS: a dead link
+  /// answers connected:false instead of erroring. A connected link is
+  /// pinged once; simRunning follows the dcsTime > 0 rule.
+  public DcsStatus(): studio::mcp::DcsStatus {
+    self.EnsureLink()
+    connected = bool from self.LinkConnected()
+    if (!connected) {
+      down = studio::mcp::DcsStatus from { false }
+      return down
+    }
+    pong = Result<dcs::bridge::Pong, dcs::bridge::RpcError> from dcs::bridge::Dcs.Ping()
+    if (pong.isErr) {
+      // Connected at the WS layer but the bridge isn't answering.
+      stalled = studio::mcp::DcsStatus from { connected }
+      return stalled
+    }
+    live = bool from pong.value.dcsTime > 0
+    latency = number from self.ElapsedMs()
+    status = studio::mcp::DcsStatus from { connected, live, latency, pong }
+    return status
+  }
+
+  /// Dial ws://127.0.0.1:25569/ws lazily on the first DCS tool call (with a
+  /// short first-dial grace so a live bridge answers immediately); later
+  /// calls reuse the link. With no DCS listening the link stays down.
+  EnsureLink(): void;
+
+  /// Whether the WS handshake to the in-DCS server is currently up.
+  LinkConnected(): bool;
+
+  /// Wall-clock milliseconds since the status ping left.
+  ElapsedMs(): number;
+
+  /// dcs_eval — run Lua in the DCS GUI environment via the bridge's `eval`
+  /// method. The link guard (not the wire) answers when DCS is absent.
+  public DcsEval(code: string): Result<dcs::bridge::Json, studio::link::CallError> {
+    self.EnsureLink()
+    payload = dcs::bridge::Json from { code }
+    result = Result<dcs::bridge::Json, studio::link::CallError> from studio::link::DcsLink.Forward("eval", Some(payload))
+    if (result.isErr) {
+      return Err(result.error)
+    }
+    return Ok(result.value)
+  }
+
+  /// dcs_call — forward an arbitrary JSON-RPC method to the bridge.
+  public DcsCall(method: string, params: Option<dcs::bridge::Json>): Result<dcs::bridge::Json, studio::link::CallError> {
+    self.EnsureLink()
+    result = Result<dcs::bridge::Json, studio::link::CallError> from studio::link::DcsLink.Forward(method, params)
+    if (result.isErr) {
+      return Err(result.error)
+    }
+    return Ok(result.value)
+  }
+
+  /// detect_installs — Saved Games write dirs, plain DCS first.
+  public DetectInstalls(): studio::inject::DcsInstall[] {
+    installs = studio::inject::DcsInstall[] from studio::inject::Injector.DetectInstalls()
+    return installs
+  }
+
+  /// injection_status — what's installed in a write dir vs this build.
+  public InjectionStatus(writeDir: string): studio::inject::InjectionStatus {
+    status = studio::inject::InjectionStatus from studio::inject::Injector.Status(writeDir)
+    return status
+  }
+
+  /// inject — install or update the bridge DLL + hook.
+  public Inject(writeDir: string): Result<studio::inject::InjectionStatus, studio::inject::InjectError> {
+    injected = Result<studio::inject::InjectionStatus, studio::inject::InjectError> from studio::inject::Injector.Inject(writeDir)
+    if (injected.isErr) {
+      return Err(injected.error)
+    }
+    return Ok(injected.value)
+  }
+
+  /// eject — remove the bridge DLL + hook.
+  public Eject(writeDir: string): Result<studio::inject::InjectionStatus, studio::inject::InjectError> {
+    ejected = Result<studio::inject::InjectionStatus, studio::inject::InjectError> from studio::inject::Injector.Eject(writeDir)
+    if (ejected.isErr) {
+      return Err(ejected.error)
+    }
+    return Ok(ejected.value)
+  }
+
+  /// detect_mission_scripts — candidate MissionScripting.lua files.
+  public DetectMissionScripts(): studio::mission::MissionScriptFile[] {
+    found = studio::mission::MissionScriptFile[] from studio::mission::MissionScripting.Detect()
+    return found
+  }
+
+  /// mission_script_status — a file's sanitization snapshot.
+  public MissionScriptStatus(path: string): studio::mission::MissionScriptStatus {
+    status = studio::mission::MissionScriptStatus from studio::mission::MissionScripting.Status(path)
+    return status
+  }
+
+  /// mission_script_set — apply desired sanitized states per item.
+  public MissionScriptSet(path: string, changes: studio::mission::ItemChange[]): Result<studio::mission::MissionScriptStatus, studio::mission::MissionEditError> {
+    set = Result<studio::mission::MissionScriptStatus, studio::mission::MissionEditError> from studio::mission::MissionScripting.SetItems(path, changes)
+    if (set.isErr) {
+      return Err(set.error)
+    }
+    return Ok(set.value)
+  }
+
+  /// mission_script_restore — copy the pristine backup back.
+  public MissionScriptRestore(path: string): Result<studio::mission::MissionScriptStatus, studio::mission::MissionEditError> {
+    restored = Result<studio::mission::MissionScriptStatus, studio::mission::MissionEditError> from studio::mission::MissionScripting.Restore(path)
+    if (restored.isErr) {
+      return Err(restored.error)
+    }
+    return Ok(restored.value)
+  }
+
+  /// lua_diagnostics — the real engine over a workspace root: mount every
+  /// Lua source and report every finding with its stable code.
+  public LuaDiagnostics(root: string): syntax::Diagnostic[] {
+    files = dcslua::SourceUnit[] from self.CollectSources(root)
+    findings = syntax::Diagnostic[] from dcslua::DcsLuaLs.Analyse(files)
+    return findings
+  }
+
+  /// Every .lua / .d.lua under the root, skipping vendor/VCS directories
+  /// (the same walk `check` uses).
+  CollectSources(root: string): dcslua::SourceUnit[];
+
+  /// lua_hover — the engine's hover card at a 1-based line/column in one
+  /// mounted file; none over whitespace or unresolved identifiers.
+  public LuaHover(root: string, path: string, line: number, character: number): Option<lspcore::HoverInfo> {
+    files = dcslua::SourceUnit[] from self.CollectSources(root)
+    dcslua::DcsLuaLs.Analyse(files)
+    offset = number from self.OffsetAt(path, line, character)
+    card = Option<lspcore::HoverInfo> from dcslua::DcsLuaLs.HoverAt(path, offset)
+    return card
+  }
+
+  /// Byte offset of a 1-based line/column pair in a mounted source.
+  OffsetAt(path: string, line: number, character: number): number;
+
+  /// lua_complete — reserved: the engine has no completion query yet, so
+  /// the tool answers a stable not-implemented error, never a guess.
+  public LuaComplete(root: string, path: string, line: number, character: number): Result<studio::lang::CompletionItem[], studio::mcp::NotImplemented> {
+    pending = studio::mcp::NotImplemented from { "completion is not implemented in the engine yet" }
+    return Err(pending)
+  }
+
+  /// lua_definition — reserved: the engine has no definition query yet, so
+  /// the tool answers a stable not-implemented error, never a guess.
+  public LuaDefinition(root: string, path: string, line: number, character: number): Result<studio::lang::Location, studio::mcp::NotImplemented> {
+    pending = studio::mcp::NotImplemented from { "go-to-definition is not implemented in the engine yet" }
+    return Err(pending)
+  }
+}
+
+/// An agent runs Lua inside the live sim through the MCP surface.
+feature AgentEvalsLua for studio::mcp::McpServer {
+  given "DCS runs with the bridge injected"
+  when "an agent calls the dcs_eval tool with a Lua snippet"
+  then "the snippet executes in the DCS GUI environment via the bridge"
+  and "the result rides back as the tool output"
+  but "with no DCS listening the link guard answers, never a hang"
+}
+
+/// An agent edits workspace files through the same fs service as the IDE.
+feature AgentEditsWorkspaceFile for studio::mcp::McpServer {
+  given "a project root on disk"
+  when "an agent writes a file via write_text_file and reads it back"
+  then "read_text_file returns exactly the written contents"
+  and "read_dir lists the new file and path_exists confirms it"
+}
+
+/// The whole surface serves headless — no Tauri app, no DCS, no IDE.
+feature HeadlessServesWithoutIde for studio::mcp::McpServer {
+  given "only the dcs-studio-cli binary, no Tauri app and no DCS"
+  when "an agent starts `dcs-studio-cli mcp` and lists tools"
+  then "the full tool surface is advertised"
+  and "dcs_status answers connected:false instead of erroring"
+}
+
+/// Lang tools answer from the real engine, not stubs.
+feature AgentSeesRealDiagnostics for studio::mcp::McpServer {
+  given "a workspace with a syntactically broken Lua file"
+  when "an agent calls lua_diagnostics on the root"
+  then "the engine's finding surfaces with its stable LUA-Exxx code"
+  and "lua_hover on a documented local answers the same card the IDE shows"
+  but "lua_complete and lua_definition answer a stable not-implemented error"
+}

@@ -42,12 +42,13 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | Module | Covers |
 | --- | --- |
 | `model/studio/core.pds` | `Studio` system, `Workbench` UI container (editor, console, dual-path `DcsCall`) |
-| `model/studio/files.pds` | `WorkspaceFs` — fs commands, project scaffolding (`crates/app/src/fs.rs`) |
-| `model/studio/link.pds` | `DcsLink` heartbeat + `BridgeClient` (`crates/app/src/dcs.rs`, `crates/dcs-bridge-client`) |
-| `model/studio/inject.pds` | `Injector` — bridge DLL/hook install (`crates/app/src/inject.rs`) |
+| `model/studio/files.pds` | `WorkspaceFs` — fs commands, project scaffolding (`crates/studio-services/src/fs.rs`; thin Tauri wrappers in `crates/app/src/fs.rs`) |
+| `model/studio/link.pds` | `DcsLink` heartbeat + `BridgeClient` (`crates/studio-services/src/link.rs`, `crates/app/src/dcs.rs`, `crates/dcs-bridge-client`) |
+| `model/studio/inject.pds` | `Injector` — bridge DLL/hook install (`crates/studio-services/src/inject.rs`) |
 | `model/studio/build.pds` | `Builder` — toolchain detection + cargo build with streamed output (issue #6 R1) |
 | `model/studio/installer.pds` | `Installer` — manifest-driven `[[install]]` deploy to SavedGames/GameInstall roots (issue #6 R1) |
-| `model/studio/mission.pds` | `MissionScripting` sanitization manager (`crates/app/src/mission.rs`) |
+| `model/studio/mission.pds` | `MissionScripting` sanitization manager (`crates/studio-services/src/mission.rs`) |
+| `model/studio/mcp.pds` | `McpServer` — the headless agent tool surface of `dcs-studio-cli mcp` (issue #8; `crates/dcs-studio-cli/src/mcp.rs` + `crates/studio-services`) |
 | `model/studio/lang.pds` | `LanguageIntel` provider layer + `DcsLua` embedded engine face + `RustAnalyzer` hosted-server face (`src/lib/lang/`) |
 | `model/dcslua.pds` | `DcsLuaLs` engine system root |
 | `model/syntax.pds` | Lexer/parser/AST contract (`crates/dcs-lua-syntax`) |
@@ -87,10 +88,22 @@ two ways behind one `LanguageProvider` contract:
   in-page (`src/lib/dcs-lua-wasm/`, rebuild with `pnpm build:wasm` and
   commit). Same dual-path convention as `dcs-ws.ts`.
 
-**dcs-studio-cli is the agent surface**: `lsp` and `mcp` (tools:
-`init_project`, `check`, `build`) over stdio, plus direct `init` /
-`check` / `build` / `install` subcommands — an agent needs no Tauri
-app.
+**dcs-studio-cli is the agent surface**: `lsp` and `mcp` over stdio,
+plus direct `init` / `check` / `build` / `install` subcommands — an
+agent needs no Tauri app. The MCP server (model/studio/mcp.pds, issue
+#8) exposes the IDE's services headless: project (`init_project`,
+`check`, `build`), workspace fs (`read_dir`, `read_text_file`,
+`write_text_file`, `path_exists`), the DCS link (`dcs_status`,
+`dcs_eval`, `dcs_call` — dialed lazily on first use; everything else
+works without DCS), injection (`detect_installs`, `injection_status`,
+`inject`, `eject`), mission scripting (`detect_mission_scripts`,
+`mission_script_status`, `mission_script_set`,
+`mission_script_restore`), and the real engine (`lua_diagnostics`,
+`lua_hover`; `lua_complete`/`lua_definition` answer a stable
+not-implemented error until the engine grows those queries). The
+service logic itself lives in the tauri-free **`crates/studio-services`**
+(fs, inject, mission, link); the app's Tauri commands are thin
+wrappers over it, so agents and the IDE always run the same code.
 
 **rust-analyzer is the second hosted server** (issue #6 R2):
 `src/lib/lang/rust-analyzer.ts` mounts `.rs` files through the same
@@ -150,7 +163,10 @@ diagnostics, never a panic. The IDE side:
 - `cargo test -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide` — engine
   suites (units, conformance goldens, totality properties, corpus gate).
 - `cargo test -p dcs-studio-cli` — CLI suites incl. real-stdio LSP and MCP
-  end-to-end sessions.
+  end-to-end sessions (full tool surface, no-DCS guards, real-engine lang
+  tools).
+- `cargo test -p studio-services` — the extracted tauri-free service logic
+  (fs, inject, mission, DCS link guards).
 - `DCS_TEMPLATE_COMPILE=1 cargo test -p dcs-studio-project --test template_compile`
   — scaffold the rust-dll template and `cargo check` it (issue #22); skips
   without the env var so the default suite stays fast. CI's

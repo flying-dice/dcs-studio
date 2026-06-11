@@ -22,4 +22,12 @@ public system DcsLuaLs {
     findings = syntax::Diagnostic[] from lspcore::Queries.AllFindings()
     return findings
   }
+
+  /// The hover card for the identifier at a byte offset in a mounted
+  /// source — the LSP textDocument/hover and the MCP lua_hover tool both
+  /// land here.
+  public HoverAt(path: string, offset: number): Option<lspcore::HoverInfo> {
+    card = Option<lspcore::HoverInfo> from lspcore::Queries.HoverAt(path, offset)
+    return card
+  }
 }
