@@ -36,6 +36,7 @@ public container Cli for studio::core::Studio {
     if (root.isErr) {
       return Err(root.error)
     }
+    self.PrintNextSteps(template)
     return Ok(root.value)
   }
 
@@ -48,6 +49,12 @@ public container Cli for studio::core::Studio {
   /// Create `<parent>/<name>` and write every file beneath it, refusing
   /// to overwrite an existing root.
   Materialise(parent: string, name: string, files: studio::cli::TemplateFile[]): Result<string, studio::files::IoError>;
+
+  /// Per-template guidance printed after a successful scaffold: build and
+  /// install commands for rust-dll, check/open for lua-script, manifest
+  /// editing for blank. Rendered by the same template registry so the
+  /// app's New Project flow can reuse the exact text.
+  PrintNextSteps(template: string): void;
 
   /// Analyse a workspace and print findings; the exit code is the number
   /// of error-severity findings, so agents and CI can gate on it.
@@ -114,6 +121,14 @@ feature OneEngineEverySurface for studio::cli::Cli {
   given "a workspace with one broken Lua file"
   when "it is analysed via check, via the MCP check tool, and via the LSP"
   then "all three report the same finding with the same code and span"
+}
+
+/// A fresh scaffold teaches its own bootstrap path.
+feature ScaffoldTeachesNextSteps for studio::cli::Cli {
+  given "a fresh init of any registered template"
+  when "scaffolding succeeds"
+  then "the output names the exact next commands for that template"
+  and "rust-dll names build and install, lua-script names check or open"
 }
 
 /// An agent builds and deploys a mod without the app or the IDE.

@@ -115,6 +115,31 @@ fn project_block(name: &str, template: &str) -> String {
     )
 }
 
+/// Per-template guidance for after a successful scaffold (model:
+/// `studio::cli::Cli.PrintNextSteps`) — printed by the CLI's `init` and
+/// reusable by the app's New Project flow. Empty for unknown ids.
+#[must_use]
+pub fn next_steps(template: &str) -> &'static str {
+    match template {
+        "rust-dll" => {
+            "next steps:\n\
+             \x20 cargo build --release\n\
+             \x20 dcs-studio-cli install   (copies the DLL + hook into Saved Games)\n\
+             \x20 then start DCS and watch Saved Games/DCS/Logs/dcs.log"
+        }
+        "lua-script" => {
+            "next steps:\n\
+             \x20 open the folder in DCS Studio, or validate with: dcs-studio-cli check\n\
+             \x20 load it via a mission trigger (DO SCRIPT FILE) — see README.md"
+        }
+        "blank" => {
+            "next steps:\n\
+             \x20 edit dcs-studio.toml — declare your files and [[install]] rules"
+        }
+        _ => "",
+    }
+}
+
 /// Render a template's files, or `None` for an unknown id.
 #[must_use]
 pub fn render(template: &str, name: &str) -> Option<Vec<TemplateFile>> {
@@ -215,9 +240,25 @@ fn lua_script(name: &str) -> Vec<TemplateFile> {
                  ## Layout\n\n\
                  - `Scripts/{slug}/main.lua` — script entry point.\n\
                  - `dcs-studio.toml` — project manifest (metadata, dependencies, install rules).\n\n\
+                 ## Where scripts run\n\n\
+                 Mission scripts run inside DCS's mission scripting environment: `env`,\n\
+                 `timer`, `trigger`, and `world` are available; `os`, `io`, and `lfs` are\n\
+                 sanitized away by default.\n\n\
+                 ## MissionScripting.lua sanitization\n\n\
+                 DCS strips `os`/`io`/`lfs` from mission scripts via `MissionScripting.lua`.\n\
+                 DCS Studio's Mission panel can de-sanitize it to restore them — convenient\n\
+                 for development, but any mission you then run can touch your filesystem.\n\
+                 Re-sanitize when you are done.\n\n\
+                 ## Loading options\n\n\
+                 - A mission trigger: `DO SCRIPT FILE`, or `DO SCRIPT` with `dofile(...)`\n\
+                 \x20 pointing at the installed script.\n\
+                 - A GameGUI hook under `Scripts/Hooks` for code that runs outside missions.\n\n\
                  ## Install\n\n\
                  Install rules in `dcs-studio.toml` map project files to your DCS folders via\n\
-                 named roots (`{{SavedGames}}`, `{{GameInstall}}`), resolved per-machine.\n"
+                 named roots (`{{SavedGames}}`, `{{GameInstall}}`), resolved per-machine.\n\n\
+                 ## Logs\n\n\
+                 `env.info` output lands in `Saved Games/DCS/Logs/dcs.log`, tagged with the\n\
+                 script name.\n"
             ),
         ),
     ]
@@ -302,6 +343,7 @@ fn rust_dll_cargo_toml(ident: &str) -> TemplateFile {
 }
 
 fn rust_dll_lib_rs(name: &str, ident: &str) -> TemplateFile {
+    let ident_upper = ident.to_uppercase();
     TemplateFile::text(
         "src/lib.rs",
         format!(
@@ -310,12 +352,50 @@ fn rust_dll_lib_rs(name: &str, ident: &str) -> TemplateFile {
              // #[mlua::lua_module] generates the luaopen_{ident} entry point that\n\
              // Lua's require(\"{ident}\") resolves inside {ident}.dll. The function\n\
              // name below IS the module name — it must match the [lib] name.\n\
-             use mlua::prelude::*;\n\n\
+             //\n\
+             // FFI rules: mlua wraps callbacks so Rust panics become Lua errors,\n\
+             // but don't lean on it — no unwrap/expect in callbacks; return\n\
+             // LuaResult and let errors raise in Lua, never unwind across FFI.\n\
+             use mlua::prelude::*;\n\
+             use std::sync::atomic::{{AtomicU64, Ordering}};\n\n\
+             // Frames pumped so far. Atomic, not a Mutex: on_frame runs on DCS's\n\
+             // main loop every simulation frame and must never block.\n\
+             static FRAMES: AtomicU64 = AtomicU64::new(0);\n\n\
              #[mlua::lua_module]\n\
              pub fn {ident}(lua: &Lua) -> LuaResult<LuaTable> {{\n\
+             \x20   // The hook sets the {ident_upper} global BEFORE require() — the same\n\
+             \x20   // plain-global config pattern the DCS Studio bridge reads (DCS_BRIDGE).\n\
+             \x20   let config: Option<LuaTable> = lua.globals().get(\"{ident_upper}\").ok();\n\
+             \x20   let log_level: String = config\n\
+             \x20       .and_then(|t| t.get(\"log_level\").ok())\n\
+             \x20       .unwrap_or_else(|| \"info\".to_string());\n\
+             \x20   let verbose = log_level == \"debug\";\n\n\
              \x20   let exports = lua.create_table()?;\n\
              \x20   // Prove the load from Lua: print(require(\"{ident}\").version)\n\
              \x20   exports.set(\"version\", env!(\"CARGO_PKG_VERSION\"))?;\n\
+             \x20   // The effective level, so Lua can confirm what was honoured.\n\
+             \x20   exports.set(\"log_level\", log_level)?;\n\n\
+             \x20   // Lua-callable Rust. Returning Err raises a Lua error the caller\n\
+             \x20   // can pcall — error conversion stays on mlua's side of the line.\n\
+             \x20   // Verbose (log_level = \"debug\") appends the live frame count.\n\
+             \x20   let greet = lua.create_function(move |_, who: String| {{\n\
+             \x20       if who.is_empty() {{\n\
+             \x20           return Err(LuaError::runtime(\"greet: name must not be empty\"));\n\
+             \x20       }}\n\
+             \x20       if verbose {{\n\
+             \x20           return Ok(format!(\n\
+             \x20               \"Hello, {{who}} — from Rust (frame {{}})\",\n\
+             \x20               FRAMES.load(Ordering::Relaxed)\n\
+             \x20           ));\n\
+             \x20       }}\n\
+             \x20       Ok(format!(\"Hello, {{who}} — from Rust\"))\n\
+             \x20   }})?;\n\
+             \x20   exports.set(\"greet\", greet)?;\n\n\
+             \x20   // Pumped by the hook's onSimulationFrame; returns the frame count.\n\
+             \x20   // Keep per-frame work tiny: a slow frame here is a visible stutter.\n\
+             \x20   let on_frame =\n\
+             \x20       lua.create_function(|_, ()| Ok(FRAMES.fetch_add(1, Ordering::Relaxed) + 1))?;\n\
+             \x20   exports.set(\"on_frame\", on_frame)?;\n\n\
              \x20   Ok(exports)\n\
              }}\n"
         ),
@@ -323,6 +403,7 @@ fn rust_dll_lib_rs(name: &str, ident: &str) -> TemplateFile {
 }
 
 fn rust_dll_hook(name: &str, slug: &str, ident: &str) -> TemplateFile {
+    let ident_upper = ident.to_uppercase();
     TemplateFile::text(
         format!("Scripts/Hooks/{ident}_hook.lua"),
         format!(
@@ -331,12 +412,31 @@ fn rust_dll_hook(name: &str, slug: &str, ident: &str) -> TemplateFile {
              -- module (modelled on the DCS Studio bridge hook). Output lands in your\n\
              -- DCS log (Saved Games/DCS/Logs/dcs.log).\n\n\
              package.cpath = package.cpath .. \";\" .. lfs.writedir() .. \"Mods\\\\tech\\\\{slug}\\\\bin\\\\?.dll\"\n\n\
-             local ok, mod = pcall(require, \"{ident}\")\n\
-             if ok then\n\
-             \x20 log.write(\"{slug}\", log.INFO, \"loaded v\" .. tostring(mod.version))\n\
+             -- Read by the Rust side on require() for configuration — the same\n\
+             -- plain-global pattern the DCS Studio bridge uses (DCS_BRIDGE).\n\
+             {ident_upper} = {{ log_level = \"info\" }}\n\n\
+             local ok, {ident} = pcall(require, \"{ident}\")\n\
+             if not ok then\n\
+             \x20 log.write(\"{slug}\", log.ERROR, \"load failed: \" .. tostring({ident}))\n\
+             \x20 return\n\
+             end\n\
+             log.write(\"{slug}\", log.INFO, \"loaded v\" .. tostring({ident}.version))\n\n\
+             -- Load-time demo of a Lua-callable Rust function; errors stay in pcall.\n\
+             local greeted, greeting = pcall({ident}.greet, \"{slug}\")\n\
+             if greeted then\n\
+             \x20 log.write(\"{slug}\", log.INFO, tostring(greeting))\n\
              else\n\
-             \x20 log.write(\"{slug}\", log.ERROR, \"load failed: \" .. tostring(mod))\n\
-             end\n"
+             \x20 log.write(\"{slug}\", log.ERROR, \"greet failed: \" .. tostring(greeting))\n\
+             end\n\n\
+             local cb = {{}}\n\
+             function cb.onSimulationFrame()\n\
+             \x20 -- pcall per frame: a Lua error in one frame must never break the next.\n\
+             \x20 local fine, err = pcall({ident}.on_frame)\n\
+             \x20 if not fine then\n\
+             \x20   log.write(\"{slug}\", log.ERROR, \"on_frame: \" .. tostring(err))\n\
+             \x20 end\n\
+             end\n\
+             DCS.setUserCallbacks(cb)\n"
         ),
     )
 }
@@ -347,24 +447,42 @@ fn rust_dll_readme(name: &str, slug: &str, ident: &str) -> TemplateFile {
         format!(
             "# {name}\n\n\
              A DCS native Lua module (Rust cdylib via mlua), scaffolded by DCS Studio.\n\n\
+             ## Prerequisites\n\n\
+             - Rust via <https://rustup.rs> — no extra `rustup target` needed; the\n\
+             \x20 host x86_64 Windows target builds the DLL DCS loads.\n\
+             - On Windows, the MSVC toolchain (Visual Studio Build Tools with the\n\
+             \x20 \"Desktop development with C++\" workload).\n\n\
              ## Build\n\n\
              ```\n\
              cargo build --release\n\
              ```\n\n\
              Produces `target/release/{ident}.dll`.\n\n\
-             ## Deploy\n\n\
-             Install rules in `dcs-studio.toml` copy the DLL to\n\
-             `{{SavedGames}}/Mods/tech/{slug}/bin` and the GameGUI hook to\n\
-             `{{SavedGames}}/Scripts/Hooks`. Apply them with DCS Studio's install\n\
-             action or `dcs-studio-cli install`.\n\n\
-             ## The LUA_LIB footgun\n\n\
-             `.cargo/config.toml` pins `LUA_LIB` / `LUA_LIB_NAME` so the DLL links\n\
-             against DCS's own `lua.dll` (import library bundled in `lua5.1/`).\n\
-             Without it, cargo silently links `lua51.dll`: the build succeeds, but\n\
-             `require(\"{ident}\")` fails inside DCS, which ships `lua.dll`.\n\n\
+             ## Install\n\n\
+             `dcs-studio-cli install` (or DCS Studio's install action) applies the\n\
+             manifest's [[install]] rules: the DLL goes to\n\
+             `{{SavedGames}}/Mods/tech/{slug}/bin`, the GameGUI hook to\n\
+             `{{SavedGames}}/Scripts/Hooks`.\n\n\
+             ## How loading works\n\n\
+             At DCS start the hook appends the bin folder to `package.cpath`, then\n\
+             `require(\"{ident}\")` finds `{ident}.dll` and calls its exported\n\
+             `luaopen_{ident}` — generated by `#[mlua::lua_module]` from the `[lib]`\n\
+             name. Keep the lib name, the require string, and the DLL filename in\n\
+             sync, or the chain breaks at require.\n\n\
+             One footgun: `.cargo/config.toml` pins `LUA_LIB` / `LUA_LIB_NAME` so the\n\
+             DLL links against DCS's own `lua.dll` (import library bundled in\n\
+             `lua5.1/`). Without it, cargo silently links `lua51.dll`: the build\n\
+             succeeds, but `require(\"{ident}\")` fails inside DCS, which ships\n\
+             `lua.dll`.\n\n\
              ## Logs\n\n\
-             The hook logs under the `{slug}` tag in your DCS log:\n\
-             `Saved Games/DCS/Logs/dcs.log`.\n"
+             The hook logs under the `{slug}` tag via `log.write` into\n\
+             `Saved Games/DCS/Logs/dcs.log`: a load line, the greet demo, and any\n\
+             per-frame errors.\n\n\
+             ## Next steps\n\n\
+             - The hook already pumps `{ident}.on_frame()` every simulation frame —\n\
+             \x20 grow it from there, but keep per-frame work tiny.\n\
+             - Expose more Rust to Lua in `src/lib.rs` with `lua.create_function`;\n\
+             \x20 return `LuaResult` so errors raise in Lua instead of unwinding\n\
+             \x20 across the FFI line.\n"
         ),
     )
 }
@@ -401,6 +519,23 @@ mod tests {
         );
         assert!(main.path.contains("my-script-mod"));
         assert!(contents.contains("my_script_mod"));
+
+        // The README teaches the mission-environment realities.
+        let readme = text_of(&files, "README.md");
+        assert!(readme.contains("MissionScripting"));
+        assert!(readme.contains("dcs.log"));
+    }
+
+    #[test]
+    fn next_steps_guides_every_template() {
+        for id in ["blank", "lua-script", "rust-dll"] {
+            assert!(!next_steps(id).is_empty(), "next_steps empty for {id}");
+        }
+        assert!(next_steps("rust-dll").contains("cargo build"));
+        assert!(next_steps("rust-dll").contains("install"));
+        assert!(next_steps("lua-script").contains("check"));
+        assert!(next_steps("blank").contains("dcs-studio.toml"));
+        assert!(next_steps("nope").is_empty());
     }
 
     #[test]
@@ -422,6 +557,22 @@ mod tests {
         // which Cargo rejects as a package name.
         assert_eq!(cargo["package"]["name"].as_str(), Some("my_native_mod"));
 
+        // The lib glue exposes the Lua-facing surface the hook drives.
+        let lib_rs = text_of(&files, "src/lib.rs");
+        assert!(lib_rs.contains("pub fn my_native_mod"));
+        assert!(lib_rs.contains("\"greet\""));
+        assert!(lib_rs.contains("\"on_frame\""));
+        assert!(lib_rs.contains("AtomicU64"));
+        // The config global is READ at require(), not just set by the hook:
+        // log_level comes off the table, and verbose mode actually uses it.
+        assert!(lib_rs.contains("globals().get"));
+        assert!(lib_rs.contains("\"log_level\""));
+        assert!(lib_rs.contains("verbose"));
+        // No panic paths across the FFI line (the comment may say "unwrap",
+        // the code must not call it).
+        assert!(!lib_rs.contains("unwrap()"));
+        assert!(!lib_rs.contains("expect("));
+
         // The GameGUI hook satisfies our own engine, clean.
         let hook = text_of(&files, "Scripts/Hooks/my_native_mod_hook.lua");
         let parsed = dcs_lua_syntax::parser::parse(hook);
@@ -431,6 +582,22 @@ mod tests {
             parsed.diagnostics
         );
         assert!(hook.contains("require, \"my_native_mod\""));
+        // The lifecycle: config global, frame pump guarded by pcall, demo call.
+        // Hook and lib must reference the SAME global name, or the read above
+        // silently finds nil and the hook's table is decoration.
+        assert!(hook.contains("MY_NATIVE_MOD = { log_level = \"info\" }"));
+        assert!(lib_rs.contains("MY_NATIVE_MOD"));
+        let frame_cb = between(hook, "function cb.onSimulationFrame()", "\nend");
+        assert!(frame_cb.contains("pcall(my_native_mod.on_frame)"));
+        assert!(hook.contains("DCS.setUserCallbacks(cb)"));
+        assert!(hook.contains("pcall(my_native_mod.greet"));
+
+        // The README walks the whole bootstrap path.
+        let readme = text_of(&files, "README.md");
+        assert!(readme.contains("luaopen_my_native_mod"));
+        assert!(readme.contains("dcs.log"));
+        assert!(readme.contains("rustup"));
+        assert!(readme.contains("cargo build --release"));
 
         // The bundled import library is a genuine COFF archive.
         let lib = files
