@@ -69,6 +69,69 @@ test("switching projects with dirty tabs prompts once with the count; declining 
   expect(seen.message).toContain("2 files have unsaved changes");
 });
 
+test("declining re-arms the guard: a later switch still prompts and can proceed", async ({
+  page,
+}) => {
+  // Regression guard for the `switching` in-flight flag: the decline arm's
+  // early return must still clear it (the `finally`), or the first decline
+  // would wedge the app — every later switch/close would silently no-op.
+  await page.getByTestId("open-a").click();
+  await expect(editor(page)).toContainText('print("alpha")');
+  await editor(page).click();
+  await editor(page).fill('print("edited a")\n');
+  await expect(status(page)).toContainText("dirty: true");
+
+  const first = { prompted: false };
+  page.once("dialog", (dialog) => {
+    first.prompted = true;
+    void dialog.dismiss();
+  });
+  await page.getByTestId("switch-project").click();
+  await expect(status(page)).toContainText("root: proj-a");
+  await expect(status(page)).toContainText("tabs: 1");
+  expect(first.prompted).toBe(true);
+
+  // Second attempt, accepted this time: must prompt again and proceed.
+  const second = { prompted: false };
+  page.once("dialog", (dialog) => {
+    second.prompted = true;
+    void dialog.accept();
+  });
+  await page.getByTestId("switch-project").click();
+  await expect(status(page)).toContainText("root: proj-b");
+  await expect(status(page)).toContainText("tabs: 0");
+  expect(second.prompted).toBe(true);
+});
+
+test("with no confirm surface at all, a dirty switch is refused outright", async ({
+  page,
+}) => {
+  // model ConfirmDiscard: "with no confirm surface at all the answer is NO
+  // — unsaved work is never silently discarded". Strip window.confirm and
+  // prove the deny-by-default fallback aborts the switch.
+  await page.getByTestId("open-a").click();
+  await expect(editor(page)).toContainText('print("alpha")');
+  await editor(page).click();
+  await editor(page).fill('print("edited a")\n');
+  await expect(status(page)).toContainText("dirty: true");
+
+  await page.evaluate(() => {
+    (window as { confirm?: unknown }).confirm = undefined;
+  });
+  const seen = watchDialogs(page, /* accept */ true);
+  await page.getByTestId("switch-project").click();
+  // Force a later observable delta before asserting "nothing moved", so a
+  // not-yet-settled abort can't satisfy the root assertion transiently.
+  await page.getByTestId("open-b").click();
+  await expect(status(page)).toContainText("tabs: 2");
+
+  await expect(status(page)).toContainText("root: proj-a");
+  await expect(tab(page, "proj-a/a.lua")).toHaveAttribute("data-dirty", "true");
+  await tab(page, "proj-a/a.lua").click();
+  await expect(editor(page)).toContainText('print("edited a")');
+  expect(seen.prompted).toBe(false);
+});
+
 test("accepting the switch prompt proceeds and clears the tabs", async ({
   page,
 }) => {
