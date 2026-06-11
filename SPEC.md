@@ -1,7 +1,7 @@
 # dcs-lua-ls — language-engine specification
 
 Normative spec for the DCS-flavoured Lua language engine. Sections are
-numbered §1–§6 and cited from `CONFORMANCE/`, `PATTERNS.md`, and `decisions/`
+numbered §1–§7 and cited from `CONFORMANCE/`, `PATTERNS.md`, and `decisions/`
 as `SPEC.md §N`.
 
 ## §1 Scope
@@ -99,3 +99,51 @@ A later layer overrides an earlier layer's function signatures and `@type`
 declarations per symbol. `@class` fields merge additively; on a per-field
 conflict the later layer wins. This ordering is what makes hand-written
 refinements over generated stubs durable across regeneration.
+
+## §7 Formatter
+
+The formatter (`crates/dcs-lua-fmt`, decisions/006) prints one canonical
+shape for §2-dialect source. It is a printer over the §2/§3 front-end —
+never a second parser — and it MUST hold these invariants:
+
+- **Total or untouched.** `format` and `format_range` return either the
+  formatted text or `Err` carrying the parse diagnostics. Source with any
+  error-severity diagnostic is never partially formatted.
+- **Deterministic.** Output is a pure function of `(source, config)` — no
+  environment, clock, or iteration-order dependence.
+- **Idempotent.** `format(format(s)) == format(s)` byte-for-byte.
+- **Semantic-preserving.** Re-parsing the output MUST yield a tree
+  structurally identical to the input's, comparing spans-ignored and short
+  strings by decoded value. The formatter MUST verify this before
+  returning and yield the input unchanged on any mismatch. Statement
+  separators (`;`) are dropped, table `;` separators become `,`, paren-free
+  call sugar gains parentheses, and trailing commas are normalised — all
+  tree-neutral; a statement beginning with `(` is printed with a leading
+  `;` so separator dropping can never merge statements.
+- **Comment-preserving.** Every comment (line, long-bracket with its exact
+  level, `---` doc run) survives with verbatim text. A comment inside an
+  expression MAY move to the end of its statement's line. Blank-line runs
+  between statements survive capped at two; runs at file start/end and
+  block edges are dropped.
+- **Range formatting.** `format_range(source, byte_range, config)` widens
+  the range to the smallest run of whole statements in the deepest
+  statement-reachable block containing it (blocks inside expression-level
+  function literals widen to their enclosing statement) and MUST leave
+  every byte outside the spliced run identical.
+
+Config keys (`dcs-studio.toml` `[format]`, parsed by
+`crates/dcs-studio-project`; absent section or field → default):
+
+| Key | Values | Default |
+| --- | --- | --- |
+| `indent_width` | 1–16 | `4` |
+| `indent_style` | `"space"` \| `"tab"` | `"space"` |
+| `quote_style` | `"double"` \| `"single"` | `"double"` |
+| `max_width` | columns | `100` |
+| `trailing_comma` | `"multiline"` \| `"never"` | `"multiline"` |
+
+The house style (spacing, quoting, wrapping, blank-line rules) is pinned in
+decisions/006 and exercised by `CONFORMANCE/format/` goldens: `name.lua`
+(input) → `name.formatted.lua` (hand-written expected output, default
+config). Every golden's expected output MUST itself be a fixed point of the
+formatter.
