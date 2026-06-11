@@ -64,6 +64,7 @@ impl Backend {
 
     async fn publish(&self, batches: Vec<(Url, Vec<Diagnostic>)>) {
         for (uri, diagnostics) in batches {
+            tracing::debug!(%uri, count = diagnostics.len(), "publishDiagnostics");
             self.client
                 .publish_diagnostics(uri, diagnostics, None)
                 .await;

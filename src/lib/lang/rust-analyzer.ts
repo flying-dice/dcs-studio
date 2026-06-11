@@ -59,7 +59,9 @@ let hostConnectionSeq = 0;
 async function connectViaHost(): Promise<LspClient> {
   const program = await invoke<string>("rust_analyzer_path");
   hostConnectionSeq += 1;
-  return LspClient.start(`rust-analyzer#${hostConnectionSeq}`, program, []);
+  // `:`-separated, NOT `#`: the id becomes a Tauri event name
+  // (`lsp://message/<id>`) and Tauri rejects `#`, making listen() throw.
+  return LspClient.start(`rust-analyzer:${hostConnectionSeq}`, program, []);
 }
 
 /** Production Cargo.toml probe through the backend fs commands. */

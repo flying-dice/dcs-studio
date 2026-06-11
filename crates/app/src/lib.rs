@@ -12,10 +12,13 @@ mod todos_cmd;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Logs to stderr (visible in the `tauri dev` terminal); tune with
-    // `DCS_LOG=debug`. Hosted language servers' stderr is folded in here too.
-    dcs_studio_project::logging::init("info");
-    tracing::info!("dcs-studio app starting");
+    // Logs to stderr (visible in the `tauri dev` terminal) AND to a file on
+    // disk so traces survive the session; tune with `DCS_LOG=debug`. Hosted
+    // language servers' stderr is folded into these events too, so one file
+    // holds the whole picture.
+    let log_path = dcs_studio_project::logging::default_log_path();
+    dcs_studio_project::logging::init_to_file("info", &log_path);
+    tracing::info!(log = %log_path.display(), "dcs-studio app starting");
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())

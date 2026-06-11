@@ -47,11 +47,15 @@ const PUBLISH_TIMEOUT_MS = 3000;
 let hostConnectionSeq = 0;
 
 /** Production connection: ask the backend for the lua-analyzer binary, host
- * it as a standalone process — exactly how rust-analyzer is hosted. */
+ * it as a standalone process — exactly how rust-analyzer is hosted.
+ *
+ * The connection id is `:`-separated, NOT `#`: it becomes a Tauri event name
+ * (`lsp://message/<id>`), and Tauri only permits alphanumerics + `-/:_` — a
+ * `#` makes `listen()` throw and the server never connects. */
 async function connectViaHost(): Promise<LspClient> {
   const program = await invoke<string>("lua_analyzer_path");
   hostConnectionSeq += 1;
-  return LspClient.start(`dcs-lua#${hostConnectionSeq}`, program, []);
+  return LspClient.start(`dcs-lua:${hostConnectionSeq}`, program, []);
 }
 
 export class LuaAnalyzerProvider implements LanguageProvider {
