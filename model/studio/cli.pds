@@ -39,8 +39,7 @@ public container Cli for studio::core::Studio {
     return Ok(root.value)
   }
 
-  /// Whether a template id is registered (lua-script-mod today; the Rust
-  /// DLL mod joins with issue #6 R1).
+  /// Whether a template id is registered (lua-script, rust-dll, blank).
   HasTemplate(template: string): bool;
 
   /// Render a template's file set, substituting the project name.
@@ -60,11 +59,45 @@ public container Cli for studio::core::Studio {
     return errors
   }
 
+  /// Build the project at `root` through the same flow as the IDE's Build
+  /// action (studio::build::Builder): cargo's exit code for Rust projects,
+  /// zero for no-op builds, nonzero when the toolchain is missing or the
+  /// build fails.
+  #[manual]
+  public Build(root: string): number {
+    built = Result<studio::build::BuildOutcome, studio::files::IoError> from studio::build::Builder.RunBuild(root)
+    if (built.isErr) {
+      return 1
+    }
+    return built.value.exitCode
+  }
+
+  /// Install the project at `root` per its dcs-studio.toml [[install]]
+  /// rules. Agents pass the Saved Games write dir explicitly; root
+  /// resolution honours it over auto-detection.
+  #[manual]
+  public Install(root: string, savedGames: string): Result<studio::installer::InstallReport, studio::files::IoError> {
+    installed = Result<studio::installer::InstallReport, studio::files::IoError> from studio::installer::Installer.InstallProject(root)
+    if (installed.isErr) {
+      return Err(installed.error)
+    }
+    return Ok(installed.value)
+  }
+
   /// Every .lua / .d.lua under the root, skipping vendor/VCS directories.
   CollectSources(root: string): dcslua::SourceUnit[];
 
   /// Error-severity findings in the list.
   CountErrors(findings: syntax::Diagnostic[]): number;
+}
+
+/// Scaffolding never clobbers an existing folder (the app's New Project
+/// flow delegates here too).
+feature InitRefusesOverwrite for studio::cli::Cli {
+  given "a folder already exists at <parent>/<name>"
+  when "init is run with that template, parent, and name"
+  then "it fails with an 'already exists' error"
+  and "the existing folder is untouched"
 }
 
 /// An agent bootstraps and validates a mod without the app.
@@ -81,4 +114,12 @@ feature OneEngineEverySurface for studio::cli::Cli {
   given "a workspace with one broken Lua file"
   when "it is analysed via check, via the MCP check tool, and via the LSP"
   then "all three report the same finding with the same code and span"
+}
+
+/// An agent builds and deploys a mod without the app or the IDE.
+feature AgentBuildsAndInstallsHeadless for studio::cli::Cli {
+  given "a rust-dll project and only the dcs-studio-cli binary"
+  when "an agent runs build then install with an explicit write dir"
+  then "cargo builds the DLL and the exit code gates success"
+  and "the manifest rules place the artifacts under the write dir"
 }

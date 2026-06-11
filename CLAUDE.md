@@ -45,6 +45,8 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | `model/studio/files.pds` | `WorkspaceFs` — fs commands, project scaffolding (`crates/app/src/fs.rs`) |
 | `model/studio/link.pds` | `DcsLink` heartbeat + `BridgeClient` (`crates/app/src/dcs.rs`, `crates/dcs-bridge-client`) |
 | `model/studio/inject.pds` | `Injector` — bridge DLL/hook install (`crates/app/src/inject.rs`) |
+| `model/studio/build.pds` | `Builder` — toolchain detection + cargo build with streamed output (issue #6 R1) |
+| `model/studio/installer.pds` | `Installer` — manifest-driven `[[install]]` deploy to SavedGames/GameInstall roots (issue #6 R1) |
 | `model/studio/mission.pds` | `MissionScripting` sanitization manager (`crates/app/src/mission.rs`) |
 | `model/studio/lang.pds` | `LanguageIntel` provider layer + `DcsLua` embedded engine face (`src/lib/lang/`) |
 | `model/dcslua.pds` | `DcsLuaLs` engine system root |
@@ -85,9 +87,20 @@ two ways behind one `LanguageProvider` contract:
   commit). Same dual-path convention as `dcs-ws.ts`.
 
 **dcs-studio-cli is the agent surface**: `lsp` and `mcp` (tools:
-`init_project`, `check`) over stdio, plus direct `init` / `check`
-subcommands — an agent needs no Tauri app. rust-analyzer joins as the
-second hosted server with issue #6 R2.
+`init_project`, `check`, `build`) over stdio, plus direct `init` /
+`check` / `build` / `install` subcommands — an agent needs no Tauri
+app. rust-analyzer joins as the second hosted server with issue #6 R2.
+
+Project tooling lives in **`crates/dcs-studio-project`** (the shared kit
+both the CLI and the app consume): templates — `blank`, `lua-script`,
+and `rust-dll` (an mlua cdylib mod generalising `crates/dcs-bridge`,
+vendored `lua5.1/lua.lib` included as bytes; the `.cargo/config.toml`
+`LUA_LIB` pin guards the silent wrong-DLL footgun) — plus scaffolding,
+`dcs-studio.toml` manifest parsing, `[[install]]`-rule deploys against
+the named roots, Saved Games detection, and toolchain probing.
+`src/lib/templates.ts` is UI metadata only; file contents render in Rust.
+The Output panel hosts the cargo build runner (`build://output` /
+`build://done` events, one build at a time).
 
 Engine governance lives in this repo:
 `SPEC.md` (dialect, diagnostic registry, annotations, profiles, `.d.lua`

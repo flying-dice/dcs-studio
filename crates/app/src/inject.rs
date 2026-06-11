@@ -98,6 +98,14 @@ pub fn dcs_detect_installs() -> Vec<DcsInstall> {
     installs
 }
 
+/// The `{SavedGames}` root for manifest installs: the shared scan's pick
+/// (plain `DCS` preferred, then `DCS.openbeta`, then other variants),
+/// kept only if it looks like a genuine write dir (has a `Config` subdir
+/// — the same validity marker `dcs_detect_installs` uses).
+pub fn default_write_dir() -> Option<PathBuf> {
+    dcs_studio_project::detect::default_saved_games().filter(|dir| dir.join("Config").is_dir())
+}
+
 fn status_for(write_dir: &str) -> InjectionStatus {
     let dll_dest = Path::new(write_dir).join(DLL_REL);
     let hook_dest = Path::new(write_dir).join(HOOK_REL);

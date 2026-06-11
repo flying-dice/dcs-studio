@@ -1,0 +1,13 @@
+[package]
+name = "dcs-studio-project"
+version.workspace = true
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+dcs-lua-syntax = { path = "../dcs-lua-syntax" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+walkdir = "2"

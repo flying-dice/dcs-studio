@@ -135,7 +135,10 @@ pub async fn dcs_call(
         .get()
         .cloned()
         .ok_or_else(|| "DCS link not started".to_string())?;
-    client.call(&method, params).await.map_err(|e| e.to_string())
+    client
+        .call(&method, params)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Snapshot of the link state, for late-mounting frontends that missed events.

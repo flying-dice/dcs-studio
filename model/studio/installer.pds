@@ -1,0 +1,69 @@
+//! studio::installer — deploys any project per its dcs-studio.toml
+//! [[install]] rules, generalising the bridge-only Injection Manager:
+//! the manifest says what goes where; the installer resolves the roots.
+
+/// One [[install]] mapping: a project-relative source copied to a
+/// root-anchored destination ({SavedGames}/..., {GameInstall}/...).
+public data InstallRule { source: string, dest: string }
+
+/// What an install run did.
+public data InstallReport { copied: number }
+
+/// The named roots install destinations anchor to.
+public data RootMap { savedGames: string, gameInstall: string }
+
+/// Manifest-driven install service shared by the IDE's Install action and
+/// the CLI `install` subcommand.
+public container Installer for studio::core::Studio {
+  /// Apply every [[install]] rule of the project at `root`: read the
+  /// manifest, resolve the named roots, copy rule by rule. A manifest
+  /// without rules is an error — there is nothing to install.
+  #[manual]
+  public InstallProject(root: string): Result<studio::installer::InstallReport, studio::files::IoError> {
+    rules = studio::installer::InstallRule[] from self.ReadManifestRules(root)
+    declared = bool from self.HasRules(rules)
+    if (!declared) {
+      nothing = studio::files::IoError from { root }
+      return Err(nothing)
+    }
+    roots = studio::installer::RootMap from self.ResolveRoots()
+    for (rule in rules) {
+      applied = Result<number, studio::files::IoError> from self.ApplyRule(rule, roots)
+      if (applied.isErr) {
+        return Err(applied.error)
+      }
+    }
+    report = studio::installer::InstallReport from { rules }
+    return Ok(report)
+  }
+
+  /// Parse the [[install]] tables out of dcs-studio.toml.
+  ReadManifestRules(root: string): studio::installer::InstallRule[];
+
+  /// Whether the manifest declares at least one install rule.
+  HasRules(rules: studio::installer::InstallRule[]): bool;
+
+  /// {SavedGames} from the detected DCS write dir, {GameInstall} from the
+  /// detected game install.
+  ResolveRoots(): studio::installer::RootMap;
+
+  /// Copy one rule's source to its resolved destination, creating dirs on
+  /// demand; returns the number of files copied.
+  ApplyRule(rule: studio::installer::InstallRule, roots: studio::installer::RootMap): Result<number, studio::files::IoError>;
+}
+
+/// The manifest, not the app, decides what installs where.
+feature ManifestDrivenInstall for studio::installer::Installer {
+  given "a project whose dcs-studio.toml declares [[install]] rules"
+  when "the project is installed"
+  then "each rule's source is copied to its named root destination"
+  and "the report counts the files copied"
+}
+
+/// A rust-dll mod deploys like the bridge does.
+feature RustDllModInstalls for studio::installer::Installer {
+  given "a rust-dll project with a built DLL and a GameGUI hook"
+  when "the project is installed"
+  then "the DLL lands under Mods/tech in the Saved Games write dir"
+  and "the hook lands under Scripts/Hooks"
+}

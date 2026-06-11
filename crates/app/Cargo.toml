@@ -25,6 +25,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 dcs-bridge-client = { path = "../dcs-bridge-client" }
+dcs-studio-project = { path = "../dcs-studio-project" }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

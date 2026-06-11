@@ -1,7 +1,9 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod build;
 mod dcs;
 mod fs;
 mod inject;
+mod install_cmd;
 mod lsp;
 mod mission;
 
@@ -12,6 +14,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(dcs::DcsState::default())
         .manage(lsp::LspHosts::default())
+        .manage(build::BuildState::default())
         .setup(|app| {
             dcs::start(app.handle().clone());
             Ok(())
@@ -29,7 +32,10 @@ pub fn run() {
             fs::write_text_file,
             fs::basename,
             fs::path_exists,
-            fs::create_project,
+            fs::create_project_from_template,
+            build::build_project,
+            build::toolchain_status,
+            install_cmd::install_project,
             dcs::dcs_call,
             dcs::dcs_status,
             inject::dcs_detect_installs,

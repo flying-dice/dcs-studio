@@ -25,8 +25,8 @@ rust:
   cache: *rust-cache
   script:
     - rustup component add clippy
-    - cargo test -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-cli
-    - cargo clippy -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-cli --all-targets -- -D warnings
+    - cargo test -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli
+    - cargo clippy -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli --all-targets -- -D warnings
 
 web:
   stage: test
