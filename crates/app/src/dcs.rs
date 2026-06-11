@@ -1,5 +1,9 @@
 // Live editor↔DCS link: owns the dcs-bridge-client WebSocket client and drives
-// the heartbeat that the frontend status bar listens to.
+// the heartbeat that the frontend status bar listens to. The shared link state
+// (client handle, sim-running, latency) lives in studio-services' LinkShared
+// (issue #8) so the headless MCP server reuses the exact same guards; this
+// module keeps the Tauri-specific parts — the event emits and the heartbeat
+// schedule.
 //
 // Two independent signals:
 // - "connected"  = the WS handshake to the in-DCS actix server is up. Sourced
@@ -12,40 +16,22 @@
 //   `DCS.getModelTime()` advances past 0 — so we derive sim-running from the
 //   pong's `dcs_time`, NOT from whether the ping succeeded. Via `dcs://heartbeat`.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Instant;
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
 use dcs_bridge_client::client::DcsClient;
 use dcs_bridge_client::protocol::{PongResult, METHOD_PING};
+use studio_services::link::{LinkShared, DCS_WS_URL, HEARTBEAT_INTERVAL, PING_TIMEOUT};
 
-const DCS_WS_URL: &str = "ws://127.0.0.1:25569/ws";
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2);
-/// Per-ping guard so a stalled bridge can't wedge the heartbeat loop. The
-/// bridge answers from boot (menu included), so this rarely fires while connected.
-const PING_TIMEOUT: Duration = Duration::from_secs(3);
-/// Sentinel for "no latency measured yet".
-const LATENCY_UNKNOWN: u32 = u32::MAX;
-
-/// Managed by Tauri. The client is filled in by [`start`] (it must be created
-/// on the async runtime), so commands treat it as optional until then.
+/// Managed by Tauri: a wrapper over the shared link state. The client is
+/// filled in by [`start`] (it must be created on the async runtime), so
+/// commands treat it as optional until then.
+#[derive(Default)]
 pub struct DcsState {
-    client: OnceLock<DcsClient>,
-    sim_running: Arc<AtomicBool>,
-    latency_ms: Arc<AtomicU32>,
-}
-
-impl Default for DcsState {
-    fn default() -> Self {
-        DcsState {
-            client: OnceLock::new(),
-            sim_running: Arc::new(AtomicBool::new(false)),
-            latency_ms: Arc::new(AtomicU32::new(LATENCY_UNKNOWN)),
-        }
-    }
+    link: Arc<LinkShared>,
 }
 
 /// Connect the client and spawn the connection watcher + heartbeat tasks.
@@ -57,9 +43,8 @@ pub fn start(app: AppHandle) {
         let client = DcsClient::connect(DCS_WS_URL);
 
         let state = app.state::<DcsState>();
-        let sim_running = state.sim_running.clone();
-        let latency_ms = state.latency_ms.clone();
-        let _ = state.client.set(client.clone());
+        let link = state.link.clone();
+        link.init_client(client.clone());
 
         // Connection watcher: relay WS up/down to the frontend. The first
         // iteration emits the current state once at startup.
@@ -88,8 +73,7 @@ pub fn start(app: AppHandle) {
         loop {
             ticker.tick().await;
             if !client.is_connected() {
-                sim_running.store(false, Ordering::Relaxed);
-                latency_ms.store(LATENCY_UNKNOWN, Ordering::Relaxed);
+                link.record_heartbeat(false, None);
                 continue;
             }
 
@@ -103,8 +87,7 @@ pub fn start(app: AppHandle) {
                     // The bridge pongs at the main menu too; a mission is only
                     // live once DCS.getModelTime() (dcs_time) advances past 0.
                     let sim = dcs_time > 0.0;
-                    sim_running.store(sim, Ordering::Relaxed);
-                    latency_ms.store(ms, Ordering::Relaxed);
+                    link.record_heartbeat(sim, Some(ms));
                     let _ = app.emit(
                         "dcs://heartbeat",
                         &json!({ "sim_running": sim, "latency_ms": ms, "dcs_time": dcs_time }),
@@ -113,8 +96,7 @@ pub fn start(app: AppHandle) {
                 // No pong within the guard (or a call error): bridge not
                 // answering. Still connected at the WS layer.
                 Ok(Err(_)) | Err(_) => {
-                    sim_running.store(false, Ordering::Relaxed);
-                    latency_ms.store(LATENCY_UNKNOWN, Ordering::Relaxed);
+                    link.record_heartbeat(false, None);
                     let _ = app.emit("dcs://heartbeat", &json!({ "sim_running": false }));
                 }
             }
@@ -129,29 +111,11 @@ pub async fn dcs_call(
     method: String,
     params: Option<Value>,
 ) -> Result<Value, String> {
-    let client = state
-        .client
-        .get()
-        .cloned()
-        .ok_or_else(|| "DCS link not started".to_string())?;
-    client
-        .call(&method, params)
-        .await
-        .map_err(|e| e.to_string())
+    state.link.call(&method, params).await
 }
 
 /// Snapshot of the link state, for late-mounting frontends that missed events.
 #[tauri::command]
 pub fn dcs_status(state: tauri::State<'_, DcsState>) -> Value {
-    let connected = state
-        .client
-        .get()
-        .map(|c| c.is_connected())
-        .unwrap_or(false);
-    let latency = state.latency_ms.load(Ordering::Relaxed);
-    json!({
-        "connected": connected,
-        "sim_running": state.sim_running.load(Ordering::Relaxed),
-        "latency_ms": if latency == LATENCY_UNKNOWN { Value::Null } else { json!(latency) },
-    })
+    state.link.status()
 }
