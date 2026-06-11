@@ -57,7 +57,10 @@ public container Cli for studio::core::Studio {
   PrintNextSteps(template: string): void;
 
   /// Analyse a workspace and print findings; the exit code is the number
-  /// of error-severity findings, so agents and CI can gate on it.
+  /// of error-severity findings, so agents and CI can gate on it. A
+  /// nonexistent root is an error, never a clean workspace — analysing
+  /// nothing must not gate as success; an empty-but-existing root is
+  /// legitimately clean.
   #[manual]
   public Check(root: string): number {
     files = dcslua::SourceUnit[] from self.CollectSources(root)

@@ -45,6 +45,7 @@ enum Command {
         parent: PathBuf,
     },
     /// Analyse a workspace; the exit code is the error-finding count.
+    /// A nonexistent root is an error, never a clean workspace.
     Check {
         /// Workspace root to analyse.
         #[arg(default_value = ".")]
@@ -108,6 +109,14 @@ fn main() -> ExitCode {
             }
         },
         Command::Check { root } => {
+            // A root that does not exist (or is not a directory) is an
+            // error, never a clean workspace — analysing nothing must not
+            // exit 0 (model: `studio::cli::Cli.Check`). An empty-but-
+            // existing dir stays clean: a blank project has no findings.
+            if !root.is_dir() {
+                eprintln!("check: '{}' does not exist", root.display());
+                return ExitCode::FAILURE;
+            }
             let report = check::run(&root);
             print!("{}", report.rendered);
             // Exit codes above 100 are reserved for runner failures.
