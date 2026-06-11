@@ -1,5 +1,7 @@
 <script lang="ts">
   import { app } from "$lib/state.svelte";
+  import { build } from "$lib/build.svelte";
+  import { installer } from "$lib/install.svelte";
   import { EDITOR_THEMES, editorThemeById } from "$lib/themes";
   import { fileIconFor } from "$lib/file-icons";
   import FileIcon from "$lib/components/FileIcon.svelte";
@@ -43,6 +45,8 @@
     Moon,
     Search,
     Hammer,
+    PackageCheck,
+    PackageMinus,
     Play,
     Bug,
     Settings,
@@ -50,6 +54,7 @@
     Syringe,
     ShieldOff,
     FileCode,
+    LoaderCircle,
     type LucideIcon,
   } from "@lucide/svelte";
 
@@ -150,12 +155,15 @@
     { label: "Help", items: [{ label: "About DCS Studio" }] },
   ];
 
-  // Top-right IDE controls.
+  // Top-right IDE controls (placeholder, no actions wired yet).
   const controls: { icon: LucideIcon; label: string }[] = [
-    { icon: Hammer, label: "Build" },
     { icon: Play, label: "Run" },
     { icon: Bug, label: "Debug" },
   ];
+
+  function openOutput() {
+    app.bottomTool = "output";
+  }
 
   // Global Save shortcut — works regardless of editor focus.
   function onKeydown(e: KeyboardEvent) {
@@ -226,6 +234,35 @@
 {/snippet}
 
 <!-- A top-right toolbar control: icon button with a tooltip. -->
+{#snippet actionBtn(
+  Icon: LucideIcon,
+  label: string,
+  onclick: () => void,
+  disabled: boolean,
+  loading: boolean,
+)}
+  <Tooltip.Root>
+    <Tooltip.Trigger>
+      {#snippet child({ props })}
+        <Button
+          {...props}
+          variant="ghost"
+          size="icon-sm"
+          class="text-muted-foreground hover:text-foreground"
+          aria-label={label}
+          {onclick}
+          {disabled}
+        >
+          {#if loading}<LoaderCircle class="animate-spin" />{:else}<Icon />{/if}
+        </Button>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Tooltip.Content side="bottom" class="font-mono text-[11px] tracking-wide">
+      {label}
+    </Tooltip.Content>
+  </Tooltip.Root>
+{/snippet}
+
 {#snippet headerBtn(Icon: LucideIcon, label: string)}
   <Tooltip.Root>
     <Tooltip.Trigger>
@@ -294,9 +331,28 @@
         {/if}
       </div>
 
-      <!-- Top-right controls: Search · Build/Run/Debug · Quick settings -->
+      <!-- Top-right controls: Search · Build/Install/Uninstall · Run/Debug · Quick settings -->
       <div class="flex items-center gap-0.5">
         {@render headerBtn(Search, "Search")}
+        <Separator orientation="vertical" class="mx-1 !h-4" />
+        {@render actionBtn(
+          Hammer, "Build",
+          () => { if (app.rootPath) { void build.start(app.rootPath); openOutput(); } },
+          build.running || !app.rootPath,
+          build.running,
+        )}
+        {@render actionBtn(
+          PackageCheck, "Install",
+          () => { if (app.rootPath) { void installer.install(app.rootPath); openOutput(); } },
+          installer.installing || !app.rootPath,
+          installer.installing,
+        )}
+        {@render actionBtn(
+          PackageMinus, "Uninstall",
+          () => { if (app.rootPath) { void installer.uninstall(app.rootPath); openOutput(); } },
+          installer.uninstalling || !app.rootPath || !installer.status?.installed,
+          installer.uninstalling,
+        )}
         <Separator orientation="vertical" class="mx-1 !h-4" />
         {#each controls as c (c.label)}
           {@render headerBtn(c.icon, c.label)}

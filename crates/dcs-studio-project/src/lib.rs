@@ -24,7 +24,7 @@ pub mod todos;
 pub mod toolchain;
 
 pub use detect::default_saved_games;
-pub use install::{InstallReport, RootMap};
+pub use install::{InstallReport, InstallStatus, RootMap, UninstallReport};
 pub use manifest::{InstallRule, Manifest, ProjectMeta};
 pub use process::quiet_command;
 pub use templates::{TemplateContents, TemplateFile};

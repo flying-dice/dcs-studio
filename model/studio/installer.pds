@@ -7,7 +7,13 @@
 public data InstallRule { source: string, dest: string }
 
 /// What an install run did.
-public data InstallReport { copied: number }
+public data InstallReport { copied: number, files: string[] }
+
+/// What an uninstall run did.
+public data UninstallReport { removed: number, files: string[] }
+
+/// Whether the project's deployed files are present and current.
+public data InstallStatus { installed: bool, upToDate: bool }
 
 /// The named roots install destinations anchor to.
 public data RootMap { savedGames: string, gameInstall: string }
@@ -50,6 +56,44 @@ public container Installer for studio::core::Studio {
   /// Copy one rule's source to its resolved destination, creating dirs on
   /// demand; returns the number of files copied.
   ApplyRule(rule: studio::installer::InstallRule, roots: studio::installer::RootMap): Result<number, studio::files::IoError>;
+
+  /// Check whether the project's deployed files are present and match their
+  /// sources. `installed` is true if any dest file exists; `upToDate` is
+  /// true if every dest file exists and its content matches the source.
+  /// A missing source marks the rule as not up to date.
+  #[manual]
+  public StatusProject(root: string): Result<studio::installer::InstallStatus, studio::files::IoError> {
+    rules = studio::installer::InstallRule[] from self.ReadManifestRules(root)
+    if (!self.HasRules(rules)) {
+      return Ok({ installed: false, upToDate: false })
+    }
+    roots = studio::installer::RootMap from self.ResolveRoots()
+    status = studio::installer::InstallStatus from self.CheckRules(rules, roots)
+    return Ok(status)
+  }
+
+  /// Remove every file that the project's [[install]] rules would have
+  /// placed at its resolved destination. File rules work from the source
+  /// filename alone; directory rules require the source tree to still exist.
+  #[manual]
+  public UninstallProject(root: string): Result<studio::installer::UninstallReport, studio::files::IoError> {
+    rules = studio::installer::InstallRule[] from self.ReadManifestRules(root)
+    roots = studio::installer::RootMap from self.ResolveRoots()
+    for (rule in rules) {
+      removed = Result<number, studio::files::IoError> from self.RemoveRule(rule, roots)
+      if (removed.isErr) {
+        return Err(removed.error)
+      }
+    }
+    report = studio::installer::UninstallReport from { rules }
+    return Ok(report)
+  }
+
+  /// Compare every dest file for a rule against its source.
+  CheckRules(rules: studio::installer::InstallRule[], roots: studio::installer::RootMap): studio::installer::InstallStatus;
+
+  /// Delete the dest file(s) for one rule.
+  RemoveRule(rule: studio::installer::InstallRule, roots: studio::installer::RootMap): Result<number, studio::files::IoError>;
 }
 
 /// The manifest, not the app, decides what installs where.

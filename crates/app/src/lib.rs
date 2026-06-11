@@ -41,6 +41,8 @@ pub fn run() {
             build::toolchain_status,
             build::rust_analyzer_path,
             install_cmd::install_project,
+            install_cmd::install_status,
+            install_cmd::uninstall_project,
             dcs::dcs_call,
             dcs::dcs_status,
             inject::dcs_detect_installs,
