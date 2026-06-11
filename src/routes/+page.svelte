@@ -10,6 +10,7 @@
   import MissionScriptingManager from "$lib/components/MissionScriptingManager.svelte";
   import Problems from "$lib/components/Problems.svelte";
   import Editor from "$lib/components/Editor.svelte";
+  import EditorTabs from "$lib/components/EditorTabs.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
   import { lang } from "$lib/lang/intel.svelte";
   import { cn } from "$lib/utils.js";
@@ -33,7 +34,6 @@
     TriangleAlert,
     ScrollText,
     FolderOpen,
-    X,
     Boxes,
     Sun,
     Moon,
@@ -93,7 +93,7 @@
         { label: "New File", shortcut: "⌘N" },
         { label: "Save", shortcut: "⌘S", action: () => app.saveFile() },
         { sep: true },
-        { label: "Close Editor", action: () => app.openFile("", "") },
+        { label: "Close Editor", action: () => app.closeActiveFile() },
         { label: "Close Project", action: () => app.closeProject() },
       ],
     },
@@ -384,29 +384,8 @@
 
         <!-- CENTER island: tab strip as the head, editor as the body. -->
         <Card class="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-0 rounded-xl py-0">
-          <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border/60 px-2">
-            {#if app.filePath}
-              <div class="flex h-7 items-center gap-2 rounded-md bg-muted pl-2.5 pr-1 text-xs">
-                {#if app.dirty}
-                  <span class="size-1.5 rounded-full bg-primary" title="Unsaved changes"></span>
-                {/if}
-                <FileIcon name={fileIconFor(app.fileName)} class="size-4" />
-                <span class="text-foreground">{app.fileName}</span>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  class="text-muted-foreground hover:text-foreground"
-                  title="Close"
-                  onclick={() => app.openFile("", "")}
-                >
-                  <X />
-                </Button>
-              </div>
-            {:else}
-              <span class="pl-2 font-mono text-[11px] tracking-wide text-muted-foreground">
-                no file open
-              </span>
-            {/if}
+          <div class="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-border/60 px-2">
+            <EditorTabs />
           </div>
           <div class="min-h-0 flex-1">
             {#if app.filePath}

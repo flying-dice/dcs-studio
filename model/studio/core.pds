@@ -9,9 +9,11 @@ public person Developer;
 /// How many recent projects the welcome screen keeps.
 public constant RECENTS_MAX = 8
 
-/// The active editor document. `savedText` is the on-disk baseline; it
-/// diverges from `text` while there are unsaved edits.
-public data Document { path: string, text: string, savedText: string }
+/// One open editor tab. Each tab owns its own buffer — text, undo history,
+/// selection, scroll — so no edit or undo in one tab can ever leak into
+/// another. `savedText` is the on-disk baseline; it diverges from `text`
+/// while there are unsaved edits (the tab is dirty).
+public data Document { path: string, name: string, text: string, savedText: string }
 
 /// A recently opened project, persisted to localStorage (most recent first).
 public data RecentProject { path: string, name: string, openedAt: datetime }
@@ -77,26 +79,82 @@ public container Workbench for studio::core::Studio {
     return Ok(entries.value)
   }
 
-  /// Open a file into the editor; the dirty baseline resets to the loaded text.
+  /// Open a file into the editor. An already-open tab is re-activated as-is
+  /// (its pending edits and undo history intact); otherwise the file is read
+  /// from disk into a fresh tab — with an empty undo history, so the load
+  /// itself is never undoable — appended to the tab strip, and activated.
   #[manual]
   public OpenFile(path: string): Result<studio::core::Document, studio::files::IoError> {
+    existing = Option<studio::core::Document> from self.FindOpen(path)
+    if (existing.isSome) {
+      self.ActivateTab(existing.value)
+      return Ok(existing.value)
+    }
     text = Result<string, studio::files::IoError> from studio::files::WorkspaceFs.ReadTextFile(path)
     if (text.isErr) {
       return Err(text.error)
     }
     doc = studio::core::Document from { path, text.value }
+    self.AppendTab(doc)
+    self.ActivateTab(doc)
     return Ok(doc)
   }
 
-  /// Persist the active document; a clean buffer is a no-op.
+  /// The already-open tab for `path`, if any — opening never duplicates tabs.
+  FindOpen(path: string): Option<studio::core::Document>;
+
+  /// Append a fresh tab to the end of the tab strip.
+  AppendTab(doc: studio::core::Document): void;
+
+  /// Make `doc` the active tab: park the outgoing tab's whole buffer
+  /// (pending edits, undo history, selection, scroll) and restore `doc`'s
+  /// own. Another file's text is never spliced into the current buffer, so
+  /// undo can never resurrect a different file's content.
+  ActivateTab(doc: studio::core::Document): void;
+
+  /// The currently focused tab, if any file is open.
+  ActiveTab(): Option<studio::core::Document>;
+
+  /// Close a tab. A dirty tab needs the developer's confirmation before its
+  /// edits are discarded; closing the active tab activates a neighbour, and
+  /// closing the last tab returns to the no-file-open state.
   #[manual]
-  public SaveFile(doc: studio::core::Document): void {
-    dirty = bool from doc.text != doc.savedText
+  public CloseFile(path: string): void {
+    tab = Option<studio::core::Document> from self.FindOpen(path)
+    if (tab.isNone) {
+      return
+    }
+    dirty = bool from tab.value.text != tab.value.savedText
+    if (dirty) {
+      confirmed = bool from self.ConfirmDiscard(tab.value)
+      if (!confirmed) {
+        return
+      }
+    }
+    self.RemoveTab(tab.value)
+  }
+
+  /// Ask the developer to confirm discarding a dirty tab's unsaved edits.
+  ConfirmDiscard(doc: studio::core::Document): bool;
+
+  /// Drop the tab and its parked buffer (so reopening reloads from disk);
+  /// re-activate a neighbour if it was the active tab.
+  RemoveTab(doc: studio::core::Document): void;
+
+  /// Persist the ACTIVE tab's buffer to the ACTIVE tab's path — never any
+  /// other tab's. A clean buffer (or no open tab) is a no-op.
+  #[manual]
+  public SaveFile(): void {
+    active = Option<studio::core::Document> from self.ActiveTab()
+    if (active.isNone) {
+      return
+    }
+    dirty = bool from active.value.text != active.value.savedText
     if (!dirty) {
       return
     }
-    studio::files::WorkspaceFs.WriteTextFile(doc.path, doc.text)
-    self.MarkSaved(doc)
+    studio::files::WorkspaceFs.WriteTextFile(active.value.path, active.value.text)
+    self.MarkSaved(active.value)
   }
 
   /// Reset the on-disk baseline to the just-written buffer.
@@ -186,8 +244,36 @@ feature SaveDirtyFile for studio::core::Workbench {
   given "a file is open in the editor"
   and "its buffer differs from the on-disk baseline"
   when "the developer saves"
-  then "the buffer is written to disk"
+  then "the active tab's buffer is written to the active tab's path"
   and "the baseline matches the buffer again"
+}
+
+/// Undo in one tab can never resurrect another file's content: each tab
+/// owns its own buffer and undo history, and opening a file is never an
+/// undoable edit (regression: issue #21 data loss).
+feature UndoNeverCrossesFiles for studio::core::Workbench {
+  given "file A is open in the editor"
+  and "file B is then opened and is the active tab"
+  when "the developer presses undo"
+  then "the buffer still shows B's content, not A's"
+  and "B is not marked dirty"
+}
+
+/// Switching tabs parks and restores whole buffers, so pending edits and
+/// their undo stacks survive the round trip.
+feature TabSwitchKeepsUnsavedEdits for studio::core::Workbench {
+  given "file A has unsaved edits in its buffer"
+  when "the developer switches to file B and back to A"
+  then "A's pending edits are still in its buffer and A is still dirty"
+  and "undo still steps back through A's own edit history"
+}
+
+/// Unsaved work is never silently discarded by closing a tab.
+feature CloseDirtyTabPrompts for studio::core::Workbench {
+  given "a tab has unsaved edits"
+  when "the developer closes it"
+  then "the developer must confirm before the edits are discarded"
+  and "declining keeps the tab open with its buffer intact"
 }
 
 /// A fresh project opens immediately after scaffolding.

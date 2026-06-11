@@ -13,17 +13,32 @@
   import { readTextFile } from "$lib/api";
   import { langIntelFor } from "$lib/lang/codemirror";
 
+  // Injectable file reader so /lab/buffers can drive the real per-tab buffer
+  // machinery from a plain browser (no Tauri fs) — same seam convention as
+  // IntelFs in intel.svelte.ts.
+  let {
+    readFile = readTextFile,
+  }: { readFile?: (path: string) => Promise<string> } = $props();
+
   let host: HTMLDivElement;
   let view: EditorView | undefined;
 
-  // Set while we programmatically replace the document (file load / close) so
-  // the change listener doesn't mistake the load for a user edit.
-  let loadingDoc = false;
+  // Per-open-file editor states (model `ActivateTab`): each tab owns a whole
+  // EditorState — doc, undo history, selection, folds — parked here while
+  // another tab is active. Tab switches swap states with `view.setState`;
+  // another file's text is never spliced into the current state via a
+  // transaction, so undo can never resurrect a different file's content.
+  const parkedStates = new Map<string, EditorState>();
+  const parkedScroll = new Map<string, number>();
+  // The path whose state the view currently shows (null = blank).
+  let shownPath: string | null = null;
+  // Invalidates in-flight first-open reads when the user switches again.
+  let loadSeq = 0;
 
   const themeComp = new Compartment();
   const langComp = new Compartment();
   // Language intelligence (diagnostics, folding, hover) from the embedded
-  // engine — reconfigured per file alongside the syntax mode.
+  // engine — baked into each tab's state alongside its syntax mode.
   const langIntelComp = new Compartment();
 
   function languageFor(name: string): Extension {
@@ -36,86 +51,129 @@
     return [];
   }
 
+  /**
+   * A fresh, history-free state for a first-opened file. The update
+   * listener closes over the tab's own path, so edits are always reported
+   * against the file they were typed into — even mid tab switch.
+   */
+  function freshState(path: string, name: string, text: string): EditorState {
+    return EditorState.create({
+      doc: text,
+      extensions: [
+        basicSetup,
+        keymap.of([
+          {
+            key: "Mod-s",
+            preventDefault: true,
+            run: () => {
+              void app.saveFile();
+              return true;
+            },
+          },
+        ]),
+        EditorView.updateListener.of((u) => {
+          if (u.docChanged) {
+            app.onDocEdited(path, u.state.doc.toString());
+          }
+        }),
+        themeComp.of(app.cm),
+        langComp.of(languageFor(name)),
+        langIntelComp.of(langIntelFor(path)),
+        EditorView.theme({
+          "&": { height: "100%" },
+          ".cm-scroller": { fontFamily: "var(--font-mono)" },
+        }),
+      ],
+    });
+  }
+
+  /** Park the shown tab's state + scroll, unless its tab was closed. */
+  function parkCurrent() {
+    if (!view || shownPath === null) return;
+    const stillOpen = app.openFiles.some((f) => f.path === shownPath);
+    if (!stillOpen) return;
+    parkedStates.set(shownPath, view.state);
+    parkedScroll.set(shownPath, view.scrollDOM.scrollTop);
+  }
+
+  /** Land the caret on a Problems-click location, once, and focus. */
+  function applyPendingJump() {
+    if (!view) return;
+    const jump = app.pendingJump;
+    if (!jump) return;
+    app.pendingJump = null;
+    const line = view.state.doc.line(
+      Math.min(Math.max(jump.line, 1), view.state.doc.lines),
+    );
+    const offset = Math.min(line.from + Math.max(jump.col - 1, 0), line.to);
+    view.dispatch({
+      selection: { anchor: offset },
+      effects: EditorView.scrollIntoView(offset, { y: "center" }),
+    });
+    view.focus();
+  }
+
   onMount(() => {
     view = new EditorView({
       parent: host,
-      state: EditorState.create({
-        doc: "",
-        extensions: [
-          basicSetup,
-          keymap.of([
-            {
-              key: "Mod-s",
-              preventDefault: true,
-              run: () => {
-                void app.saveFile();
-                return true;
-              },
-            },
-          ]),
-          EditorView.updateListener.of((u) => {
-            if (u.docChanged && !loadingDoc) {
-              app.onDocEdited(u.state.doc.toString());
-            }
-          }),
-          themeComp.of(app.cm),
-          langComp.of([]),
-          langIntelComp.of([]),
-          EditorView.theme({
-            "&": { height: "100%" },
-            ".cm-scroller": { fontFamily: "var(--font-mono)" },
-          }),
-        ],
-      }),
+      state: EditorState.create({ doc: "" }),
     });
     return () => view?.destroy();
   });
 
-  // Load file contents + language when the active file changes.
+  // Swap whole per-file states when the active tab changes; drop parked
+  // states for closed tabs (so reopening reloads from disk, model `RemoveTab`).
   $effect(() => {
-    const path = app.filePath;
-    const name = app.fileName;
-    if (!view) return;
-    if (!path) {
-      loadingDoc = true;
-      view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: "" },
-        effects: langIntelComp.reconfigure([]),
-      });
-      loadingDoc = false;
+    const path = app.activePath;
+    const doc = app.activeDoc;
+    const open = new Set(app.openFiles.map((f) => f.path));
+    for (const parked of Array.from(parkedStates.keys())) {
+      if (!open.has(parked)) {
+        parkedStates.delete(parked);
+        parkedScroll.delete(parked);
+      }
+    }
+    if (!view || path === shownPath) return;
+    const seq = ++loadSeq;
+    if (!path || !doc) {
+      parkCurrent();
+      shownPath = null;
+      view.setState(EditorState.create({ doc: "" }));
       return;
     }
-    readTextFile(path).then((text) => {
-      if (!view) return;
-      loadingDoc = true;
-      view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: text },
-        effects: [
-          langComp.reconfigure(languageFor(name)),
-          langIntelComp.reconfigure(langIntelFor(path)),
-        ],
-      });
-      loadingDoc = false;
-      app.onDocLoaded(text);
-      // A Problems click carries its finding's location: land the caret
-      // there and bring it into view.
-      const jump = app.pendingJump;
-      if (jump) {
-        app.pendingJump = null;
-        const line = view.state.doc.line(
-          Math.min(Math.max(jump.line, 1), view.state.doc.lines),
-        );
-        const offset = Math.min(line.from + Math.max(jump.col - 1, 0), line.to);
-        view.dispatch({
-          selection: { anchor: offset },
-          effects: EditorView.scrollIntoView(offset, { y: "center" }),
-        });
-        view.focus();
-      }
+    const parked = parkedStates.get(path);
+    if (parked) {
+      // Tab switch back: the parked state carries the tab's pending edits,
+      // undo history, selection, and folds untouched.
+      parkCurrent();
+      shownPath = path;
+      view.setState(parked);
+      view.scrollDOM.scrollTop = parkedScroll.get(path) ?? 0;
+      // The parked state may predate a theme change — re-sync it.
+      view.dispatch({ effects: themeComp.reconfigure(app.cm) });
+      applyPendingJump();
+      return;
+    }
+    // First activation: load from disk into a fresh state. Fresh states are
+    // inherently history-free, so the load itself is never undoable.
+    const name = doc.name;
+    readFile(path).then((text) => {
+      if (!view || seq !== loadSeq) return; // superseded by a newer switch
+      parkCurrent();
+      shownPath = path;
+      view.setState(freshState(path, name, text));
+      app.onDocLoaded(path, text);
+      applyPendingJump();
     });
   });
 
-  // Live theme swap.
+  // A Problems click on the already-active file changes only pendingJump.
+  $effect(() => {
+    const jump = app.pendingJump;
+    if (jump && view && app.activePath === shownPath) applyPendingJump();
+  });
+
+  // Live theme swap (affects the shown state; parked states re-sync on swap).
   $effect(() => {
     const cm = app.cm;
     view?.dispatch({ effects: themeComp.reconfigure(cm) });

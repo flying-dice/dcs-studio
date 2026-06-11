@@ -43,6 +43,19 @@ export interface RecentProject {
   openedAt: number;
 }
 
+/**
+ * One open editor tab (model studio::core Document). `savedText` is the
+ * on-disk baseline; `docText` is the live buffer — the tab is dirty while
+ * they diverge. The CodeMirror state (undo history, selection, scroll) is
+ * parked per tab by the Editor component, keyed by `path`.
+ */
+export interface OpenDoc {
+  path: string;
+  name: string;
+  docText: string;
+  savedText: string;
+}
+
 const RECENTS_KEY = "dcs.recents";
 const RECENTS_MAX = 8;
 
@@ -91,17 +104,38 @@ class AppState {
   // Recently opened projects (most-recent first), persisted to localStorage.
   recents = $state<RecentProject[]>(loadRecents());
 
-  // Active editor document. `savedText` is the on-disk baseline; `docText` is
-  // the live editor buffer. They diverge while there are unsaved edits.
-  filePath = $state<string | null>(null);
-  fileName = $state<string>("");
-  docText = $state("");
-  savedText = $state("");
+  // Open editor tabs (model studio::core Document). Each tab owns its own
+  // buffer: `savedText` is the on-disk baseline, `docText` the live editor
+  // text — they diverge while that tab has unsaved edits.
+  openFiles = $state<OpenDoc[]>([]);
+  activePath = $state<string | null>(null);
   saving = $state(false);
 
-  /** Whether the open document has unsaved edits. */
+  /** The active tab's record, if any file is open. */
+  get activeDoc(): OpenDoc | null {
+    return this.openFiles.find((f) => f.path === this.activePath) ?? null;
+  }
+
+  /** Path of the active tab (kept as the legacy single-file accessor). */
+  get filePath(): string | null {
+    return this.activeDoc?.path ?? null;
+  }
+
+  /** Display name of the active tab. */
+  get fileName(): string {
+    return this.activeDoc?.name ?? "";
+  }
+
+  /** Whether the active tab has unsaved edits. */
   get dirty(): boolean {
-    return !!this.filePath && this.docText !== this.savedText;
+    const doc = this.activeDoc;
+    return !!doc && doc.docText !== doc.savedText;
+  }
+
+  /** Whether the tab for `path` has unsaved edits. */
+  isDirty(path: string): boolean {
+    const doc = this.openFiles.find((f) => f.path === path);
+    return !!doc && doc.docText !== doc.savedText;
   }
 
   // Live DCS link status, driven by the Rust-side heartbeat (see dcs.rs).
@@ -225,8 +259,8 @@ class AppState {
   async openPath(path: string) {
     this.rootPath = path;
     this.rootName = await basename(path);
-    this.filePath = null;
-    this.fileName = "";
+    this.openFiles = [];
+    this.activePath = null;
     this.leftTool = "project";
     this.remember(path, this.rootName);
     // Project-opened announcement: mount the workspace into the language
@@ -249,8 +283,8 @@ class AppState {
   closeProject() {
     this.rootPath = null;
     this.rootName = "";
-    this.filePath = null;
-    this.fileName = "";
+    this.openFiles = [];
+    this.activePath = null;
     lang.reset();
   }
 
@@ -277,33 +311,86 @@ class AppState {
    */
   pendingJump = $state<{ line: number; col: number } | null>(null);
 
+  /**
+   * Open a file (model `OpenFile`): an already-open tab is re-activated
+   * as-is — pending edits and undo history intact; otherwise a fresh tab is
+   * appended and activated. The editor loads its text from disk on first
+   * activation and reports it via `onDocLoaded`.
+   */
   openFile(path: string, name: string, jumpTo?: { line: number; col: number }) {
-    this.filePath = path || null;
-    this.fileName = name;
     this.pendingJump = jumpTo ?? null;
-    // Reset the document baseline; the editor refills it once the file loads.
-    this.docText = "";
-    this.savedText = "";
+    const existing = this.openFiles.find((f) => f.path === path);
+    if (existing) {
+      this.activePath = path;
+      return;
+    }
+    this.openFiles.push({ path, name, docText: "", savedText: "" });
+    this.activePath = path;
+  }
+
+  /** Make an already-open tab the active one (model `ActivateTab`). */
+  activateFile(path: string) {
+    if (this.openFiles.some((f) => f.path === path)) this.activePath = path;
+  }
+
+  /**
+   * Close a tab (model `CloseFile`): a dirty tab needs confirmation before
+   * its edits are discarded; closing the active tab activates a neighbour,
+   * and closing the last tab returns to the no-file-open state.
+   */
+  closeFile(path: string) {
+    const idx = this.openFiles.findIndex((f) => f.path === path);
+    if (idx < 0) return;
+    const tab = this.openFiles[idx];
+    if (tab.docText !== tab.savedText) {
+      const confirmed = this.confirmDiscard(tab.name);
+      if (!confirmed) return;
+    }
+    this.openFiles.splice(idx, 1);
+    if (this.activePath === path) {
+      const neighbour = this.openFiles[idx] ?? this.openFiles[idx - 1];
+      this.activePath = neighbour?.path ?? null;
+    }
+  }
+
+  /** Close the active tab, if any (File → Close Editor, tab × button). */
+  closeActiveFile() {
+    if (this.activePath) this.closeFile(this.activePath);
+  }
+
+  /** Ask the developer before discarding a dirty tab (model `ConfirmDiscard`). */
+  private confirmDiscard(name: string): boolean {
+    if (typeof window === "undefined" || typeof window.confirm !== "function") {
+      return true;
+    }
+    return window.confirm(`${name} has unsaved changes. Close it and discard them?`);
   }
 
   /** Called by the editor once a file's contents have loaded from disk. */
-  onDocLoaded(text: string) {
-    this.savedText = text;
-    this.docText = text;
+  onDocLoaded(path: string, text: string) {
+    const doc = this.openFiles.find((f) => f.path === path);
+    if (!doc) return;
+    doc.savedText = text;
+    doc.docText = text;
   }
 
-  /** Called by the editor on every user edit. */
-  onDocEdited(text: string) {
-    this.docText = text;
+  /** Called by the editor on every user edit to the tab for `path`. */
+  onDocEdited(path: string, text: string) {
+    const doc = this.openFiles.find((f) => f.path === path);
+    if (doc) doc.docText = text;
   }
 
-  /** Persist the active document to disk. No-op when clean or unsaved-able. */
+  /**
+   * Persist the ACTIVE tab's buffer to the ACTIVE tab's path — never any
+   * other tab's (model `SaveFile`). No-op when clean or already saving.
+   */
   async saveFile() {
-    if (!this.filePath || !this.dirty || this.saving) return;
+    const doc = this.activeDoc;
+    if (!doc || doc.docText === doc.savedText || this.saving) return;
     this.saving = true;
     try {
-      await writeTextFile(this.filePath, this.docText);
-      this.savedText = this.docText;
+      await writeTextFile(doc.path, doc.docText);
+      doc.savedText = doc.docText;
     } finally {
       this.saving = false;
     }
