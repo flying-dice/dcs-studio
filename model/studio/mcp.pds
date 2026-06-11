@@ -22,6 +22,11 @@ public data NotImplemented { message: string }
 /// — stdout is the wire, so nothing else may print to it. Tools are thin
 /// delegates; the only logic owned here is the lazy DCS link and the
 /// on-demand status ping.
+///
+/// Recorded decision: the workspace fs tools take absolute host paths with
+/// no sandbox root, exactly like the IDE's own fs commands they delegate to
+/// — the server runs on the agent's machine with the agent's rights, and the
+/// MCP host (not this server) owns tool-permission policy.
 public container McpServer for studio::core::Studio {
   /// init_project — scaffold a project from a template (same kit as the
   /// CLI `init` and the app's New Project flow).

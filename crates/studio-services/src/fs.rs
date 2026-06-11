@@ -86,17 +86,37 @@ mod tests {
 
     #[test]
     fn read_dir_lists_directories_first_then_files_case_insensitively() {
+        // The fixture must discriminate case-insensitive from byte order:
+        // byte order would yield Gamma < beta (dirs) and Echo.lua < b.lua
+        // (files); case-insensitive order does not.
         let root = temp_dir("read-dir");
         std::fs::create_dir(root.join("zeta")).expect("dir");
         std::fs::create_dir(root.join("Alpha")).expect("dir");
+        std::fs::create_dir(root.join("beta")).expect("dir");
+        std::fs::create_dir(root.join("Gamma")).expect("dir");
         std::fs::write(root.join("b.lua"), "").expect("file");
         std::fs::write(root.join("A.lua"), "").expect("file");
+        std::fs::write(root.join("Echo.lua"), "").expect("file");
 
         let entries = read_dir(&root.to_string_lossy()).expect("listing");
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, vec!["Alpha", "zeta", "A.lua", "b.lua"]);
-        assert!(entries[0].is_dir && entries[1].is_dir);
-        assert!(!entries[2].is_dir && !entries[3].is_dir);
+        assert_eq!(
+            names,
+            vec!["Alpha", "beta", "Gamma", "zeta", "A.lua", "b.lua", "Echo.lua"]
+        );
+        assert!(entries[..4].iter().all(|e| e.is_dir));
+        assert!(entries[4..].iter().all(|e| !e.is_dir));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn write_into_a_missing_parent_reports_the_path() {
+        let root = temp_dir("write-missing-parent");
+        let path = root.join("no-such-dir").join("note.txt");
+        let Err(err) = write_text_file(&path.to_string_lossy(), "x") else {
+            panic!("writing under a missing parent must fail");
+        };
+        assert!(err.contains("Failed to write"), "err was: {err}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

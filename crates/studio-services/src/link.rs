@@ -217,6 +217,22 @@ mod tests {
         assert!(err.contains("not connected to DCS"), "err was: {err}");
     }
 
+    #[tokio::test]
+    async fn status_live_on_a_disconnected_link_clears_a_stale_sample() {
+        let link = LinkShared::default();
+        let _ = link.ensure_client("ws://127.0.0.1:59997/ws").await;
+        // A stale "mission live" sample from before the disconnect…
+        link.record_heartbeat(true, Some(9));
+
+        let live = link.status_live().await;
+        assert_eq!(live["connected"], json!(false));
+
+        // …must be cleared by the probe, not left to lie in status().
+        let snapshot = link.status();
+        assert_eq!(snapshot["sim_running"], json!(false));
+        assert_eq!(snapshot["latency_ms"], Value::Null);
+    }
+
     #[test]
     fn heartbeat_samples_write_through() {
         let link = LinkShared::default();

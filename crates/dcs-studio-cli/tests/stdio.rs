@@ -423,6 +423,33 @@ fn mcp_workspace_tools_round_trip_against_a_tempdir() {
             .contains("read_text_file requires 'path'")
     );
 
+    // An unparseable frame is ignored and the session lives on: the next
+    // well-formed request still answers.
+    {
+        let stdin = child.stdin.as_mut().expect("stdin piped");
+        stdin.write_all(b"this is not json\n").expect("garbage");
+        stdin.flush().expect("flush");
+    }
+    let survived = mcp_call(
+        &mut child,
+        &mut reader,
+        7,
+        "path_exists",
+        &json!({"path": file_arg}),
+    );
+    assert_eq!(survived["id"], json!(7));
+    assert_eq!(tool_text(&survived), "true");
+
+    // A tool name nothing serves is the invalid-params error, not a result.
+    let unknown = mcp_call(&mut child, &mut reader, 8, "frobnicate", &json!({}));
+    assert_eq!(unknown["error"]["code"], json!(-32602));
+    assert!(
+        unknown["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown tool: frobnicate")
+    );
+
     drop(child.stdin.take());
     assert!(child.wait().expect("exit").success());
     let _ = std::fs::remove_dir_all(&root);
@@ -555,4 +582,309 @@ fn mcp_lang_tools_answer_from_the_real_engine() {
     drop(child.stdin.take());
     assert!(child.wait().expect("exit").success());
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn mcp_lua_hover_edges_answer_errors_not_guesses() {
+    let root = temp_dir("mcp-hover-edges");
+    let documented = root.join("doc.lua");
+    std::fs::write(
+        &documented,
+        "--- Greets the pilot.\nlocal greet = \"hello\"\nprint(greet)\n",
+    )
+    .expect("seed documented");
+
+    let (mut child, mut reader) = mcp_session(&[]);
+
+    // lua_hover without a usable position is invalid-params, naming the arg.
+    let no_line = mcp_call(
+        &mut child,
+        &mut reader,
+        1,
+        "lua_hover",
+        &json!({"root": root.to_string_lossy(),
+               "path": documented.to_string_lossy(),
+               "character": 8}),
+    );
+    assert_eq!(no_line["error"]["code"], json!(-32602));
+    assert!(
+        no_line["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("'line'"),
+        "message was: {}",
+        no_line["error"]["message"]
+    );
+
+    // lua_hover on a file the root does not contain is a tool error.
+    let stray = mcp_call(
+        &mut child,
+        &mut reader,
+        2,
+        "lua_hover",
+        &json!({"root": root.to_string_lossy(),
+               "path": "Z:/nowhere/else.lua",
+               "line": 1, "character": 1}),
+    );
+    assert_eq!(stray["result"]["isError"], json!(true));
+    assert!(tool_text(&stray).contains("is not a Lua source under"));
+
+    // Hover over empty space answers the no-information text, cleanly.
+    let miss = mcp_call(
+        &mut child,
+        &mut reader,
+        3,
+        "lua_hover",
+        &json!({"root": root.to_string_lossy(),
+               "path": documented.to_string_lossy(),
+               "line": 1, "character": 1}),
+    );
+    assert_eq!(miss["result"]["isError"], json!(false));
+    assert!(tool_text(&miss).contains("no hover information"));
+
+    drop(child.stdin.take());
+    assert!(child.wait().expect("exit").success());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A stock MissionScripting.lua, as DCS ships it.
+const STOCK_MISSION_SCRIPT: &str = "do\n\tsanitizeModule('os')\n\tsanitizeModule('io')\n\
+                                    \tsanitizeModule('lfs')\n\t_G['require'] = nil\n\
+                                    \t_G['loadlib'] = nil\n\t_G['package'] = nil\nend\n";
+
+#[test]
+fn mcp_mission_and_injection_tools_drive_the_real_services() {
+    let root = temp_dir("mcp-mission");
+    let script = root.join("MissionScripting.lua");
+    std::fs::write(&script, STOCK_MISSION_SCRIPT).expect("seed script");
+    let script_arg = script.to_string_lossy().into_owned();
+
+    let (mut child, mut reader) = mcp_session(&[]);
+
+    // mission_script_status: the stock file reads fully sanitized.
+    let status = mcp_call(
+        &mut child,
+        &mut reader,
+        1,
+        "mission_script_status",
+        &json!({"path": script_arg}),
+    );
+    assert_eq!(status["result"]["isError"], json!(false));
+    let snapshot: Value = serde_json::from_str(tool_text(&status)).expect("status json");
+    assert_eq!(snapshot["backup_exists"], json!(false));
+    let lfs = snapshot["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|i| i["name"] == json!("lfs"))
+        .expect("lfs item")
+        .clone();
+    assert_eq!(lfs["sanitized"], json!(true));
+
+    // mission_script_set desanitizes lfs and snapshots the pristine backup.
+    let set = mcp_call(
+        &mut child,
+        &mut reader,
+        2,
+        "mission_script_set",
+        &json!({"path": script_arg, "items": {"lfs": false}}),
+    );
+    assert_eq!(set["result"]["isError"], json!(false));
+    let after: Value = serde_json::from_str(tool_text(&set)).expect("set json");
+    assert_eq!(after["backup_exists"], json!(true));
+    let lfs = after["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|i| i["name"] == json!("lfs"))
+        .expect("lfs item")
+        .clone();
+    assert_eq!(lfs["sanitized"], json!(false));
+    let edited = std::fs::read_to_string(&script).expect("edited");
+    assert!(edited.contains("-- sanitizeModule('lfs')"));
+
+    // Items that aren't an item -> bool object are invalid params.
+    let bad = mcp_call(
+        &mut child,
+        &mut reader,
+        3,
+        "mission_script_set",
+        &json!({"path": script_arg, "items": {"lfs": "nope"}}),
+    );
+    assert_eq!(bad["error"]["code"], json!(-32602));
+    assert!(
+        bad["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("item -> bool")
+    );
+
+    // mission_script_restore copies the pristine backup back.
+    let restored = mcp_call(
+        &mut child,
+        &mut reader,
+        4,
+        "mission_script_restore",
+        &json!({"path": script_arg}),
+    );
+    assert_eq!(restored["result"]["isError"], json!(false));
+    assert_eq!(
+        std::fs::read_to_string(&script).expect("restored"),
+        STOCK_MISSION_SCRIPT
+    );
+
+    // restore without a backup is the disclosed error, as a tool error.
+    let bare = root.join("Bare").join("MissionScripting.lua");
+    std::fs::create_dir_all(bare.parent().unwrap()).expect("dir");
+    std::fs::write(&bare, STOCK_MISSION_SCRIPT).expect("seed bare");
+    let no_backup = mcp_call(
+        &mut child,
+        &mut reader,
+        5,
+        "mission_script_restore",
+        &json!({"path": bare.to_string_lossy()}),
+    );
+    assert_eq!(no_backup["result"]["isError"], json!(true));
+    assert_eq!(tool_text(&no_backup), "No backup found");
+
+    drop(child.stdin.take());
+    assert!(child.wait().expect("exit").success());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn mcp_injection_tools_on_an_empty_write_dir_report_not_installed() {
+    let root = temp_dir("mcp-inject");
+    let empty = root.join("EmptyWriteDir");
+    std::fs::create_dir(&empty).expect("dir");
+
+    let (mut child, mut reader) = mcp_session(&[]);
+
+    // injection_status on a write dir with nothing installed says so —
+    // and never errors.
+    let inject_status = mcp_call(
+        &mut child,
+        &mut reader,
+        1,
+        "injection_status",
+        &json!({"write_dir": empty.to_string_lossy()}),
+    );
+    assert_eq!(inject_status["result"]["isError"], json!(false));
+    let report: Value = serde_json::from_str(tool_text(&inject_status)).expect("status json");
+    assert_eq!(report["dll_installed"], json!(false));
+    assert_eq!(report["hook_installed"], json!(false));
+
+    // eject with nothing installed is fine (missing files are fine).
+    let ejected = mcp_call(
+        &mut child,
+        &mut reader,
+        2,
+        "eject",
+        &json!({"write_dir": empty.to_string_lossy()}),
+    );
+    assert_eq!(ejected["result"]["isError"], json!(false));
+
+    drop(child.stdin.take());
+    assert!(child.wait().expect("exit").success());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// ---- fake in-DCS bridge ------------------------------------------------------
+
+/// A minimal in-process stand-in for the in-DCS bridge: a WebSocket JSON-RPC
+/// server that pongs `ping` with a scripted `dcs_time` and echoes every other
+/// method back as `{ method, params }` — the external oracle for the dcs_*
+/// tools' wire behaviour (no real DCS in CI).
+fn fake_bridge(dcs_time: std::sync::Arc<std::sync::Mutex<f64>>) -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { break };
+            let dcs_time = dcs_time.clone();
+            std::thread::spawn(move || {
+                let Ok(mut ws) = tungstenite::accept(stream) else {
+                    return;
+                };
+                while let Ok(message) = ws.read() {
+                    let Ok(text) = message.to_text() else {
+                        continue;
+                    };
+                    let Ok(request) = serde_json::from_str::<Value>(text) else {
+                        continue;
+                    };
+                    let result = if request["method"] == json!("ping") {
+                        json!({"pong": true, "dcs_time": *dcs_time.lock().expect("lock")})
+                    } else {
+                        json!({"method": request["method"], "params": request["params"]})
+                    };
+                    let response = json!({
+                        "jsonrpc": "2.0", "id": request["id"], "result": result,
+                    });
+                    if ws
+                        .send(tungstenite::Message::text(response.to_string()))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+#[test]
+fn mcp_dcs_tools_against_a_fake_bridge_follow_the_wire_rules() {
+    let dcs_time = std::sync::Arc::new(std::sync::Mutex::new(0.0_f64));
+    let port = fake_bridge(dcs_time.clone());
+    let url = format!("ws://127.0.0.1:{port}/ws");
+    let (mut child, mut reader) = mcp_session(&[("DCS_BRIDGE_WS", &url)]);
+
+    // dcs_status against a pong with dcs_time = 0: connected, but the menu
+    // is not a mission — sim_running stays false.
+    let menu = mcp_call(&mut child, &mut reader, 1, "dcs_status", &json!({}));
+    assert_eq!(menu["result"]["isError"], json!(false));
+    let snapshot: Value = serde_json::from_str(tool_text(&menu)).expect("status json");
+    assert_eq!(snapshot["connected"], json!(true));
+    assert_eq!(snapshot["sim_running"], json!(false));
+
+    // Once dcs_time advances past 0, sim_running flips on.
+    *dcs_time.lock().expect("lock") = 27.5;
+    let live = mcp_call(&mut child, &mut reader, 2, "dcs_status", &json!({}));
+    let snapshot: Value = serde_json::from_str(tool_text(&live)).expect("status json");
+    assert_eq!(snapshot["connected"], json!(true));
+    assert_eq!(snapshot["sim_running"], json!(true));
+    assert_eq!(snapshot["dcs_time"], json!(27.5));
+
+    // dcs_eval forwards the snippet verbatim — quotes, escapes, newlines —
+    // as the `eval` method's { code } params.
+    let tricky = "return \"a\\\"b\" .. [[multi\nline]]";
+    let eval = mcp_call(
+        &mut child,
+        &mut reader,
+        3,
+        "dcs_eval",
+        &json!({"code": tricky}),
+    );
+    assert_eq!(eval["result"]["isError"], json!(false));
+    let echoed: Value = serde_json::from_str(tool_text(&eval)).expect("echo json");
+    assert_eq!(echoed["method"], json!("eval"));
+    assert_eq!(echoed["params"]["code"], json!(tricky));
+
+    // dcs_call forwards an arbitrary method with its params untouched.
+    let call = mcp_call(
+        &mut child,
+        &mut reader,
+        4,
+        "dcs_call",
+        &json!({"method": "outText", "params": {"text": "hi", "delay": 3}}),
+    );
+    assert_eq!(call["result"]["isError"], json!(false));
+    let echoed: Value = serde_json::from_str(tool_text(&call)).expect("echo json");
+    assert_eq!(echoed["method"], json!("outText"));
+    assert_eq!(echoed["params"], json!({"text": "hi", "delay": 3}));
+
+    drop(child.stdin.take());
+    assert!(child.wait().expect("exit").success());
 }

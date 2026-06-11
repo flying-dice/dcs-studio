@@ -414,6 +414,20 @@ mod tests {
     }
 
     #[test]
+    fn unknown_items_are_ignored_and_leave_the_file_untouched() {
+        // Recorded behavior: set_items only toggles lines matching known
+        // sanitizeModule/_G items; unknown keys match nothing, so the file
+        // is not rewritten and no backup is taken.
+        let file = temp_script("unknown-item");
+        let path = file.to_string_lossy().into_owned();
+
+        let status = set_items(&path, &desire("frobnicate", false)).expect("set");
+        assert!(!status.backup_exists, "no change, so no backup");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), STOCK);
+        let _ = std::fs::remove_dir_all(file.parent().unwrap());
+    }
+
+    #[test]
     fn restore_without_a_backup_is_the_disclosed_error() {
         let file = temp_script("no-backup");
         let path = file.to_string_lossy().into_owned();

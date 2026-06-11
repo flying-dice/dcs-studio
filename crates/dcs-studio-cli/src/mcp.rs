@@ -15,6 +15,11 @@
 //!   error until the engine grows those queries.
 //!
 //! Stdout is the wire — nothing here may print to it except responses.
+//!
+//! Recorded decision (model/studio/mcp.pds): the workspace fs tools take
+//! absolute host paths with no sandbox root, like the IDE fs commands they
+//! delegate to — the server runs with the agent's own rights and the MCP
+//! host owns tool-permission policy.
 
 use std::collections::HashMap;
 use std::future::Future;

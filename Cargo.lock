@@ -1182,6 +1182,7 @@ dependencies = [
  "studio-services",
  "tokio",
  "tower-lsp",
+ "tungstenite",
  "walkdir",
 ]
 
