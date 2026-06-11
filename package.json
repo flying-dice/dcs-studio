@@ -40,6 +40,8 @@
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-opener": "^2",
     "codemirror": "^6.0.2",
+    "dompurify": "^3.4.9",
+    "marked": "^18.0.5",
     "thememirror": "^2.0.1"
   },
   "devDependencies": {

@@ -19,6 +19,7 @@ import {
   type DecorationSet,
 } from "@codemirror/view";
 import { lang } from "./intel.svelte";
+import { renderMarkdown } from "./markdown";
 import { providerFor } from "./registry";
 import type { Diagnostic, FoldingRange, InlayHint } from "./provider";
 
@@ -158,12 +159,18 @@ export function langIntelFor(path: string | null): Extension {
       create: () => {
         const dom = document.createElement("div");
         dom.className = "cm-dcs-hover";
-        const title = document.createElement("strong");
+        // The signature is already a clean code-like line (`local function
+        // f(a)`); render it verbatim as a monospace tier, not as markdown.
+        const title = document.createElement("div");
+        title.className = "cm-dcs-hover__title";
         title.textContent = card.title;
         dom.appendChild(title);
+        // The doc body is markdown — render and sanitize it so headings,
+        // code, lists and links read well in the card's prose tier.
         if (card.body) {
           const body = document.createElement("div");
-          body.textContent = card.body;
+          body.className = "cm-dcs-hover__body";
+          body.innerHTML = renderMarkdown(card.body);
           dom.appendChild(body);
         }
         return { dom };
