@@ -1116,6 +1116,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dcs-lua-fmt"
+version = "0.1.0"
+dependencies = [
+ "dcs-lua-syntax",
+ "serde",
+]
+
+[[package]]
 name = "dcs-lua-ide"
 version = "0.1.0"
 dependencies = [
@@ -1164,6 +1172,7 @@ name = "dcs-studio-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "dcs-lua-fmt",
  "dcs-lua-lsp-core",
  "dcs-lua-syntax",
  "dcs-studio-project",
@@ -1178,6 +1187,7 @@ dependencies = [
 name = "dcs-studio-project"
 version = "0.1.0"
 dependencies = [
+ "dcs-lua-fmt",
  "dcs-lua-syntax",
  "serde",
  "toml 0.8.2",
