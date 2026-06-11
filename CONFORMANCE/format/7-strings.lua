@@ -7,3 +7,5 @@ local f = "mixed \"quotes\" stay"
 local g = [[long
 bracket]]
 local h = [==[ level two ]==]
+local i = 'héllo'
+local j = 'dön\'t panic — ünïcødé'

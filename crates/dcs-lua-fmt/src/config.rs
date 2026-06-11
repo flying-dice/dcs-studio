@@ -4,6 +4,10 @@
 
 use serde::Deserialize;
 
+/// Floor for the effective column budget: configured `max_width` values
+/// below this clamp up (SPEC.md §7).
+pub const MIN_WIDTH: usize = 20;
+
 /// Indentation character choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -38,7 +42,9 @@ pub struct FormatConfig {
     pub indent_width: u8,
     pub indent_style: IndentStyle,
     pub quote_style: QuoteStyle,
-    /// Column budget; lines with nothing breakable may exceed it.
+    /// Column budget; lines with nothing breakable may exceed it. Values
+    /// below [`MIN_WIDTH`] clamp up — a degenerate budget must not force
+    /// every construct to break (SPEC.md §7 config table).
     pub max_width: usize,
     pub trailing_comma: TrailingComma,
 }
@@ -56,6 +62,13 @@ impl Default for FormatConfig {
 }
 
 impl FormatConfig {
+    /// The effective column budget: `max_width` clamped to at least
+    /// [`MIN_WIDTH`].
+    #[must_use]
+    pub(crate) fn width_budget(&self) -> usize {
+        self.max_width.max(MIN_WIDTH)
+    }
+
     /// One indent level as text.
     #[must_use]
     pub(crate) fn indent_unit(&self) -> String {
@@ -78,6 +91,16 @@ mod tests {
         assert_eq!(config.quote_style, QuoteStyle::Double);
         assert_eq!(config.max_width, 100);
         assert_eq!(config.trailing_comma, TrailingComma::Multiline);
+    }
+
+    #[test]
+    fn max_width_clamps_to_floor() {
+        let config = FormatConfig {
+            max_width: 0,
+            ..FormatConfig::default()
+        };
+        assert_eq!(config.width_budget(), MIN_WIDTH);
+        assert_eq!(FormatConfig::default().width_budget(), 100);
     }
 
     #[test]

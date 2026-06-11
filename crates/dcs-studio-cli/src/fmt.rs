@@ -6,7 +6,11 @@
 //! skipped in both modes without affecting the exit code — surfacing
 //! syntax errors is `check`'s job, and gating fmt on them would make a
 //! broken file block formatting the rest. A nonexistent path is an
-//! error, never a no-op.
+//! error, never a no-op. A semantic-guard trip (decisions/006) warns
+//! loudly on stderr, leaves the file unchanged, and the walk continues.
+//! In-place writes go through a same-directory temp file renamed over
+//! the original, so a crash mid-write can never truncate a script; a
+//! file is reported on stdout only after its write succeeded.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -39,15 +43,25 @@ pub fn run(paths: &[PathBuf], check: bool) -> ExitCode {
         for (file, text) in files {
             checked += 1;
             match dcs_lua_fmt::format(&text, &config) {
-                Ok(formatted) if formatted == text => {}
+                Ok(formatted) if formatted.guard_tripped => {
+                    eprintln!(
+                        "fmt: {file}: internal formatter guard tripped; \
+                         file left unchanged — please report this file"
+                    );
+                }
+                Ok(formatted) if formatted.text == text => {}
                 Ok(formatted) => {
                     would_change += 1;
-                    println!("{file}");
-                    if !check
-                        && let Err(error) = std::fs::write(&file, formatted)
-                    {
-                        eprintln!("fmt: writing {file}: {error}");
-                        failed = true;
+                    if check {
+                        println!("{file}");
+                    } else {
+                        match write_atomic(Path::new(&file), &formatted.text) {
+                            Ok(()) => println!("{file}"),
+                            Err(error) => {
+                                eprintln!("fmt: writing {file}: {error}");
+                                failed = true;
+                            }
+                        }
                     }
                 }
                 Err(diagnostics) => {
@@ -72,6 +86,20 @@ pub fn run(paths: &[PathBuf], check: bool) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// Write via a sibling temp file renamed over the original, so a crash or
+/// full disk mid-write can never leave a mission script truncated. The
+/// temp file lives in the same directory (same volume — `rename` stays
+/// atomic) and is cleaned up if the rename fails.
+fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    let mut tmp_name = path.as_os_str().to_os_string();
+    tmp_name.push(".fmt-tmp");
+    let tmp = PathBuf::from(tmp_name);
+    std::fs::write(&tmp, contents)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 /// The `[format]` config governing `path`: the nearest `dcs-studio.toml`

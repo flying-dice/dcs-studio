@@ -1,7 +1,8 @@
 //! The semantic-preservation guard (SPEC.md §7): the printed text must
 //! re-parse to a tree structurally identical to the input's — spans
-//! ignored, short strings compared by decoded value — and every input
-//! comment must survive into the output trivia.
+//! ignored, short strings compared by decoded value — and the multiset of
+//! comment texts must survive into the output trivia (a comment may move,
+//! e.g. to a line's end, but never change text or disappear).
 
 use dcs_lua_syntax::Severity;
 use dcs_lua_syntax::ast::{Ast, BlockId, ExprId, ExprKind, FuncBody, Parsed, StatKind, TableField};
@@ -15,7 +16,7 @@ use crate::strings::same_value;
 #[must_use]
 pub(crate) fn preserved(before: &Parsed, before_trivia: &[SpannedTrivia], printed: &str) -> bool {
     let lexed = dcs_lua_syntax::lexer::lex(printed);
-    let comment_count_after = comment_count(&lexed.trivia);
+    let comments_after = comment_texts(&lexed.trivia);
     let after = dcs_lua_syntax::parser::parse_lexed(printed, lexed);
     if after
         .diagnostics
@@ -24,7 +25,7 @@ pub(crate) fn preserved(before: &Parsed, before_trivia: &[SpannedTrivia], printe
     {
         return false;
     }
-    if comment_count(before_trivia) != comment_count_after {
+    if comment_texts(before_trivia) != comments_after {
         return false;
     }
     blocks_eq(
@@ -35,11 +36,20 @@ pub(crate) fn preserved(before: &Parsed, before_trivia: &[SpannedTrivia], printe
     )
 }
 
-fn comment_count(trivia: &[SpannedTrivia]) -> usize {
-    trivia
+/// The multiset of comment texts (sorted), the unit of comment survival:
+/// stronger than a bare count — a comment may move but never mutate.
+fn comment_texts(trivia: &[SpannedTrivia]) -> Vec<String> {
+    let mut texts: Vec<String> = trivia
         .iter()
-        .filter(|t| !matches!(t.trivia, Trivia::BlankLines { .. }))
-        .count()
+        .filter_map(|t| match &t.trivia {
+            Trivia::LineComment { text }
+            | Trivia::LongComment { text }
+            | Trivia::DocComment { text } => Some(text.clone()),
+            Trivia::BlankLines { .. } => None,
+        })
+        .collect();
+    texts.sort_unstable();
+    texts
 }
 
 fn blocks_eq(a: &Ast, ab: BlockId, b: &Ast, bb: BlockId) -> bool {

@@ -39,6 +39,13 @@ fn formats_in_place_and_is_then_stable() {
     let formatted = std::fs::read_to_string(&file).expect("read back");
     assert_eq!(formatted, "local x = 1\nif x then\n    y = x\nend\n");
 
+    // The atomic write leaves no temp residue behind.
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .expect("list dir")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(names, vec!["messy.lua"], "no temp files may linger");
+
     // Second run: nothing changes, file list is empty.
     let output = fmt(&["."], &dir);
     assert!(output.status.success());

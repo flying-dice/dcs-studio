@@ -39,7 +39,14 @@ pub(crate) fn print(
 
 /// Print one statement run for range formatting: trivia cursor starts at
 /// the splice boundary and the final newline is trimmed so the run sits
-/// flush against the untouched tail.
+/// flush against the untouched tail. `starts_block` says whether the run
+/// begins at its block's first statement — only then may a `(`-starting
+/// first statement drop its `;` merge guard (Lua 5.1 admits `;` solely
+/// after a statement).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the splice parameters are one explicit set with a single caller"
+)]
 pub(crate) fn print_run(
     src: &str,
     parsed: &Parsed,
@@ -48,10 +55,11 @@ pub(crate) fn print_run(
     stats: &[StatId],
     depth: usize,
     splice_start: u32,
+    starts_block: bool,
 ) -> String {
     let mut printer = Printer::new(src, parsed, trivia, config);
     printer.ti = trivia.partition_point(|t| t.span.start < splice_start);
-    printer.print_stats(stats, depth);
+    printer.print_stat_run(stats, depth, starts_block);
     if printer.out.ends_with(printer.newline) {
         let len = printer.out.len() - printer.newline.len();
         printer.out.truncate(len);
@@ -203,23 +211,31 @@ impl<'a> Printer<'a> {
     // ---- statements --------------------------------------------------------------
 
     fn print_stats(&mut self, stats: &[StatId], depth: usize) {
+        self.print_stat_run(stats, depth, true);
+    }
+
+    /// `starts_block`: the first of `stats` is its block's first statement,
+    /// so a `(`-starting statement there must not gain the `;` merge guard
+    /// — Lua 5.1's `chunk ::= {stat [';']}` admits `;` only *after* a
+    /// statement, and PUC Lua rejects a block-start `;`.
+    fn print_stat_run(&mut self, stats: &[StatId], depth: usize, starts_block: bool) {
         for (i, &sid) in stats.iter().enumerate() {
             let span = self.ast.stat(sid).span;
             self.flush_trivia(span.start, depth, i == 0, false);
             self.push_indent(depth);
-            self.print_stat(sid, depth);
+            self.print_stat(sid, depth, starts_block && i == 0);
             self.trailing_comments(span.end);
             self.push_newline();
         }
     }
 
     #[expect(clippy::too_many_lines, reason = "one arm per statement form")]
-    fn print_stat(&mut self, sid: StatId, depth: usize) {
+    fn print_stat(&mut self, sid: StatId, depth: usize, first_in_block: bool) {
         let ast = self.ast;
         let span = ast.stat(sid).span;
         match &ast.stat(sid).kind {
             StatKind::Assign { targets, values } => {
-                if self.starts_with_paren(targets[0]) {
+                if !first_in_block && self.starts_with_paren(targets[0]) {
                     self.out.push(';');
                 }
                 self.emit_expr_list(targets, depth);
@@ -235,7 +251,7 @@ impl<'a> Printer<'a> {
                 }
             }
             StatKind::CallStat { call } => {
-                if self.starts_with_paren(*call) {
+                if !first_in_block && self.starts_with_paren(*call) {
                     self.out.push(';');
                 }
                 self.emit_expr(*call, depth);
@@ -407,7 +423,8 @@ impl<'a> Printer<'a> {
 
     /// Whether the statement's first printed character would be `(` — it
     /// then needs a leading `;` so dropped separators cannot merge it into
-    /// the previous statement (decisions/006).
+    /// the previous statement (decisions/006). Suppressed at a block's
+    /// start, where no previous statement exists and Lua 5.1 rejects `;`.
     fn starts_with_paren(&self, mut id: ExprId) -> bool {
         loop {
             match &self.ast.expr(id).kind {
@@ -437,7 +454,7 @@ impl<'a> Printer<'a> {
     fn emit_expr(&mut self, id: ExprId, depth: usize) {
         let flat = self.flat_expr(id);
         if let Some(text) = &flat
-            && self.current_col() + text.len() <= self.config.max_width
+            && self.current_col() + text.len() <= self.config.width_budget()
         {
             self.out.push_str(text);
             return;
@@ -492,7 +509,9 @@ impl<'a> Printer<'a> {
             ExprKind::Index { obj, key } => {
                 self.emit_expr(*obj, depth);
                 self.out.push('[');
+                let at = self.out.len();
                 self.emit_expr(*key, depth);
+                self.pad_long_bracket_key(at);
                 self.out.push(']');
             }
             // Leaves always have a flat form; reaching here means it
@@ -552,10 +571,23 @@ impl<'a> Printer<'a> {
             }
             TableField::Keyed { key, value } => {
                 self.out.push('[');
+                let at = self.out.len();
                 self.emit_expr(*key, depth);
+                self.pad_long_bracket_key(at);
                 self.out.push_str("] = ");
                 self.emit_expr(*value, depth);
             }
+        }
+    }
+
+    /// Pad a just-emitted bracketed key (starting at byte `at`) with one
+    /// space on each side when the key's own text starts with `[` — only a
+    /// long-bracket string can, and `[[[` would lex as a long-bracket
+    /// opener (decisions/006).
+    fn pad_long_bracket_key(&mut self, at: usize) {
+        if self.out.as_bytes().get(at) == Some(&b'[') {
+            self.out.insert(at, ' ');
+            self.out.push(' ');
         }
     }
 
@@ -601,7 +633,11 @@ impl<'a> Printer<'a> {
                 format!("{}.{}", self.flat_expr(*obj)?, name.text)
             }
             ExprKind::Index { obj, key } => {
-                format!("{}[{}]", self.flat_expr(*obj)?, self.flat_expr(*key)?)
+                format!(
+                    "{}{}",
+                    self.flat_expr(*obj)?,
+                    bracketed_key(&self.flat_expr(*key)?)
+                )
             }
             ExprKind::Call { callee, args } => {
                 format!("{}({})", self.flat_expr(*callee)?, self.flat_list(args)?)
@@ -632,8 +668,8 @@ impl<'a> Printer<'a> {
                             format!("{} = {}", name.text, self.flat_expr(*value)?)
                         }
                         TableField::Keyed { key, value } => format!(
-                            "[{}] = {}",
-                            self.flat_expr(*key)?,
+                            "{} = {}",
+                            bracketed_key(&self.flat_expr(*key)?),
                             self.flat_expr(*value)?
                         ),
                     });
@@ -667,6 +703,16 @@ impl<'a> Printer<'a> {
             parts.push(self.flat_expr(expr)?);
         }
         Some(parts.join(", "))
+    }
+}
+
+/// `[key]`, space-padded when the key's text itself starts with `[` (a
+/// long-bracket string) — `[[[` would lex as a long-bracket opener.
+fn bracketed_key(key: &str) -> String {
+    if key.starts_with('[') {
+        format!("[ {key} ]")
+    } else {
+        format!("[{key}]")
     }
 }
 

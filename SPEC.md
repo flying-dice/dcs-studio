@@ -114,12 +114,18 @@ never a second parser — and it MUST hold these invariants:
 - **Idempotent.** `format(format(s)) == format(s)` byte-for-byte.
 - **Semantic-preserving.** Re-parsing the output MUST yield a tree
   structurally identical to the input's, comparing spans-ignored and short
-  strings by decoded value. The formatter MUST verify this before
-  returning and yield the input unchanged on any mismatch. Statement
-  separators (`;`) are dropped, table `;` separators become `,`, paren-free
-  call sugar gains parentheses, and trailing commas are normalised — all
+  strings by decoded value, with the multiset of comment texts intact. The
+  formatter MUST verify this before returning and yield the input
+  unchanged on any mismatch, signalling the trip to the caller
+  (`Formatted::guard_tripped`) — never aborting. Statement separators
+  (`;`) are dropped, table `;` separators become `,`, paren-free call
+  sugar gains parentheses, and trailing commas are normalised — all
   tree-neutral; a statement beginning with `(` is printed with a leading
-  `;` so separator dropping can never merge statements.
+  `;` when (and only when) a statement precedes it in its block, so
+  separator dropping can never merge statements. At a block's start the
+  `;` MUST be suppressed: Lua 5.1's grammar (`chunk ::= {stat [';']}`)
+  admits `;` only after a statement, and the output MUST stay loadable
+  under PUC Lua 5.1.
 - **Comment-preserving.** Every comment (line, long-bracket with its exact
   level, `---` doc run) survives with verbatim text. A comment inside an
   expression MAY move to the end of its statement's line. Blank-line runs
@@ -139,7 +145,7 @@ Config keys (`dcs-studio.toml` `[format]`, parsed by
 | `indent_width` | 1–16 | `4` |
 | `indent_style` | `"space"` \| `"tab"` | `"space"` |
 | `quote_style` | `"double"` \| `"single"` | `"double"` |
-| `max_width` | columns | `100` |
+| `max_width` | columns; values below 20 clamp to 20 | `100` |
 | `trailing_comma` | `"multiline"` \| `"never"` | `"multiline"` |
 
 The house style (spacing, quoting, wrapping, blank-line rules) is pinned in

@@ -10,36 +10,42 @@ use crate::config::QuoteStyle;
 /// redundant escape of the old quote relaxes (`'don\'t'` → `"don't"`).
 #[must_use]
 pub(crate) fn normalize(raw: &str, style: QuoteStyle) -> String {
-    let bytes = raw.as_bytes();
     let (old, new) = match style {
-        QuoteStyle::Double => (b'\'', b'"'),
-        QuoteStyle::Single => (b'"', b'\''),
+        QuoteStyle::Double => ('\'', '"'),
+        QuoteStyle::Single => ('"', '\''),
     };
-    if bytes.first() != Some(&old) || bytes.len() < 2 || bytes.last() != Some(&old) {
-        return raw.to_string();
-    }
-    let content = &raw[1..raw.len() - 1];
-    if content.bytes().any(|b| b == new) {
+    // Char-wise over `&str`: the only edits (dropping a `\` before the old
+    // quote, swapping the delimiters) are ASCII-safe; multi-byte content
+    // passes through verbatim — never byte-by-byte, which would mangle
+    // UTF-8 continuation bytes into mojibake.
+    let content = match raw
+        .strip_prefix(old)
+        .and_then(|rest| rest.strip_suffix(old))
+    {
+        Some(content) if raw.len() >= 2 => content,
+        _ => return raw.to_string(),
+    };
+    if content.contains(new) {
         return raw.to_string();
     }
     let mut out = String::with_capacity(raw.len());
-    out.push(char::from(new));
-    let mut iter = content.bytes();
-    while let Some(byte) = iter.next() {
-        if byte == b'\\' {
-            match iter.next() {
-                Some(escaped) if escaped == old => out.push(char::from(old)),
+    out.push(new);
+    let mut chars = content.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some(escaped) if escaped == old => out.push(old),
                 Some(escaped) => {
                     out.push('\\');
-                    out.push(char::from(escaped));
+                    out.push(escaped);
                 }
                 None => out.push('\\'),
             }
         } else {
-            out.push(char::from(byte));
+            out.push(ch);
         }
     }
-    out.push(char::from(new));
+    out.push(new);
     out
 }
 
@@ -134,6 +140,17 @@ mod tests {
     fn redundant_escape_relaxes_on_swap() {
         assert_eq!(normalize("'don\\'t'", QuoteStyle::Double), "\"don't\"");
         assert!(same_value("'don\\'t'", "\"don't\""));
+    }
+
+    #[test]
+    fn non_ascii_content_survives_the_swap() {
+        assert_eq!(normalize("'héllo'", QuoteStyle::Double), "\"héllo\"");
+        assert_eq!(
+            normalize("'dön\\'t — ünïcødé'", QuoteStyle::Double),
+            "\"dön't — ünïcødé\""
+        );
+        assert_eq!(normalize("\"héllo\"", QuoteStyle::Single), "'héllo'");
+        assert!(same_value("'héllo'", "\"héllo\""));
     }
 
     #[test]

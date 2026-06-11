@@ -27,7 +27,9 @@ pub(crate) fn format_range(
     let stats = &parsed.ast.block(block).stats;
 
     // Whole statements intersecting the range, widened until the splice
-    // start sits at a line boundary owning no earlier statement text.
+    // start sits at a line boundary owning no earlier statement text and
+    // no tail of a straddling comment (a block comment crossing the
+    // boundary would otherwise be amputated by the splice).
     let mut first = stats.len();
     let mut last = 0usize;
     for (i, &sid) in stats.iter().enumerate() {
@@ -41,27 +43,67 @@ pub(crate) fn format_range(
         return src.to_string();
     }
     let mut splice_start = line_start(src, parsed.ast.stat(stats[first]).span.start);
-    while first > 0 && parsed.ast.stat(stats[first - 1]).span.end > splice_start {
-        first -= 1;
-        splice_start = line_start(src, parsed.ast.stat(stats[first]).span.start);
+    loop {
+        let before = (first, splice_start);
+        while first > 0 && parsed.ast.stat(stats[first - 1]).span.end > splice_start {
+            first -= 1;
+            splice_start = line_start(src, parsed.ast.stat(stats[first]).span.start);
+        }
+        for t in trivia {
+            if t.span.start >= splice_start {
+                break;
+            }
+            if t.span.end > splice_start && !matches!(t.trivia, Trivia::BlankLines { .. }) {
+                splice_start = line_start(src, t.span.start);
+            }
+        }
+        if (first, splice_start) == before {
+            break;
+        }
     }
 
-    // Extend the splice over comments riding the last statement's line.
+    // Extend the splice over everything riding the last statement's line:
+    // a following statement there joins the run (the untouched suffix must
+    // never share a line with the formatted text), and same-line comments
+    // splice in whole — a straddling block comment moves entirely inside.
     let mut splice_end = parsed.ast.stat(stats[last]).span.end;
-    for t in trivia {
-        if t.span.start < splice_end {
-            continue;
+    loop {
+        let before = (last, splice_end);
+        while last + 1 < stats.len() {
+            let next = parsed.ast.stat(stats[last + 1]).span.start;
+            if src[splice_end as usize..next as usize].contains('\n') {
+                break;
+            }
+            last += 1;
+            splice_end = parsed.ast.stat(stats[last]).span.end;
         }
-        let same_line = !src[splice_end as usize..t.span.start as usize].contains('\n');
-        if same_line && !matches!(t.trivia, Trivia::BlankLines { .. }) {
-            splice_end = t.span.end;
-        } else {
+        for t in trivia {
+            if t.span.start < splice_end {
+                continue;
+            }
+            let same_line = !src[splice_end as usize..t.span.start as usize].contains('\n');
+            if same_line && !matches!(t.trivia, Trivia::BlankLines { .. }) {
+                splice_end = t.span.end;
+            } else {
+                break;
+            }
+        }
+        if (last, splice_end) == before {
             break;
         }
     }
 
     let run = &stats[first..=last];
-    let formatted = printer::print_run(src, parsed, trivia, config, run, depth, splice_start);
+    let formatted = printer::print_run(
+        src,
+        parsed,
+        trivia,
+        config,
+        run,
+        depth,
+        splice_start,
+        first == 0,
+    );
     let mut out = String::with_capacity(src.len() + 64);
     out.push_str(&src[..splice_start as usize]);
     out.push_str(&formatted);

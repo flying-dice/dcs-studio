@@ -10,8 +10,16 @@
 /// Formatting options, read from `dcs-studio.toml` `[format]` by the
 /// project kit; every field has a default so an absent section formats
 /// with house style (4 spaces, double quotes, 100 columns, trailing
-/// comma in multiline tables).
+/// comma in multiline tables). `maxWidth` values below 20 clamp to 20 —
+/// a degenerate budget must not force every construct to break.
 public data FormatConfig { indentWidth: number, indentStyle: string, quoteStyle: string, maxWidth: number, trailingComma: string }
+
+/// A successful formatting outcome. `guardTripped` raised means the
+/// semantic guard rejected the printed text and `text` is the input
+/// returned unchanged — always a formatter bug, surfaced loudly by
+/// callers (the CLI warns on stderr and continues its walk; nothing
+/// aborts).
+public data Formatted { text: string, guardTripped: bool }
 
 /// `crates/dcs-lua-fmt`. The deterministic formatter face: whole-file and
 /// range formatting over the shared parse. Semantic preservation is a
@@ -24,8 +32,9 @@ public container Fmt for dcslua::DcsLuaLs {
   /// Before returning, the printed text is re-parsed and structurally
   /// compared (spans ignored, strings by decoded value) against the
   /// input tree; on any mismatch the original text is returned unchanged
-  /// — safety beats prettiness.
-  public Format(text: string, config: fmt::FormatConfig): Result<string, syntax::Diagnostic[]> {
+  /// with `guardTripped` raised — safety beats prettiness, and the trip
+  /// is signalled, never an abort.
+  public Format(text: string, config: fmt::FormatConfig): Result<fmt::Formatted, syntax::Diagnostic[]> {
     parsed = syntax::Parsed from syntax::Syntax.Parse(text)
     failed = bool from self.HasErrors(parsed)
     if (failed) {
@@ -34,9 +43,11 @@ public container Fmt for dcslua::DcsLuaLs {
     printed = string from fmt::Printer.Print(text, parsed, config)
     safe = bool from self.PreservesSemantics(text, printed)
     if (!safe) {
-      return Ok(text)
+      unchanged = fmt::Formatted from { text }
+      return Ok(unchanged)
     }
-    return Ok(printed)
+    formatted = fmt::Formatted from { printed }
+    return Ok(formatted)
   }
 
   /// Format the smallest run of whole statements enclosing a byte range;
@@ -44,7 +55,7 @@ public container Fmt for dcslua::DcsLuaLs {
   /// run lives in the deepest statement-reachable block containing the
   /// range (function-literal bodies nested inside expressions widen to
   /// their enclosing statement).
-  public FormatRange(text: string, range: syntax::Span, config: fmt::FormatConfig): Result<string, syntax::Diagnostic[]> {
+  public FormatRange(text: string, range: syntax::Span, config: fmt::FormatConfig): Result<fmt::Formatted, syntax::Diagnostic[]> {
     parsed = syntax::Parsed from syntax::Syntax.Parse(text)
     failed = bool from self.HasErrors(parsed)
     if (failed) {
@@ -53,9 +64,11 @@ public container Fmt for dcslua::DcsLuaLs {
     printed = string from fmt::Printer.PrintRun(text, parsed, range, config)
     safe = bool from self.PreservesSemantics(text, printed)
     if (!safe) {
-      return Ok(text)
+      unchanged = fmt::Formatted from { text }
+      return Ok(unchanged)
     }
-    return Ok(printed)
+    formatted = fmt::Formatted from { printed }
+    return Ok(formatted)
   }
 
   /// Whether the parse carries any error-severity diagnostic.
@@ -63,7 +76,8 @@ public container Fmt for dcslua::DcsLuaLs {
 
   /// The runtime guard: re-parse the printed text and compare trees
   /// structurally (spans ignored, short strings by decoded value), and
-  /// require every input comment to survive into the output trivia.
+  /// require the multiset of comment texts to survive into the output
+  /// trivia (a comment may move to a line end, never change or vanish).
   PreservesSemantics(before: string, after: string): bool;
 }
 
@@ -117,11 +131,14 @@ feature UnparseableFileReturnsUnchanged for fmt::Fmt {
   and "the caller keeps the original text byte-for-byte"
 }
 
-/// Formatting never changes what a script does.
+/// Formatting never changes what a script does — and the output always
+/// loads under real PUC Lua 5.1, whose grammar (`chunk ::= {stat [';']}`)
+/// admits `;` only after a statement.
 /// #critical
 feature FormattingPreservesSemantics for fmt::Fmt {
   given "any source that formats successfully"
   when "the output is re-parsed"
   then "its tree is structurally identical to the input's (spans ignored, strings by decoded value)"
-  and "a parenthesised call statement keeps a leading `;` so statement boundaries cannot merge"
+  and "a statement beginning with `(` keeps a leading `;` only when a statement precedes it in its block, so boundaries cannot merge and a block-start statement never gains an illegal `;`"
+  and "a tripped guard returns the input unchanged with `guardTripped` raised — signalled to the caller, never an abort"
 }
