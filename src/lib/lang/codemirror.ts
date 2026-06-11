@@ -6,10 +6,34 @@
 import { foldService } from "@codemirror/language";
 import { linter, type Diagnostic as CmDiagnostic } from "@codemirror/lint";
 import type { Extension } from "@codemirror/state";
-import { hoverTooltip } from "@codemirror/view";
+import { EditorView, hoverTooltip, ViewPlugin } from "@codemirror/view";
 import { lang } from "./intel.svelte";
 import { providerFor } from "./registry";
 import type { Diagnostic, FoldingRange } from "./provider";
+
+// Live editor views by file path, registered while a langIntel extension
+// is mounted — the Structure panel's symbol navigation dispatches here.
+const editors = new Map<string, EditorView>();
+
+/** How long a caret must rest before the Structure highlight follows. */
+const CURSOR_DEBOUNCE_MS = 150;
+
+/**
+ * Land the caret of `path`'s open editor on `offset` and scroll it into
+ * view (model/studio/lang.pds `OpenSymbol`). False when no live editor
+ * shows the file.
+ */
+export function revealInEditor(path: string, offset: number): boolean {
+  const view = editors.get(path);
+  if (!view) return false;
+  const anchor = Math.min(Math.max(offset, 0), view.state.doc.length);
+  view.dispatch({
+    selection: { anchor },
+    effects: EditorView.scrollIntoView(anchor, { y: "center" }),
+  });
+  view.focus();
+  return true;
+}
 
 /**
  * Language-intelligence extensions for `path`; `[]` when no provider
@@ -68,7 +92,29 @@ export function langIntelFor(path: string | null): Extension {
     };
   });
 
-  return [lintSource, folding, hover];
+  // Registers the live view for symbol navigation and publishes the caret
+  // (debounced) so the Structure panel highlights the enclosing symbol.
+  const cursorTracker = ViewPlugin.define((view) => {
+    editors.set(path, view);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return {
+      update(update) {
+        if (!update.selectionSet) return;
+        const offset = update.state.selection.main.head;
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          lang.cursor = { path, offset };
+        }, CURSOR_DEBOUNCE_MS);
+      },
+      destroy() {
+        clearTimeout(timer);
+        if (editors.get(path) === view) editors.delete(path);
+        if (lang.cursor?.path === path) lang.cursor = null;
+      },
+    };
+  });
+
+  return [lintSource, folding, hover, cursorTracker];
 }
 
 function toCmDiagnostic(d: Diagnostic, docLength: number): CmDiagnostic {

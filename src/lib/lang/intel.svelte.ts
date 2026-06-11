@@ -9,6 +9,7 @@ import { readDir, readTextFile, type DirEntry } from "$lib/api";
 import { allProviders, providerFor } from "./registry";
 import type {
   Diagnostic,
+  DocumentSymbol,
   LanguageProvider,
   ProfileRule,
   SourceFile,
@@ -42,6 +43,17 @@ export class LangIntel {
   diagnostics = $state<Diagnostic[]>([]);
   /** The embedded engine's lifecycle, surfaced in the status bar. */
   engineStatus = $state<EngineStatus>("off");
+  /** The outlined file's symbols, for the Structure panel (model
+   * `RefreshOutline`). */
+  symbols = $state<DocumentSymbol[]>([]);
+  /** The file `symbols` describes; null while nothing is outlined. */
+  outlinePath = $state<string | null>(null);
+  /** Last (debounced) editor caret, published by the CodeMirror wiring so
+   * the Structure panel's selection can follow the cursor. */
+  cursor = $state<{ path: string; offset: number } | null>(null);
+  // Stale-outline guard, same shape as mountGeneration: a slow symbols
+  // query for a previous file must not clobber the current outline.
+  private outlineGeneration = 0;
   // Generation counter: opening another project mid-mount invalidates the
   // older walk, so a slow first mount can never clobber the newer one.
   private mountGeneration = 0;
@@ -103,8 +115,47 @@ export class LangIntel {
   /** Clear findings and status when the workspace closes. */
   reset(): void {
     this.mountGeneration += 1;
+    this.outlineGeneration += 1;
     this.diagnostics = [];
     this.engineStatus = "off";
+    this.symbols = [];
+    this.outlinePath = null;
+    this.cursor = null;
+  }
+
+  /**
+   * Outline `path` for the Structure panel (model `RefreshOutline`):
+   * called when the active file changes, and re-entered from
+   * `updateSource` so the outline follows edits on the same debounced
+   * cadence as findings. A file no provider claims (or no file at all)
+   * publishes an empty outline — the panel says which case it is. An
+   * engine failure surfaces in the status bar (model error arm) and
+   * publishes an empty outline.
+   */
+  async refreshOutline(path: string | null): Promise<void> {
+    const generation = ++this.outlineGeneration;
+    // On a file change the old file's symbols clear immediately: stale
+    // rows must never be clickable against the new file (a click would
+    // navigate to the old file's offsets). Same-file refreshes keep the
+    // rows for a flicker-free update.
+    if (path !== this.outlinePath) this.symbols = [];
+    this.outlinePath = path;
+    const provider = path ? providerFor(path) : null;
+    if (!path || !provider) {
+      this.symbols = [];
+      return;
+    }
+    try {
+      const symbols = await provider.documentSymbols(path);
+      if (generation === this.outlineGeneration) this.symbols = symbols;
+    } catch (error) {
+      // Engine death surfaces in the status bar, same as updateSource
+      // (model `RefreshOutline` error arm); the panel shows an empty
+      // outline instead of stale rows.
+      console.error("language engine failed:", error);
+      this.engineStatus = "failed";
+      if (generation === this.outlineGeneration) this.symbols = [];
+    }
   }
 
   /**
@@ -118,6 +169,9 @@ export class LangIntel {
     try {
       await provider.setSource(path, text);
       await this.refreshProblems();
+      // The outline follows edits on this same debounced cadence (model
+      // `UpdateSource` → `RefreshOutline`).
+      if (path === this.outlinePath) await this.refreshOutline(path);
     } catch (error) {
       // Engine death (server crash, wasm trap) surfaces in the status
       // bar; the IDE keeps working without intelligence.

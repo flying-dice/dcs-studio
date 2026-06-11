@@ -9,6 +9,7 @@
   import LuaConsole from "$lib/components/LuaConsole.svelte";
   import MissionScriptingManager from "$lib/components/MissionScriptingManager.svelte";
   import Problems from "$lib/components/Problems.svelte";
+  import Structure from "$lib/components/Structure.svelte";
   import Editor from "$lib/components/Editor.svelte";
   import EditorTabs from "$lib/components/EditorTabs.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
@@ -374,6 +375,10 @@
               {#if app.leftTool === "project"}
                 <ScrollArea class="h-full">
                   <FileTree />
+                </ScrollArea>
+              {:else if app.leftTool === "structure"}
+                <ScrollArea class="h-full">
+                  <Structure path={app.filePath} />
                 </ScrollArea>
               {:else}
                 {@render placeholder(labelFor(leftTools, app.leftTool))}

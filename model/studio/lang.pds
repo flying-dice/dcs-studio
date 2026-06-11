@@ -26,8 +26,10 @@ public data Hover { title: string, body: string }
 public data Location { path: string, start: number, end: number }
 
 /// One outline entry: a function, local, or global declaration, with
-/// nested declarations as children.
-public data DocumentSymbol { name: string, kind: string, start: number, end: number, children: studio::lang::DocumentSymbol[] }
+/// nested declarations as children. `start..end` spans the whole
+/// declaration; `selectionStart..selectionEnd` spans just the name —
+/// the span navigation lands on.
+public data DocumentSymbol { name: string, kind: string, start: number, end: number, selectionStart: number, selectionEnd: number, children: studio::lang::DocumentSymbol[] }
 
 /// One foldable region, in byte offsets; the editor folds by line.
 public data FoldingRange { start: number, end: number }
@@ -133,6 +135,10 @@ public container LanguageIntel for studio::core::Studio {
       self.SyncRustSource(path, text)
     }
     self.RefreshProblems()
+    outlined = bool from self.IsOutlinedFile(path)
+    if (outlined) {
+      self.RefreshOutline(path)
+    }
   }
 
   /// Drop a deleted file from its owning session and refresh findings.
@@ -195,6 +201,60 @@ public container LanguageIntel for studio::core::Studio {
   /// view.
   JumpTo(finding: studio::lang::Diagnostic): void;
 
+  /// Whether `path` is the file the Structure panel currently outlines.
+  IsOutlinedFile(path: string): bool;
+
+  /// Outline of the active file for the Structure panel: queried when the
+  /// active file changes, and re-entered from UpdateSource so the outline
+  /// follows edits on the same debounced cadence as findings. The panel
+  /// tells its empty states apart: no file open ("No file open"), a claimed
+  /// file with zero declarations ("No symbols"), and a file no provider
+  /// claims ("No structure for this file type"). An engine failure marks
+  /// the engine failed in the status bar and publishes an empty outline.
+  #[manual]
+  public RefreshOutline(path: Option<string>): void {
+    if (path.isNone) {
+      self.PublishOutline(self.EmptyOutline())
+      return
+    }
+    supported = bool from self.HasProviderFor(path.value)
+    if (!supported) {
+      self.PublishOutline(self.EmptyOutline())
+      return
+    }
+    outlined = Result<studio::lang::DocumentSymbol[], studio::lang::EngineError> from self.QueryOutline(path.value)
+    if (outlined.isErr) {
+      self.ShowEngineStatus(outlined.error)
+      self.PublishOutline(self.EmptyOutline())
+      return
+    }
+    self.PublishOutline(outlined.value)
+  }
+
+  /// The empty outline published while no file is open and for files no
+  /// provider claims.
+  EmptyOutline(): studio::lang::DocumentSymbol[];
+
+  /// Route the outline query to the owning engine — DcsLua.DocumentSymbols
+  /// for Lua sources, rust-analyzer's session for Rust (empty while
+  /// rust-analyzer is absent). An engine failure (IPC drop, server crash)
+  /// surfaces as the error arm instead of taking the panel down.
+  QueryOutline(path: string): Result<studio::lang::DocumentSymbol[], studio::lang::EngineError>;
+
+  /// Hand the outline to the UI: the Structure panel's tree reads from
+  /// this.
+  PublishOutline(symbols: studio::lang::DocumentSymbol[]): void;
+
+  /// A Structure entry navigates the editor: the caret lands on the
+  /// symbol's selection span (its name) and scrolls into view.
+  #[manual]
+  public OpenSymbol(symbol: studio::lang::DocumentSymbol): void;
+
+  /// The innermost outline entry whose span contains the editor caret —
+  /// the row the Structure panel highlights as selection follows the
+  /// cursor (debounced).
+  EnclosingSymbol(offset: number): Option<studio::lang::DocumentSymbol>;
+
   /// Status-bar note that language intelligence is unavailable.
   ShowEngineStatus(failure: studio::lang::EngineError): void;
 }
@@ -221,6 +281,15 @@ feature EngineFailureIsNonFatal for studio::lang::LanguageIntel {
   when "a project is opened"
   then "the IDE works normally without language intelligence"
   and "the status bar reports the engine as unavailable"
+}
+
+/// Structure entries navigate the editor to their symbols.
+feature ClickSymbolNavigatesEditor for studio::lang::LanguageIntel {
+  given "the Structure panel outlines the active Lua file"
+  when "the developer clicks a symbol entry"
+  then "the editor caret lands on the symbol's name and scrolls into view"
+  and "the outline follows edits on the diagnostics debounce"
+  but "an empty Lua file shows 'No symbols' and a file no provider claims shows 'No structure for this file type'"
 }
 
 /// Rust projects get rust-analyzer findings through the same provider seam.
