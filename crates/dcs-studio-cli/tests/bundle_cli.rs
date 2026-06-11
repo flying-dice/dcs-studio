@@ -102,7 +102,7 @@ fn run_bundle(root: &Path) -> Output {
         .expect("spawn dcs-studio-cli bundle")
 }
 
-/// The built dcs-lua-runner, or None (callers skip) — host_ipc pattern.
+/// The built dcs-lua-runner, or None (callers skip) — `host_ipc` pattern.
 fn runner_binary() -> Option<PathBuf> {
     if let Some(pinned) = std::env::var_os("DCS_LUA_RUNNER") {
         let path = PathBuf::from(pinned);

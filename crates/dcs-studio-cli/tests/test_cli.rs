@@ -2,7 +2,7 @@
 //! `studio::cli::Cli.Test` + feature `FailingTestFailsBuild`): real CLI
 //! binary, real dcs-lua-runner, scaffolded temp projects.
 //!
-//! Runner discovery for THIS suite mirrors host_ipc.rs: `DCS_LUA_RUNNER`
+//! Runner discovery for THIS suite mirrors `host_ipc.rs`: `DCS_LUA_RUNNER`
 //! first (CI builds tools/lua-runner and pins it), then the runner's own
 //! target dir from a local `cargo build --manifest-path
 //! tools/lua-runner/Cargo.toml`. Tests that need a live runner SKIP
@@ -210,6 +210,60 @@ fn nonexistent_root_is_an_error() {
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("does not exist"),
     );
+}
+
+/// The executable half of `ScaffoldedProjectPassesCi`: a fresh
+/// lua-script scaffold's own sample suite passes `test`, and its
+/// `[build]` table bundles — the same two commands the scaffolded
+/// GitHub workflow runs (the workflow file itself is pinned by
+/// template-content tests in dcs-studio-project).
+#[test]
+fn scaffolded_lua_script_passes_test_and_bundle() {
+    let Some(runner) = runner_binary() else {
+        eprintln!("SKIP test_cli: build tools/lua-runner first or set DCS_LUA_RUNNER");
+        return;
+    };
+    let parent = std::env::temp_dir().join(format!("dcs-scaffold-ci-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&parent);
+    std::fs::create_dir_all(&parent).expect("parent dir");
+
+    let init = Command::new(env!("CARGO_BIN_EXE_dcs-studio-cli"))
+        .args(["init", "Sample Mod", "--template", "lua-script", "--parent"])
+        .arg(&parent)
+        .output()
+        .expect("spawn init");
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let root = parent.join("Sample Mod");
+
+    let tested = run_test_subcommand(&root, &runner, &[]);
+    assert!(
+        tested.status.success(),
+        "the scaffold's sample suite must pass:\n{}\n{}",
+        String::from_utf8_lossy(&tested.stdout),
+        String::from_utf8_lossy(&tested.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&tested.stdout);
+    assert!(stdout.contains("3 passed, 0 failed"), "{stdout}");
+
+    let bundled = Command::new(env!("CARGO_BIN_EXE_dcs-studio-cli"))
+        .arg("bundle")
+        .arg(&root)
+        .output()
+        .expect("spawn bundle");
+    assert!(
+        bundled.status.success(),
+        "the scaffold must bundle: {}",
+        String::from_utf8_lossy(&bundled.stderr)
+    );
+    assert!(
+        root.join("dist/sample-mod.lua").is_file(),
+        "[build] output lands under dist/"
+    );
+    let _ = std::fs::remove_dir_all(&parent);
 }
 
 #[test]
