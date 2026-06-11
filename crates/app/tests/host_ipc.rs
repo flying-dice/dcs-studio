@@ -16,6 +16,17 @@ use std::process::{Child, Command, Stdio};
 use dcs_studio_lib::lsp::read_frame;
 use serde_json::{json, Value};
 
+/// Kill a process by id: std::process::Child can't be killed from a
+/// watchdog thread without sharing the handle, but the OS tools can.
+fn kill_by_id(id: u32) {
+    #[cfg(windows)]
+    let _ = Command::new("taskkill")
+        .args(["/PID", &id.to_string(), "/T", "/F"])
+        .output();
+    #[cfg(not(windows))]
+    let _ = Command::new("kill").args(["-9", &id.to_string()]).output();
+}
+
 /// `DCS_STUDIO_CLI`, else `<target dir of this test exe>/dcs-studio-cli`.
 fn cli_path() -> Option<PathBuf> {
     if let Ok(overridden) = std::env::var("DCS_STUDIO_CLI") {
@@ -80,6 +91,15 @@ fn host_frame_reader_drives_a_real_dcs_studio_cli_lsp() {
     }
     let mut child = command.spawn().expect("spawn dcs-studio-cli lsp");
     let mut reader = BufReader::new(child.stdout.take().expect("stdout piped"));
+
+    // Watchdog: a wedged server would otherwise block read_line forever
+    // and stall CI to the job timeout. Killing the child after the budget
+    // turns every blocked read into EOF, failing the test fast instead.
+    let child_id = child.id();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        kill_by_id(child_id);
+    });
 
     // initialize with no rootUri — the in-memory didOpen below is the
     // only document, so no workspace walk competes for diagnostics.

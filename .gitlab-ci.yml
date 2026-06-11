@@ -35,7 +35,14 @@ rust:
 app:
   stage: test
   image: rust:1.92
-  cache: *rust-cache
+  # Own cache key: the app job's tauri/webkit artifacts would churn the
+  # shared rust cache the engine/CLI job depends on.
+  cache:
+    key: rust-app-$CI_COMMIT_REF_SLUG
+    paths:
+      - .cargo/registry
+      - target
+    policy: pull-push
   variables:
     DCS_STUDIO_CLI: $CI_PROJECT_DIR/target/debug/dcs-studio-cli
   script:
