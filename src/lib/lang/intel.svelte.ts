@@ -128,10 +128,17 @@ export class LangIntel {
    * called when the active file changes, and re-entered from
    * `updateSource` so the outline follows edits on the same debounced
    * cadence as findings. A file no provider claims (or no file at all)
-   * publishes an empty outline — the panel says so instead of failing.
+   * publishes an empty outline — the panel says which case it is. An
+   * engine failure surfaces in the status bar (model error arm) and
+   * publishes an empty outline.
    */
   async refreshOutline(path: string | null): Promise<void> {
     const generation = ++this.outlineGeneration;
+    // On a file change the old file's symbols clear immediately: stale
+    // rows must never be clickable against the new file (a click would
+    // navigate to the old file's offsets). Same-file refreshes keep the
+    // rows for a flicker-free update.
+    if (path !== this.outlinePath) this.symbols = [];
     this.outlinePath = path;
     const provider = path ? providerFor(path) : null;
     if (!path || !provider) {
@@ -142,7 +149,11 @@ export class LangIntel {
       const symbols = await provider.documentSymbols(path);
       if (generation === this.outlineGeneration) this.symbols = symbols;
     } catch (error) {
+      // Engine death surfaces in the status bar, same as updateSource
+      // (model `RefreshOutline` error arm); the panel shows an empty
+      // outline instead of stale rows.
       console.error("language engine failed:", error);
+      this.engineStatus = "failed";
       if (generation === this.outlineGeneration) this.symbols = [];
     }
   }

@@ -13,6 +13,10 @@
   import { lang } from "$lib/lang/intel.svelte";
 
   const LUA_PATH = "lab/main.lua";
+  // A second claimed file — drives the stale-outline regression: switching
+  // between two Lua files must never show the previous file's rows.
+  const OTHER_PATH = "lab/other.lua";
+  const OTHER = `function alpha() end\n`;
   // A file no provider claims — drives the "no structure" rendering.
   const TEXT_PATH = "lab/notes.txt";
   // The multibyte comment makes UTF-16 and byte offsets diverge before
@@ -32,8 +36,8 @@ function helper() end
   let host: HTMLDivElement;
   let ready = $state(false);
   // Which file the Structure panel outlines (the lab's stand-in for the
-  // workbench's active file).
-  let path = $state<string>(LUA_PATH);
+  // workbench's active file); null stands in for "no file open".
+  let path = $state<string | null>(LUA_PATH);
 
   // Caret readout for the e2e suite: the same debounced cursor store the
   // Structure highlight follows.
@@ -48,7 +52,14 @@ function helper() end
       try {
         const provider = providerFor(LUA_PATH);
         if (!provider) throw new Error(`no provider for ${LUA_PATH}`);
-        await provider.mount([{ path: LUA_PATH, text: INITIAL }], [], "lab");
+        await provider.mount(
+          [
+            { path: LUA_PATH, text: INITIAL },
+            { path: OTHER_PATH, text: OTHER },
+          ],
+          [],
+          "lab",
+        );
         lang.engineStatus = "ready";
       } catch (error) {
         console.error("language engine failed to mount:", error);
@@ -78,7 +89,21 @@ function helper() end
       data-testid="switch-file"
       onclick={() => (path = path === LUA_PATH ? TEXT_PATH : LUA_PATH)}
     >
-      outline: {path}
+      outline: {path ?? "none"}
+    </button>
+    <button
+      class="rounded border px-2 py-0.5"
+      data-testid="switch-lua"
+      onclick={() => (path = path === OTHER_PATH ? LUA_PATH : OTHER_PATH)}
+    >
+      other lua
+    </button>
+    <button
+      class="rounded border px-2 py-0.5"
+      data-testid="close-file"
+      onclick={() => (path = null)}
+    >
+      close file
     </button>
     <span data-testid="cursor-offset"
       >cursor: {cursorOffset ?? "-"}</span

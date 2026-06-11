@@ -206,31 +206,40 @@ public container LanguageIntel for studio::core::Studio {
 
   /// Outline of the active file for the Structure panel: queried when the
   /// active file changes, and re-entered from UpdateSource so the outline
-  /// follows edits on the same debounced cadence as findings. A file no
-  /// provider claims publishes an empty outline — the panel shows "No
-  /// structure for this file type" instead of failing.
+  /// follows edits on the same debounced cadence as findings. The panel
+  /// tells its empty states apart: no file open ("No file open"), a claimed
+  /// file with zero declarations ("No symbols"), and a file no provider
+  /// claims ("No structure for this file type"). An engine failure marks
+  /// the engine failed in the status bar and publishes an empty outline.
   #[manual]
-  public RefreshOutline(path: string): void {
-    supported = bool from self.HasProviderFor(path)
+  public RefreshOutline(path: Option<string>): void {
+    if (path.isNone) {
+      self.PublishOutline(self.EmptyOutline())
+      return
+    }
+    supported = bool from self.HasProviderFor(path.value)
     if (!supported) {
       self.PublishOutline(self.EmptyOutline())
       return
     }
-    isLua = bool from self.IsLuaSource(path)
-    if (isLua) {
-      symbols = studio::lang::DocumentSymbol[] from studio::lang::DcsLua.DocumentSymbols(path)
-      self.PublishOutline(symbols)
+    outlined = Result<studio::lang::DocumentSymbol[], studio::lang::EngineError> from self.QueryOutline(path.value)
+    if (outlined.isErr) {
+      self.ShowEngineStatus(outlined.error)
+      self.PublishOutline(self.EmptyOutline())
       return
     }
-    self.PublishRustOutline(path)
+    self.PublishOutline(outlined.value)
   }
 
-  /// The empty outline published for files no provider claims.
+  /// The empty outline published while no file is open and for files no
+  /// provider claims.
   EmptyOutline(): studio::lang::DocumentSymbol[];
 
-  /// Query rust-analyzer's session for a Rust file's outline and publish
-  /// it; empty while rust-analyzer is absent.
-  PublishRustOutline(path: string): void;
+  /// Route the outline query to the owning engine — DcsLua.DocumentSymbols
+  /// for Lua sources, rust-analyzer's session for Rust (empty while
+  /// rust-analyzer is absent). An engine failure (IPC drop, server crash)
+  /// surfaces as the error arm instead of taking the panel down.
+  QueryOutline(path: string): Result<studio::lang::DocumentSymbol[], studio::lang::EngineError>;
 
   /// Hand the outline to the UI: the Structure panel's tree reads from
   /// this.
@@ -280,7 +289,7 @@ feature ClickSymbolNavigatesEditor for studio::lang::LanguageIntel {
   when "the developer clicks a symbol entry"
   then "the editor caret lands on the symbol's name and scrolls into view"
   and "the outline follows edits on the diagnostics debounce"
-  but "a file no provider claims shows 'No structure for this file type'"
+  but "an empty Lua file shows 'No symbols' and a file no provider claims shows 'No structure for this file type'"
 }
 
 /// Rust projects get rust-analyzer findings through the same provider seam.
