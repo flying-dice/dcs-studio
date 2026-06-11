@@ -18,6 +18,11 @@ use crate::token::{Token, TokenKind};
 /// Lua's unary operator binding power (lcode.c `UNARY_PRIORITY`).
 const UNARY_PRIORITY: u8 = 12;
 
+/// Nesting cap keeping recursion well inside wasm's 1 MiB shadow stack
+/// (the deployment target's tightest budget). Beyond it, parsing recovers
+/// with `LUA-E103` instead of overflowing — totality holds everywhere.
+const MAX_NESTING_DEPTH: u32 = 200;
+
 /// Parse `src` into a tree plus diagnostics (lexical ones included).
 #[must_use]
 pub fn parse(src: &str) -> Parsed {
@@ -37,6 +42,7 @@ struct Parser<'src> {
     pos: usize,
     ast: Ast,
     diagnostics: Vec<Diagnostic>,
+    depth: u32,
 }
 
 impl<'src> Parser<'src> {
@@ -47,7 +53,23 @@ impl<'src> Parser<'src> {
             pos: 0,
             ast: Ast::default(),
             diagnostics: lexed.diagnostics,
+            depth: 0,
         }
+    }
+
+    /// Recursion guard for every self-nesting production. `false` means
+    /// the cap is hit: report once (at the trigger) and let the caller
+    /// produce its recovery value without descending further.
+    fn enter_nested(&mut self) -> bool {
+        self.depth += 1;
+        if self.depth == MAX_NESTING_DEPTH + 1 {
+            self.error_here(codes::NESTING_TOO_DEEP, "nesting too deep");
+        }
+        self.depth <= MAX_NESTING_DEPTH
+    }
+
+    fn exit_nested(&mut self) {
+        self.depth -= 1;
     }
 
     fn run(mut self) -> Parsed {
@@ -168,6 +190,20 @@ impl<'src> Parser<'src> {
     /// non-final position is reported (Lua 5.1 last-statement rule) but the
     /// following statements still parse.
     fn parse_block(&mut self) -> BlockId {
+        if !self.enter_nested() {
+            self.exit_nested();
+            let offset = self.current_span().start;
+            return self.ast.alloc_block(Block {
+                stats: Vec::new(),
+                span: Span::empty(offset),
+            });
+        }
+        let block = self.parse_block_inner();
+        self.exit_nested();
+        block
+    }
+
+    fn parse_block_inner(&mut self) -> BlockId {
         let start = self.current_span();
         let mut stats = Vec::new();
         let mut last_was_final: Option<Span> = None;
@@ -461,6 +497,19 @@ impl<'src> Parser<'src> {
     /// operators chain while their left power beats `limit`; right power
     /// drives the recursion, so `..` and `^` come out right-associative.
     fn parse_sub_expr(&mut self, limit: u8) -> ExprId {
+        if !self.enter_nested() {
+            self.exit_nested();
+            return self.ast.alloc_expr(Expr {
+                kind: ExprKind::Missing,
+                span: Span::empty(self.current_span().start),
+            });
+        }
+        let expr = self.parse_sub_expr_inner(limit);
+        self.exit_nested();
+        expr
+    }
+
+    fn parse_sub_expr_inner(&mut self, limit: u8) -> ExprId {
         let start = self.current_span();
         let mut lhs = if let Some(op) = unary_op(self.kind()) {
             self.bump();

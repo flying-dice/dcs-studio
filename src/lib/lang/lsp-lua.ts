@@ -8,6 +8,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { LspClient } from "./lsp-client";
+import { lineStarts } from "./offsets";
 import type {
   CompletionItem,
   Diagnostic,
@@ -213,14 +214,6 @@ function uriToPath(uri: string): string {
   let path = decodeURIComponent(uri.replace(/^file:\/\/\//, ""));
   if (!path.startsWith("/") && !/^[A-Za-z]:/.test(path)) path = `/${path}`;
   return path.replace(/\//g, "\\");
-}
-
-function lineStarts(text: string): number[] {
-  const starts = [0];
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === "\n") starts.push(i + 1);
-  }
-  return starts;
 }
 
 function lineStart(starts: number[], line: number): number {

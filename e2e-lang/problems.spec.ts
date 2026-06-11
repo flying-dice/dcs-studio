@@ -42,6 +42,23 @@ test("broken Lua shows a diagnostic inline and in Problems", async ({
   ).not.toHaveCount(0);
 });
 
+test("squiggles stay put behind non-ASCII text", async ({ page }) => {
+  // A multi-byte comment before the error: with byte offsets fed straight
+  // to CodeMirror the mark would drift left into the comment; converted
+  // offsets keep it on the offending token.
+  await setEditorText(page, "-- наводка по цели…\nfunction f(\n");
+
+  const entry = page.getByTestId("problem-entry").first();
+  await expect(entry).toBeVisible({ timeout: 15_000 });
+
+  const marked = await page
+    .getByTestId("lab-editor")
+    .locator(".cm-lintRange")
+    .first()
+    .textContent();
+  expect(marked ?? "").not.toMatch(/[а-я…]/i);
+});
+
 test("fixing the source clears the problems", async ({ page }) => {
   await setEditorText(page, "function f(\n");
   await expect(page.getByTestId("problem-entry").first()).toBeVisible({

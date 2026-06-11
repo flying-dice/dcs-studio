@@ -40,3 +40,27 @@ proptest! {
         let _ = parse(&src);
     }
 }
+
+/// Deep nesting recovers as LUA-E103 instead of blowing the stack — the
+/// totality claim must hold on wasm's 1 MiB shadow stack, so this runs on
+/// a deliberately small thread stack.
+#[test]
+fn deep_nesting_recovers_within_a_wasm_sized_stack() {
+    let handle = std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(|| {
+            let parens = format!("return {}1{}", "(".repeat(20_000), ")".repeat(20_000));
+            let parsed = parse(&parens);
+            assert!(parsed.diagnostics.iter().any(|d| d.code == "LUA-E103"));
+
+            let blocks = format!("{}x = 1\n{}", "do ".repeat(20_000), "end ".repeat(20_000));
+            let parsed = parse(&blocks);
+            assert!(parsed.diagnostics.iter().any(|d| d.code == "LUA-E103"));
+
+            // Legitimate nesting depths stay diagnostic-free.
+            let sane = format!("x = {}1{}", "(".repeat(50), ")".repeat(50));
+            assert!(parse(&sane).diagnostics.is_empty());
+        })
+        .expect("spawn small-stack thread");
+    handle.join().expect("no overflow, no panic");
+}

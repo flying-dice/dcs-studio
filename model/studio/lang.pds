@@ -134,14 +134,21 @@ public container LanguageIntel for studio::core::Studio {
   /// stores both read from this.
   PublishProblems(found: studio::lang::Diagnostic[]): void;
 
-  /// A Problems entry navigates to its finding; a vanished file is ignored.
+  /// A Problems entry navigates to its finding: the file opens and the
+  /// caret lands on the finding's line and column. A vanished file is
+  /// ignored.
   #[manual]
   public OpenProblem(finding: studio::lang::Diagnostic): void {
     opened = Result<studio::core::Document, studio::files::IoError> from studio::core::Workbench.OpenFile(finding.path)
     if (opened.isErr) {
       return
     }
+    self.JumpTo(finding)
   }
+
+  /// Place the editor caret at a finding's location and scroll it into
+  /// view.
+  JumpTo(finding: studio::lang::Diagnostic): void;
 
   /// Status-bar note that language intelligence is unavailable.
   ShowEngineStatus(failure: studio::lang::EngineError): void;
@@ -160,6 +167,7 @@ feature ProblemsClickOpensFile for studio::lang::LanguageIntel {
   given "the Problems panel lists a finding in another file"
   when "the developer clicks the entry"
   then "that file opens in the editor"
+  and "the caret lands on the finding's line and column"
 }
 
 /// Language intelligence is an enhancement, never a gate.

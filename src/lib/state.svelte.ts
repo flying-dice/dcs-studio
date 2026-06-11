@@ -272,9 +272,17 @@ class AppState {
     saveRecents(this.recents);
   }
 
-  openFile(path: string, name: string) {
+  /**
+   * Where the editor should land once the next file finishes loading
+   * (1-based line/column, UTF-16 columns) — set when a Problems entry is
+   * opened, consumed by the editor, then cleared.
+   */
+  pendingJump = $state<{ line: number; col: number } | null>(null);
+
+  openFile(path: string, name: string, jumpTo?: { line: number; col: number }) {
     this.filePath = path || null;
     this.fileName = name;
+    this.pendingJump = jumpTo ?? null;
     // Reset the document baseline; the editor refills it once the file loads.
     this.docText = "";
     this.savedText = "";

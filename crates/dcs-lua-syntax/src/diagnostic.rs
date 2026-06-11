@@ -49,4 +49,5 @@ pub mod codes {
     pub const UNEXPECTED_TOKEN: &str = "LUA-E100";
     pub const EXPECTED_TOKEN: &str = "LUA-E101";
     pub const UNTERMINATED_BLOCK: &str = "LUA-E102";
+    pub const NESTING_TOO_DEEP: &str = "LUA-E103";
 }

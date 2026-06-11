@@ -300,6 +300,16 @@ feature ParsingIsInfallible for syntax::Parser {
   but "parsing never throws or aborts"
 }
 
+/// Totality holds at the deployment target's stack budget.
+/// #critical
+feature DeepNestingRecoversNotOverflows for syntax::Parser {
+  given "pathologically deep nesting (thousands of parens or blocks)"
+  when "the chunk is parsed on a wasm-sized 1 MiB stack"
+  then "recursion stops at the nesting cap with a LUA-E103 diagnostic"
+  and "the surrounding source still parses into the tree"
+  but "the stack never overflows"
+}
+
 /// A missing `end` is reported but does not destroy enclosing structure.
 feature MissingEndRecovers for syntax::Parser {
   given "a function body whose `end` was not yet typed"

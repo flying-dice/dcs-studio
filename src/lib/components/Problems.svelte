@@ -21,7 +21,10 @@
   }
 
   function open(finding: Diagnostic) {
-    app.openFile(finding.path, fileName(finding.path));
+    app.openFile(finding.path, fileName(finding.path), {
+      line: finding.start_line,
+      col: finding.start_col,
+    });
   }
 </script>
 

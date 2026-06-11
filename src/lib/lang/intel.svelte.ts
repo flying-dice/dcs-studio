@@ -5,7 +5,7 @@
 // A separate singleton from `app` so the dependency points one way:
 // `state.svelte.ts` announces project-opened; components read findings here.
 
-import { readDir, readTextFile } from "$lib/api";
+import { readDir, readTextFile, type DirEntry } from "$lib/api";
 import { allProviders, providerFor } from "./registry";
 import type { Diagnostic, ProfileRule, SourceFile } from "./provider";
 
@@ -14,7 +14,20 @@ const SKIPPED_DIRS = new Set([".git", "node_modules", "target", "build"]);
 
 export type EngineStatus = "off" | "loading" | "ready" | "failed";
 
-class LangIntel {
+/**
+ * The filesystem the workspace walk reads through. Injectable so the
+ * mount path — the race guard, unreadable-file skip, reset — is testable
+ * from the browser e2e suite (`/lab/mount`) without Tauri.
+ */
+export interface IntelFs {
+  readDir(path: string): Promise<DirEntry[]>;
+  readTextFile(path: string): Promise<string>;
+}
+
+const tauriFs: IntelFs = { readDir, readTextFile };
+
+export class LangIntel {
+  constructor(private readonly fs: IntelFs = tauriFs) {}
   /** Workspace-wide findings, sorted by path then offset. */
   diagnostics = $state<Diagnostic[]>([]);
   /** The embedded engine's lifecycle, surfaced in the status bar. */
@@ -95,7 +108,7 @@ class LangIntel {
   private async collectLuaSources(root: string): Promise<SourceFile[]> {
     const files: SourceFile[] = [];
     const walk = async (dir: string): Promise<void> => {
-      const entries = await readDir(dir);
+      const entries = await this.fs.readDir(dir);
       for (const entry of entries) {
         if (entry.is_dir) {
           if (!SKIPPED_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
@@ -105,7 +118,7 @@ class LangIntel {
         }
         if (providerFor(entry.name)) {
           try {
-            const text = await readTextFile(entry.path);
+            const text = await this.fs.readTextFile(entry.path);
             files.push({ path: entry.path, text });
           } catch {
             // One unreadable file (locked, binary-masquerading, vanished)

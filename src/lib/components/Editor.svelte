@@ -95,6 +95,21 @@
       });
       loadingDoc = false;
       app.onDocLoaded(text);
+      // A Problems click carries its finding's location: land the caret
+      // there and bring it into view.
+      const jump = app.pendingJump;
+      if (jump) {
+        app.pendingJump = null;
+        const line = view.state.doc.line(
+          Math.min(Math.max(jump.line, 1), view.state.doc.lines),
+        );
+        const offset = Math.min(line.from + Math.max(jump.col - 1, 0), line.to);
+        view.dispatch({
+          selection: { anchor: offset },
+          effects: EditorView.scrollIntoView(offset, { y: "center" }),
+        });
+        view.focus();
+      }
     });
   });
 

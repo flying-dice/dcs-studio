@@ -52,7 +52,7 @@ Diagnostic { severity, span, code, code_description, message }
 | Range | Stage | Examples |
 | --- | --- | --- |
 | `LUA-E0xx` | lexical | `LUA-E001` unexpected character · `LUA-E002` unterminated string · `LUA-E003` unterminated long bracket · `LUA-E004` malformed number |
-| `LUA-E1xx` | parse | `LUA-E100` unexpected token · `LUA-E101` expected token · `LUA-E102` unterminated block (missing `end`) |
+| `LUA-E1xx` | parse | `LUA-E100` unexpected token · `LUA-E101` expected token · `LUA-E102` unterminated block (missing `end`) · `LUA-E103` nesting too deep (recursion cap; totality on a 1 MiB stack) |
 | `LUA-Sxxx` | static (resolution) | reserved |
 | `LUA-Txxx` | types | reserved |
 | `DCS-Wxxx` | DCS-flavoured lints | reserved |
