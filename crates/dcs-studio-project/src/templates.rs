@@ -130,6 +130,8 @@ pub fn next_steps(template: &str) -> &'static str {
         "lua-script" => {
             "next steps:\n\
              \x20 open the folder in DCS Studio, or validate with: dcs-studio-cli check\n\
+             \x20 run the unit tests outside DCS: dcs-studio-cli test\n\
+             \x20 bundle the require graph into dist/: dcs-studio-cli bundle\n\
              \x20 load it via a mission trigger (DO SCRIPT FILE) — see README.md"
         }
         "blank" => {
@@ -181,31 +183,7 @@ fn lua_script(name: &str) -> Vec<TemplateFile> {
     let slug = slugify(name);
     let ident = lua_ident(name);
     vec![
-        TemplateFile::text(
-            "dcs-studio.toml",
-            format!(
-                "{}{}\n\
-                 # Required modules / other mods.\n\
-                 [[dependencies]]\n\
-                 id = \"F-16C_50\"\n\
-                 name = \"F-16C Viper\"\n\
-                 version = \"*\"\n\
-                 optional = false\n\n\
-                 # Install rules: copy matching sources to a destination under a named root.\n\
-                 [[install]]\n\
-                 source = \"Scripts/{slug}/\"\n\
-                 dest = \"{{SavedGames}}/Scripts/{slug}\"\n\n\
-                 # File manifest — tracked project files and their role.\n\
-                 [[files]]\n\
-                 path = \"Scripts/{slug}/main.lua\"\n\
-                 role = \"script\"\n\n\
-                 [[files]]\n\
-                 path = \"README.md\"\n\
-                 role = \"doc\"\n",
-                manifest_header(name),
-                project_block(name, "lua-script")
-            ),
-        ),
+        lua_script_manifest(name, &slug),
         TemplateFile::text(
             format!("Scripts/{slug}/main.lua"),
             format!(
@@ -232,14 +210,68 @@ fn lua_script(name: &str) -> Vec<TemplateFile> {
                  return {ident}\n"
             ),
         ),
-        TemplateFile::text(
-            "README.md",
-            format!(
-                "# {name}\n\n\
+        lua_script_sample_test(name, &slug, &ident),
+        lua_script_workflow(),
+        lua_script_readme(name, &slug),
+    ]
+}
+
+fn lua_script_manifest(name: &str, slug: &str) -> TemplateFile {
+    TemplateFile::text(
+        "dcs-studio.toml",
+        format!(
+            "{}{}\n\
+             # Required modules / other mods.\n\
+             [[dependencies]]\n\
+             id = \"F-16C_50\"\n\
+             name = \"F-16C Viper\"\n\
+             version = \"*\"\n\
+             optional = false\n\n\
+             # Install rules: copy matching sources to a destination under a named root.\n\
+             [[install]]\n\
+             source = \"Scripts/{slug}/\"\n\
+             dest = \"{{SavedGames}}/Scripts/{slug}\"\n\n\
+             # Lua unit tests, run outside DCS: dcs-studio-cli test\n\
+             [test]\n\
+             dir = \"tests\"\n\n\
+             # Single-file bundle of the require graph: dcs-studio-cli bundle\n\
+             [build]\n\
+             entry = \"Scripts/{slug}/main.lua\"\n\
+             output = \"{slug}.lua\"\n\n\
+             # File manifest — tracked project files and their role.\n\
+             [[files]]\n\
+             path = \"Scripts/{slug}/main.lua\"\n\
+             role = \"script\"\n\n\
+             [[files]]\n\
+             path = \"tests/main.test.lua\"\n\
+             role = \"test\"\n\n\
+             [[files]]\n\
+             path = \"README.md\"\n\
+             role = \"doc\"\n",
+            manifest_header(name),
+            project_block(name, "lua-script")
+        ),
+    )
+}
+
+fn lua_script_readme(name: &str, slug: &str) -> TemplateFile {
+    TemplateFile::text(
+        "README.md",
+        format!(
+            "# {name}\n\n\
                  A DCS (Digital Combat Simulator) Lua script mod, scaffolded by DCS Studio.\n\n\
                  ## Layout\n\n\
                  - `Scripts/{slug}/main.lua` — script entry point.\n\
+                 - `tests/main.test.lua` — unit tests, run outside DCS by `dcs-studio-cli test`.\n\
+                 - `.github/workflows/ci.yml` — GitHub Actions: test + bundle on push, release on tag.\n\
                  - `dcs-studio.toml` — project manifest (metadata, dependencies, install rules).\n\n\
+                 ## Test and bundle\n\n\
+                 `dcs-studio-cli test` runs `tests/**/*.test.lua` in a real Lua 5.1 with the\n\
+                 mission environment stubbed (`env`, `timer`, `trigger.action`, `world`) —\n\
+                 stub calls are recorded in `dcs.calls`, and `runner.advanceTime(n)` drives\n\
+                 a manual clock through `timer.scheduleFunction` deadlines. `dcs-studio-cli\n\
+                 bundle` amalgamates the require graph from `[build] entry` into one\n\
+                 DCS-loadable file under `dist/`.\n\n\
                  ## Where scripts run\n\n\
                  Mission scripts run inside DCS's mission scripting environment: `env`,\n\
                  `timer`, `trigger`, and `world` are available; `os`, `io`, and `lfs` are\n\
@@ -259,9 +291,141 @@ fn lua_script(name: &str) -> Vec<TemplateFile> {
                  ## Logs\n\n\
                  `env.info` output lands in `Saved Games/DCS/Logs/dcs.log`, tagged with the\n\
                  script name.\n"
-            ),
         ),
-    ]
+    )
+}
+
+/// The scaffolded unit-test suite (issue #9): exercises the real entry
+/// module through `dcs-studio-cli test`, demonstrating the harness, the
+/// recorded stub calls, and the manual clock.
+fn lua_script_sample_test(name: &str, slug: &str, ident: &str) -> TemplateFile {
+    TemplateFile::text(
+        "tests/main.test.lua",
+        format!(
+            "-- Unit tests for {name}, run outside DCS by `dcs-studio-cli test`.\n\
+             --\n\
+             -- Harness: describe/test/expect with toBe, toEqual, toBeTruthy,\n\
+             -- toBeFalsy, toBeNil, toContain, toThrow. The runner stubs the mission\n\
+             -- environment (env, timer, trigger.action, world), records every stub\n\
+             -- call into dcs.calls, and runner.advanceTime(n) drives a manual clock\n\
+             -- through timer.scheduleFunction deadlines.\n\n\
+             local {ident} = require(\"Scripts.{slug}.main\")\n\n\
+             describe(\"{name}\", function()\n\
+             \x20   test(\"knows its identity\", function()\n\
+             \x20       expect({ident}.name).toBe(\"{name}\")\n\
+             \x20       expect({ident}.version).toBe(\"0.1.0\")\n\
+             \x20   end)\n\n\
+             \x20   test(\"logged through env.info when it started\", function()\n\
+             \x20       expect(#dcs.calls).toBe(1)\n\
+             \x20       expect(dcs.calls[1].fn).toBe(\"env.info\")\n\
+             \x20       expect(dcs.calls[1].args[1]).toContain(\"loaded v0.1.0\")\n\
+             \x20   end)\n\n\
+             \x20   test(\"the manual clock fires scheduled functions\", function()\n\
+             \x20       local fired = 0\n\
+             \x20       timer.scheduleFunction(function()\n\
+             \x20           fired = fired + 1\n\
+             \x20       end, nil, timer.getTime() + 60)\n\
+             \x20       runner.advanceTime(59)\n\
+             \x20       expect(fired).toBe(0)\n\
+             \x20       runner.advanceTime(1)\n\
+             \x20       expect(fired).toBe(1)\n\
+             \x20   end)\n\
+             end)\n"
+        ),
+    )
+}
+
+/// The scaffolded GitHub Actions workflow (issue #9): test + bundle on
+/// push, release `dist/*` + the manifest on tag. No name interpolation —
+/// identical for every project. The rust-dll template deliberately gets
+/// no workflow: its CI story needs a Windows MSVC link against DCS's
+/// lua import library, out of scope until the mirror ships runners
+/// for it.
+fn lua_script_workflow() -> TemplateFile {
+    TemplateFile::text(
+        ".github/workflows/ci.yml",
+        r#"# CI for this mod — scaffolded by DCS Studio (issue #9).
+#
+# The DCS Studio toolchain (dcs-studio-cli + dcs-lua-runner) installs
+# from a GitHub repository's releases. PLACEHOLDER: the official mirror
+# of DCS Studio is pending publication; the slug below
+# (flying-dice/dcs-studio) is where it is expected to land — point
+# DCS_STUDIO_REPO elsewhere if your toolchain releases live elsewhere.
+# Releases are expected to ship Linux x86_64 binaries named
+# `dcs-studio-cli` and `dcs-lua-runner`.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  # The GitHub repository whose releases provide the toolchain.
+  DCS_STUDIO_REPO: flying-dice/dcs-studio
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  test-and-bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the DCS Studio toolchain from releases
+        run: |
+          mkdir -p "$HOME/.dcs-studio"
+          gh release download --repo "$DCS_STUDIO_REPO" \
+            --pattern 'dcs-studio-cli*' --pattern 'dcs-lua-runner*' \
+            --dir "$HOME/.dcs-studio"
+          chmod +x "$HOME/.dcs-studio"/*
+          echo "$HOME/.dcs-studio" >> "$GITHUB_PATH"
+
+      - name: Run Lua unit tests
+        run: dcs-studio-cli test --reporter junit
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit
+          path: junit.xml
+
+      - name: Bundle
+        run: dcs-studio-cli bundle
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # A tag publishes the marketplace-consumable shape: dist/* plus the
+  # project manifest.
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: test-and-bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the DCS Studio toolchain from releases
+        run: |
+          mkdir -p "$HOME/.dcs-studio"
+          gh release download --repo "$DCS_STUDIO_REPO" \
+            --pattern 'dcs-studio-cli*' --pattern 'dcs-lua-runner*' \
+            --dir "$HOME/.dcs-studio"
+          chmod +x "$HOME/.dcs-studio"/*
+          echo "$HOME/.dcs-studio" >> "$GITHUB_PATH"
+
+      - name: Bundle
+        run: dcs-studio-cli bundle
+
+      - name: Create the release
+        run: gh release create "$GITHUB_REF_NAME" dist/* dcs-studio.toml --title "$GITHUB_REF_NAME" --generate-notes
+"#
+        .to_string(),
+    )
 }
 
 /// A standalone mlua cdylib mod, generalising `crates/dcs-bridge`: the Lua
@@ -504,7 +668,7 @@ mod tests {
     #[test]
     fn lua_script_template_scaffolds_valid_lua() {
         let files = render("lua-script", "My Script Mod").expect("known template");
-        assert_eq!(files.len(), 3);
+        assert_eq!(files.len(), 5);
         let main = files
             .iter()
             .find(|f| f.path.ends_with("main.lua"))
@@ -526,6 +690,86 @@ mod tests {
         assert!(readme.contains("dcs.log"));
     }
 
+    /// Issue #9: the scaffolded test suite must exercise the REAL entry
+    /// module and only the documented harness/stub surface, and the
+    /// manifest's [test]/[build] tables must point at files the template
+    /// actually writes (drift here strands `test` and `bundle`).
+    #[test]
+    fn lua_script_template_ships_a_wired_up_test_suite() {
+        let files = render("lua-script", "My Script Mod").expect("known template");
+
+        let spec = text_of(&files, "tests/main.test.lua");
+        let parsed = dcs_lua_syntax::parser::parse(spec);
+        assert!(
+            parsed.diagnostics.is_empty(),
+            "sample test has findings: {:?}",
+            parsed.diagnostics
+        );
+        // Requires the module the template writes, by its real path.
+        assert!(spec.contains("require(\"Scripts.my-script-mod.main\")"));
+        // Demonstrates the three pillars: matchers, the recorded stub
+        // call log, and the manual clock.
+        assert!(spec.contains(".toBe("));
+        assert!(spec.contains("dcs.calls[1].fn"));
+        assert!(spec.contains("runner.advanceTime"));
+        assert!(spec.contains("timer.scheduleFunction"));
+
+        // The manifest's tables resolve against the template's own files.
+        let manifest = crate::manifest::parse(text_of(&files, "dcs-studio.toml"))
+            .expect("rendered manifest parses");
+        assert_eq!(manifest.test.dir, "tests");
+        let entry = manifest.build.entry.expect("[build] entry declared");
+        assert!(
+            files.iter().any(|f| f.path == entry),
+            "[build] entry '{entry}' must be a file the template writes"
+        );
+        assert_eq!(manifest.build.output.as_deref(), Some("my-script-mod.lua"));
+        assert!(
+            files.iter().any(|f| f.path == "tests/main.test.lua"),
+            "the [test] dir must contain the sample spec"
+        );
+    }
+
+    /// Issue #9: the scaffolded GitHub Actions workflow is the only pin
+    /// `ScaffoldedProjectPassesCi` can have in this repo (it runs on
+    /// GitHub, not our GitLab CI): it must install from the mirror's
+    /// releases (documented placeholder slug), run test + bundle on
+    /// push, and release dist/* + the manifest on tag.
+    #[test]
+    fn lua_script_workflow_runs_test_bundle_and_releases() {
+        let files = render("lua-script", "My Script Mod").expect("known template");
+        let workflow = text_of(&files, ".github/workflows/ci.yml");
+
+        // Install: both binaries, from the documented placeholder repo.
+        assert!(workflow.contains("DCS_STUDIO_REPO: flying-dice/dcs-studio"));
+        assert!(
+            workflow.contains("PLACEHOLDER"),
+            "the pending mirror must be called out"
+        );
+        assert!(workflow.contains("gh release download"));
+        assert!(workflow.contains("dcs-lua-runner"));
+
+        // Push: tests (junit for CI consumption) and the bundle.
+        assert!(workflow.contains("dcs-studio-cli test --reporter junit"));
+        assert!(workflow.contains("dcs-studio-cli bundle"));
+        assert!(workflow.contains("junit.xml"));
+
+        // Tag: the marketplace-consumable shape.
+        assert!(workflow.contains("startsWith(github.ref, 'refs/tags/')"));
+        assert!(workflow.contains("gh release create"));
+        assert!(workflow.contains("dist/*"));
+        assert!(workflow.contains("dcs-studio.toml"));
+
+        // The rust-dll template deliberately ships no workflow (see
+        // lua_script_workflow's doc): pin the decision so adding one is
+        // a conscious act.
+        let rust = render("rust-dll", "My Native Mod").expect("known template");
+        assert!(
+            !rust.iter().any(|f| f.path.starts_with(".github/")),
+            "rust-dll grew a workflow — revisit its CI story deliberately"
+        );
+    }
+
     #[test]
     fn next_steps_guides_every_template() {
         for id in ["blank", "lua-script", "rust-dll"] {
@@ -534,6 +778,8 @@ mod tests {
         assert!(next_steps("rust-dll").contains("cargo build"));
         assert!(next_steps("rust-dll").contains("install"));
         assert!(next_steps("lua-script").contains("check"));
+        assert!(next_steps("lua-script").contains("dcs-studio-cli test"));
+        assert!(next_steps("lua-script").contains("bundle"));
         assert!(next_steps("blank").contains("dcs-studio.toml"));
         assert!(next_steps("nope").is_empty());
     }

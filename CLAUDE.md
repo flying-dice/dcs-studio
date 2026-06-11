@@ -46,6 +46,7 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | `model/studio/link.pds` | `DcsLink` heartbeat + `BridgeClient` (`crates/studio-services/src/link.rs`, `crates/app/src/dcs.rs`, `crates/dcs-bridge-client`) |
 | `model/studio/inject.pds` | `Injector` — bridge DLL/hook install (`crates/studio-services/src/inject.rs`) |
 | `model/studio/build.pds` | `Builder` — toolchain detection + cargo build with streamed output (issue #6 R1) |
+| `model/studio/cli.pds` | `Cli` agent-surface binary (`crates/dcs-studio-cli`), `TestRunner` — out-of-DCS Lua test runner (`tools/lua-runner`), `Bundler` — single-file require-graph bundler (issue #9) |
 | `model/studio/installer.pds` | `Installer` — manifest-driven `[[install]]` deploy to SavedGames/GameInstall roots (issue #6 R1) |
 | `model/studio/mission.pds` | `MissionScripting` sanitization manager (`crates/studio-services/src/mission.rs`) |
 | `model/studio/mcp.pds` | `McpServer` — the headless agent tool surface of `dcs-studio-cli mcp` (issue #8; `crates/dcs-studio-cli/src/mcp.rs` + `crates/studio-services`) |
@@ -90,21 +91,26 @@ two ways behind one `LanguageProvider` contract:
   commit). Same dual-path convention as `dcs-ws.ts`.
 
 **dcs-studio-cli is the agent surface**: `lsp` and `mcp` over stdio,
-plus direct `init` / `check` / `build` / `install` subcommands — an
-agent needs no Tauri app. The MCP server (model/studio/mcp.pds, issue
-#8) exposes the IDE's services headless: project (`init_project`,
-`check`, `build`), workspace fs (`read_dir`, `read_text_file`,
-`write_text_file`, `path_exists`), the DCS link (`dcs_status`,
-`dcs_eval`, `dcs_call` — dialed lazily on first use; everything else
-works without DCS), injection (`detect_installs`, `injection_status`,
-`inject`, `eject`), mission scripting (`detect_mission_scripts`,
-`mission_script_status`, `mission_script_set`,
-`mission_script_restore`), and the real engine (`lua_diagnostics`,
-`lua_hover`; `lua_complete`/`lua_definition` answer a stable
-not-implemented error until the engine grows those queries). The
-service logic itself lives in the tauri-free **`crates/studio-services`**
-(fs, inject, mission, link); the app's Tauri commands are thin
-wrappers over it, so agents and the IDE always run the same code.
+plus direct `init` / `check` / `build` / `test` / `bundle` / `install`
+subcommands — an agent needs no Tauri app. The MCP server
+(model/studio/mcp.pds, issue #8) exposes the IDE's services headless:
+project (`init_project`, `check`, `build`), workspace fs (`read_dir`,
+`read_text_file`, `write_text_file`, `path_exists`), the DCS link
+(`dcs_status`, `dcs_eval`, `dcs_call` — dialed lazily on first use;
+everything else works without DCS), injection (`detect_installs`,
+`injection_status`, `inject`, `eject`), mission scripting
+(`detect_mission_scripts`, `mission_script_status`,
+`mission_script_set`, `mission_script_restore`), and the real engine
+(`lua_diagnostics`, `lua_hover`; `lua_complete`/`lua_definition` answer
+a stable not-implemented error until the engine grows those queries).
+The service logic itself lives in the tauri-free
+**`crates/studio-services`** (fs, inject, mission, link); the app's
+Tauri commands are thin wrappers over it, so agents and the IDE always
+run the same code. `test` runs `tests/**/*.test.lua` outside DCS via
+the sibling `dcs-lua-runner` binary (`tools/lua-runner`, its OWN cargo
+workspace: mlua `vendored` must never feature-unify with dcs-bridge's
+`module`; `DCS_LUA_RUNNER` overrides the path); `bundle` amalgamates
+the `[build] entry` require graph into `dist/` via package.preload.
 
 **rust-analyzer is the second hosted server** (issue #6 R2):
 `src/lib/lang/rust-analyzer.ts` mounts `.rs` files through the same
@@ -165,9 +171,15 @@ diagnostics, never a panic. The IDE side:
   suites (units, conformance goldens, totality properties, corpus gate).
 - `cargo test -p dcs-studio-cli` — CLI suites incl. real-stdio LSP and MCP
   end-to-end sessions (full tool surface, no-DCS guards, real-engine lang
-  tools).
+  tools). The `test`-subcommand and bundle-execution suites need the
+  lua-runner built first (below) and found via `DCS_LUA_RUNNER` or
+  `tools/lua-runner/target/debug`; they skip hermetically without it
+  (host_ipc pattern). CI builds it first and pins the env var.
 - `cargo test -p studio-services` — the extracted tauri-free service logic
   (fs, inject, mission, DCS link guards).
+- `cargo test --manifest-path tools/lua-runner/Cargo.toml` — the Lua test
+  runner (issue #9). Its OWN cargo workspace, so `cargo test --workspace`
+  from the root never touches it; CI's `rust` job runs it explicitly.
 - `DCS_TEMPLATE_COMPILE=1 cargo test -p dcs-studio-project --test template_compile`
   — scaffold the rust-dll template and `cargo check` it (issue #22); skips
   without the env var so the default suite stays fast. CI's
