@@ -34,15 +34,55 @@ public system Studio;
 /// and the Playwright e2e suite).
 public container Workbench for studio::core::Studio {
   /// Open a folder as the project workspace, remember it as recent, and
-  /// announce it to project-tracking tool windows.
+  /// announce it to project-tracking tool windows. Switching away while
+  /// open tabs have unsaved edits needs ONE confirmation naming how many
+  /// files would lose their work; declining aborts the switch entirely —
+  /// every tab, buffer, dirty flag, and the current project stay exactly
+  /// as they were. The initial open (no tabs yet) never prompts.
   #[manual]
   public OpenProject(path: string): void {
+    dirty = number from self.CountDirtyTabs()
+    if (dirty > 0) {
+      prompt = string from self.DiscardPrompt(dirty)
+      confirmed = bool from self.ConfirmDiscard(prompt)
+      if (!confirmed) {
+        return
+      }
+    }
     name = string from studio::files::WorkspaceFs.Basename(path)
     recent = studio::core::RecentProject from { path, name }
     self.RememberRecent(recent)
     opened = studio::core::ProjectOpened from { path }
     self.Announce(opened)
   }
+
+  /// How many open tabs have unsaved edits — the blast radius a project
+  /// switch or close would discard.
+  CountDirtyTabs(): number;
+
+  /// The count-naming confirmation prompt, e.g. "3 files have unsaved
+  /// changes. Discard them and continue?".
+  DiscardPrompt(dirtyCount: number): string;
+
+  /// Return to the welcome screen without quitting. Same guard as
+  /// OpenProject: unsaved tabs need one count-naming confirmation, and
+  /// declining keeps the workspace exactly as it was.
+  #[manual]
+  public CloseProject(): void {
+    dirty = number from self.CountDirtyTabs()
+    if (dirty > 0) {
+      prompt = string from self.DiscardPrompt(dirty)
+      confirmed = bool from self.ConfirmDiscard(prompt)
+      if (!confirmed) {
+        return
+      }
+    }
+    self.ShowWelcome()
+  }
+
+  /// Drop every tab and its parked buffer, leave the workspace, reset the
+  /// language engine, and show the welcome screen.
+  ShowWelcome(): void;
 
   /// Keep `recent` at the head of the recents list: dedupe by path, cap at
   /// RECENTS_MAX, persist to localStorage.
@@ -162,7 +202,8 @@ public container Workbench for studio::core::Studio {
     }
     dirty = bool from tab.value.text != tab.value.savedText
     if (dirty) {
-      confirmed = bool from self.ConfirmDiscard(tab.value)
+      prompt = string from tab.value.name
+      confirmed = bool from self.ConfirmDiscard(prompt)
       if (!confirmed) {
         return
       }
@@ -170,12 +211,13 @@ public container Workbench for studio::core::Studio {
     self.RemoveTab(tab.value)
   }
 
-  /// Ask the developer to confirm discarding a dirty tab's unsaved edits.
-  /// Dual-path like DcsCall: a native dialog in the packaged app
-  /// (window.confirm is a stub under Tauri), window.confirm in a plain
-  /// browser. With no confirm surface at all the answer is NO — unsaved
-  /// work is never silently discarded.
-  ConfirmDiscard(doc: studio::core::Document): bool;
+  /// Ask the developer to confirm discarding unsaved edits — one tab's
+  /// (CloseFile, prompt naming the file) or every dirty tab's (project
+  /// switch/close, prompt naming the count). Dual-path like DcsCall: a
+  /// native dialog in the packaged app (window.confirm is a stub under
+  /// Tauri), window.confirm in a plain browser. With no confirm surface
+  /// at all the answer is NO — unsaved work is never silently discarded.
+  ConfirmDiscard(prompt: string): bool;
 
   /// Drop the tab and its parked buffer (so reopening reloads from disk);
   /// re-activate a neighbour if it was the active tab.
@@ -344,6 +386,19 @@ feature CloseDirtyTabPrompts for studio::core::Workbench {
   when "the developer closes it"
   then "the developer must confirm before the edits are discarded"
   and "declining keeps the tab open with its buffer intact"
+}
+
+/// Switching or closing a project never silently discards unsaved tabs:
+/// one confirmation names how many files are affected, and declining
+/// aborts the whole operation (issue #25). Covers both arms — OpenProject
+/// and CloseProject share the guard.
+feature DecliningProjectSwitchKeepsEverything for studio::core::Workbench {
+  given "a project is open and some open tabs have unsaved edits"
+  when "the developer opens another project (or closes the project) and declines the prompt"
+  then "the prompt named how many files have unsaved changes"
+  and "the switch/close is aborted: project, tabs, buffers, and dirty flags all unchanged"
+  and "accepting instead proceeds and discards the tabs"
+  and "with no dirty tabs no prompt appears at all"
 }
 
 /// A fresh project opens immediately after scaffolding.

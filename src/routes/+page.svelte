@@ -88,14 +88,14 @@
     {
       label: "File",
       items: [
-        { label: "New Project…", action: () => app.closeProject() },
+        { label: "New Project…", action: () => void app.closeProject() },
         { label: "Open Project…", shortcut: "⌘O", action: () => app.openFolder() },
         { sep: true },
         { label: "New File", shortcut: "⌘N" },
         { label: "Save", shortcut: "⌘S", action: () => app.saveFile() },
         { sep: true },
         { label: "Close Editor", action: () => app.closeActiveFile() },
-        { label: "Close Project", action: () => app.closeProject() },
+        { label: "Close Project", action: () => void app.closeProject() },
       ],
     },
     {

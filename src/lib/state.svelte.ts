@@ -57,6 +57,19 @@ export interface OpenDoc {
   savedText: string;
 }
 
+/**
+ * openPath / closeProject's environment-touching collaborators: basename
+ * resolution (a Tauri command) and the language-engine mount/reset.
+ * Injectable so the browser lab (/lab/project-switch) can drive the real
+ * switch/close guards without Tauri — same seam convention as LangIntel's
+ * IntelFs.
+ */
+export interface ProjectOps {
+  basename(path: string): Promise<string>;
+  mountWorkspace(path: string): Promise<void>;
+  resetWorkspace(): void;
+}
+
 const RECENTS_KEY = "dcs.recents";
 const RECENTS_MAX = 8;
 
@@ -111,6 +124,17 @@ class AppState {
   openFiles = $state<OpenDoc[]>([]);
   activePath = $state<string | null>(null);
   saving = $state(false);
+  // One project switch/close at a time: under Tauri the confirm dialog is
+  // async (it doesn't block like window.confirm), so a double-click on a
+  // recent must not run the flow — or the dialog — twice (mirrors `saving`).
+  switching = $state(false);
+
+  /** See `ProjectOps` — the lab route swaps in in-memory stand-ins. */
+  projectOps: ProjectOps = {
+    basename,
+    mountWorkspace: (path) => lang.mountWorkspace(path),
+    resetWorkspace: () => lang.reset(),
+  };
 
   /** The active tab's record, if any file is open. */
   get activeDoc(): OpenDoc | null {
@@ -256,18 +280,35 @@ class AppState {
     await this.openPath(path);
   }
 
-  /** Load a project by absolute path (from the picker or a recent entry). */
-  async openPath(path: string) {
-    this.rootPath = path;
-    this.rootName = await basename(path);
-    this.openFiles = [];
-    this.activePath = null;
-    this.leftTool = "project";
-    this.remember(path, this.rootName);
-    // Project-opened announcement: mount the workspace into the language
-    // engine (model/studio/lang.pds MountWorkspace). Fire-and-forget — an
-    // engine failure is non-fatal and surfaces in the status bar.
-    void lang.mountWorkspace(path);
+  /**
+   * Load a project by absolute path (from the picker or a recent entry).
+   * Switching away while open tabs have unsaved edits asks ONE count-naming
+   * confirmation (model `OpenProject`); declining aborts the switch with
+   * every tab, buffer, dirty flag, and the current project intact. The
+   * initial open (no tabs yet) never prompts — the dirty count is 0.
+   */
+  async openPath(path: string): Promise<void> {
+    if (this.switching) return;
+    this.switching = true;
+    try {
+      const dirty = this.countDirtyTabs();
+      if (dirty > 0) {
+        const confirmed = await this.confirmDiscard(this.discardPrompt(dirty));
+        if (!confirmed) return;
+      }
+      this.rootPath = path;
+      this.rootName = await this.projectOps.basename(path);
+      this.openFiles = [];
+      this.activePath = null;
+      this.leftTool = "project";
+      this.remember(path, this.rootName);
+      // Project-opened announcement: mount the workspace into the language
+      // engine (model/studio/lang.pds MountWorkspace). Fire-and-forget — an
+      // engine failure is non-fatal and surfaces in the status bar.
+      void this.projectOps.mountWorkspace(path);
+    } finally {
+      this.switching = false;
+    }
   }
 
   /**
@@ -280,13 +321,41 @@ class AppState {
     return path;
   }
 
-  /** Return to the welcome screen without quitting. */
-  closeProject() {
-    this.rootPath = null;
-    this.rootName = "";
-    this.openFiles = [];
-    this.activePath = null;
-    lang.reset();
+  /**
+   * Return to the welcome screen without quitting (model `CloseProject`).
+   * Same guard as openPath: unsaved tabs need one count-naming
+   * confirmation, and declining keeps the workspace exactly as it was.
+   */
+  async closeProject(): Promise<void> {
+    if (this.switching) return;
+    this.switching = true;
+    try {
+      const dirty = this.countDirtyTabs();
+      if (dirty > 0) {
+        const confirmed = await this.confirmDiscard(this.discardPrompt(dirty));
+        if (!confirmed) return;
+      }
+      this.rootPath = null;
+      this.rootName = "";
+      this.openFiles = [];
+      this.activePath = null;
+      this.projectOps.resetWorkspace();
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  /** How many open tabs have unsaved edits — the blast radius a project
+   * switch or close would discard (model `CountDirtyTabs`). */
+  private countDirtyTabs(): number {
+    return this.openFiles.filter((f) => f.docText !== f.savedText).length;
+  }
+
+  /** The count-naming confirmation prompt (model `DiscardPrompt`). */
+  private discardPrompt(count: number): string {
+    return count === 1
+      ? "1 file has unsaved changes. Discard it and continue?"
+      : `${count} files have unsaved changes. Discard them and continue?`;
   }
 
   /** Record (or bump) a project in the recents list. */
@@ -343,7 +412,9 @@ class AppState {
     const tab = this.openFiles.find((f) => f.path === path);
     if (!tab) return;
     if (tab.docText !== tab.savedText) {
-      const confirmed = await this.confirmDiscard(tab.name);
+      const confirmed = await this.confirmDiscard(
+        `${tab.name} has unsaved changes. Close it and discard them?`,
+      );
       if (!confirmed) return;
     }
     // Re-locate the tab: the list may have changed while the dialog was up.
@@ -362,15 +433,15 @@ class AppState {
   }
 
   /**
-   * Ask the developer before discarding a dirty tab (model `ConfirmDiscard`).
-   * Dual-path like dcsCall: the native dialog in the packaged app
-   * (window.confirm is a non-functional stub in Tauri's webview),
-   * window.confirm in a plain browser (vite dev, Playwright). With no
-   * confirm surface at all the answer is NO — never silently discard
-   * unsaved work.
+   * Ask the developer before discarding unsaved edits — one tab's
+   * (closeFile) or every dirty tab's (project switch/close); the caller
+   * provides the prompt (model `ConfirmDiscard`). Dual-path like dcsCall:
+   * the native dialog in the packaged app (window.confirm is a
+   * non-functional stub in Tauri's webview), window.confirm in a plain
+   * browser (vite dev, Playwright). With no confirm surface at all the
+   * answer is NO — never silently discard unsaved work.
    */
-  private async confirmDiscard(name: string): Promise<boolean> {
-    const message = `${name} has unsaved changes. Close it and discard them?`;
+  private async confirmDiscard(message: string): Promise<boolean> {
     if (isTauri()) {
       return confirmDialog(message, { title: "Unsaved changes", kind: "warning" });
     }
