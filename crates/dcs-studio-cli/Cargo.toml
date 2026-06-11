@@ -11,6 +11,7 @@ name = "dcs-studio-cli"
 path = "src/main.rs"
 
 [dependencies]
+dcs-lua-fmt = { path = "../dcs-lua-fmt" }
 dcs-lua-lsp-core = { path = "../dcs-lua-lsp-core" }
 dcs-lua-syntax = { path = "../dcs-lua-syntax" }
 dcs-studio-project = { path = "../dcs-studio-project" }

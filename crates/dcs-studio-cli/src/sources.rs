@@ -17,6 +17,11 @@ pub fn collect(root: &Path) -> Vec<(String, String)> {
     WalkDir::new(root)
         .into_iter()
         .filter_entry(|entry| {
+            // The root itself always walks — `fmt .` / `check .` must not
+            // trip over the literal `.` (or a dot-named root) being given.
+            if entry.depth() == 0 {
+                return true;
+            }
             let name = entry.file_name().to_string_lossy();
             !(entry.file_type().is_dir()
                 && (SKIPPED_DIRS.contains(&name.as_ref()) || name.starts_with('.')))
