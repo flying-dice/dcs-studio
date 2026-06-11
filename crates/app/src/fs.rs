@@ -71,6 +71,15 @@ pub struct NewFile {
     contents: String,
 }
 
+/// A template path must stay under the project root: relative, with plain
+/// components only — no absolute paths, no `..` traversal, no drive prefixes.
+fn stays_under_root(path: &str) -> bool {
+    let p = Path::new(path);
+    !p.as_os_str().is_empty()
+        && p.components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
 /// Scaffold a new project: create `<parent>/<name>` (erroring if it already
 /// exists) and write every templated file beneath it. Returns the absolute path
 /// of the new project root so the caller can open it immediately.
@@ -79,6 +88,12 @@ pub fn create_project(parent: String, name: String, files: Vec<NewFile>) -> Resu
     let root = Path::new(&parent).join(&name);
     if root.exists() {
         return Err(format!("'{}' already exists", root.display()));
+    }
+    if let Some(file) = files.iter().find(|f| !stays_under_root(&f.path)) {
+        return Err(format!(
+            "Template path '{}' would escape the project root",
+            file.path
+        ));
     }
     std::fs::create_dir_all(&root)
         .map_err(|e| format!("Failed to create '{}': {}", root.display(), e))?;
@@ -94,4 +109,26 @@ pub fn create_project(parent: String, name: String, files: Vec<NewFile>) -> Resu
     }
 
     Ok(root.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stays_under_root;
+
+    #[test]
+    fn plain_relative_paths_are_allowed() {
+        assert!(stays_under_root("README.md"));
+        assert!(stays_under_root("scripts/init.lua"));
+        assert!(stays_under_root("a/b/c.txt"));
+    }
+
+    #[test]
+    fn escaping_paths_are_rejected() {
+        assert!(!stays_under_root(""));
+        assert!(!stays_under_root("../outside.txt"));
+        assert!(!stays_under_root("a/../../outside.txt"));
+        assert!(!stays_under_root("/etc/passwd"));
+        assert!(!stays_under_root(r"C:\Windows\system32\evil.dll"));
+        assert!(!stays_under_root(r"\\server\share\evil"));
+    }
 }

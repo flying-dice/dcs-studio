@@ -43,9 +43,10 @@ public container WorkspaceFs for studio::core::Studio {
   /// Whether a path currently exists — flags stale recent projects.
   public PathExists(path: string): bool;
 
-  /// Scaffold `<parent>/<name>`: refuse to overwrite an existing folder, then
-  /// materialise every template file beneath the new root. Returns the
-  /// absolute project root so the caller can open it immediately.
+  /// Scaffold `<parent>/<name>`: refuse to overwrite an existing folder,
+  /// refuse any template path that could escape the new root, then
+  /// materialise every template file beneath it. Returns the absolute
+  /// project root so the caller can open it immediately.
   public CreateProject(parent: string, name: string, files: studio::files::NewFile[]): Result<string, studio::files::IoError> {
     root = string from self.JoinPath(parent, name)
     exists = bool from self.PathExists(root)
@@ -54,6 +55,11 @@ public container WorkspaceFs for studio::core::Studio {
       return Err(taken)
     }
     for (file in files) {
+      safe = bool from self.StaysUnderRoot(file)
+      if (!safe) {
+        escaping = studio::files::IoError from { file }
+        return Err(escaping)
+      }
       written = Result<void, studio::files::IoError> from self.WriteProjectFile(root, file)
       if (written.isErr) {
         return Err(written.error)
@@ -63,6 +69,10 @@ public container WorkspaceFs for studio::core::Studio {
   }
 
   JoinPath(parent: string, name: string): string;
+
+  /// A template path must be relative with plain components only — no
+  /// absolute paths, no `..` traversal out of the project root.
+  StaysUnderRoot(file: studio::files::NewFile): bool;
 
   /// Write one templated file under the root, creating parent dirs on demand.
   WriteProjectFile(root: string, file: studio::files::NewFile): Result<void, studio::files::IoError>;

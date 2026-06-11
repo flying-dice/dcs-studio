@@ -12,6 +12,7 @@
     type InjectionStatus,
   } from "$lib/api";
   import { app } from "$lib/state.svelte";
+  import { ToolActions } from "$lib/tool-actions.svelte";
   import { cn } from "$lib/utils.js";
 
   import { Button } from "$lib/components/ui/button/index.js";
@@ -22,8 +23,7 @@
   let installs = $state<DcsInstall[]>([]);
   let selected = $state<string | null>(null);
   let status = $state<InjectionStatus | null>(null);
-  let busy = $state(false);
-  let notice = $state<{ ok: boolean; text: string } | null>(null);
+  const ui = new ToolActions();
 
   const anythingInstalled = $derived(
     !!status && (status.dll_installed || status.hook_installed),
@@ -48,17 +48,17 @@
       status = await dcsInjectionStatus(selected);
     } catch (e) {
       status = null;
-      notice = { ok: false, text: String(e) };
+      ui.fail(e);
     }
   }
 
   async function detect() {
-    notice = null;
+    ui.clearNotice();
     try {
       installs = await dcsDetectInstalls();
     } catch (e) {
       installs = [];
-      notice = { ok: false, text: String(e) };
+      ui.fail(e);
     }
     if (!selected || !installs.some((i) => i.write_dir === selected)) {
       selected =
@@ -71,7 +71,7 @@
 
   async function select(writeDir: string) {
     selected = writeDir;
-    notice = null;
+    ui.clearNotice();
     await refreshStatus();
   }
 
@@ -86,31 +86,19 @@
   }
 
   async function inject() {
-    if (!selected || busy) return;
-    busy = true;
-    notice = null;
-    try {
-      status = await dcsInject(selected);
-      notice = { ok: true, text: "Bridge installed. Restart DCS to load it." };
-    } catch (e) {
-      notice = { ok: false, text: String(e) };
-    } finally {
-      busy = false;
-    }
+    const writeDir = selected;
+    if (!writeDir) return;
+    await ui.run("Bridge installed. Restart DCS to load it.", async () => {
+      status = await dcsInject(writeDir);
+    });
   }
 
   async function eject() {
-    if (!selected || busy) return;
-    busy = true;
-    notice = null;
-    try {
-      status = await dcsEject(selected);
-      notice = { ok: true, text: "Bridge removed." };
-    } catch (e) {
-      notice = { ok: false, text: String(e) };
-    } finally {
-      busy = false;
-    }
+    const writeDir = selected;
+    if (!writeDir) return;
+    await ui.run("Bridge removed.", async () => {
+      status = await dcsEject(writeDir);
+    });
   }
 
   onMount(() => {
@@ -221,10 +209,10 @@
         <Button
           size="sm"
           class="w-full"
-          disabled={busy || !status.source_available}
+          disabled={ui.busy || !status.source_available}
           onclick={inject}
         >
-          {busy ? "Working…" : actionLabel}
+          {ui.busy ? "Working…" : actionLabel}
         </Button>
         {#if !status.source_available}
           <p class="text-[11px] leading-snug text-amber-500">
@@ -236,20 +224,20 @@
             variant="destructive"
             size="sm"
             class="w-full"
-            disabled={busy}
+            disabled={ui.busy}
             onclick={eject}
           >
             Eject
           </Button>
         {/if}
-        {#if notice}
+        {#if ui.notice}
           <p
             class={cn(
               "text-[11px] leading-snug",
-              notice.ok ? "text-emerald-500" : "text-destructive",
+              ui.notice.ok ? "text-emerald-500" : "text-destructive",
             )}
           >
-            {notice.text}
+            {ui.notice.text}
           </p>
         {/if}
       </div>

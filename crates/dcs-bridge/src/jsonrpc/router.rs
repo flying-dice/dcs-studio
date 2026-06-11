@@ -31,7 +31,7 @@ impl UserData for JsonRpcRouter {
         methods.add_function("new", |_lua: &Lua, (): ()| Ok(JsonRpcRouter::new()));
 
         methods.add_meta_method(mlua::MetaMethod::ToString, |_, this: &Self, ()| {
-            Ok(format!("Server: {:?}", this.methods))
+            Ok(format!("JsonRpcRouter({:?})", this.methods))
         });
 
         methods.add_method_mut(

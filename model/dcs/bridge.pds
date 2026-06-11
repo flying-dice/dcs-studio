@@ -136,7 +136,8 @@ container Hook for dcs::bridge::Dcs {
 /// Native actix WS/HTTP server inside the DLL (GET /ws, GET /health,
 /// POST /rpc). Requests are parsed off the WS read task into a queue;
 /// each response rides back to its requester over a per-request channel,
-/// guarded by SERVER_TIMEOUT_SECONDS.
+/// guarded by SERVER_TIMEOUT_SECONDS. A frame that fails to parse is
+/// logged and skipped — it never tears down the session.
 container RpcServer for dcs::bridge::Dcs {
   /// Bind BRIDGE_HOST:BRIDGE_PORT on a dedicated server thread.
   Listen(): void;

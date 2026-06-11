@@ -118,27 +118,43 @@ class AppState {
     if (this.dcsInitialised) return;
     this.dcsInitialised = true;
 
-    // Outside Tauri (vite dev / Playwright) there are no Rust-side events:
-    // drive the status from a browser-side ping heartbeat over the bridge WS.
     if (!isTauri()) {
-      const beat = async () => {
-        const started = performance.now();
-        try {
-          await dcsCall("ping");
-          this.dcsConnected = true;
-          this.dcsSimRunning = true;
-          this.dcsLatencyMs = Math.round(performance.now() - started);
-        } catch {
-          this.dcsConnected = wsConnected();
-          this.dcsSimRunning = false;
-          this.dcsLatencyMs = null;
-        }
-      };
-      void beat();
-      setInterval(() => void beat(), 2000);
+      this.startBrowserHeartbeat();
       return;
     }
+    await this.listenToLinkEvents();
+    await this.seedFromBackendSnapshot();
+  }
 
+  /**
+   * Outside Tauri (vite dev / Playwright) there are no Rust-side events:
+   * drive the status from a browser-side ping heartbeat over the bridge WS.
+   */
+  private startBrowserHeartbeat() {
+    const beat = async () => {
+      const started = performance.now();
+      try {
+        const pong = (await dcsCall("ping")) as { dcs_time?: number } | null;
+        // Same rule as the Rust heartbeat (dcs.rs): the bridge pongs from
+        // the main menu too; a mission is live only once dcs_time > 0.
+        const dcsTime = typeof pong?.dcs_time === "number" ? pong.dcs_time : 0;
+        this.dcsConnected = true;
+        this.dcsSimRunning = dcsTime > 0;
+        this.dcsTime = dcsTime;
+        this.dcsLatencyMs = Math.round(performance.now() - started);
+      } catch {
+        this.dcsConnected = wsConnected();
+        this.dcsSimRunning = false;
+        this.dcsLatencyMs = null;
+        this.dcsTime = null;
+      }
+    };
+    void beat();
+    setInterval(() => void beat(), 2000);
+  }
+
+  /** Relay the Rust-side link events into the reactive fields. */
+  private async listenToLinkEvents() {
     await listen("dcs://connected", () => {
       this.dcsConnected = true;
     });
@@ -156,9 +172,13 @@ class AppState {
         this.dcsTime = e.payload.dcs_time ?? null;
       },
     );
+  }
 
-    // Seed from the backend snapshot to cover events emitted before we
-    // started listening (the heartbeat starts with the app, not the UI).
+  /**
+   * Seed from the backend snapshot to cover events emitted before we
+   * started listening (the heartbeat starts with the app, not the UI).
+   */
+  private async seedFromBackendSnapshot() {
     try {
       const s = await dcsStatus();
       this.dcsConnected = s.connected;
@@ -277,14 +297,10 @@ class AppState {
     }
   }
 
-  toggleLeft(id: string) {
-    this.leftTool = this.leftTool === id ? null : id;
-  }
-  toggleRight(id: string) {
-    this.rightTool = this.rightTool === id ? null : id;
-  }
-  toggleBottom(id: string) {
-    this.bottomTool = this.bottomTool === id ? null : id;
+  /** Open the tool window in a stripe, or collapse it when already open. */
+  toggleTool(stripe: "left" | "right" | "bottom", id: string) {
+    const key = `${stripe}Tool` as const;
+    this[key] = this[key] === id ? null : id;
   }
 }
 

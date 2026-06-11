@@ -12,6 +12,7 @@
     type MissionScriptFile,
     type MissionScriptStatus,
   } from "$lib/api";
+  import { ToolActions } from "$lib/tool-actions.svelte";
   import { cn } from "$lib/utils.js";
 
   import { Button } from "$lib/components/ui/button/index.js";
@@ -22,8 +23,7 @@
   let files = $state<MissionScriptFile[]>([]);
   let selected = $state<string | null>(null);
   let status = $state<MissionScriptStatus | null>(null);
-  let busy = $state(false);
-  let notice = $state<{ ok: boolean; text: string } | null>(null);
+  const ui = new ToolActions();
 
   const presentItems = $derived(status?.items.filter((i) => i.present) ?? []);
   const anyDesanitized = $derived(presentItems.some((i) => !i.sanitized));
@@ -38,17 +38,17 @@
       status = await dcsMissionScriptStatus(selected);
     } catch (e) {
       status = null;
-      notice = { ok: false, text: String(e) };
+      ui.fail(e);
     }
   }
 
   async function detect() {
-    notice = null;
+    ui.clearNotice();
     try {
       files = await dcsDetectMissionScripts();
     } catch (e) {
       files = [];
-      notice = { ok: false, text: String(e) };
+      ui.fail(e);
     }
     if (!selected || !files.some((f) => f.path === selected)) {
       selected =
@@ -59,7 +59,7 @@
 
   async function select(path: string) {
     selected = path;
-    notice = null;
+    ui.clearNotice();
     await refreshStatus();
   }
 
@@ -78,17 +78,11 @@
   }
 
   async function apply(items: Record<string, boolean>, okText: string) {
-    if (!selected || busy) return;
-    busy = true;
-    notice = null;
-    try {
-      status = await dcsMissionScriptSet(selected, items);
-      notice = { ok: true, text: okText };
-    } catch (e) {
-      notice = { ok: false, text: String(e) };
-    } finally {
-      busy = false;
-    }
+    const path = selected;
+    if (!path) return;
+    await ui.run(okText, async () => {
+      status = await dcsMissionScriptSet(path, items);
+    });
   }
 
   function toggle(name: string, sanitized: boolean) {
@@ -109,17 +103,11 @@
   }
 
   async function restore() {
-    if (!selected || busy) return;
-    busy = true;
-    notice = null;
-    try {
-      status = await dcsMissionScriptRestore(selected);
-      notice = { ok: true, text: "Stock file restored from backup." };
-    } catch (e) {
-      notice = { ok: false, text: String(e) };
-    } finally {
-      busy = false;
-    }
+    const path = selected;
+    if (!path) return;
+    await ui.run("Stock file restored from backup.", async () => {
+      status = await dcsMissionScriptRestore(path);
+    });
   }
 
   onMount(() => {
@@ -226,7 +214,7 @@
                 role="switch"
                 aria-checked={item.sanitized}
                 aria-label={`Toggle ${item.name} sanitization`}
-                disabled={!item.present || busy}
+                disabled={!item.present || ui.busy}
                 class={cn(
                   "relative h-3.5 w-6 shrink-0 rounded-full transition-colors",
                   !item.present && "cursor-not-allowed bg-muted-foreground/20",
@@ -258,16 +246,16 @@
           <Button
             size="sm"
             class="w-full"
-            disabled={busy || !anySanitized}
+            disabled={ui.busy || !anySanitized}
             onclick={() => setAll(false)}
           >
-            {busy ? "Working…" : "Desanitize all"}
+            {ui.busy ? "Working…" : "Desanitize all"}
           </Button>
           <Button
             variant="secondary"
             size="sm"
             class="w-full"
-            disabled={busy || !anyDesanitized}
+            disabled={ui.busy || !anyDesanitized}
             onclick={() => setAll(true)}
           >
             Re-sanitize all
@@ -277,20 +265,20 @@
               variant="destructive"
               size="sm"
               class="w-full"
-              disabled={busy}
+              disabled={ui.busy}
               onclick={restore}
             >
               Restore stock
             </Button>
           {/if}
-          {#if notice}
+          {#if ui.notice}
             <p
               class={cn(
                 "text-[11px] leading-snug",
-                notice.ok ? "text-emerald-500" : "text-destructive",
+                ui.notice.ok ? "text-emerald-500" : "text-destructive",
               )}
             >
-              {notice.text}
+              {ui.notice.text}
             </p>
           {/if}
         </div>
@@ -298,8 +286,8 @@
         <p class="px-3 text-xs text-muted-foreground">
           MissionScripting.lua not found at this path.
         </p>
-        {#if notice}
-          <p class="px-3 text-[11px] leading-snug text-destructive">{notice.text}</p>
+        {#if ui.notice}
+          <p class="px-3 text-[11px] leading-snug text-destructive">{ui.notice.text}</p>
         {/if}
       {/if}
 

@@ -108,9 +108,9 @@
     {
       label: "View",
       items: [
-        { label: "Project", action: () => app.toggleLeft("project") },
-        { label: "Database", action: () => app.toggleRight("database") },
-        { label: "Terminal", action: () => app.toggleBottom("terminal") },
+        { label: "Project", action: () => app.toggleTool("left", "project") },
+        { label: "Database", action: () => app.toggleTool("right", "database") },
+        { label: "Terminal", action: () => app.toggleTool("bottom", "terminal") },
       ],
     },
     {
@@ -340,8 +340,8 @@
            anchored at the bottom (JetBrains-style) so toggling the bottom panel
            never resizes the top row. -->
       <nav class="flex shrink-0 flex-col items-center justify-between">
-        {@render toggles(leftTools, app.leftTool, (id) => app.toggleLeft(id), true, "right")}
-        {@render toggles(bottomTools, app.bottomTool, (id) => app.toggleBottom(id), true, "right")}
+        {@render toggles(leftTools, app.leftTool, (id) => app.toggleTool("left", id), true, "right")}
+        {@render toggles(bottomTools, app.bottomTool, (id) => app.toggleTool("bottom", id), true, "right")}
       </nav>
 
       <!-- CONTENT COLUMN: top row of islands + optional bottom island -->
@@ -454,7 +454,7 @@
 
       <!-- RIGHT STRIPE: full height, panel tools at the top. -->
       <nav class="flex shrink-0 flex-col items-center">
-        {@render toggles(rightTools, app.rightTool, (id) => app.toggleRight(id), true, "left")}
+        {@render toggles(rightTools, app.rightTool, (id) => app.toggleTool("right", id), true, "left")}
       </nav>
     </main>
 

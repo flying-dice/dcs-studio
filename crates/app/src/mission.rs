@@ -90,6 +90,32 @@ fn line_state(line: &str, name: &str) -> Option<bool> {
     }
 }
 
+/// Toggle one line between sanitized (active) and desanitized (commented out),
+/// preserving its indentation. `None` when the line matches none of the
+/// requested items, or is already in the desired state.
+fn toggled_line(
+    line: &str,
+    desired: &std::collections::HashMap<String, bool>,
+) -> Option<String> {
+    let (&want, active) = desired
+        .iter()
+        .find_map(|(name, want)| line_state(line, name).map(|active| (want, active)))?;
+    if active == want {
+        return None;
+    }
+    let ws_len = line.len() - line.trim_start().len();
+    let (indent, body) = line.split_at(ws_len);
+    Some(if want {
+        // Re-sanitize: strip one leading `--` token and one following space.
+        let rest = body.strip_prefix("--").unwrap_or(body);
+        let rest = rest.strip_prefix(' ').unwrap_or(rest);
+        format!("{indent}{rest}")
+    } else {
+        // Desanitize: comment the statement out.
+        format!("{indent}-- {body}")
+    })
+}
+
 fn backup_path(path: &str) -> PathBuf {
     PathBuf::from(format!("{path}.dcsstudio.bak"))
 }
@@ -243,28 +269,10 @@ pub fn dcs_mission_script_set(
 
     let mut changed = false;
     for line in lines.iter_mut() {
-        let Some((&want, active)) = desired
-            .iter()
-            .find_map(|(name, want)| line_state(line, name).map(|active| (want, active)))
-        else {
-            continue;
-        };
-        if active == want {
-            continue;
+        if let Some(new_line) = toggled_line(line, &desired) {
+            *line = new_line;
+            changed = true;
         }
-        let ws_len = line.len() - line.trim_start().len();
-        let (indent, body) = line.split_at(ws_len);
-        let new_line = if want {
-            // Re-sanitize: strip one leading `--` token and one following space.
-            let rest = body.strip_prefix("--").unwrap_or(body);
-            let rest = rest.strip_prefix(' ').unwrap_or(rest);
-            format!("{indent}{rest}")
-        } else {
-            // Desanitize: comment the statement out.
-            format!("{indent}-- {body}")
-        };
-        *line = new_line;
-        changed = true;
     }
 
     if changed {
@@ -286,6 +294,49 @@ pub fn dcs_mission_script_set(
     }
 
     Ok(status_for(&path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::toggled_line;
+    use std::collections::HashMap;
+
+    fn desire(name: &str, sanitized: bool) -> HashMap<String, bool> {
+        HashMap::from([(name.to_string(), sanitized)])
+    }
+
+    #[test]
+    fn desanitize_comments_the_line_out_preserving_indent() {
+        let toggled = toggled_line("\tsanitizeModule('lfs')", &desire("lfs", false));
+        assert_eq!(toggled.as_deref(), Some("\t-- sanitizeModule('lfs')"));
+    }
+
+    #[test]
+    fn resanitize_strips_one_comment_marker() {
+        let toggled = toggled_line("\t-- sanitizeModule('os')", &desire("os", true));
+        assert_eq!(toggled.as_deref(), Some("\tsanitizeModule('os')"));
+    }
+
+    #[test]
+    fn lines_already_in_the_desired_state_are_untouched() {
+        assert_eq!(toggled_line("\tsanitizeModule('io')", &desire("io", true)), None);
+        assert_eq!(
+            toggled_line("\t-- _G['require'] = nil", &desire("require", false)),
+            None
+        );
+    }
+
+    #[test]
+    fn unrelated_lines_are_untouched() {
+        assert_eq!(toggled_line("local x = 1", &desire("lfs", false)), None);
+        assert_eq!(toggled_line("\tsanitizeModule('os')", &desire("lfs", false)), None);
+    }
+
+    #[test]
+    fn global_nil_assignments_toggle_too() {
+        let toggled = toggled_line("\t_G['package'] = nil", &desire("package", false));
+        assert_eq!(toggled.as_deref(), Some("\t-- _G['package'] = nil"));
+    }
 }
 
 /// Copy the pristine `<path>.dcsstudio.bak` back over the live file.

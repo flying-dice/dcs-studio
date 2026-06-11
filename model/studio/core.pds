@@ -140,6 +140,27 @@ public container Workbench for studio::core::Studio {
   /// Status bar: sim-running, latency, and model time from the heartbeat.
   #[onevent(studio::link::Heartbeat)]
   OnHeartbeat(beat: studio::link::Heartbeat): void;
+
+  /// Browser-only fallback heartbeat: outside Tauri there are no Rust-side
+  /// events, so the UI pings the bridge directly. Sim-running follows the
+  /// same rule as the native heartbeat — the pong's dcsTime must advance
+  /// past 0 — never mere ping success.
+  #[schedule = "every HEARTBEAT_SECONDS in a plain browser"]
+  BrowserHeartbeatTick(): void {
+    native = bool from self.InTauri()
+    if (native) {
+      return
+    }
+    pong = Result<dcs::bridge::Pong, dcs::bridge::RpcError> from dcs::bridge::Dcs.Ping()
+    if (pong.isErr) {
+      down = studio::link::Heartbeat from { false }
+      self.OnHeartbeat(down)
+      return
+    }
+    live = bool from pong.value.dcsTime > 0
+    beat = studio::link::Heartbeat from { live, pong }
+    self.OnHeartbeat(beat)
+  }
 }
 
 /// The developer runs Lua against the live sim from the console.
