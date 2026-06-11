@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm sidecar && pnpm build",
     "frontendDist": "../../build"
   },
   "app": {
@@ -24,6 +24,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": [
+      "binaries/lua-analyzer"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

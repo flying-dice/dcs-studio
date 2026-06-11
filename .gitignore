@@ -24,3 +24,7 @@ vite.config.ts.timestamp-*
 # LuaLS read-only reference clone for the type-layer parity work (plan
 # "Parity strategy") — never a build/runtime dependency.
 /reference/
+
+# Tauri sidecar binaries staged by scripts/prepare-sidecar.mjs (built, not
+# source); the bundler picks them up during `tauri build`.
+/crates/app/binaries/
