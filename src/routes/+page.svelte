@@ -10,6 +10,7 @@
   import MissionScriptingManager from "$lib/components/MissionScriptingManager.svelte";
   import Problems from "$lib/components/Problems.svelte";
   import Structure from "$lib/components/Structure.svelte";
+  import Todos from "$lib/components/Todos.svelte";
   import Editor from "$lib/components/Editor.svelte";
   import EditorTabs from "$lib/components/EditorTabs.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
@@ -33,6 +34,7 @@
     Sparkles,
     SquareTerminal,
     TriangleAlert,
+    ListTodo,
     ScrollText,
     FolderOpen,
     Boxes,
@@ -74,6 +76,7 @@
     { id: "lua", label: "Lua Console", icon: FileCode },
     { id: "terminal", label: "Terminal", icon: SquareTerminal },
     { id: "problems", label: "Problems", icon: TriangleAlert },
+    { id: "todos", label: "Todos", icon: ListTodo },
     { id: "output", label: "Output", icon: ScrollText },
   ];
 
@@ -433,6 +436,8 @@
                 <LuaConsole />
               {:else if app.bottomTool === "problems"}
                 <Problems />
+              {:else if app.bottomTool === "todos"}
+                <Todos />
               {:else if app.bottomTool === "output"}
                 <BuildOutput />
               {:else}

@@ -8,6 +8,7 @@ mod lsp;
 // Exposed for the host-IPC integration test - exactly one item wide.
 pub use lsp::read_frame;
 mod mission;
+mod todos_cmd;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -50,6 +51,8 @@ pub fn run() {
             lsp::lsp_start,
             lsp::lsp_send,
             lsp::lsp_stop,
+            todos_cmd::scan_todos,
+            todos_cmd::scan_file_todos,
             mission::dcs_detect_mission_scripts,
             mission::dcs_mission_script_status,
             mission::dcs_mission_script_set,

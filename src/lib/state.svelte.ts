@@ -19,6 +19,7 @@ import { listen } from "@tauri-apps/api/event";
 import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import { wsConnected } from "./dcs-ws";
 import { lang } from "./lang/intel.svelte";
+import { todos } from "./todos.svelte";
 import type { Extension } from "@codemirror/state";
 
 const EDITOR_THEME_KEY = "dcs.editorTheme";
@@ -268,6 +269,9 @@ class AppState {
     // engine (model/studio/lang.pds MountWorkspace). Fire-and-forget — an
     // engine failure is non-fatal and surfaces in the status bar.
     void lang.mountWorkspace(path);
+    // …and rescan comment tags for the Todos panel (model/studio/todos.pds
+    // RefreshAll) — equally fire-and-forget and non-fatal.
+    void todos.refreshAll(path);
   }
 
   /**
@@ -287,6 +291,7 @@ class AppState {
     this.openFiles = [];
     this.activePath = null;
     lang.reset();
+    todos.reset();
   }
 
   /** Record (or bump) a project in the recents list. */
@@ -409,6 +414,9 @@ class AppState {
       const text = doc.docText;
       await writeTextFile(doc.path, text);
       doc.savedText = text;
+      // Saved-file rescan for the Todos panel (model/studio/todos.pds
+      // RefreshFile): splices only this file's entries.
+      void todos.refreshFile(doc.path);
     } finally {
       this.saving = false;
     }
