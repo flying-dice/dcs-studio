@@ -25,15 +25,17 @@ actually executed.
 
 Map the diff to the pipeline jobs (`.gitlab-ci.yml`) and run the SAME
 commands locally for every touched area. Don't approximate; use the job's
-invocation:
+invocation. The table below is a snapshot — **`.gitlab-ci.yml` is the
+source of truth**: read the job before running it, and when the table and
+the yml disagree, the yml wins (and fixing this table is part of the run).
 
-| Touched | Run |
+| Touched | Run (mirrors the job) |
 | --- | --- |
-| any Rust crate | `cargo test --workspace` + `cargo clippy --workspace --all-targets -- -D warnings` |
-| `crates/app` | also `cargo test -p dcs-studio --tests` (build `dcs-studio-cli` first) |
+| engine/CLI crates | `cargo test -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli` + the same `-p` set for `cargo clippy … --all-targets -- -D warnings` — the `rust` job enumerates exactly these five; `--workspace` is NOT the job (it drags in `crates/app`, which needs the webkit stack, and `dcs-bridge*`, which CI never gates) |
+| `crates/app` | replicate the `app` job verbatim: `mkdir -p build`; `cargo build -p dcs-studio-cli`; `DCS_STUDIO_CLI=target/debug/dcs-studio-cli cargo test -p dcs-studio --lib --tests`; `cargo clippy -p dcs-studio --all-targets -- -D warnings`. Without the `DCS_STUDIO_CLI` pin, `tests/host_ipc.rs` self-skips — green-but-not-executed |
 | frontend / `src/` | `pnpm check` + `pnpm test:lang` |
-| engine crates | `pnpm build:wasm` then `git diff --exit-code src/lib/dcs-lua-wasm/` (wasm-sync parity) |
-| templates / `dcs-studio-project` | `DCS_TEMPLATE_COMPILE=1 cargo test -p dcs-studio-project --test template_compile` |
+| engine crates (wasm parity) | `pnpm build:wasm` then `git diff --exit-code -- src/lib/dcs-lua-wasm/dcs_lua_ide.js src/lib/dcs-lua-wasm/dcs_lua_ide.d.ts` — the two files the `wasm-sync` job diffs, exactly; the `.wasm` binary is excluded (wasm-opt output varies by version — a whole-dir diff fails trees CI passes) |
+| templates / `dcs-studio-project` | both halves of the `template-compile` job: `DCS_TEMPLATE_COMPILE=1 cargo test -p dcs-studio-project --test template_compile` AND the scaffold probe — `cargo run -p dcs-studio-cli -- init "Lua Probe" --template lua-script --parent <tmp>`, assert `<tmp>/Lua Probe/Scripts/lua-probe/main.lua` exists, `cargo run -p dcs-studio-cli -- check "<tmp>/Lua Probe"` (the issue-#22 half: a moved entry script passes the env-gated test but breaks the scaffold) |
 
 Record counts (total/passed/failed/skipped) and durations. Any failure ends
 the phase: fix, restart Phase 0.
