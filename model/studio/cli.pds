@@ -99,6 +99,180 @@ public container Cli for studio::core::Studio {
 
   /// Error-severity findings in the list.
   CountErrors(findings: syntax::Diagnostic[]): number;
+
+  /// Run the project's Lua unit tests outside DCS: discover the spec
+  /// files ([test] table in dcs-studio.toml; tests/**/*.test.lua by
+  /// default), spawn the sibling lua-runner binary, render results
+  /// (pretty, or JUnit XML for CI). A missing runner is an error, never
+  /// a silent pass — a gate built on `test` must go red; any failing
+  /// test exits nonzero.
+  #[manual]
+  public Test(root: string, reporter: string): number {
+    runner = Option<string> from self.FindRunner()
+    if (runner.isNone) {
+      return 1
+    }
+    specs = string[] from self.DiscoverSpecs(root)
+    results = studio::cli::FileResult[] from studio::cli::TestRunner.RunFiles(root, specs)
+    self.RenderReport(results, reporter)
+    failed = bool from self.AnyFailed(results)
+    if (failed) {
+      return 1
+    }
+    return 0
+  }
+
+  /// The lua-runner binary next to the CLI exe; DCS_LUA_RUNNER overrides
+  /// (the same pattern as DCS_STUDIO_CLI for the app).
+  FindRunner(): Option<string>;
+
+  /// Spec files per the manifest's [test] table (directory + suffix),
+  /// defaulting to tests/**/*.test.lua.
+  DiscoverSpecs(root: string): string[];
+
+  /// Pretty terminal output, or JUnit XML on disk for `--reporter junit`.
+  RenderReport(results: studio::cli::FileResult[], reporter: string): void;
+
+  /// Whether any case failed (a file-level load error counts).
+  AnyFailed(results: studio::cli::FileResult[]): bool;
+
+  /// Bundle the lua-script project at `root` into a single dist/ file
+  /// (see studio::cli::Bundler); errors exit nonzero.
+  #[manual]
+  public Bundle(root: string): number {
+    bundled = Result<studio::cli::BundleReport, studio::files::IoError> from studio::cli::Bundler.BundleProject(root)
+    if (bundled.isErr) {
+      return 1
+    }
+    return 0
+  }
+}
+
+/// One executed test case: its full describe-path name, outcome, and —
+/// for failures — the matcher's message and the source line it raised at.
+public data TestCase { name: string, passed: bool, message: string, line: number }
+
+/// One spec file's results. A file that errors outside any test (load
+/// failure, top-level error) reports a single failed load-error case so
+/// a broken spec can never gate as green-by-absence.
+public data FileResult { path: string, cases: studio::cli::TestCase[] }
+
+/// What a bundle run produced: the dist-relative output path and how many
+/// project-local modules were inlined.
+public data BundleReport { output: string, modules: number }
+
+/// The out-of-DCS Lua test runner (tools/lua-runner — its own cargo
+/// workspace, so mlua's `vendored` feature can never unify with the
+/// `module` feature dcs-bridge needs). Reads a JSON spec {root, files}
+/// on stdin and emits JSON results on stdout; the CLI `test` subcommand
+/// spawns it as a sibling binary (DCS_LUA_RUNNER overrides the path).
+public container TestRunner for studio::core::Studio {
+  /// Run every spec file, each in a FRESH Lua 5.1 state: the
+  /// describe/test/expect harness, the recording DCS stubs (timer,
+  /// trigger.action, env, world — every stub call lands in `dcs.calls`),
+  /// and a manual clock starting at zero. package.path roots at the
+  /// project so specs require project modules by path.
+  public RunFiles(root: string, files: string[]): studio::cli::FileResult[];
+
+  /// Advance the manual clock by `n` seconds, firing due scheduled
+  /// functions in deadline order — same deadline fires FIFO, and a fired
+  /// function scheduling inside the window fires within the same advance.
+  /// DCS semantics: a scheduled function returning a number reschedules
+  /// itself at that model time.
+  AdvanceTime(seconds: number): void;
+
+  /// Resolve a global read inside a spec: stubbed names answer; a known
+  /// DCS global without a stub errors with "not stubbed yet: <name>" —
+  /// a silent nil would let a test pass against an API the stub set
+  /// cannot vouch for.
+  #[manual]
+  public ResolveGlobal(name: string): Result<string, studio::files::IoError> {
+    stubbed = bool from self.IsStubbed(name)
+    if (!stubbed) {
+      unknown = studio::files::IoError from { name }
+      return Err(unknown)
+    }
+    value = string from self.StubValue(name)
+    return Ok(value)
+  }
+
+  /// Whether the name is in the stubbed DCS surface.
+  IsStubbed(name: string): bool;
+
+  /// The stub bound to a known name.
+  StubValue(name: string): string;
+}
+
+/// Single-file bundler for lua-script mods: resolves the require graph
+/// from the manifest's [build] entry and emits one PUC-loadable file —
+/// a package.preload["<module>"] entry per project-local module, then
+/// the entry body — so require semantics (single execution, module table
+/// identity) survive verbatim. Only project-local modules bundle;
+/// requires the project cannot resolve (DCS/system modules) pass through
+/// untouched for the runtime to provide. Dynamic (non-string-literal)
+/// requires are a documented limitation: they are left untouched and
+/// their targets are not bundled.
+public container Bundler for studio::core::Studio {
+  /// Bundle the project at `root` into dist/: no declared [build] entry
+  /// is an error (bundling never guesses an entry), an unresolvable
+  /// graph (cycle, unreadable module) is an error, and the write reports
+  /// its own failure.
+  #[manual]
+  public BundleProject(root: string): Result<studio::cli::BundleReport, studio::files::IoError> {
+    entry = Option<string> from self.ReadBuildEntry(root)
+    if (entry.isNone) {
+      missing = studio::files::IoError from { root }
+      return Err(missing)
+    }
+    graph = Result<string[], studio::files::IoError> from self.ResolveRequireGraph(root, entry.value)
+    if (graph.isErr) {
+      return Err(graph.error)
+    }
+    text = string from self.EmitBundle(root, entry.value, graph.value)
+    written = Result<string, studio::files::IoError> from self.WriteDist(root, text)
+    if (written.isErr) {
+      return Err(written.error)
+    }
+    report = studio::cli::BundleReport from { written }
+    return Ok(report)
+  }
+
+  /// The [build] entry script from dcs-studio.toml; None when the table
+  /// or field is absent.
+  ReadBuildEntry(root: string): Option<string>;
+
+  /// Walk string-literal require() calls via the dcs-lua-syntax AST,
+  /// depth-first from the entry: project-local modules (module path
+  /// resolved against the entry's folder, then the project root) recurse
+  /// and bundle in dependency order; anything else stays external. A
+  /// require cycle is an error naming the cycle path.
+  #[manual]
+  public ResolveRequireGraph(root: string, entry: string): Result<string[], studio::files::IoError> {
+    walked = Result<string[], studio::files::IoError> from self.WalkRequires(root, entry)
+    if (walked.isErr) {
+      return Err(walked.error)
+    }
+    cyclic = bool from self.HasCycle(walked.value)
+    if (cyclic) {
+      cycle = studio::files::IoError from { entry }
+      return Err(cycle)
+    }
+    return Ok(walked.value)
+  }
+
+  /// Depth-first require scan from the entry; an unreadable or
+  /// unparseable project-local module is an error.
+  WalkRequires(root: string, entry: string): Result<string[], studio::files::IoError>;
+
+  /// Whether the walk re-entered a module still on its own require path.
+  HasCycle(modules: string[]): bool;
+
+  /// package.preload entries in dependency order, then the entry body.
+  EmitBundle(root: string, entry: string, modules: string[]): string;
+
+  /// Write dist/<output>.lua (the [build] output name, defaulting to the
+  /// project slug), creating dist/ on demand.
+  WriteDist(root: string, text: string): Result<string, studio::files::IoError>;
 }
 
 /// Scaffolding never clobbers an existing folder (the app's New Project
@@ -140,4 +314,34 @@ feature AgentBuildsAndInstallsHeadless for studio::cli::Cli {
   when "an agent runs build then install with an explicit write dir"
   then "cargo builds the DLL and the exit code gates success"
   and "the manifest rules place the artifacts under the write dir"
+}
+
+/// A failing Lua test fails the build.
+feature FailingTestFailsBuild for studio::cli::Cli {
+  given "a project with one passing and one failing spec"
+  when "dcs-studio-cli test runs"
+  then "the failing test is reported with its file and line"
+  and "the exit code is nonzero, in pretty and junit reporters alike"
+}
+
+/// Bundling never changes what require means.
+feature BundlePreservesRequireSemantics for studio::cli::Bundler {
+  given "an entry script requiring project-local modules, one of them twice"
+  when "the project is bundled and the bundle executes under real Lua 5.1"
+  then "each module body runs exactly once"
+  and "every require of a module yields the identical table"
+  and "requires the project cannot resolve are left for the DCS runtime"
+}
+
+/// A fresh scaffold's CI pipeline is green end-to-end. The "then" cannot
+/// execute in this repo's CI (the workflow runs on GitHub against the
+/// mirror's releases, and the mirror is pending): it is pinned by
+/// template-content asserts on ci.yml plus local test+bundle runs against
+/// a real scaffold — the closest executable approximation.
+feature ScaffoldedProjectPassesCi for studio::cli::Cli {
+  given "a fresh lua-script scaffold pushed to its GitHub repository"
+  when "the scaffolded ci.yml workflow runs"
+  then "the CLI installs from the GitHub mirror's releases"
+  and "dcs-studio-cli test --reporter junit and bundle both pass"
+  and "a tag publishes dist/* plus dcs-studio.toml as a release"
 }
