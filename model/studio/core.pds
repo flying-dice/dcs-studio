@@ -116,8 +116,11 @@ public container Workbench for studio::core::Studio {
   /// empty buffer must never impersonate the file on disk). A load that
   /// was superseded while the read was in flight — the developer activated
   /// another tab (every activation invalidates older in-flight loads, even
-  /// re-activating the already-shown tab) or closed this one — is
-  /// discarded without touching the shown buffer.
+  /// re-activating the already-shown tab), closed this one, or this tab
+  /// otherwise lost the active spot — is discarded without touching the
+  /// shown buffer. The ONE superseded guard covers both arms symmetrically:
+  /// a superseded failed read closes nothing, exactly as a superseded
+  /// successful read shows nothing.
   #[manual]
   LoadTab(doc: studio::core::Document): Result<string, studio::files::IoError> {
     text = Result<string, studio::files::IoError> from studio::files::WorkspaceFs.ReadTextFile(doc.path)
@@ -136,8 +139,9 @@ public container Workbench for studio::core::Studio {
   }
 
   /// Whether this load was overtaken while its read was in flight: the
-  /// developer activated another tab (or re-activated the shown one) or
-  /// closed this tab, so the result must not win the view.
+  /// developer activated another tab (or re-activated the shown one),
+  /// closed this tab, or this tab is no longer the active one — so the
+  /// result must not win the view (Ok arm) nor close the tab (Err arm).
   LoadSuperseded(doc: studio::core::Document): bool;
 
   /// Swap the freshly loaded text in as `doc`'s shown buffer and set both
@@ -311,6 +315,27 @@ feature StaleLoadNeverHijacksView for studio::core::Workbench {
   when "the developer activates A again before B's read lands"
   then "the editor keeps showing A's buffer when the stale read resolves"
   and "edits route into A's buffer, never B's"
+}
+
+/// Closing the active tab hands the view to a neighbour; closing any other
+/// tab never steals focus from the active one.
+feature CloseActiveTabActivatesNeighbour for studio::core::Workbench {
+  given "files A and B are open and B is the active tab"
+  when "the developer closes B"
+  then "B's tab is gone and A becomes the active tab"
+  and "the buffer shows A's content"
+  and "closing non-active A instead leaves B active with A's tab gone"
+}
+
+/// Every activation invalidates older in-flight loads — even when the tab
+/// being re-activated is the one whose stale read is still in flight, so
+/// the supersede cannot be decided by which tab is active.
+feature RetriggeredLoadDiscardsStaleRead for studio::core::Workbench {
+  given "file B's first read is in flight and the developer switched back to A"
+  when "the developer activates B again and its re-triggered read lands first"
+  then "the stale first read is discarded when it finally resolves"
+  and "B keeps the re-triggered load's buffer, edits, and dirty flag"
+  and "A's buffer is untouched"
 }
 
 /// Unsaved work is never silently discarded by closing a tab.

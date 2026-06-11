@@ -86,6 +86,13 @@
     </button>
     <button
       class="rounded border px-2 py-0.5"
+      data-testid="close-active"
+      onclick={() => app.closeActiveFile()}
+    >
+      close active
+    </button>
+    <button
+      class="rounded border px-2 py-0.5"
       data-testid="hold-next-b"
       onclick={() => (holdNextB = true)}
     >

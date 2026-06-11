@@ -178,11 +178,12 @@
         text = await readFile(path);
       } catch (error) {
         // Failed read (model `LoadTab` Err arm): never leave an empty tab
-        // impersonating the file on disk — close it, unless a newer switch
-        // already owns the tab strip. No toast surface exists yet; log like
-        // the other fs/engine failures.
+        // impersonating the file on disk — close it, unless the load was
+        // superseded (same guard as the success arm: a newer switch owns the
+        // tab strip, or this tab is no longer the active one). No toast
+        // surface exists yet; log like the other fs/engine failures.
         console.error(`failed to read ${path}:`, error);
-        if (seq === loadSeq) void app.closeFile(path);
+        if (seq === loadSeq && app.activePath === path) void app.closeFile(path);
         return;
       }
       // Superseded while in flight (newer switch, or the tab was closed and
