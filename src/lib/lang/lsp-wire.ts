@@ -4,7 +4,7 @@
 // byte math, and squiggles stay precise on non-ASCII lines.
 
 import { lineStarts } from "./offsets";
-import type { Diagnostic, DocumentSymbol } from "./provider";
+import type { Diagnostic, DocumentSymbol, Hover } from "./provider";
 
 export interface LspPosition {
   line: number;
@@ -66,6 +66,22 @@ export function positionToOffset(
   return lineStart(starts, position.line) + position.character;
 }
 
+/** Document offset → LSP position: the line owning the last start <= offset. */
+export function offsetToPosition(
+  starts: number[],
+  offset: number,
+): LspPosition {
+  // Largest line with starts[line] <= offset.
+  let low = 0;
+  let high = starts.length - 1;
+  while (low < high) {
+    const mid = (low + high + 1) >> 1;
+    if (starts[mid] <= offset) low = mid;
+    else high = mid - 1;
+  }
+  return { line: low, character: offset - starts[low] };
+}
+
 export function convertDiagnostic(
   wire: LspWireDiagnostic,
   path: string,
@@ -102,6 +118,50 @@ export function convertSymbol(
     selection_end: positionToOffset(starts, wire.selectionRange.end),
     children: (wire.children ?? []).map((child) => convertSymbol(child, text)),
   };
+}
+
+/**
+ * `textDocument/hover` contents in every shape the spec allows: a bare
+ * string, a `MarkupContent`/`MarkedString` object, or an array of these.
+ */
+export type LspWireHoverContents =
+  | string
+  | { kind?: string; language?: string; value: string }
+  | (string | { kind?: string; language?: string; value: string })[];
+
+export interface LspWireHover {
+  contents: LspWireHoverContents;
+}
+
+/** Flatten any allowed `contents` shape into one markdown string. */
+function hoverMarkdown(contents: LspWireHoverContents): string {
+  if (typeof contents === "string") return contents;
+  if (Array.isArray(contents)) {
+    return contents
+      .map((part) => (typeof part === "string" ? part : part.value))
+      .filter((part) => part.trim() !== "")
+      .join("\n\n");
+  }
+  return contents.value;
+}
+
+/**
+ * Wire hover → our card: the first non-empty line (markdown emphasis and
+ * heading marks stripped) titles the card; the rest is the body.
+ */
+export function convertHover(wire: LspWireHover | null): Hover | null {
+  if (!wire) return null;
+  const markdown = hoverMarkdown(wire.contents).trim();
+  if (markdown === "") return null;
+  const lines = markdown.split("\n");
+  const title = lines[0]
+    .trim()
+    .replace(/^#+\s*/, "")
+    .replace(/^\*\*/, "")
+    .replace(/\*\*$/, "")
+    .trim();
+  const body = lines.slice(1).join("\n").trim();
+  return { title, body };
 }
 
 /** Map one flat `SymbolInformation` onto our hierarchical shape. */

@@ -10,12 +10,15 @@ import { LspClient } from "./lsp-client";
 import { lineStarts } from "./offsets";
 import {
   convertDiagnostic,
+  convertHover,
   convertSymbol,
   lineEnd,
   lineStart,
+  offsetToPosition,
   pathToUri,
   uriToPath,
   type LspWireDiagnostic,
+  type LspWireHover,
   type LspWireSymbol,
 } from "./lsp-wire";
 import type {
@@ -191,8 +194,14 @@ export class LspLuaProvider implements LanguageProvider {
     return [];
   }
 
-  async hover(_path: string, _offset: number): Promise<Hover | null> {
-    return null;
+  async hover(path: string, offset: number): Promise<Hover | null> {
+    if (!this.client) return null;
+    const text = this.texts.get(path) ?? "";
+    const response = (await this.client.request("textDocument/hover", {
+      textDocument: { uri: pathToUri(path) },
+      position: offsetToPosition(lineStarts(text), offset),
+    })) as LspWireHover | null;
+    return convertHover(response);
   }
 
   async definition(_path: string, _offset: number): Promise<Location | null> {
