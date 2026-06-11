@@ -223,7 +223,11 @@ fn pump_messages(stdout: impl Read, deliver: impl Fn(String)) {
 
 /// Parse one `Content-Length`-framed message; `None` on EOF, error, or an
 /// implausible length (`MAX_FRAME_BYTES`) ends the session cleanly.
-fn read_frame(reader: &mut BufReader<impl Read>) -> Option<String> {
+///
+/// `pub` solely so the host-IPC integration test (`tests/host_ipc.rs`)
+/// can drive the host's own frame reader against a real spawned
+/// `dcs-studio-cli lsp`; production code reaches it via `pump_messages`.
+pub fn read_frame(reader: &mut BufReader<impl Read>) -> Option<String> {
     let mut content_length: Option<usize> = None;
     loop {
         let mut line = String::new();

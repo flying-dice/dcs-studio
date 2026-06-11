@@ -4,7 +4,7 @@ mod dcs;
 mod fs;
 mod inject;
 mod install_cmd;
-mod lsp;
+pub mod lsp;
 mod mission;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
