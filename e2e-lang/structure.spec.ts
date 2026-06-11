@@ -334,6 +334,12 @@ test("a late failure for a superseded file keeps the current outline", async ({
   await page.waitForTimeout(1_200);
   const visible = (await entries.allTextContents()).map((t) => t.trim());
   expect(visible).toEqual(["alpha"]);
+  // …and it must be discarded WHOLE — status bar included. A dead query
+  // for a file the user already left must not stick the engine on
+  // "failed" while the current file outlines fine.
+  await expect(page.getByTestId("lab-engine-status")).toContainText(
+    "engine: ready",
+  );
 });
 
 test("hiding the panel clears the outline", async ({ page }) => {

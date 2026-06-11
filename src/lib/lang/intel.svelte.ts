@@ -153,8 +153,13 @@ export class LangIntel {
       // (model `RefreshOutline` error arm); the panel shows an empty
       // outline instead of stale rows.
       console.error("language engine failed:", error);
-      this.engineStatus = "failed";
-      if (generation === this.outlineGeneration) this.symbols = [];
+      // A failure for a superseded query is discarded whole — status bar
+      // included — or a dead query for a file the user already left would
+      // stick the engine on "failed" while the current file outlines fine.
+      if (generation === this.outlineGeneration) {
+        this.engineStatus = "failed";
+        this.symbols = [];
+      }
     }
   }
 
