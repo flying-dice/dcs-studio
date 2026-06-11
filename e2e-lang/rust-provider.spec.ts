@@ -34,3 +34,17 @@ test("a root without a Cargo.toml disables the provider, no crash", async ({
 }) => {
   await expect(page.getByTestId("rust-disabled")).toHaveText("disabled");
 });
+
+test("a missing rust-analyzer binary never fails the intel layer", async ({
+  page,
+}) => {
+  // A real LangIntel mounting two providers: a Lua provider with one
+  // finding and a real RustAnalyzerProvider whose connect rejects like a
+  // missing binary. The layer must end "ready" — NOT "failed" — with the
+  // Lua finding intact (model `RustProjectGetsDiagnostics`).
+  await page.getByTestId("intel-mount").click();
+  await expect(page.getByTestId("intel-status")).toHaveText("ready");
+  const finding = page.getByTestId("intel-finding").first();
+  await expect(finding).toContainText("/X/x.lua");
+  await expect(finding).toContainText("LUA-E102");
+});

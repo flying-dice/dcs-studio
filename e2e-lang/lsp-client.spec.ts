@@ -43,3 +43,19 @@ test("a server crash rejects the path instead of hanging", async ({
     { timeout: 10_000 },
   );
 });
+
+test("mount after a crash reconnects on the same root", async ({ page }) => {
+  await page.getByTestId("lsp-crash").click();
+  await expect(page.getByTestId("lsp-after-crash")).toContainText(
+    "language server exited",
+    { timeout: 10_000 },
+  );
+  // The crash blanked the findings; a remount must bring them back via a
+  // FRESH connection — the dead session may not be reused.
+  await expect(page.getByTestId("lsp-marked")).toHaveText("marked: «»");
+  await page.getByTestId("lsp-remount").click();
+  await expect(page.getByTestId("lsp-status")).toContainText("server alive");
+  const finding = page.getByTestId("lsp-finding").first();
+  await expect(finding).toContainText("LUA-E102");
+  await expect(page.getByTestId("lsp-marked")).toHaveText("marked: «(»");
+});

@@ -43,6 +43,9 @@ export class LspLuaProvider implements LanguageProvider {
   readonly extensions = [".lua"];
 
   private client: LspClient | null = null;
+  // Distinguishes "crashed, awaiting remount" (edits must surface the
+  // failure) from "never mounted" (edits are quietly ignored).
+  private exited = false;
   private readonly texts = new Map<string, string>();
   private readonly versions = new Map<string, number>();
   private readonly findings = new Map<string, Diagnostic[]>();
@@ -72,6 +75,11 @@ export class LspLuaProvider implements LanguageProvider {
         // Unstick any lint pass awaiting a publish that will never come.
         for (const [, release] of this.publishWaiters) release();
         this.publishWaiters.clear();
+        // Forget the dead session so the next mount() reconnects and
+        // didOpens afresh (mount clears texts/findings wholesale).
+        this.exited = true;
+        this.client = null;
+        this.versions.clear();
       });
       await this.client.request("initialize", {
         processId: null,
@@ -79,6 +87,7 @@ export class LspLuaProvider implements LanguageProvider {
         capabilities: {},
       });
       await this.client.notify("initialized", {});
+      this.exited = false; // a fresh, live session
     }
     // Wholesale remount: close anything from a previous project.
     for (const path of [...this.texts.keys()]) {
@@ -104,7 +113,12 @@ export class LspLuaProvider implements LanguageProvider {
   }
 
   async setSource(path: string, text: string): Promise<void> {
-    if (!this.client) return;
+    if (!this.client) {
+      // A crashed session must surface the failure (the status bar says
+      // "failed"); a never-mounted one quietly ignores edits.
+      if (this.exited) throw new Error("language server exited");
+      return;
+    }
     if (!this.client.isAlive) throw new Error("language server exited");
     this.texts.set(path, text);
     const published = this.nextPublish(path);

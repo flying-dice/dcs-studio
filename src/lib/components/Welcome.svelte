@@ -212,8 +212,7 @@
 
       <p class="reveal mt-5 max-w-md text-sm leading-relaxed text-muted-foreground" style="--d:180ms">
         Author, manage, and package Digital Combat Simulator mods. Start from a
-        template or open existing work — every project carries a
-        <span class="font-mono text-foreground/80">dcs-studio.toml</span> manifest.
+        template or open existing work.
       </p>
 
       <!-- Actions / New-project form -->

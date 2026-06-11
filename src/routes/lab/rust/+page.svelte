@@ -6,9 +6,11 @@
   // publishDiagnostics conversion for .rs sources, and the no-Cargo.toml
   // root quietly disabling the provider instead of crashing.
   import { onMount } from "svelte";
+  import type { DirEntry } from "$lib/api";
   import { LspClient, type LspTransport } from "$lib/lang/lsp-client";
+  import { LangIntel, type IntelFs } from "$lib/lang/intel.svelte";
   import { RustAnalyzerProvider } from "$lib/lang/rust-analyzer";
-  import type { Diagnostic } from "$lib/lang/provider";
+  import type { Diagnostic, LanguageProvider } from "$lib/lang/provider";
 
   const ROOT = "C:\\lab\\rsproj";
   const PATH = "C:\\lab\\rsproj\\main.rs";
@@ -101,6 +103,81 @@
     async () => false,
   );
 
+  // ---- intel-level scenario: a missing binary never fails the layer ----
+  // A real LangIntel over a fake fs and an injected provider list: a tiny
+  // always-finding Lua provider next to a REAL RustAnalyzerProvider whose
+  // connect rejects like a missing binary. Mounting must end "ready" with
+  // the Lua finding intact — rust-analyzer is an enhancement lost.
+  const intelFile = (path: string): DirEntry => ({
+    name: path.split("/").pop() ?? path,
+    path,
+    is_dir: false,
+  });
+
+  const intelFs: IntelFs = {
+    async readDir(): Promise<DirEntry[]> {
+      return [intelFile("/X/x.lua"), intelFile("/X/x.rs")];
+    },
+    async readTextFile(path: string): Promise<string> {
+      return path.endsWith(".lua") ? "if x then\n" : "fn main() {}\n";
+    },
+  };
+
+  const LUA_FINDING: Diagnostic = {
+    path: "/X/x.lua",
+    severity: "error",
+    code: "LUA-E102",
+    code_description: "",
+    message: "unterminated 'if' block: 'end' expected",
+    start: 0,
+    end: 2,
+    start_line: 1,
+    start_col: 1,
+    end_line: 1,
+    end_col: 3,
+  };
+
+  const fakeLuaProvider: LanguageProvider = {
+    id: "fake-lua",
+    extensions: [".lua"],
+    async mount() {},
+    async setSource() {},
+    async removeSource() {},
+    async diagnostics() {
+      return [LUA_FINDING];
+    },
+    async documentSymbols() {
+      return [];
+    },
+    async foldingRanges() {
+      return [];
+    },
+    async complete() {
+      return [];
+    },
+    async hover() {
+      return null;
+    },
+    async definition() {
+      return null;
+    },
+  };
+
+  const missingBinaryProvider = new RustAnalyzerProvider(
+    () =>
+      Promise.reject(
+        new Error(
+          "rust-analyzer not found — rustup component add rust-analyzer",
+        ),
+      ),
+    async () => true, // a Cargo project, so mount really tries to connect
+  );
+
+  const intel = new LangIntel(intelFs, () => [
+    fakeLuaProvider,
+    missingBinaryProvider,
+  ]);
+
   onMount(() => {
     void (async () => {
       await provider.mount([{ path: PATH, text: SOURCE }], [], ROOT);
@@ -126,6 +203,20 @@
       <li data-testid="rust-finding">
         {finding.code} @ {finding.start_line}:{finding.start_col} offset {finding.start}
       </li>
+    {/each}
+  </ul>
+
+  <button
+    type="button"
+    data-testid="intel-mount"
+    onclick={() => void intel.mountWorkspace("/X")}
+  >
+    Mount intel workspace
+  </button>
+  <div data-testid="intel-status">{intel.engineStatus}</div>
+  <ul>
+    {#each intel.diagnostics as finding, index (`${finding.path}|${finding.start}|${index}`)}
+      <li data-testid="intel-finding">{finding.path} {finding.code}</li>
     {/each}
   </ul>
 </div>

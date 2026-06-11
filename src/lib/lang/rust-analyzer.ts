@@ -5,9 +5,11 @@
 // itself, so mount hands it a rootUri instead of didOpen-ing the world.
 //
 // Absence is non-fatal twice over: no Cargo.toml under the root disables
-// the provider quietly, and a missing rust-analyzer binary rejects mount
-// — which LanguageIntel already treats as an enhancement lost, not an
-// error (model `RustProjectGetsDiagnostics`).
+// the provider quietly, and a missing rust-analyzer binary disables it
+// the same way — an enhancement lost, not an error; LanguageIntel
+// additionally isolates every provider's mount, so even a rejecting
+// mount cannot take Lua intelligence down with it (model
+// `RustProjectGetsDiagnostics`).
 
 import { invoke } from "@tauri-apps/api/core";
 import { pathExists } from "$lib/api";
@@ -57,6 +59,9 @@ export class RustAnalyzerProvider implements LanguageProvider {
   private client: LspClient | null = null;
   private mountedRoot: string | null = null;
   private disabled = true;
+  // Distinguishes "crashed, awaiting remount" (edits must surface the
+  // failure) from "never mounted" (edits are quietly ignored).
+  private exited = false;
   private readonly texts = new Map<string, string>();
   private readonly versions = new Map<string, number>();
   private readonly findings = new Map<string, Diagnostic[]>();
@@ -108,28 +113,53 @@ export class RustAnalyzerProvider implements LanguageProvider {
     this.disabled = false;
 
     if (!this.client) {
-      this.client = await this.connect();
-      this.client.onNotification("textDocument/publishDiagnostics", (params) =>
-        this.onPublish(
-          params as { uri: string; diagnostics: LspWireDiagnostic[] },
-        ),
-      );
-      this.client.onServerExit(() => {
-        for (const [, release] of this.publishWaiters) release();
-        this.publishWaiters.clear();
-      });
-      await this.client.request("initialize", {
-        processId: null,
-        // rust-analyzer walks the project itself from here.
-        rootUri: pathToUri(root),
-        capabilities: { textDocument: { publishDiagnostics: {} } },
-      });
-      await this.client.notify("initialized", {});
+      try {
+        this.client = await this.connect();
+        this.client.onNotification(
+          "textDocument/publishDiagnostics",
+          (params) =>
+            this.onPublish(
+              params as { uri: string; diagnostics: LspWireDiagnostic[] },
+            ),
+        );
+        this.client.onServerExit(() => {
+          for (const [, release] of this.publishWaiters) release();
+          this.publishWaiters.clear();
+          // Forget the dead session so the next mount() — same root or
+          // not — reconnects and re-opens cleanly instead of talking to
+          // a server that no longer exists.
+          this.exited = true;
+          this.client = null;
+          this.versions.clear();
+          this.mountedRoot = null;
+        });
+        await this.client.request("initialize", {
+          processId: null,
+          // rust-analyzer walks the project itself from here.
+          rootUri: pathToUri(root),
+          capabilities: { textDocument: { publishDiagnostics: {} } },
+        });
+        await this.client.notify("initialized", {});
+        this.exited = false; // a fresh, live session
+      } catch (error) {
+        // A missing rust-analyzer binary (the error carries the rustup
+        // install guidance) is non-fatal — same quiet-idle path as a
+        // root without a Cargo.toml (header comment above).
+        this.disabled = true;
+        this.client = null;
+        console.warn("rust-analyzer unavailable:", error);
+      }
     }
   }
 
   async setSource(path: string, text: string): Promise<void> {
-    if (!this.client || this.disabled) return;
+    if (this.disabled) return;
+    if (!this.client) {
+      // A crashed session must surface the failure (the status bar says
+      // "failed"); a never-mounted one quietly ignores edits.
+      if (this.exited) throw new Error("language server exited");
+      return;
+    }
     if (!this.client.isAlive) throw new Error("language server exited");
     this.texts.set(path, text);
     const published = this.nextPublish(path);

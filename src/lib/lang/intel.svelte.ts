@@ -32,7 +32,12 @@ export interface IntelFs {
 const tauriFs: IntelFs = { readDir, readTextFile };
 
 export class LangIntel {
-  constructor(private readonly fs: IntelFs = tauriFs) {}
+  /** Both seams injectable so `/lab/mount` and `/lab/rust` drive the
+   * real mount path — fake filesystem, fake/failing providers. */
+  constructor(
+    private readonly fs: IntelFs = tauriFs,
+    private readonly providers: () => LanguageProvider[] = allProviders,
+  ) {}
   /** Workspace-wide findings, sorted by path then offset. */
   diagnostics = $state<Diagnostic[]>([]);
   /** The embedded engine's lifecycle, surfaced in the status bar. */
@@ -61,7 +66,8 @@ export class LangIntel {
       const files = await this.collectSources(root);
       if (generation !== this.mountGeneration) return; // superseded
       const rules = this.profileRules(root);
-      for (const provider of allProviders()) {
+      let anyMounted = false;
+      for (const provider of this.providers()) {
         const lower = (path: string) => path.toLowerCase();
         const mine = files.filter((f) =>
           provider.extensions.some((ext) => lower(f.path).endsWith(ext)),
@@ -72,10 +78,21 @@ export class LangIntel {
           this.pushWired.add(provider);
           provider.onDiagnostics(() => void this.refreshProblems());
         }
-        await provider.mount(mine, rules, root);
+        // One engine failing to mount never takes the others down
+        // (model `MountRustAnalyzer` is non-fatal; `RefreshProblems`
+        // runs unconditionally).
+        try {
+          await provider.mount(mine, rules, root);
+          anyMounted = true;
+        } catch (error) {
+          console.error(
+            `language provider '${provider.id}' failed to mount:`,
+            error,
+          );
+        }
       }
       if (generation !== this.mountGeneration) return;
-      this.engineStatus = "ready";
+      this.engineStatus = anyMounted ? "ready" : "failed";
       await this.refreshProblems();
     } catch (error) {
       console.error("language engine failed to mount:", error);
@@ -125,7 +142,7 @@ export class LangIntel {
   /** Pull every provider's findings for the Problems panel and markers. */
   private async refreshProblems(): Promise<void> {
     const perProvider = await Promise.all(
-      allProviders().map((provider) => provider.diagnostics()),
+      this.providers().map((provider) => provider.diagnostics()),
     );
     this.diagnostics = perProvider.flat();
   }
