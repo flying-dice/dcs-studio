@@ -428,7 +428,7 @@
       </nav>
 
       <!-- CONTENT COLUMN: top row of islands + optional bottom island -->
-      <div class="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col">
         <div class="flex min-h-0 flex-1">
         {#if app.leftTool}
           <Card class="flex h-full min-h-0 shrink-0 flex-col gap-0 rounded-xl py-0" style="width: {app.leftPanelWidth}px">
@@ -462,8 +462,8 @@
           </Card>
         {/if}
         {#if app.leftTool}
-          <PanelResizeHandle side="left" currentWidth={app.leftPanelWidth}
-            onresize={(w) => app.setPanelWidth("left", w)} />
+          <PanelResizeHandle side="left" currentSize={app.leftPanelWidth}
+            onresize={(w) => app.setPanelSize("left", w)} />
         {/if}
 
         <!-- CENTER island: tab strip as the head, editor as the body. -->
@@ -487,8 +487,8 @@
         </Card>
 
         {#if app.rightTool}
-          <PanelResizeHandle side="right" currentWidth={app.rightPanelWidth}
-            onresize={(w) => app.setPanelWidth("right", w)} />
+          <PanelResizeHandle side="right" currentSize={app.rightPanelWidth}
+            onresize={(w) => app.setPanelSize("right", w)} />
           <Card class="flex h-full min-h-0 shrink-0 flex-col gap-0 rounded-xl py-0" style="width: {app.rightPanelWidth}px">
             {@render islandHead(labelFor(rightTools, app.rightTool))}
             <div class="min-h-0 flex-1">
@@ -511,7 +511,9 @@
         <!-- BOTTOM PANEL island spans the content column, so its left/right
              edges line up with the top row's panels automatically. -->
         {#if app.bottomTool}
-          <Card class="flex h-52 shrink-0 flex-col gap-0 rounded-xl py-0">
+          <PanelResizeHandle side="bottom" currentSize={app.bottomPanelHeight}
+            onresize={(h) => app.setPanelSize("bottom", h)} />
+          <Card class="flex shrink-0 flex-col gap-0 rounded-xl py-0" style="height: {app.bottomPanelHeight}px">
             {@render islandHead(labelFor(bottomTools, app.bottomTool))}
             <div class="min-h-0 flex-1">
               {#if app.bottomTool === "lua"}

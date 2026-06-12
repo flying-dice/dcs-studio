@@ -328,6 +328,18 @@
 	@apply text-muted-foreground;
 }
 
+/* --- selection: fix thememirror typo in createTheme's selectionBackground  --
+   thememirror@2.0.1 create-theme.js has ".cm-selectionBackgroundm" (extra "m")
+   so its .cm-selectionBackground spans are always transparent. This override
+   re-applies each theme's selection colour via the --cm-selection CSS variable
+   that chromeVars() emits, with specificity high enough to win over the broken
+   thememirror theme rule. One Dark (@codemirror/theme-one-dark) already has the
+   correct selector, but the higher specificity here is harmless. */
+.cm-editor.cm-focused .cm-selectionBackground,
+.cm-editor .cm-selectionBackground {
+	background-color: var(--cm-selection) !important;
+}
+
 /* --- cursor: sticky ease-in glide on position change ---------------------- */
 /* Starts slow (sticky feel) then accelerates to the new position.          */
 /* 80 ms keeps it imperceptible during rapid typing but visible on clicks.  */
