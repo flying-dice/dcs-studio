@@ -114,7 +114,7 @@ fn initialize_walk_publishes_parse_and_type_diagnostics() {
     });
     assert_eq!(
         type_publish["params"]["diagnostics"][0]["code"],
-        json!("LUA-T001")
+        json!("param-type-mismatch")
     );
 
     // A full-sync didChange that fixes broken.lua clears its diagnostics.
@@ -159,5 +159,66 @@ fn initialize_walk_publishes_parse_and_type_diagnostics() {
     lsp_send(&mut child, &json!({"jsonrpc": "2.0", "method": "exit"}));
     let status = child.wait().expect("exit");
     assert!(status.success());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn inlay_hints_carry_inferred_signature_types() {
+    let root = temp_dir("inlay");
+    // An unannotated function whose parameter and return type the body implies.
+    std::fs::write(
+        root.join("sig.lua"),
+        "local function f(p)\n  return p:upper()\nend\n",
+    )
+    .expect("seed file");
+
+    let mut child = lua_analyzer()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn lua-analyzer");
+    let mut reader = BufReader::new(child.stdout.take().expect("stdout piped"));
+
+    let root_uri = format!("file:///{}", root.display().to_string().replace('\\', "/"));
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"processId": null, "rootUri": root_uri, "capabilities": {}}}),
+    );
+    let init = lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(1)));
+    // The server advertises the inlay-hint capability.
+    assert_eq!(init["result"]["capabilities"]["inlayHintProvider"], json!(true));
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
+    );
+
+    let file_uri = format!("{root_uri}/sig.lua");
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 11, "method": "textDocument/inlayHint",
+                "params": {"textDocument": {"uri": file_uri},
+                           "range": {"start": {"line": 0, "character": 0},
+                                     "end": {"line": 3, "character": 0}}}}),
+    );
+    let response = lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(11)));
+    let hints = response["result"].as_array().expect("inlay hint array");
+    let labels: Vec<&str> = hints.iter().filter_map(|h| h["label"].as_str()).collect();
+    // The parameter `p: string` (after the name) and the return `: string`
+    // (after the parameter list) — both reach the editor over real stdio.
+    assert_eq!(
+        labels.iter().filter(|l| **l == ": string").count(),
+        2,
+        "expected two `: string` hints; got {labels:?}"
+    );
+
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 99, "method": "shutdown"}),
+    );
+    lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(99)));
+    lsp_send(&mut child, &json!({"jsonrpc": "2.0", "method": "exit"}));
+    assert!(child.wait().expect("exit").success());
     let _ = std::fs::remove_dir_all(&root);
 }

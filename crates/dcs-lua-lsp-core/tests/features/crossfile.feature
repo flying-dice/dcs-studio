@@ -14,7 +14,7 @@ Feature: Cross-file type checking
       add_one("not a number")
       """
     When the workspace is type-checked
-    Then diagnostic "LUA-T001" is reported
+    Then diagnostic "param-type-mismatch" is reported
 
   Scenario: an aliased type resolves to its target
     Given a Lua file "types.lua" with:
@@ -28,7 +28,7 @@ Feature: Cross-file type checking
       travel("far")
       """
     When the workspace is type-checked
-    Then diagnostic "LUA-T001" is reported
+    Then diagnostic "param-type-mismatch" is reported
 
   Scenario: a subclass is assignable to its parent
     Given a Lua file "types.lua" with:

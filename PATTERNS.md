@@ -61,7 +61,7 @@ output against the golden, mirroring pseudoscript's harness.
 
 ## Type-layer parity harness (Cucumber)
 
-The type layer (annotations, inference, `LUA-T001`, inlay hints) is covered by
+The type layer (annotations, inference, `param-type-mismatch`, inlay hints) is covered by
 a real Cucumber suite in `dcs-lua-lsp-core` (`tests/parity.rs`, `harness =
 false`; `.feature` files under `tests/features/`). Scenarios are authored from
 lua-language-server's `test/` categories (type_inference, diagnostics,

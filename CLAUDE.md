@@ -174,7 +174,7 @@ diagnostics, never a panic. The IDE side:
 - `cargo test -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide` — engine
   suites (units, conformance goldens, totality properties, corpus gate).
 - `cargo test -p lua-analyzer` — the standalone Lua LSP server's real-stdio
-  suite (initialize → workspace walk → parse + `LUA-T001` type diagnostics,
+  suite (initialize → workspace walk → parse + `param-type-mismatch` type diagnostics,
   didChange, hover).
 - `cargo test -p dcs-studio-cli` — CLI suites incl. the real-stdio MCP
   end-to-end session (full tool surface, no-DCS guards, real-engine lang

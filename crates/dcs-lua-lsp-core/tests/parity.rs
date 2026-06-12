@@ -1,7 +1,7 @@
 //! LuaLS-parity BDD suite (plan "Cucumber harness").
 //!
 //! Gherkin scenarios under `tests/features/` exercise the type layer the way
-//! lua-language-server's own `test/` suite does — type inference, `LUA-T001`
+//! lua-language-server's own `test/` suite does — type inference, `param-type-mismatch`
 //! diagnostics, and inferred-type inlay hints — but scoped to the **DCS Lua
 //! 5.1 dialect** only (no multi-runtime-version cases). The cloned LuaLS repo
 //! is a read-only reference; the scenarios here are authored, not copied, so
@@ -15,7 +15,7 @@
 #![allow(clippy::needless_pass_by_value, clippy::doc_markdown)]
 
 use cucumber::{World, gherkin::Step, given, then, when};
-use dcs_lua_lsp_core::{Workspace, check_types, inlay_hints, infer_type};
+use dcs_lua_lsp_core::{Workspace, all_findings, check_types, inlay_hints, infer_type};
 
 /// The scenario world: a mounted workspace plus the last query results.
 #[derive(Debug, Default, World)]
@@ -47,6 +47,13 @@ fn when_type_checked(world: &mut LangWorld) {
 #[when("inlay hints for the file are requested")]
 fn when_inlay_hints(world: &mut LangWorld) {
     world.hints = inlay_hints(&world.workspace, &world.path);
+}
+
+/// The aggregated finding set (parse + type findings, with inline
+/// `---@allow`-style lint levels resolved) — what every transport publishes.
+#[when("diagnostics are collected")]
+fn when_collected(world: &mut LangWorld) {
+    world.diagnostics = all_findings(&world.workspace);
 }
 
 #[then(regex = r#"^diagnostic "([^"]+)" is reported at the argument "([^"]+)"$"#)]

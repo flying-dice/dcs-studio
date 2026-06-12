@@ -26,8 +26,8 @@ public data DocumentSymbol { name: string, kind: lspcore::SymbolKind, span: synt
 public data HoverInfo { title: string, body: string }
 
 /// One inferred-type inlay hint: the label (`: <type>`) and the byte offset
-/// it sits after (the end of the bound name). `kind` is the LSP inlay-hint
-/// kind (`Type`).
+/// it sits after — the end of a bound name, a function parameter name, or the
+/// parameter list's closing `)`. `kind` is the LSP inlay-hint kind (`Type`).
 public data InlayHint { offset: number, label: string, kind: string }
 
 /// A workspace-wide table of declared named types built from `@class`,
@@ -85,14 +85,26 @@ public container Queries for dcslua::DcsLuaLs {
 
   /// Every finding across the mounted workspace, each paired with its
   /// file path, ordered by path then offset. Combines parse diagnostics
-  /// with the type-checker's `LUA-Txxx` findings (`CheckTypes`).
+  /// with the type-checker's lint findings (`CheckTypes`), then resolves each
+  /// lint's level (`ApplyLintLevels`).
   public AllFindings(): syntax::Diagnostic[] {
-    return self.MergeParseAndTypeFindings()
+    merged = syntax::Diagnostic[] from self.MergeParseAndTypeFindings()
+    return self.ApplyLintLevels(merged)
   }
 
   /// Collect parse diagnostics from every file and append the workspace
   /// type-check findings, re-sorted by path then offset.
   MergeParseAndTypeFindings(): syntax::Diagnostic[];
+
+  /// Resolve each type lint's level — an inline directive (`---@allow`/`warn`/
+  /// `deny`/`expect`, covering the statement below it; Lua's stand-in for a
+  /// Rust `#[allow]` attribute) over the project's `[lints.lua]` level over the
+  /// built-in default; `forbid` from `[lints.lua]` cannot be downgraded inline.
+  /// An `allow`ed finding is dropped, the rest are re-severitied to
+  /// Warning/Error, and an `---@expect` whose lint never fired in its statement
+  /// raises `unfulfilled-lint-expectation`. Parse findings (`LUA-Exxx`) are not
+  /// lints and pass through untouched.
+  ApplyLintLevels(findings: syntax::Diagnostic[]): syntax::Diagnostic[];
 
   /// Build the named-type table from every `@class`/`@alias`/`@enum` block
   /// across the workspace.
@@ -114,18 +126,42 @@ public container Queries for dcslua::DcsLuaLs {
   public Assignable(arg: syntax::Type, param: syntax::Type, table: lspcore::TypeTable): bool;
 
   /// Walk every call across the workspace; for a callee that carries
-  /// `@param` types, infer each argument's type and report `LUA-T001` at the
-  /// argument's span when it is not `Assignable` to the parameter. Each
-  /// finding is paired with its file path. Cross-file: a callee declared in
-  /// another file is checked, resolving named types through the workspace
-  /// type table. An `@overload` set flags only when no overload matches;
-  /// optional and vararg parameters relax arity. Unresolved callees and
-  /// generics never flag.
+  /// `@param` types, infer each argument's type and report the
+  /// `param-type-mismatch` lint at the argument's span when it is not
+  /// `Assignable` to the parameter. Each finding is paired with its file path.
+  /// Cross-file: a callee declared in another file is checked, resolving named
+  /// types through the workspace type table. An `@overload` set flags only when
+  /// no overload matches; optional and vararg parameters relax arity.
+  /// Unresolved callees and generics never flag.
+  ///
+  /// Two further lints fire (advisory by default), since Lua coerces numeric
+  /// strings in arithmetic and concatenation and a metamethod may overload an
+  /// operator: `operator-type-mismatch` flags an operator applied to an operand
+  /// whose inferred type cannot fit it — arithmetic or `#` on a
+  /// table/boolean/nil/function, arithmetic on a non-numeric string,
+  /// concatenation of a table/boolean/nil/function; and `param-usage-mismatch`
+  /// flags a call argument whose type conflicts with how the callee's
+  /// un-annotated parameter is used in its body (the usage type from
+  /// `param_infer`). A numeric string literal is accepted where a number is
+  /// expected; `any`/`unknown`/generics never flag. Each finding's effective
+  /// severity comes from its lint level (`ApplyLintLevels`).
   public CheckTypes(): syntax::Diagnostic[];
 
-  /// Inferred-type inlay hints for one file: one `: <type>` hint after each
-  /// `local` binding that has no explicit `@type`/`@param` annotation and
-  /// whose inferred type is concrete (never `Unknown`/`Any`).
+  /// Inferred-type inlay hints for one file. One `: <type>` hint after each
+  /// `local` binding that has no explicit `@type` annotation and whose
+  /// inferred type is concrete; and, on every function form (`local
+  /// function`, `function a.b.c`, `function obj:m`, `function(...)` literals),
+  /// one hint after each parameter whose type is inferred and one after the
+  /// parameter list for the return type. A parameter's type comes from its
+  /// `@param` annotation first, else from a best-common-type over its uses in
+  /// the body: concatenation implies `string`, arithmetic implies `number`, a
+  /// string-library method receiver (`p:upper()`) implies `string`, any other
+  /// method receiver or a field/index target (`p.x`, `p[k]`) implies `table`.
+  /// The return type is the join of the body's `return` expressions (a `return`
+  /// of a typed parameter reuses its type). Any concrete type is never
+  /// `Unknown`/`Any`; a parameter constrained two incompatible ways, one with
+  /// no evidence, or a reassigned/shadowed one is omitted, as is a `nil`-only
+  /// or conflicting return.
   public InlayHints(path: string): lspcore::InlayHint[];
 
   /// The hover card for the identifier at a byte offset; none over
@@ -152,13 +188,39 @@ feature HoverExplainsDeclarations for lspcore::Queries {
   and "the doc comment text above the declaration appears in the body"
 }
 
-/// A type-incompatible argument is reported against the declared `@param`.
+/// A type-incompatible argument is the `param-type-mismatch` lint.
 /// #critical
 feature ArgumentTypeIsChecked for lspcore::Queries {
   given "a function with a `---@param msg string` annotation"
   when "it is called with a number literal argument"
-  then "a LUA-T001 diagnostic is reported at the argument's span"
+  then "a param-type-mismatch lint is reported at the argument's span"
   but "calling it with a string argument reports nothing"
+}
+
+/// An operator applied to an unfit operand is the `operator-type-mismatch` lint.
+feature OperatorOperandIsChecked for lspcore::Queries {
+  given "a local string concatenated with a table value"
+  when "the workspace is type-checked"
+  then "an operator-type-mismatch lint is reported at the table operand"
+  but "a numeric string literal used in arithmetic reports nothing"
+}
+
+/// An argument conflicting with a parameter's body usage is the
+/// `param-usage-mismatch` lint.
+feature ParameterUsageIsChecked for lspcore::Queries {
+  given "an un-annotated `local function f(p) return p + 1 end`"
+  when "it is called with a string-literal argument"
+  then "a param-usage-mismatch lint is reported at the argument's span"
+  but "calling it with a number argument reports nothing"
+}
+
+/// A lint's level is set inline (Rust-style verbs) or in `[lints.lua]`.
+feature LintLevelsControlReporting for lspcore::Queries {
+  given "an `---@allow operator-type-mismatch` above a flagged statement"
+  when "the workspace findings are collected"
+  then "no diagnostic is reported for that statement"
+  and "an `---@expect` whose lint never fires reports unfulfilled-lint-expectation"
+  but "a `[lints.lua]` `deny` level keeps the lint and raises it to an error"
 }
 
 /// Inferred types are surfaced as inlay hints on unannotated locals.
@@ -166,6 +228,15 @@ feature InferredTypesShowAsInlayHints for lspcore::Queries {
   given "a local assigned a string literal with no `@type` annotation"
   when "inlay hints for the file are requested"
   then "a `: string` hint is returned at the end of the bound name"
+}
+
+/// Function signatures gain inlay hints from body usage and annotations.
+feature SignatureInlayHintsFromUsage for lspcore::Queries {
+  given "an unannotated `local function f(p) return p:upper() end`"
+  when "inlay hints for the file are requested"
+  then "a `: string` hint is returned after the parameter `p`"
+  and "a `: string` hint is returned after the parameter list's `)`"
+  but "a parameter used in conflicting ways gets no hint"
 }
 
 /// Editing one file re-analyses exactly that file.

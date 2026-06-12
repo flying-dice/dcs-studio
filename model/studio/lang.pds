@@ -35,7 +35,8 @@ public data DocumentSymbol { name: string, kind: string, start: number, end: num
 public data FoldingRange { start: number, end: number }
 
 /// One inferred-type inlay hint: a `: <type>` label drawn as ghost text
-/// after the byte `offset` (the end of the bound name).
+/// after the byte `offset` — the end of a bound name, a function parameter
+/// name, or the parameter list's closing `)`.
 public data InlayHint { offset: number, label: string, kind: string }
 
 /// The embedded engine failed to load or initialise (e.g. the wasm module
@@ -79,7 +80,12 @@ public system DcsLua {
   public DefinitionOf(path: string, offset: number): Option<studio::lang::Location>;
 
   /// Inferred-type inlay hints for one file, drawn as ghost text by the
-  /// editor on unannotated local bindings.
+  /// editor on unannotated local bindings and on every function form
+  /// (`local function`, `function a.b.c`, `function obj:m`, `function(...)`
+  /// literals): one hint after each parameter whose type is inferred (its
+  /// `@param` annotation first, else its uses in the body) and one after the
+  /// parameter list for the body-inferred return type. Conflicting or
+  /// un-inferable parameters and returns are omitted.
   public InlayHints(path: string): studio::lang::InlayHint[];
 }
 

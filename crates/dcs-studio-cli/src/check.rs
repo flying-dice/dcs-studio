@@ -22,6 +22,11 @@ pub fn run(root: &Path) -> Report {
     for (path, text) in &files {
         workspace.set_source(path, text);
     }
+    // Honour the project's `[lints.lua]` levels (absent/invalid manifest →
+    // defaults); inline `---@allow`/`deny`/… directives apply regardless.
+    workspace.set_lint_levels(dcs_lua_lsp_core::lints::levels_from_strings(
+        &dcs_studio_project::manifest::lua_lint_levels(root),
+    ));
     let findings = dcs_lua_lsp_core::all_findings(&workspace);
 
     let mut rendered = String::new();
@@ -50,5 +55,40 @@ pub fn run(root: &Path) -> Report {
     Report {
         rendered,
         error_count,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_project(toml: &str, lua: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("cli-check-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join("dcs-studio.toml"), toml).expect("manifest");
+        std::fs::write(dir.join("checks.lua"), lua).expect("lua");
+        dir
+    }
+
+    #[test]
+    fn lints_lua_level_silences_the_code() {
+        // `{} + 1` is operator-type-mismatch; `[lints.lua]` allows it away.
+        let lua = "local x = {} + 1\n";
+        let with = temp_project(
+            "[project]\nname = \"x\"\n\n[lints.lua]\noperator-type-mismatch = \"allow\"\n",
+            lua,
+        );
+        assert!(run(&with).rendered.contains("no findings"), "{}", run(&with).rendered);
+        let _ = std::fs::remove_dir_all(&with);
+
+        // Without the [lints] section the warning is reported.
+        let without = temp_project("[project]\nname = \"x\"\n", lua);
+        assert!(
+            run(&without).rendered.contains("operator-type-mismatch"),
+            "{}",
+            run(&without).rendered
+        );
+        let _ = std::fs::remove_dir_all(&without);
     }
 }

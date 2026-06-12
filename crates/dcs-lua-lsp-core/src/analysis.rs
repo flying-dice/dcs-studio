@@ -12,15 +12,17 @@
 
 use std::collections::HashMap;
 
-use dcs_lua_syntax::Diagnostic;
+use dcs_lua_syntax::diagnostic::{Severity, codes};
+use dcs_lua_syntax::{Diagnostic, Span};
 
 use crate::check::check_types;
+use crate::lints::{LintLevel, Resolver, default_level};
 use crate::workspace::Workspace;
 
 /// The finding set per mounted file: each file's parse diagnostics plus the
-/// workspace type-checker's `LUA-Txxx` findings for that file, each list
-/// ordered by offset. One `check_types` pass for the whole workspace, so
-/// callers that need every file (the LSP boot walk) pay it once.
+/// workspace type-checker's lint findings for that file, each list ordered by
+/// offset. One `check_types` pass for the whole workspace, so callers that
+/// need every file (the LSP boot walk) pay it once.
 #[must_use]
 pub fn findings_by_file(workspace: &Workspace) -> HashMap<String, Vec<Diagnostic>> {
     let mut by_path: HashMap<String, Vec<Diagnostic>> = workspace
@@ -30,10 +32,63 @@ pub fn findings_by_file(workspace: &Workspace) -> HashMap<String, Vec<Diagnostic
     for (path, diagnostic) in check_types(workspace) {
         by_path.entry(path).or_default().push(diagnostic);
     }
+    // Resolve each lint's level per file — inline `---@allow`/`warn`/`deny`/
+    // `expect` directives over the project's `[lints.lua]` over the built-in
+    // default — dropping `allow`ed findings, re-severitying the rest, and
+    // raising `unfulfilled-lint-expectation` for an `expect` that never fired.
+    for (path, list) in &mut by_path {
+        let Some(entry) = workspace.file(path) else {
+            continue;
+        };
+        apply_levels(&Resolver::parse(entry), workspace.lint_levels(), list);
+    }
     for list in by_path.values_mut() {
         list.sort_by_key(|diagnostic| diagnostic.span.start);
     }
     by_path
+}
+
+/// Apply lint levels to one file's findings in place.
+fn apply_levels(
+    resolver: &Resolver,
+    project: &HashMap<String, LintLevel>,
+    list: &mut Vec<Diagnostic>,
+) {
+    // An `expect` whose lint never fired this pass reports against its marker.
+    let fired: Vec<(u32, &str)> = list.iter().map(|d| (d.span.start, d.code)).collect();
+    let unfulfilled = resolver.unfulfilled(&fired);
+    drop(fired);
+    for (marker, code) in unfulfilled {
+        list.push(unfulfilled_expectation(marker, &code));
+    }
+    list.retain_mut(|diagnostic| {
+        // Only levelled lints are governed; parse errors and the expectation
+        // diagnostic pass through untouched.
+        if default_level(diagnostic.code).is_none() {
+            return true;
+        }
+        match resolver.level(diagnostic.span.start, diagnostic.code, project) {
+            LintLevel::Allow => false,
+            LintLevel::Warn => {
+                diagnostic.severity = Severity::Warning;
+                true
+            }
+            LintLevel::Deny | LintLevel::Forbid => {
+                diagnostic.severity = Severity::Error;
+                true
+            }
+        }
+    });
+}
+
+fn unfulfilled_expectation(marker: Span, code: &str) -> Diagnostic {
+    Diagnostic {
+        severity: Severity::Warning,
+        span: marker,
+        code: codes::UNFULFILLED_EXPECTATION,
+        code_description: "",
+        message: format!("lint `{code}` was expected here but did not fire"),
+    }
 }
 
 /// Every finding for one file (empty if unmounted), ordered by offset — the
@@ -67,5 +122,83 @@ mod tests {
         let findings = all_findings(&ws);
         assert!(!findings.is_empty());
         assert!(findings.iter().all(|(path, _)| path == "b.lua"));
+    }
+
+    #[test]
+    fn allow_directive_silences_a_finding() {
+        let mut ws = Workspace::new();
+        // `{} + 1` is operator-type-mismatch, allowed by the directive above it.
+        ws.set_source(
+            "m.lua",
+            "---@allow operator-type-mismatch\nlocal x = {} + 1\n",
+        );
+        assert!(all_findings(&ws).is_empty(), "{:?}", all_findings(&ws));
+
+        // Without the directive the warning is present.
+        ws.set_source("m.lua", "local x = {} + 1\n");
+        assert_eq!(all_findings(&ws).len(), 1);
+    }
+
+    #[test]
+    fn project_lint_level_drops_and_promotes() {
+        let mut ws = Workspace::new();
+        ws.set_source("m.lua", "local x = {} + 1\n");
+        assert_eq!(all_findings(&ws).len(), 1);
+
+        // `allow` silences it workspace-wide…
+        ws.set_lint_levels(HashMap::from([(
+            "operator-type-mismatch".to_string(),
+            LintLevel::Allow,
+        )]));
+        assert!(all_findings(&ws).is_empty());
+
+        // …and `deny` keeps it but promotes it to an error.
+        ws.set_lint_levels(HashMap::from([(
+            "operator-type-mismatch".to_string(),
+            LintLevel::Deny,
+        )]));
+        let findings = all_findings(&ws);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].1.severity, Severity::Error);
+    }
+
+    #[test]
+    fn directive_targets_only_the_named_lint() {
+        let mut ws = Workspace::new();
+        // Allowing param-usage-mismatch leaves the operator lint in place.
+        ws.set_source(
+            "m.lua",
+            "---@allow param-usage-mismatch\nlocal x = {} + 1\n",
+        );
+        let findings = all_findings(&ws);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].1.code, "operator-type-mismatch");
+    }
+
+    #[test]
+    fn warn_directive_downgrades_a_deny_by_default_lint() {
+        // `param-type-mismatch` is deny (error) by default; `---@warn` over the
+        // call downgrades it to a warning (rustc's `#[warn]` on a deny lint).
+        let mut ws = Workspace::new();
+        let src = "--- @param n number\nlocal function f(n) end\n---@warn param-type-mismatch\nf('x')\n";
+        ws.set_source("m.lua", src);
+        let findings = all_findings(&ws);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].1.code, "param-type-mismatch");
+        assert_eq!(findings[0].1.severity, Severity::Warning);
+    }
+
+    #[test]
+    fn expect_reports_when_the_lint_does_not_fire() {
+        let mut ws = Workspace::new();
+        // The statement is clean, so the expectation is unfulfilled.
+        ws.set_source("m.lua", "---@expect operator-type-mismatch\nlocal x = 1\n");
+        let findings = all_findings(&ws);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].1.code, codes::UNFULFILLED_EXPECTATION);
+
+        // When the lint does fire, the expectation is met and silent.
+        ws.set_source("m.lua", "---@expect operator-type-mismatch\nlocal x = {} + 1\n");
+        assert!(all_findings(&ws).is_empty(), "{:?}", all_findings(&ws));
     }
 }

@@ -24,6 +24,21 @@ pub struct Manifest {
     /// declared entry is an error, never a guess.
     #[serde(default)]
     pub build: BuildConfig,
+    /// `[lints]` — per-lint levels, the Cargo `[lints]` idiom. Absent section
+    /// means every lint keeps its built-in default.
+    #[serde(default)]
+    pub lints: LintsConfig,
+}
+
+/// `[lints]` — lint levels by language, mirroring Cargo's `[lints.rust]` /
+/// `[lints.clippy]`. `[lints.lua]` maps a Lua lint name to a level
+/// (`allow`/`warn`/`deny`/`forbid`).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct LintsConfig {
+    /// `[lints.lua]` — `<lint-name> = "<level>"` (e.g.
+    /// `operator-type-mismatch = "allow"`).
+    pub lua: std::collections::HashMap<String, String>,
 }
 
 /// `[test]` — where `dcs-studio-cli test` discovers spec files.
@@ -93,6 +108,15 @@ pub fn load(root: &Path) -> Result<Manifest, String> {
     let text =
         std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
     parse(&text)
+}
+
+/// The project's `[lints.lua]` levels (`name -> "level"`), or empty when the
+/// manifest is absent or invalid. The one place the "no manifest → defaults"
+/// rule lives, so every edge (LSP server, CLI, MCP) honours `[lints.lua]`
+/// identically.
+#[must_use]
+pub fn lua_lint_levels(root: &Path) -> std::collections::HashMap<String, String> {
+    load(root).map(|manifest| manifest.lints.lua).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -166,6 +190,22 @@ mod tests {
         assert_eq!(manifest.test.suffix, ".test.lua");
         assert_eq!(manifest.build.entry.as_deref(), Some("main.lua"));
         assert_eq!(manifest.build.output.as_deref(), Some("bundle.lua"));
+    }
+
+    #[test]
+    fn absent_lints_section_means_no_levels() {
+        let manifest = parse("[project]\nname = \"x\"\n").expect("parse");
+        assert!(manifest.lints.lua.is_empty());
+    }
+
+    #[test]
+    fn lints_lua_table_maps_names_to_levels() {
+        let manifest = parse(
+            "[project]\nname = \"x\"\n\n[lints.lua]\noperator-type-mismatch = \"allow\"\nparam-usage-mismatch = \"deny\"\n",
+        )
+        .expect("parse");
+        assert_eq!(manifest.lints.lua.get("operator-type-mismatch").map(String::as_str), Some("allow"));
+        assert_eq!(manifest.lints.lua.get("param-usage-mismatch").map(String::as_str), Some("deny"));
     }
 
     #[test]

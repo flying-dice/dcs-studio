@@ -122,6 +122,11 @@ impl LanguageServer for Backend {
             for (path, text) in &files {
                 workspace.set_source(path, text);
             }
+            // Apply the project's `[lints.lua]` levels (absent/invalid manifest
+            // → defaults); inline `---@allow`/`deny`/… directives still apply.
+            workspace.set_lint_levels(dcs_lua_lsp_core::lints::levels_from_strings(
+                &dcs_studio_project::manifest::lua_lint_levels(&root),
+            ));
             // One shared aggregation for the whole walk, not one per file.
             let by_file = findings_by_file(&workspace);
             files

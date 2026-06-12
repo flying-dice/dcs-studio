@@ -1,8 +1,8 @@
-//! Call-site type checking (SPEC.md §3.1, `LUA-T001`).
+//! Call-site type checking (SPEC.md §3.1, `param-type-mismatch`).
 //!
 //! Walks every call in a file; for a callee that resolves to a function
 //! carrying `@param` types, infers each argument's type and reports
-//! `LUA-T001` at the argument span when it is not [`assignable`] to the
+//! `param-type-mismatch` at the argument span when it is not [`assignable`] to the
 //! declared parameter type. Conservative by construction: unresolved
 //! callees, un-annotated parameters, generics, and `any` never flag.
 
@@ -13,17 +13,19 @@ use dcs_lua_syntax::{Diagnostic, Type};
 use crate::annot::block_at;
 use crate::assignable::assignable;
 use crate::infer::infer_type;
+use crate::param_infer::param_types;
 use crate::resolve::{Decl, resolve, resolve_dotted};
 use crate::ty_table::TypeTable;
 use crate::workspace::Workspace;
 
-/// Every `LUA-T001` finding across the workspace, paired with its file path.
+/// Every `param-type-mismatch` finding across the workspace, paired with its file path.
 #[must_use]
 pub fn check_types(workspace: &Workspace) -> Vec<(String, Diagnostic)> {
     let table = TypeTable::build(workspace);
     let mut findings = Vec::new();
     for (path, entry) in workspace.files() {
         check_file(workspace, path, entry, &table, &mut findings);
+        crate::operands::check_operands(workspace, path, entry, &mut findings);
     }
     findings.sort_by(|a, b| (a.0.as_str(), a.1.span.start).cmp(&(b.0.as_str(), b.1.span.start)));
     tracing::debug!(findings = findings.len(), "type check");
@@ -43,57 +45,88 @@ fn check_file(
         let ExprKind::Call { callee, args } = &expr.kind else {
             continue;
         };
-        let Some((params, decl_path)) = callee_params(workspace, path, *callee) else {
+        let Some((func, decl_start, decl_path)) = callee_function(workspace, path, *callee) else {
             continue;
         };
         let Some(func_entry) = workspace.file(&decl_path) else {
             continue;
         };
-        let block = block_at(func_entry, params.decl_start);
-        if block.params.is_empty() {
-            continue;
-        }
+        let block = block_at(func_entry, decl_start);
+        // Body-usage parameter types, for the un-annotated (`param-usage-mismatch`) path.
+        // `param_types` is annotation-first, so an annotated slot keeps its
+        // declared type — but those slots take the `param-type-mismatch` branch below.
+        let usage = param_types(workspace, &decl_path, func, Some(decl_start));
         for (position, &arg) in args.iter().enumerate() {
-            let Some(param_name) = params.names.get(position) else {
+            let Some(param) = func.params.get(position) else {
                 break;
             };
-            let Some(param) = block.param_type(param_name) else {
-                continue;
-            };
-            if !is_checkable(&param.ty) {
-                continue;
-            }
+            let name = param.text.as_str();
             let arg_ty = infer_type(workspace, path, arg);
-            if !assignable(&arg_ty, &param.ty, table) {
-                findings.push((
-                    path.to_string(),
-                    Diagnostic {
-                        severity: Severity::Error,
-                        span: ast.expr(arg).span,
-                        code: codes::ARGUMENT_TYPE_MISMATCH,
-                        code_description: "",
-                        message: format!(
-                            "argument of type `{}` is not assignable to parameter `{}` of type `{}`",
-                            arg_ty.render(),
-                            param_name,
-                            param.ty.render()
-                        ),
-                    },
-                ));
+            let arg_span = ast.expr(arg).span;
+
+            if let Some(declared) = block.param_type(name) {
+                // `param-type-mismatch` — a declared `@param` is violated (Error).
+                if is_checkable(&declared.ty) && !assignable(&arg_ty, &declared.ty, table) {
+                    findings.push((
+                        path.to_string(),
+                        Diagnostic {
+                            severity: Severity::Error,
+                            span: arg_span,
+                            code: codes::ARGUMENT_TYPE_MISMATCH,
+                            code_description: "",
+                            message: format!(
+                                "argument of type `{}` is not assignable to parameter `{}` of type `{}`",
+                                arg_ty.render(),
+                                name,
+                                declared.ty.render()
+                            ),
+                        },
+                    ));
+                }
+            } else if let Some(usage_ty) = usage.get(position).and_then(Option::as_ref) {
+                // `param-usage-mismatch` — the parameter is un-annotated, but its body uses
+                // imply a type the argument conflicts with (Warning).
+                if is_checkable(usage_ty) && !assignable(&arg_ty, usage_ty, table) && !coerces(ast, arg, usage_ty) {
+                    findings.push((
+                        path.to_string(),
+                        Diagnostic {
+                            severity: Severity::Warning,
+                            span: arg_span,
+                            code: codes::ARGUMENT_USAGE_MISMATCH,
+                            code_description: "",
+                            message: format!(
+                                "argument of type `{}` conflicts with parameter `{}`, used as `{}` in the body",
+                                arg_ty.render(),
+                                name,
+                                usage_ty.render()
+                            ),
+                        },
+                    ));
+                }
             }
         }
     }
 }
 
-/// The parameter names of the function `callee` resolves to, plus the path
-/// of the file declaring it. `None` when the callee is not a resolvable
-/// function declaration.
-struct Params {
-    names: Vec<String>,
-    decl_start: u32,
+/// Whether `arg` coerces into `usage_ty` despite not being formally
+/// assignable: a numeric string literal satisfies a `number`-typed use, the
+/// way Lua coerces `"10" + 5`.
+fn coerces(ast: &Ast, arg: ExprId, usage_ty: &Type) -> bool {
+    matches!(usage_ty, Type::Number)
+        && matches!(
+            &ast.expr(arg).kind,
+            ExprKind::Str { raw } if crate::operands::numeric_string_literal(raw)
+        )
 }
 
-fn callee_params(workspace: &Workspace, path: &str, callee: ExprId) -> Option<(Params, String)> {
+/// The function declaration `callee` resolves to: its body, its declaration
+/// start (the `@param`/usage-inference anchor), and the path of the file
+/// declaring it. `None` when the callee is not a resolvable function.
+fn callee_function<'ws>(
+    workspace: &'ws Workspace,
+    path: &str,
+    callee: ExprId,
+) -> Option<(&'ws FuncBody, u32, String)> {
     let entry = workspace.file(path)?;
     let ast = &entry.parsed.ast;
     let (decl_path, decl) = match &ast.expr(callee).kind {
@@ -107,18 +140,12 @@ fn callee_params(workspace: &Workspace, path: &str, callee: ExprId) -> Option<(P
         }
         _ => return None,
     };
-    let (func, decl_start): (&FuncBody, u32) = match &decl {
+    let (func, decl_start): (&'ws FuncBody, u32) = match &decl {
         Decl::LocalFunction { func, stat_start, .. }
         | Decl::GlobalFunction { func, stat_start, .. } => (func, *stat_start),
         _ => return None,
     };
-    Some((
-        Params {
-            names: func.params.iter().map(|n| n.text.clone()).collect(),
-            decl_start,
-        },
-        decl_path,
-    ))
+    Some((func, decl_start, decl_path))
 }
 
 /// Only concrete declared types gate a diagnostic; wildcards and generics
@@ -179,5 +206,64 @@ mod tests {
         let ws = ws(src);
         let findings = check_types(&ws);
         assert_eq!(findings.len(), 1, "{findings:?}");
+    }
+
+    /// Inlay-hint parameter inference must stay isolated from call checking:
+    /// a parameter passed straight to an annotated callee keeps inferring as
+    /// `Unknown` here (never the body-witnessed type), so it never flags.
+    #[test]
+    fn parameter_passed_to_annotated_callee_never_flags() {
+        let src =
+            "--- @param n number\nlocal function g(n) end\nlocal function f(p) g(p) p:upper() end\n";
+        assert!(check_types(&ws(src)).is_empty());
+    }
+
+    // ---- param-usage-mismatch: argument vs. un-annotated parameter body usage ----------
+
+    fn codes_of(src: &str) -> Vec<&'static str> {
+        check_types(&ws(src)).into_iter().map(|(_, d)| d.code).collect()
+    }
+
+    #[test]
+    fn string_arg_to_numerically_used_param_warns() {
+        // `p` is used as `p + 1`, so a string argument conflicts (Warning).
+        let src = "local function f(p) return p + 1 end\nf('x')\n";
+        let findings = check_types(&ws(src));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].1.code, codes::ARGUMENT_USAGE_MISMATCH);
+        assert_eq!(findings[0].1.severity, Severity::Warning);
+    }
+
+    #[test]
+    fn number_arg_to_numerically_used_param_is_clean() {
+        assert!(check_types(&ws("local function f(p) return p + 1 end\nf(5)\n")).is_empty());
+    }
+
+    #[test]
+    fn numeric_string_literal_arg_coerces_and_is_clean() {
+        // Lua coerces `"10" + 1`, so passing "10" to a number-used param is ok.
+        assert!(check_types(&ws("local function f(p) return p + 1 end\nf('10')\n")).is_empty());
+    }
+
+    #[test]
+    fn number_arg_to_string_used_param_warns() {
+        let src = "local function g(s) return s:upper() end\ng(5)\n";
+        assert_eq!(codes_of(src), vec![codes::ARGUMENT_USAGE_MISMATCH]);
+    }
+
+    #[test]
+    fn param_with_no_inferable_usage_never_warns() {
+        // `x` is just returned — usage type is `Unknown`, so nothing flags.
+        assert!(check_types(&ws("local function h(x) return x end\nh(5)\nh('s')\n")).is_empty());
+    }
+
+    #[test]
+    fn annotated_param_stays_t001_not_t003() {
+        // An annotated param uses the declared type and the Error code.
+        let src = "--- @param n number\nlocal function f(n) end\nf('x')\n";
+        let findings = check_types(&ws(src));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].1.code, codes::ARGUMENT_TYPE_MISMATCH);
+        assert_eq!(findings[0].1.severity, Severity::Error);
     }
 }

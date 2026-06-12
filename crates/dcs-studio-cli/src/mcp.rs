@@ -690,6 +690,9 @@ fn lua_diagnostics_tool(root: &Path) -> Value {
     for (path, text) in &files {
         workspace.set_source(path, text);
     }
+    workspace.set_lint_levels(dcs_lua_lsp_core::lints::levels_from_strings(
+        &dcs_studio_project::manifest::lua_lint_levels(root),
+    ));
     let findings = dcs_lua_lsp_core::all_findings(&workspace);
     let rendered: Vec<Value> = findings
         .iter()

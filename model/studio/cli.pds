@@ -54,7 +54,9 @@ public container Cli for studio::core::Studio {
   /// of error-severity findings, so agents and CI can gate on it. A
   /// nonexistent root is an error, never a clean workspace — analysing
   /// nothing must not gate as success; an empty-but-existing root is
-  /// legitimately clean.
+  /// legitimately clean. Each lint's effective level comes from the project's
+  /// `dcs-studio.toml` `[lints.lua]` table or an inline `---@allow`/`deny`/…
+  /// directive, resolved by the engine (lspcore::Queries.ApplyLintLevels).
   #[manual]
   public Check(root: string): number {
     files = dcslua::SourceUnit[] from self.CollectSources(root)
