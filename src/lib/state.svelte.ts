@@ -24,6 +24,24 @@ import { todos } from "./todos.svelte";
 import type { Extension } from "@codemirror/state";
 
 const EDITOR_THEME_KEY = "dcs.editorTheme";
+const PANEL_WIDTHS_KEY = "dcs.panelWidths";
+
+const _pw = (() => {
+  if (typeof localStorage === "undefined") return { left: 270, right: 270 };
+  try {
+    const raw = localStorage.getItem(PANEL_WIDTHS_KEY);
+    const p = raw ? JSON.parse(raw) : {};
+    return {
+      left:  typeof p.left  === "number" ? p.left  : 270,
+      right: typeof p.right === "number" ? p.right : 270,
+    };
+  } catch { return { left: 270, right: 270 }; }
+})();
+
+function savePanelWidths(left: number, right: number): void {
+  try { localStorage.setItem(PANEL_WIDTHS_KEY, JSON.stringify({ left, right })); }
+  catch { /* ignore */ }
+}
 
 function loadEditorThemeId(): string {
   if (typeof localStorage === "undefined") return DEFAULT_DARK_THEME;
@@ -254,6 +272,9 @@ class AppState {
   leftTool = $state<string | null>("project");
   rightTool = $state<string | null>(null);
   bottomTool = $state<string | null>(null);
+
+  leftPanelWidth  = $state(_pw.left);
+  rightPanelWidth = $state(_pw.right);
 
   /** The CodeMirror extension for the currently selected editor theme. */
   get cm(): Extension {
@@ -504,6 +525,12 @@ class AppState {
   toggleTool(stripe: "left" | "right" | "bottom", id: string) {
     const key = `${stripe}Tool` as const;
     this[key] = this[key] === id ? null : id;
+  }
+
+  setPanelWidth(side: "left" | "right", width: number) {
+    if (side === "left") this.leftPanelWidth  = width;
+    else                 this.rightPanelWidth = width;
+    savePanelWidths(this.leftPanelWidth, this.rightPanelWidth);
   }
 }
 

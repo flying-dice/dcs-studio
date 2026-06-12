@@ -17,6 +17,7 @@
   import Editor from "$lib/components/Editor.svelte";
   import EditorTabs from "$lib/components/EditorTabs.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
+  import PanelResizeHandle from "$lib/components/PanelResizeHandle.svelte";
   import { lang } from "$lib/lang/intel.svelte";
   import { cn } from "$lib/utils.js";
 
@@ -68,10 +69,10 @@
   // the rest pop open a labelled placeholder island for now.
   const leftTools: Tool[] = [
     { id: "project", label: "Project", icon: FolderTree },
-    { id: "structure", label: "Structure", icon: ListTree },
     { id: "bookmarks", label: "Bookmarks", icon: Bookmark },
   ];
   const rightTools: Tool[] = [
+    { id: "structure", label: "Structure", icon: ListTree },
     { id: "inject", label: "Inject", icon: Syringe },
     { id: "mission", label: "Mission", icon: ShieldOff },
     { id: "database", label: "Database", icon: Database },
@@ -428,9 +429,9 @@
 
       <!-- CONTENT COLUMN: top row of islands + optional bottom island -->
       <div class="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-        <div class="flex min-h-0 flex-1 gap-2">
+        <div class="flex min-h-0 flex-1">
         {#if app.leftTool}
-          <Card class="flex h-full min-h-0 w-[270px] shrink-0 flex-col gap-0 rounded-xl py-0">
+          <Card class="flex h-full min-h-0 shrink-0 flex-col gap-0 rounded-xl py-0" style="width: {app.leftPanelWidth}px">
             <div class="flex h-9 shrink-0 items-center justify-between gap-2 px-3">
               <span class="truncate font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                 {app.leftTool === "project"
@@ -454,15 +455,15 @@
                 <ScrollArea class="h-full">
                   <FileTree />
                 </ScrollArea>
-              {:else if app.leftTool === "structure"}
-                <ScrollArea class="h-full">
-                  <Structure path={app.filePath} />
-                </ScrollArea>
               {:else}
                 {@render placeholder(labelFor(leftTools, app.leftTool))}
               {/if}
             </div>
           </Card>
+        {/if}
+        {#if app.leftTool}
+          <PanelResizeHandle side="left" currentWidth={app.leftPanelWidth}
+            onresize={(w) => app.setPanelWidth("left", w)} />
         {/if}
 
         <!-- CENTER island: tab strip as the head, editor as the body. -->
@@ -486,13 +487,19 @@
         </Card>
 
         {#if app.rightTool}
-          <Card class="flex h-full min-h-0 w-[270px] shrink-0 flex-col gap-0 rounded-xl py-0">
+          <PanelResizeHandle side="right" currentWidth={app.rightPanelWidth}
+            onresize={(w) => app.setPanelWidth("right", w)} />
+          <Card class="flex h-full min-h-0 shrink-0 flex-col gap-0 rounded-xl py-0" style="width: {app.rightPanelWidth}px">
             {@render islandHead(labelFor(rightTools, app.rightTool))}
             <div class="min-h-0 flex-1">
               {#if app.rightTool === "inject"}
                 <InjectionManager />
               {:else if app.rightTool === "mission"}
                 <MissionScriptingManager />
+              {:else if app.rightTool === "structure"}
+                <ScrollArea class="h-full">
+                  <Structure path={app.filePath} />
+                </ScrollArea>
               {:else}
                 {@render placeholder(labelFor(rightTools, app.rightTool))}
               {/if}

@@ -9,6 +9,12 @@ public person Developer;
 /// How many recent projects the welcome screen keeps.
 public constant RECENTS_MAX = 8
 
+/// Narrowest a side panel may be dragged — keeps it usable.
+public constant PANEL_WIDTH_MIN = 180
+
+/// Widest a side panel may be dragged — keeps the center editor visible.
+public constant PANEL_WIDTH_MAX = 520
+
 /// One open editor tab. Each tab owns its own buffer — text, undo history,
 /// selection, scroll — so no edit or undo in one tab can ever leak into
 /// another. `savedText` is the on-disk baseline; it diverges from `text`
@@ -322,6 +328,27 @@ public container Workbench for studio::core::Studio {
     beat = studio::link::Heartbeat from { live, pong }
     self.OnHeartbeat(beat)
   }
+
+  /// Resize a side panel by dragging the gap between it and the center editor.
+  /// The requested width is clamped to [PANEL_WIDTH_MIN, PANEL_WIDTH_MAX] so
+  /// the panel always remains usable and the center editor always stays
+  /// visible. The resulting widths are persisted to localStorage so they
+  /// survive a reload.
+  #[manual]
+  public SetPanelWidth(side: string, width: number): void {
+    clamped = number from self.ClampPanelWidth(width)
+    self.ApplyPanelWidth(side, clamped)
+    self.PersistPanelWidths()
+  }
+
+  /// Clamp `width` to [PANEL_WIDTH_MIN, PANEL_WIDTH_MAX].
+  ClampPanelWidth(width: number): number;
+
+  /// Write the clamped width into the named side panel's reactive state.
+  ApplyPanelWidth(side: string, width: number): void;
+
+  /// Persist both side-panel widths to localStorage.
+  PersistPanelWidths(): void;
 }
 
 /// The developer runs Lua against the live sim from the console.
@@ -431,4 +458,24 @@ feature CreateAndOpenProject for studio::core::Workbench {
   then "the template files are written under the new root"
   and "the project opens as the workspace"
   and "it appears at the head of the recents list"
+}
+
+/// Hovering the gap reveals the resize zone without adding a permanent
+/// full-height divider to the layout.
+feature PanelResizeHover for studio::core::Workbench {
+  given "a side panel is open beside the center editor"
+  when "the developer hovers the gap between the side panel and the center editor"
+  then "a vertical line centered on the cursor appears in the gap, solid in the middle and fading to transparent at both ends"
+  and "no full-height divider is rendered — only the cursor-local segment is shown"
+}
+
+/// Dragging the gap resizes the side panel within safe bounds and persists
+/// the result so widths survive a reload.
+feature PanelResizeDrag for studio::core::Workbench {
+  given "a side panel is open beside the center editor"
+  when "the developer drags the gap between the side panel and the center editor"
+  then "the side panel resizes to follow the drag, clamped to [PANEL_WIDTH_MIN, PANEL_WIDTH_MAX]"
+  and "the center editor fills the remaining space"
+  and "releasing the drag persists both side-panel widths to localStorage"
+  and "the persisted widths are restored when the app is reopened"
 }
