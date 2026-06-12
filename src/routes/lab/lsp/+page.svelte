@@ -91,7 +91,7 @@
                     ? {
                         contents: {
                           kind: "markdown",
-                          value: "**local x: number**\n\nthe answer",
+                          value: "```lua\nlocal x: number\n```\n\nthe answer",
                         },
                       }
                     : null;

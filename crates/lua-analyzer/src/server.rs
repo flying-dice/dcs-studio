@@ -218,10 +218,19 @@ impl LanguageServer for Backend {
         let Some(card) = dcs_lua_lsp_core::hover(&workspace, &path, offset) else {
             return Ok(None);
         };
+        // Emit the signature as a fenced ```lua block plus the doc body — the
+        // same MarkupContent convention rust-analyzer uses, so the IDE renders
+        // every hosted server's hover the same way and never reconstructs a
+        // title from the markdown.
+        let value = if card.body.is_empty() {
+            format!("```lua\n{}\n```", card.title)
+        } else {
+            format!("```lua\n{}\n```\n\n{}", card.title, card.body)
+        };
         Ok(Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
-                value: format!("**{}**\n\n{}", card.title, card.body),
+                value,
             }),
             range: None,
         }))

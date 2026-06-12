@@ -7,6 +7,7 @@
   import { app } from "$lib/state.svelte";
   import { lang } from "$lib/lang/intel.svelte";
   import type { Diagnostic } from "$lib/lang/provider";
+  import { openExternal } from "$lib/external";
   import { cn } from "$lib/utils.js";
 
   type Severity = "error" | "warning" | "info";
@@ -176,10 +177,15 @@
                 </span>
               </button>
               {#if finding.code_description}
+                <!-- `href` stays for accessibility/copy-link, but the click
+                     opens the OS browser instead of navigating the webview. -->
                 <a
                   href={finding.code_description}
-                  target="_blank"
-                  rel="noreferrer"
+                  onclick={(event) => {
+                    event.preventDefault();
+                    if (finding.code_description)
+                      void openExternal(finding.code_description);
+                  }}
                   class="shrink-0 pr-1.5 font-mono text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
                   title={`Open ${finding.code} documentation`}
                   data-testid="problem-code"

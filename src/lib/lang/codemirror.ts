@@ -20,6 +20,7 @@ import {
 } from "@codemirror/view";
 import { lang } from "./intel.svelte";
 import { renderMarkdown } from "./markdown";
+import { openLinksExternally } from "../external";
 import { providerFor } from "./registry";
 import type { Diagnostic, FoldingRange, InlayHint } from "./provider";
 
@@ -157,20 +158,37 @@ export function langIntelFor(path: string | null): Extension {
     return null;
   });
 
-  const hover = hoverTooltip(async (_view, pos) => {
+  const hover = hoverTooltip(async (view, pos) => {
     const card = await provider.hover(path, pos);
     if (!card) return null;
+    // Anchor the tooltip to the whole symbol, not the single character under
+    // the pointer. CodeMirror keeps a *ranged* tooltip (`pos != end`) open
+    // while the pointer is anywhere over `pos..end` or the card; a point
+    // tooltip (`pos == end`) vanishes the instant the pointer drifts one
+    // column. So this both widens the hover hitbox to the full identifier and
+    // stops the card disappearing as you move toward it. It is hit-testing
+    // only — the text stays clickable.
+    const word = view.state.wordAt(pos);
     return {
-      pos,
+      pos: word?.from ?? pos,
+      end: word?.to ?? pos,
+      // The arrow (styled in layout.css) sits in the gap between the symbol and
+      // the card; CodeMirror folds its rect into the card's hover area, so the
+      // pointer never crosses dead space on the way to the card. It is above
+      // the text, never over it, so clicking the symbol still works.
+      arrow: true,
       create: () => {
         const dom = document.createElement("div");
         dom.className = "cm-dcs-hover";
-        // The signature is already a clean code-like line (`local function
-        // f(a)`); render it verbatim as a monospace tier, not as markdown.
-        const title = document.createElement("div");
-        title.className = "cm-dcs-hover__title";
-        title.textContent = card.title;
-        dom.appendChild(title);
+        // A clean signature line (`local function f(a)`) renders verbatim as a
+        // monospace tier. A fenced-markdown hover (rust-analyzer) has no such
+        // line — its signature lives in the markdown body — so skip this tier.
+        if (card.title) {
+          const title = document.createElement("div");
+          title.className = "cm-dcs-hover__title";
+          title.textContent = card.title;
+          dom.appendChild(title);
+        }
         // The doc body is markdown — render and sanitize it so headings,
         // code, lists and links read well in the card's prose tier.
         if (card.body) {
@@ -179,6 +197,9 @@ export function langIntelFor(path: string | null): Extension {
           body.innerHTML = renderMarkdown(card.body);
           dom.appendChild(body);
         }
+        // A markdown link must open in the OS browser, not navigate the Tauri
+        // webview away from the editor.
+        openLinksExternally(dom);
         return { dom };
       },
     };

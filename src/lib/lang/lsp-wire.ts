@@ -151,22 +151,18 @@ function hoverMarkdown(contents: LspWireHoverContents): string {
 }
 
 /**
- * Wire hover → our card: the first non-empty line (markdown emphasis and
- * heading marks stripped) titles the card; the rest is the body.
+ * Wire hover → our card. LSP hover is a MarkupContent markdown blob; every
+ * hosted server wraps the signature in a fenced code block (lua-analyzer's
+ * ```lua, rust-analyzer's ```rust) followed by prose. We render that markdown
+ * verbatim as the card body — the renderer turns the fences into styled code
+ * blocks — so there is no title line to reconstruct downstream. (The two-tier
+ * `title`/`body` card is the wasm engine's own structured path; it never
+ * passes through here.)
  */
 export function convertHover(wire: LspWireHover | null): Hover | null {
   if (!wire) return null;
   const markdown = hoverMarkdown(wire.contents).trim();
-  if (markdown === "") return null;
-  const lines = markdown.split("\n");
-  const title = lines[0]
-    .trim()
-    .replace(/^#+\s*/, "")
-    .replace(/^\*\*/, "")
-    .replace(/\*\*$/, "")
-    .trim();
-  const body = lines.slice(1).join("\n").trim();
-  return { title, body };
+  return markdown === "" ? null : { title: "", body: markdown };
 }
 
 /** Map one flat `SymbolInformation` onto our hierarchical shape. */

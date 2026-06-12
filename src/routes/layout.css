@@ -175,6 +175,26 @@
 .cm-dcs-hover {
 	@apply flex flex-col gap-1.5 p-3;
 	max-width: 420px;
+	/* Bound a tall doc and scroll it cleanly instead of overflowing the card. */
+	max-height: min(360px, 60vh);
+	overflow-y: auto;
+	overflow-x: hidden;
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
+}
+/* A subtle native scrollbar matching the shadcn scroll-area (border-coloured,
+   rounded, inset thumb on a transparent track). */
+.cm-dcs-hover::-webkit-scrollbar {
+	width: 10px;
+}
+.cm-dcs-hover::-webkit-scrollbar-thumb {
+	background-color: var(--border);
+	border-radius: 9999px;
+	border: 3px solid transparent;
+	background-clip: padding-box;
+}
+.cm-dcs-hover::-webkit-scrollbar-track {
+	background: transparent;
 }
 .cm-dcs-hover__title {
 	@apply font-mono text-xs text-foreground;
@@ -182,6 +202,11 @@
 }
 .cm-dcs-hover__body {
 	@apply border-t border-border pt-1.5 text-xs text-muted-foreground;
+}
+/* No title tier above (a fenced-markdown hover): the body is the whole card,
+   so drop the separator border it would otherwise draw at the very top. */
+.cm-dcs-hover__body:first-child {
+	@apply border-t-0 pt-0;
 }
 .cm-dcs-hover__body > :first-child {
 	margin-top: 0;
