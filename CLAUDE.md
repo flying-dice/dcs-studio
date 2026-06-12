@@ -9,6 +9,8 @@ for installing the in-DCS bridge DLL and toggling MissionScripting.lua sanitizat
 The PseudoScript model in `model/` is the **spec**, not documentation-after-the-fact.
 Every change that touches behavior or architecture follows this order:
 
+> Use `pds -h` to check the model skill and language spec
+
 1. **Draft the model first.** Update (or add to) the relevant `model/*.pds` module
    to express the intended change — new callables, data shapes, error paths,
    features. Run `pds check <file>` until clean and `pds fmt --write <file>`.

@@ -239,6 +239,22 @@ feature SignatureInlayHintsFromUsage for lspcore::Queries {
   but "a parameter used in conflicting ways gets no hint"
 }
 
+/// A function with no value-returning `return` gets an explicit `: void` hint.
+feature VoidReturnInlayHint for lspcore::Queries {
+  given "a function whose body has no `return` statement (or only bare `return`s)"
+  when "inlay hints for the file are requested"
+  then "a `: void` hint is returned after the parameter list's `)` "
+  but "a function that returns a value gets the inferred type hint instead"
+}
+
+/// Field assignments on global tables surface the assigned value's inferred type.
+feature GlobalFieldAssignInlayHint for lspcore::Queries {
+  given "a statement `M.field = <literal>` with no `@type` annotation"
+  when "inlay hints for the file are requested"
+  then "a `: <type>` hint is returned at the end of the field name"
+  but "an explicitly annotated assignment gets no hint"
+}
+
 /// Editing one file re-analyses exactly that file.
 feature PerFileMemoisation for lspcore::Workspace {
   given "a workspace with many mounted files"

@@ -125,6 +125,18 @@ pub(crate) fn return_type(
     }
 }
 
+/// Returns `true` when the function provably never returns a value: either no
+/// `return` statement exists in the body, or every `return` is bare (no expression).
+/// Used to emit `: void` hints rather than silently omitting the return hint.
+#[must_use]
+pub(crate) fn is_void_return(workspace: &Workspace, path: &str, func: &FuncBody) -> bool {
+    let Some(entry) = workspace.file(path) else { return false };
+    let ast = &entry.parsed.ast;
+    let mut firsts = Vec::new();
+    collect_returns(ast, func.body, &mut firsts);
+    firsts.is_empty() || firsts.iter().all(|f| f.is_none())
+}
+
 /// The type of a single `return` value expression, reusing an inferred
 /// parameter type for a bare parameter reference and the string-method table
 /// for a string-library call (neither of which `infer.rs` resolves).

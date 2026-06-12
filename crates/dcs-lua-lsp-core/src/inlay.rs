@@ -20,7 +20,7 @@ use dcs_lua_syntax::token::{SpannedTrivia, Trivia};
 
 use crate::annot::block_at;
 use crate::infer::infer_type;
-use crate::param_infer::{param_types, return_type};
+use crate::param_infer::{is_void_return, param_types, return_type};
 use crate::workspace::{FileEntry, Workspace};
 
 /// One inferred-type inlay hint: a `: <type>` label drawn after `offset`.
@@ -55,6 +55,20 @@ pub fn inlay_hints(workspace: &Workspace, path: &str) -> Vec<InlayHint> {
                     let ty = infer_type(workspace, path, value);
                     if let Some(label) = type_label(&ty) {
                         hints.push(type_hint(name.span.end, label));
+                    }
+                }
+            }
+            StatKind::Assign { targets, values } => {
+                if block_at(entry, stat.span.start).var_type.is_some() {
+                    continue;
+                }
+                for (i, &target) in targets.iter().enumerate() {
+                    let Some(&value) = values.get(i) else { continue };
+                    if let ExprKind::Field { name, .. } = &ast.expr(target).kind {
+                        let ty = infer_type(workspace, path, value);
+                        if let Some(label) = type_label(&ty) {
+                            hints.push(type_hint(name.span.end, label));
+                        }
                     }
                 }
             }
@@ -95,11 +109,15 @@ fn emit_signature(
             hints.push(type_hint(param.span.end, label));
         }
     }
-    if let Some(ty) = return_type(workspace, path, func, &params)
-        && let Some(label) = type_label(&ty)
-        && let Some(offset) = locate_close_paren(&entry.source, &entry.trivia, func)
-    {
-        hints.push(type_hint(offset, label));
+    let return_offset = locate_close_paren(&entry.source, &entry.trivia, func);
+    if let Some(offset) = return_offset {
+        if let Some(ty) = return_type(workspace, path, func, &params)
+            && let Some(label) = type_label(&ty)
+        {
+            hints.push(type_hint(offset, label));
+        } else if is_void_return(workspace, path, func) {
+            hints.push(type_hint(offset, ": void".to_string()));
+        }
     }
 }
 
@@ -246,5 +264,34 @@ mod tests {
     fn unannotated_param_with_no_evidence_has_no_hint() {
         let hints = inlay_hints(&ws("local function f(p) return p end\n"), "main.lua");
         assert!(hints.is_empty());
+    }
+
+    #[test]
+    fn void_function_gets_void_return_hint() {
+        let labels = labels("local function log(msg) print(msg) end\n");
+        assert!(labels.contains(&": void".to_string()));
+    }
+
+    #[test]
+    fn function_with_return_does_not_get_void_hint() {
+        assert!(!labels("local function f() return 1 end\n").contains(&": void".to_string()));
+    }
+
+    #[test]
+    fn bare_return_only_function_gets_void_hint() {
+        let labels = labels("local function f(p) if p then return end end\n");
+        assert!(labels.contains(&": void".to_string()));
+    }
+
+    #[test]
+    fn field_assignment_gets_type_hint() {
+        let labels = labels("local M = {}\nM.name = \"x\"\nM.count = 1\n");
+        assert!(labels.contains(&": string".to_string()));
+        assert!(labels.contains(&": number".to_string()));
+    }
+
+    #[test]
+    fn annotated_field_assignment_gets_no_hint() {
+        assert!(labels("--- @type number\nM.n = some_call()\n").is_empty());
     }
 }

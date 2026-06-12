@@ -53,7 +53,7 @@ Feature: Inferred-type inlay hints
     When inlay hints for the file are requested
     Then an inlay hint ": number" follows "(p"
 
-  Scenario: a parameter used two incompatible ways gets no hint
+  Scenario: a parameter used two incompatible ways gets no parameter type hint
     Given a Lua file "m.lua":
       """
       local function f(p)
@@ -62,4 +62,25 @@ Feature: Inferred-type inlay hints
       end
       """
     When inlay hints for the file are requested
-    Then no inlay hints are returned
+    Then an inlay hint ": void" follows "(p)"
+
+  Scenario: a void function gets a `: void` return hint
+    Given a Lua file "m.lua":
+      """
+      local function log(msg)
+        print(msg)
+      end
+      """
+    When inlay hints for the file are requested
+    Then an inlay hint ": void" follows "(msg)"
+
+  Scenario: global field assignments show the inferred type
+    Given a Lua file "m.lua":
+      """
+      local M = {}
+      M.name    = "my-mod"
+      M.version = 1
+      """
+    When inlay hints for the file are requested
+    Then an inlay hint ": string" follows "M.name"
+    And an inlay hint ": number" follows "M.version"
