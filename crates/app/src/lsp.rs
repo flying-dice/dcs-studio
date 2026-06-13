@@ -24,21 +24,96 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// corrupt/hostile stream and ends the session instead of allocating it.
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
-type Hosts = Arc<Mutex<HashMap<String, ServerHandle>>>;
+type SharedRegistry = Arc<Mutex<Registry>>;
 
 #[derive(Default)]
-pub struct LspHosts(Hosts);
+pub struct LspHosts(SharedRegistry);
+
+/// Two-level server registry (issue #31). A stable LOGICAL id the webview
+/// knows (`"dcs-lua"`) maps to a per-spawn PHYSICAL id (`"dcs-lua:3"`) that
+/// keys the live handle and its IPC event channel. The split lets a fresh
+/// spawn claim a new physical id while a dying server's reader thread still
+/// reaps the old one — no cross-stream of events, no clobber of the map.
+#[derive(Default)]
+struct Registry {
+    /// physical_id -> live process handle.
+    handles: HashMap<String, ServerHandle>,
+    /// logical_id -> the physical_id currently serving it.
+    logical: HashMap<String, String>,
+    /// Monotonic source of unique physical ids; never reused within a run.
+    next_seq: u64,
+}
+
+impl Registry {
+    /// Physical id of a server safe to RE-ATTACH to for `logical_id`:
+    /// stdin still open (not mid-stop) and the initialize handshake already
+    /// done. A re-attaching client skips the handshake instead of illegally
+    /// re-initializing a live server (the issue-#31 failure).
+    fn reattach_target(&self, logical_id: &str) -> Option<String> {
+        let physical = self.logical.get(logical_id)?;
+        let handle = self.handles.get(physical)?;
+        if handle.stdin.is_some() && handle.initialized {
+            Some(physical.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Remove and return the handle currently mapped to `logical_id`, if any
+    /// — a stale or never-initialized server the caller kills before
+    /// spawning a replacement.
+    fn remove(&mut self, logical_id: &str) -> Option<ServerHandle> {
+        let physical = self.logical.remove(logical_id)?;
+        self.handles.remove(&physical)
+    }
+
+    /// Allocate the next unique physical id for `logical_id`.
+    fn next_physical(&mut self, logical_id: &str) -> String {
+        self.next_seq += 1;
+        format!("{logical_id}:{}", self.next_seq)
+    }
+
+    /// Register a freshly spawned `handle` under both index levels at once,
+    /// so a physical handle never exists without its logical mapping.
+    fn register(&mut self, logical_id: &str, physical_id: &str, handle: ServerHandle) {
+        self.handles.insert(physical_id.to_string(), handle);
+        self.logical.insert(logical_id.to_string(), physical_id.to_string());
+    }
+
+    /// Record that the server keyed by `physical_id` finished its handshake,
+    /// so a later re-attach (page refresh / HMR) can skip it.
+    fn mark_initialized(&mut self, physical_id: &str) {
+        if let Some(handle) = self.handles.get_mut(physical_id) {
+            handle.initialized = true;
+        }
+    }
+}
 
 struct ServerHandle {
     child: Child,
     /// `None` once an explicit stop has sent EOF; the entry itself stays
     /// until the reader thread reaps, so exit emits exactly once.
     stdin: Option<ChildStdin>,
+    /// Set once the webview reports a completed initialize handshake; gates
+    /// the re-attach decision in `lsp_get_or_start`.
+    initialized: bool,
 }
 
 #[derive(Clone, Serialize)]
 struct ExitPayload {
     code: Option<i32>,
+}
+
+/// What `lsp_get_or_start` hands back: the PHYSICAL id the client must use
+/// for every later send/stop/mark, and whether the server was freshly
+/// spawned (`is_new` → run the initialize handshake) or re-attached
+/// (`!is_new` → skip it). Serialized camelCase so the webview reads
+/// `serverId` / `isNew` (Tauri camelCases command args, not return values).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartOutcome {
+    server_id: String,
+    is_new: bool,
 }
 
 /// Resolve the dcs-studio-cli binary: next to the app executable (both
@@ -68,25 +143,79 @@ pub fn lsp_server_path() -> Result<String, String> {
     }
 }
 
+/// Get or start the language server for a stable LOGICAL id (issue #31).
+///
+/// The backend is the authoritative owner of server lifecycle: a webview
+/// recreated by a page refresh or HMR asks here on every (re)mount and is
+/// told whether it inherited a live, already-initialized server (re-attach,
+/// `is_new=false`, skip the handshake) or got a fresh spawn (`is_new=true`,
+/// run it). A stale or never-initialized leftover is killed first so the
+/// replacement never shares a physical id — or an event stream — with it.
 #[tauri::command]
-pub fn lsp_start(
+pub fn lsp_get_or_start(
     app: AppHandle,
     state: State<'_, LspHosts>,
-    server_id: String,
+    logical_id: String,
     program: String,
     args: Vec<String>,
-) -> Result<(), String> {
-    let hosts = state.0.clone();
-    {
-        let map = hosts.lock().map_err(|e| e.to_string())?;
-        if map.contains_key(&server_id) {
-            return Ok(()); // already running — idempotent start
+) -> Result<StartOutcome, String> {
+    let shared = state.0.clone();
+
+    // One critical section decides the outcome: re-attach to a healthy
+    // initialized server, or evict any stale leftover and reserve a fresh
+    // physical id. The evicted child is killed AFTER the lock releases, so
+    // its blocking wait never stalls another command.
+    let (physical, stale) = {
+        let mut reg = shared.lock().map_err(|e| e.to_string())?;
+        if let Some(physical) = reg.reattach_target(&logical_id) {
+            return Ok(StartOutcome {
+                server_id: physical,
+                is_new: false,
+            });
         }
+        let stale = reg.remove(&logical_id);
+        (reg.next_physical(&logical_id), stale)
+    };
+    if let Some(mut stale) = stale {
+        let _ = stale.child.kill();
+        let _ = stale.child.wait();
     }
 
-    let mut command = Command::new(&program);
+    spawn_server(&app, &shared, &logical_id, &physical, &program, &args)?;
+    Ok(StartOutcome {
+        server_id: physical,
+        is_new: true,
+    })
+}
+
+/// Mark the server keyed by `server_id` (a physical id) as initialized,
+/// called by the client once its initialize handshake succeeds so a later
+/// re-attach can skip it.
+#[tauri::command]
+pub fn lsp_mark_initialized(state: State<'_, LspHosts>, server_id: String) -> Result<(), String> {
+    state
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .mark_initialized(&server_id);
+    Ok(())
+}
+
+/// Spawn `program args`, wire its stdout/stderr to IPC events keyed by
+/// `physical_id`, and register the (uninitialized) handle. The reader thread
+/// reaps `physical_id` on stream end and emits `lsp://exit/{physical_id}`,
+/// so a crash or stop never leaves a client hanging.
+fn spawn_server(
+    app: &AppHandle,
+    shared: &SharedRegistry,
+    logical_id: &str,
+    physical_id: &str,
+    program: &str,
+    args: &[String],
+) -> Result<(), String> {
+    let mut command = Command::new(program);
     command
-        .args(&args)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -106,8 +235,8 @@ pub fn lsp_start(
 
     {
         let message_app = app.clone();
-        let message_id = server_id.clone();
-        let reader_hosts = hosts.clone();
+        let message_id = physical_id.to_string();
+        let reader_hosts = shared.clone();
         std::thread::spawn(move || {
             pump_messages(stdout, |message| {
                 let _ = message_app.emit(&format!("lsp://message/{message_id}"), message);
@@ -122,7 +251,7 @@ pub fn lsp_start(
 
     {
         let stderr_app = app.clone();
-        let stderr_id = server_id.clone();
+        let stderr_id = physical_id.to_string();
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 let _ = stderr_app.emit(&format!("lsp://stderr/{stderr_id}"), line);
@@ -130,11 +259,13 @@ pub fn lsp_start(
         });
     }
 
-    hosts.lock().map_err(|e| e.to_string())?.insert(
-        server_id,
+    shared.lock().map_err(|e| e.to_string())?.register(
+        logical_id,
+        physical_id,
         ServerHandle {
             child,
             stdin: Some(stdin),
+            initialized: false,
         },
     );
     Ok(())
@@ -146,8 +277,9 @@ pub fn lsp_send(
     server_id: String,
     message: String,
 ) -> Result<(), String> {
-    let mut hosts = state.0.lock().map_err(|e| e.to_string())?;
-    let handle = hosts
+    let mut reg = state.0.lock().map_err(|e| e.to_string())?;
+    let handle = reg
+        .handles
         .get_mut(&server_id)
         .ok_or_else(|| format!("no language server '{server_id}'"))?;
     let stdin = handle
@@ -165,17 +297,17 @@ pub fn lsp_send(
 #[tauri::command]
 pub fn lsp_stop(state: State<'_, LspHosts>, server_id: String) -> Result<(), String> {
     {
-        let mut hosts = state.0.lock().map_err(|e| e.to_string())?;
-        let Some(handle) = hosts.get_mut(&server_id) else {
+        let mut reg = state.0.lock().map_err(|e| e.to_string())?;
+        let Some(handle) = reg.handles.get_mut(&server_id) else {
             return Ok(()); // already gone — reader thread beat us to it
         };
         drop(handle.stdin.take()); // EOF
     }
-    let hosts = state.0.clone();
+    let shared = state.0.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(1500));
-        if let Ok(mut map) = hosts.lock() {
-            if let Some(handle) = map.get_mut(&server_id) {
+        if let Ok(mut reg) = shared.lock() {
+            if let Some(handle) = reg.handles.get_mut(&server_id) {
                 let _ = handle.child.kill(); // reader thread reaps + emits exit
             }
         }
@@ -190,12 +322,12 @@ pub fn stop_all(app: &AppHandle) {
         return;
     };
     let ids: Vec<String> = match state.0.lock() {
-        Ok(hosts) => hosts.keys().cloned().collect(),
+        Ok(reg) => reg.handles.keys().cloned().collect(),
         Err(_) => return,
     };
     for id in ids {
-        if let Ok(mut map) = state.0.lock() {
-            if let Some(mut handle) = map.remove(&id) {
+        if let Ok(mut reg) = state.0.lock() {
+            if let Some(mut handle) = reg.handles.remove(&id) {
                 let _ = handle.child.kill();
                 let _ = handle.child.wait();
             }
@@ -203,10 +335,11 @@ pub fn stop_all(app: &AppHandle) {
     }
 }
 
-/// Remove `id` from the host map and wait the child out, returning its
-/// exit code. Safe to call whether or not the handle is still present.
-fn reap(hosts: &Hosts, id: &str) -> Option<i32> {
-    let handle = hosts.lock().ok()?.remove(id);
+/// Remove the handle for physical `id` and wait the child out, returning
+/// its exit code. Safe to call whether or not the handle is still present;
+/// a now-dangling logical mapping self-heals on the next `lsp_get_or_start`.
+fn reap(shared: &SharedRegistry, id: &str) -> Option<i32> {
+    let handle = shared.lock().ok()?.handles.remove(id);
     let mut handle = handle?;
     let _ = handle.child.kill(); // no-op if already dead
     handle.child.wait().ok().and_then(|status| status.code())
@@ -304,7 +437,7 @@ mod tests {
     /// host map, and surfaced as an exit — never left to hang clients.
     #[test]
     fn spontaneous_child_exit_reaps_and_reports() {
-        let hosts: Hosts = Arc::default();
+        let shared: SharedRegistry = Arc::default();
         let mut child = throwaway_child(); // exits immediately
         let stdout = {
             // Give the reader a stream that ends right away.
@@ -312,11 +445,12 @@ mod tests {
             empty
         };
         let stdin = child.stdin.take().expect("piped stdin");
-        hosts.lock().unwrap().insert(
+        shared.lock().unwrap().handles.insert(
             "t".to_string(),
             ServerHandle {
                 child,
                 stdin: Some(stdin),
+                initialized: false,
             },
         );
 
@@ -324,16 +458,94 @@ mod tests {
         pump_messages(stdout, |_| {
             delivered.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         });
-        let code = reap(&hosts, "t");
+        let code = reap(&shared, "t");
 
         assert_eq!(delivered.load(std::sync::atomic::Ordering::SeqCst), 0);
         // code is None when reap's kill races the child's own exit and
         // the process dies by signal (Unix signal deaths carry no exit
         // code) - the ExitPayload contract is Option for exactly that.
         // What matters is that reap completed and the handle is gone.
-        assert!(hosts.lock().unwrap().is_empty(), "handle removed");
+        assert!(shared.lock().unwrap().handles.is_empty(), "handle removed");
         let _ = code;
         // A second reap (e.g. racing stop) is a clean no-op.
-        assert_eq!(reap(&hosts, "t"), None);
+        assert_eq!(reap(&shared, "t"), None);
+    }
+
+    /// Register a throwaway-backed handle under `logical`/`physical` — also
+    /// exercises `Registry::register`, the path `spawn_server` uses.
+    fn insert_handle(reg: &mut Registry, logical: &str, physical: &str, initialized: bool) {
+        let mut child = throwaway_child();
+        let stdin = child.stdin.take().expect("piped stdin");
+        reg.register(
+            logical,
+            physical,
+            ServerHandle {
+                child,
+                stdin: Some(stdin),
+                initialized,
+            },
+        );
+    }
+
+    /// Kill + wait every remaining handle so the test leaks no zombies.
+    fn drain(reg: &mut Registry) {
+        for (_, mut handle) in reg.handles.drain() {
+            let _ = handle.child.kill();
+            let _ = handle.child.wait();
+        }
+    }
+
+    /// The re-attach guard is the heart of issue #31: only a live, already
+    /// initialized server may be inherited without a fresh handshake.
+    #[test]
+    fn reattach_only_to_a_healthy_initialized_server() {
+        let mut reg = Registry::default();
+        // Unknown logical id: nothing to inherit.
+        assert_eq!(reg.reattach_target("dcs-lua"), None);
+
+        // Live but pre-handshake: re-attaching would skip the initialize the
+        // server still expects — refuse.
+        insert_handle(&mut reg, "dcs-lua", "dcs-lua:1", false);
+        assert_eq!(reg.reattach_target("dcs-lua"), None);
+
+        // Handshake done: re-attach to exactly this physical id.
+        reg.mark_initialized("dcs-lua:1");
+        assert_eq!(
+            reg.reattach_target("dcs-lua").as_deref(),
+            Some("dcs-lua:1")
+        );
+
+        // Mid-stop (stdin closed) is unhealthy even when initialized.
+        reg.handles.get_mut("dcs-lua:1").unwrap().stdin = None;
+        assert_eq!(reg.reattach_target("dcs-lua"), None);
+
+        drain(&mut reg);
+    }
+
+    /// Evicting a stale server clears both index levels and is idempotent.
+    #[test]
+    fn remove_evicts_logical_and_physical() {
+        let mut reg = Registry::default();
+        insert_handle(&mut reg, "dcs-lua", "dcs-lua:1", true);
+
+        let mut evicted = reg.remove("dcs-lua").expect("handle present");
+        let _ = evicted.child.kill();
+        let _ = evicted.child.wait();
+        assert!(reg.handles.is_empty());
+        assert!(reg.logical.is_empty());
+        assert!(
+            reg.remove("dcs-lua").is_none(),
+            "second remove is a clean miss"
+        );
+    }
+
+    /// Every respawn takes a brand-new physical id — a dying server's reader
+    /// thread can never reap its replacement.
+    #[test]
+    fn physical_ids_are_unique_per_respawn() {
+        let mut reg = Registry::default();
+        assert_eq!(reg.next_physical("dcs-lua"), "dcs-lua:1");
+        assert_eq!(reg.next_physical("dcs-lua"), "dcs-lua:2");
+        assert_eq!(reg.next_physical("rust-analyzer"), "rust-analyzer:3");
     }
 }

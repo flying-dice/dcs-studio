@@ -66,6 +66,7 @@
       async start(onMessage, onExit) {
         emitMessage = onMessage;
         emitExit = onExit;
+        return true; // the in-page fake is always a fresh spawn
       },
       async send(raw: string) {
         const message = JSON.parse(raw);

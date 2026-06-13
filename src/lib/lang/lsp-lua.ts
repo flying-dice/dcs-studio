@@ -36,7 +36,7 @@ import type {
 const PUBLISH_TIMEOUT_MS = 3000;
 
 /** Production connection: ask the backend where the CLI lives, host it. */
-async function connectViaHost(): Promise<LspClient> {
+async function connectViaHost(): Promise<{ client: LspClient; isNew: boolean }> {
   const program = await invoke<string>("lsp_server_path");
   return LspClient.start("dcs-lua", program, ["lsp"]);
 }
@@ -57,7 +57,10 @@ export class LspLuaProvider implements LanguageProvider {
 
   /** `connect` is injectable so `/lab/lsp` drives this exact class. */
   constructor(
-    private readonly connect: () => Promise<LspClient> = connectViaHost,
+    private readonly connect: () => Promise<{
+      client: LspClient;
+      isNew: boolean;
+    }> = connectViaHost,
   ) {}
 
   // The IDE feeds files itself (it owns the file tree), so the workspace
@@ -68,7 +71,8 @@ export class LspLuaProvider implements LanguageProvider {
     _root: string,
   ): Promise<void> {
     if (!this.client) {
-      this.client = await this.connect();
+      const { client, isNew } = await this.connect();
+      this.client = client;
       this.client.onNotification("textDocument/publishDiagnostics", (params) =>
         this.onPublish(
           params as { uri: string; diagnostics: LspWireDiagnostic[] },
@@ -84,12 +88,18 @@ export class LspLuaProvider implements LanguageProvider {
         this.client = null;
         this.versions.clear();
       });
-      await this.client.request("initialize", {
-        processId: null,
-        rootUri: null,
-        capabilities: {},
-      });
-      await this.client.notify("initialized", {});
+      // Re-attaching to a server that outlived a webview reload (page
+      // refresh / HMR) means it is already initialized — handshaking again
+      // is the issue-#31 protocol violation. Only a fresh spawn handshakes.
+      if (isNew) {
+        await this.client.request("initialize", {
+          processId: null,
+          rootUri: null,
+          capabilities: {},
+        });
+        await this.client.notify("initialized", {});
+        await this.client.markInitialized();
+      }
       this.exited = false; // a fresh, live session
     }
     // Wholesale remount: close anything from a previous project.

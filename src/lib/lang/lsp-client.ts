@@ -11,9 +11,22 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** How a client reaches its server; production = the Tauri host pump. */
 export interface LspTransport {
-  start(onMessage: (raw: string) => void, onExit: () => void): Promise<void>;
+  /**
+   * Attach to the server. Resolves `true` when it was freshly spawned (the
+   * caller must run the LSP initialize handshake) and `false` when it
+   * re-attached to a server that outlived a webview reload and is already
+   * initialized (skip the handshake — re-initializing a live server is the
+   * issue-#31 protocol violation).
+   */
+  start(onMessage: (raw: string) => void, onExit: () => void): Promise<boolean>;
   send(message: string): Promise<void>;
   stop(): Promise<void>;
+  /**
+   * Record that the initialize handshake completed, so a later re-attach
+   * can skip it. Absent on transports with no backend lifecycle to track
+   * (the in-page browser fake).
+   */
+  markInitialized?(): Promise<void>;
 }
 
 /** A request that outlives this has hit a dead or wedged server. */
@@ -27,9 +40,13 @@ interface Pending {
 
 class TauriTransport implements LspTransport {
   private unlisten: UnlistenFn[] = [];
+  // The backend-assigned PHYSICAL id this spawn answers on — the key for
+  // every send/stop/mark. Learned from `lsp_get_or_start`; `logicalId` is
+  // the stable name the backend resolves against.
+  private physicalId = "";
 
   constructor(
-    private readonly serverId: string,
+    private readonly logicalId: string,
     private readonly program: string,
     private readonly args: string[],
   ) {}
@@ -37,37 +54,47 @@ class TauriTransport implements LspTransport {
   async start(
     onMessage: (raw: string) => void,
     onExit: () => void,
-  ): Promise<void> {
-    this.unlisten.push(
-      await listen<string>(`lsp://message/${this.serverId}`, (event) =>
-        onMessage(event.payload),
-      ),
-    );
-    this.unlisten.push(
-      await listen(`lsp://exit/${this.serverId}`, () => onExit()),
-    );
-    // Surface server stderr in the devtools console until the Output
-    // panel grows a consumer.
-    this.unlisten.push(
-      await listen<string>(`lsp://stderr/${this.serverId}`, (event) =>
-        console.debug(`[${this.serverId}]`, event.payload),
-      ),
-    );
-    await invoke("lsp_start", {
-      serverId: this.serverId,
+  ): Promise<boolean> {
+    const { serverId: physicalId, isNew } = await invoke<{
+      serverId: string;
+      isNew: boolean;
+    }>("lsp_get_or_start", {
+      logicalId: this.logicalId,
       program: this.program,
       args: this.args,
     });
+    this.physicalId = physicalId;
+    // Listen only after the spawn returns the physical id. The gap is safe:
+    // a fresh server stays silent until it receives `initialize`, and a
+    // re-attached one until its next request, so no message is missed.
+    this.unlisten.push(
+      await listen<string>(`lsp://message/${physicalId}`, (event) =>
+        onMessage(event.payload),
+      ),
+    );
+    this.unlisten.push(await listen(`lsp://exit/${physicalId}`, () => onExit()));
+    // Surface server stderr in the devtools console until the Output
+    // panel grows a consumer.
+    this.unlisten.push(
+      await listen<string>(`lsp://stderr/${physicalId}`, (event) =>
+        console.debug(`[${physicalId}]`, event.payload),
+      ),
+    );
+    return isNew;
   }
 
   async send(message: string): Promise<void> {
-    await invoke("lsp_send", { serverId: this.serverId, message });
+    await invoke("lsp_send", { serverId: this.physicalId, message });
   }
 
   async stop(): Promise<void> {
-    await invoke("lsp_stop", { serverId: this.serverId });
+    await invoke("lsp_stop", { serverId: this.physicalId });
     for (const stop of this.unlisten) stop();
     this.unlisten = [];
+  }
+
+  async markInitialized(): Promise<void> {
+    await invoke("lsp_mark_initialized", { serverId: this.physicalId });
   }
 }
 
@@ -83,23 +110,31 @@ export class LspClient {
 
   private constructor(private readonly transport: LspTransport) {}
 
-  /** Spawn `program args` behind the backend host and attach. */
+  /**
+   * Spawn (or re-attach to) `program args` behind the backend host. The
+   * `isNew` flag is true for a fresh spawn the caller must hand-shake,
+   * false when re-attached to a server that survived a webview reload.
+   */
   static async start(
-    serverId: string,
+    logicalId: string,
     program: string,
     args: string[],
-  ): Promise<LspClient> {
-    return LspClient.withTransport(new TauriTransport(serverId, program, args));
+  ): Promise<{ client: LspClient; isNew: boolean }> {
+    return LspClient.withTransport(
+      new TauriTransport(logicalId, program, args),
+    );
   }
 
   /** Attach over any transport — the browser test seam. */
-  static async withTransport(transport: LspTransport): Promise<LspClient> {
+  static async withTransport(
+    transport: LspTransport,
+  ): Promise<{ client: LspClient; isNew: boolean }> {
     const client = new LspClient(transport);
-    await transport.start(
+    const isNew = await transport.start(
       (raw) => client.onMessage(raw),
       () => client.onExit(),
     );
-    return client;
+    return { client, isNew };
   }
 
   get isAlive(): boolean {
@@ -113,6 +148,15 @@ export class LspClient {
   /** Runs when the server goes away — crash or teardown. */
   onServerExit(handler: () => void): void {
     this.exitHandlers.push(handler);
+  }
+
+  /**
+   * Tell the host the initialize handshake landed, so a re-attach after a
+   * webview reload skips it (issue #31). A no-op on transports that don't
+   * track backend lifecycle (the in-page browser fake).
+   */
+  async markInitialized(): Promise<void> {
+    await this.transport.markInitialized?.();
   }
 
   async request(

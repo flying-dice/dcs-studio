@@ -45,7 +45,10 @@ import type {
 const PUBLISH_TIMEOUT_MS = 3000;
 
 /** Production connection: ask the backend for the binary, host it. */
-async function connectViaHost(): Promise<LspClient> {
+async function connectViaHost(): Promise<{
+  client: LspClient;
+  isNew: boolean;
+}> {
   const program = await invoke<string>("rust_analyzer_path");
   return LspClient.start("rust-analyzer", program, []);
 }
@@ -73,7 +76,10 @@ export class RustAnalyzerProvider implements LanguageProvider {
 
   /** Both seams injectable so `/lab/rust` drives this exact class. */
   constructor(
-    private readonly connect: () => Promise<LspClient> = connectViaHost,
+    private readonly connect: () => Promise<{
+      client: LspClient;
+      isNew: boolean;
+    }> = connectViaHost,
     private readonly hasCargoToml: (
       root: string,
     ) => Promise<boolean> = cargoTomlExists,
@@ -117,7 +123,8 @@ export class RustAnalyzerProvider implements LanguageProvider {
 
     if (!this.client) {
       try {
-        this.client = await this.connect();
+        const { client, isNew } = await this.connect();
+        this.client = client;
         this.client.onNotification(
           "textDocument/publishDiagnostics",
           (params) =>
@@ -136,13 +143,20 @@ export class RustAnalyzerProvider implements LanguageProvider {
           this.versions.clear();
           this.mountedRoot = null;
         });
-        await this.client.request("initialize", {
-          processId: null,
-          // rust-analyzer walks the project itself from here.
-          rootUri: pathToUri(root),
-          capabilities: { textDocument: { publishDiagnostics: {} } },
-        });
-        await this.client.notify("initialized", {});
+        // A server re-attached after a webview reload keeps its rootUri and
+        // index; re-initializing it is the issue-#31 protocol violation.
+        // Only a fresh spawn handshakes (and re-walks the project); findings
+        // for a re-attached server refresh on the next edit.
+        if (isNew) {
+          await this.client.request("initialize", {
+            processId: null,
+            // rust-analyzer walks the project itself from here.
+            rootUri: pathToUri(root),
+            capabilities: { textDocument: { publishDiagnostics: {} } },
+          });
+          await this.client.notify("initialized", {});
+          await this.client.markInitialized();
+        }
         this.exited = false; // a fresh, live session
       } catch (error) {
         // A missing rust-analyzer binary (the error carries the rustup
