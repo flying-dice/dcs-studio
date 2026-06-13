@@ -109,7 +109,9 @@
 
   function openRecent(path: string) {
     if (missing.has(path)) return;
-    app.openPath(path);
+    // Fire-and-forget (closeFile convention): openPath's own `switching`
+    // guard keeps a double-click from running the flow twice.
+    void app.openPath(path);
   }
 
   // ── Keyboard shortcuts ──────────────────────────────────────────────────

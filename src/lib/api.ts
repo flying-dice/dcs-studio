@@ -109,6 +109,19 @@ export interface BuildDone {
 /** What an install run did. */
 export interface InstallReport {
   copied: number;
+  files: string[];
+}
+
+/** What an uninstall run did. */
+export interface UninstallReport {
+  removed: number;
+  files: string[];
+}
+
+/** Whether the project's deployed files are present and current. */
+export interface InstallStatus {
+  installed: boolean;
+  up_to_date: boolean;
 }
 
 /**
@@ -128,6 +141,16 @@ export function toolchainStatus(): Promise<ToolchainStatus> {
 /** Apply the project's dcs-studio.toml [[install]] rules to this machine. */
 export function installProject(root: string): Promise<InstallReport> {
   return invoke<InstallReport>("install_project", { root });
+}
+
+/** Check whether the project's deployed files are present and current. */
+export function installStatus(root: string): Promise<InstallStatus> {
+  return invoke<InstallStatus>("install_status", { root });
+}
+
+/** Remove every file the project's [[install]] rules deployed. */
+export function uninstallProject(root: string): Promise<UninstallReport> {
+  return invoke<UninstallReport>("uninstall_project", { root });
 }
 
 /** Snapshot of the editor↔DCS link state (see `dcs_status` in dcs.rs). */

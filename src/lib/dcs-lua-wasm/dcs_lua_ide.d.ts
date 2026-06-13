@@ -71,6 +71,19 @@ export interface FoldingRange {
 }
 
 /**
+ * One inferred-type inlay hint: a `: <type>` label drawn as ghost text
+ * after the byte `offset` (the end of the bound name).
+ */
+export interface InlayHint {
+    offset: number;
+    label: string;
+    /**
+     * LSP inlay-hint kind; currently always `\"Type\"`.
+     */
+    kind: string;
+}
+
+/**
  * One outline entry; `kind` is `\"function\" | \"variable\"`.
  */
 export interface DocumentSymbol {
@@ -109,7 +122,9 @@ export class IdeSession {
      */
     definition(_path: string, _offset: number): Location | undefined;
     /**
-     * All current findings across the mounted workspace.
+     * All current findings across the mounted workspace: parse diagnostics
+     * plus the type-checker's `LUA-Txxx` findings, via the shared
+     * `all_findings` aggregation (the same one the CLI/MCP/LSP edges use).
      */
     diagnostics(): Diagnostic[];
     /**
@@ -126,6 +141,10 @@ export class IdeSession {
      * initializer-inferred type (lsp-core resolution).
      */
     hover(path: string, offset: number): Hover | undefined;
+    /**
+     * Inferred-type inlay hints for one file (lsp-core resolution).
+     */
+    inlay_hints(path: string): InlayHint[];
     /**
      * Seed the session with the workspace's Lua sources and profile rules.
      * Wholesale: any previously mounted workspace is replaced, so opening
@@ -154,6 +173,7 @@ export interface InitOutput {
     readonly idesession_document_symbols: (a: number, b: number, c: number) => [number, number];
     readonly idesession_folding_ranges: (a: number, b: number, c: number) => [number, number];
     readonly idesession_hover: (a: number, b: number, c: number, d: number) => any;
+    readonly idesession_inlay_hints: (a: number, b: number, c: number) => [number, number];
     readonly idesession_mount: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly idesession_new: () => number;
     readonly idesession_remove_source: (a: number, b: number, c: number) => void;

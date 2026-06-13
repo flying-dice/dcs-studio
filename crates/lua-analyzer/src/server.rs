@@ -1,17 +1,17 @@
-//! `dcs-studio-cli lsp` — the genuine Language Server Protocol edge over
-//! `dcs-lua-lsp-core` (decisions/005). Any LSP client works: editors, the
-//! IDE's backend host, LLM agents.
+//! The tower-lsp server over `dcs-lua-lsp-core`.
 //!
-//! initialize walks the workspace root for Lua sources, so workspace-wide
-//! diagnostics publish from boot; edits arrive as full-document sync.
-//! Positions are UTF-16 (the protocol default), derived from the engine's
-//! byte spans at this edge.
+//! `initialize` records the workspace `rootUri`; `initialized` walks it for
+//! Lua sources so workspace-wide diagnostics publish from boot. Edits arrive
+//! as full-document sync. Positions are UTF-16 (the protocol default),
+//! derived from the engine's byte spans at this edge.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use dcs_lua_lsp_core::workspace::Workspace;
-use dcs_lua_lsp_core::{DocumentSymbol as CoreSymbol, SymbolKind as CoreSymbolKind};
+use dcs_lua_lsp_core::{
+    DocumentSymbol as CoreSymbol, SymbolKind as CoreSymbolKind, file_findings, findings_by_file,
+};
 use dcs_lua_syntax::{LineIndex, Severity, Span};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
@@ -19,8 +19,9 @@ use tower_lsp::lsp_types::{
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability, Hover, HoverContents,
     HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-    MarkupContent, MarkupKind, NumberOrString, OneOf, Position, Range, ServerCapabilities,
-    ServerInfo, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    InlayHint, InlayHintKind, InlayHintLabel, InlayHintParams, MarkupContent, MarkupKind,
+    NumberOrString, OneOf, Position, Range, ServerCapabilities, ServerInfo,
+    TextDocumentSyncCapability, TextDocumentSyncKind, SymbolKind, Url,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
@@ -52,13 +53,19 @@ impl Backend {
     fn set_and_collect(&self, path: &str, text: &str) -> Vec<(Url, Vec<Diagnostic>)> {
         let mut workspace = self.workspace.lock().expect("workspace lock");
         workspace.set_source(path, text);
-        collect_file_diagnostics(&workspace, path)
+        // `file_findings` is the shared finding set (parse + type + future);
+        // this edge only maps it to LSP wire diagnostics. A cross-file edit
+        // may leave a stale finding in another file until that file is next
+        // published — consistent with this server's per-file publish
+        // granularity (the boot walk covers the whole workspace).
+        collect_file_diagnostics(&workspace, path, &file_findings(&workspace, path))
             .map(|payload| vec![payload])
             .unwrap_or_default()
     }
 
     async fn publish(&self, batches: Vec<(Url, Vec<Diagnostic>)>) {
         for (uri, diagnostics) in batches {
+            tracing::debug!(%uri, count = diagnostics.len(), "publishDiagnostics");
             self.client
                 .publish_diagnostics(uri, diagnostics, None)
                 .await;
@@ -72,11 +79,14 @@ impl LanguageServer for Backend {
         if let Some(root_uri) = params.root_uri
             && let Ok(path) = root_uri.to_file_path()
         {
+            tracing::info!(root = %path.display(), "initialize");
             *self.root.lock().expect("root lock") = Some(path);
+        } else {
+            tracing::info!(root = "none", "initialize (no rootUri)");
         }
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
-                name: "dcs-studio-cli".to_string(),
+                name: "lua-analyzer".to_string(),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
             capabilities: ServerCapabilities {
@@ -86,6 +96,7 @@ impl LanguageServer for Backend {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -94,8 +105,12 @@ impl LanguageServer for Backend {
     async fn initialized(&self, _: InitializedParams) {
         // Mount the whole workspace so diagnostics cover unopened files.
         let root = self.root.lock().expect("root lock").clone();
-        let Some(root) = root else { return };
-        let files = crate::sources::collect(&root);
+        let Some(root) = root else {
+            tracing::warn!("initialized with no root — nothing to walk");
+            return;
+        };
+        let files = dcs_studio_project::sources::collect(&root);
+        tracing::info!(root = %root.display(), files = files.len(), "workspace walk");
         {
             let mut walked = self.walked.lock().expect("walked lock");
             for (path, _) in &files {
@@ -107,9 +122,22 @@ impl LanguageServer for Backend {
             for (path, text) in &files {
                 workspace.set_source(path, text);
             }
+            // Apply the project's `[lints.lua]` levels (absent/invalid manifest
+            // → defaults); inline `---@allow`/`deny`/… directives still apply.
+            workspace.set_lint_levels(dcs_lua_lsp_core::lints::levels_from_strings(
+                &dcs_studio_project::manifest::lua_lint_levels(&root),
+            ));
+            // One shared aggregation for the whole walk, not one per file.
+            let by_file = findings_by_file(&workspace);
             files
                 .iter()
-                .filter_map(|(path, _)| collect_file_diagnostics(&workspace, path))
+                .filter_map(|(path, _)| {
+                    collect_file_diagnostics(
+                        &workspace,
+                        path,
+                        by_file.get(path).map_or(&[], Vec::as_slice),
+                    )
+                })
                 .collect::<Vec<_>>()
         };
         self.publish(batches).await;
@@ -190,10 +218,19 @@ impl LanguageServer for Backend {
         let Some(card) = dcs_lua_lsp_core::hover(&workspace, &path, offset) else {
             return Ok(None);
         };
+        // Emit the signature as a fenced ```lua block plus the doc body — the
+        // same MarkupContent convention rust-analyzer uses, so the IDE renders
+        // every hosted server's hover the same way and never reconstructs a
+        // title from the markdown.
+        let value = if card.body.is_empty() {
+            format!("```lua\n{}\n```", card.title)
+        } else {
+            format!("```lua\n{}\n```\n\n{}", card.title, card.body)
+        };
         Ok(Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
-                value: format!("**{}**\n\n{}", card.title, card.body),
+                value,
             }),
             range: None,
         }))
@@ -223,6 +260,31 @@ impl LanguageServer for Backend {
             .collect();
         Ok(Some(ranges))
     }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let Some(path) = uri_path(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        let workspace = self.workspace.lock().expect("workspace lock");
+        let Some(entry) = workspace.file(&path) else {
+            return Ok(None);
+        };
+        let index = LineIndex::new(&entry.source);
+        let hints = dcs_lua_lsp_core::inlay_hints(&workspace, &path)
+            .into_iter()
+            .map(|hint| InlayHint {
+                position: position(&entry.source, &index, hint.offset),
+                label: InlayHintLabel::String(hint.label),
+                kind: Some(InlayHintKind::TYPE),
+                text_edits: None,
+                tooltip: None,
+                padding_left: Some(true),
+                padding_right: None,
+                data: None,
+            })
+            .collect();
+        Ok(Some(hints))
+    }
 }
 
 fn uri_path(uri: &Url) -> Option<String> {
@@ -231,13 +293,19 @@ fn uri_path(uri: &Url) -> Option<String> {
         .map(|path| path.display().to_string())
 }
 
-fn collect_file_diagnostics(workspace: &Workspace, path: &str) -> Option<(Url, Vec<Diagnostic>)> {
+/// The LSP publish payload for one file: map the shared finding set
+/// ([`file_findings`] / [`findings_by_file`]) to wire diagnostics with
+/// UTF-16 ranges. This edge owns the wire conversion only — never which
+/// findings exist.
+fn collect_file_diagnostics(
+    workspace: &Workspace,
+    path: &str,
+    findings: &[dcs_lua_syntax::Diagnostic],
+) -> Option<(Url, Vec<Diagnostic>)> {
     let entry = workspace.file(path)?;
     let uri = Url::from_file_path(path).ok()?;
     let index = LineIndex::new(&entry.source);
-    let diagnostics = entry
-        .parsed
-        .diagnostics
+    let diagnostics = findings
         .iter()
         .map(|diagnostic| Diagnostic {
             range: span_range(&entry.source, &index, diagnostic.span),

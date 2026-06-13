@@ -8,6 +8,7 @@ export const idesession_diagnostics: (a: number) => [number, number];
 export const idesession_document_symbols: (a: number, b: number, c: number) => [number, number];
 export const idesession_folding_ranges: (a: number, b: number, c: number) => [number, number];
 export const idesession_hover: (a: number, b: number, c: number, d: number) => any;
+export const idesession_inlay_hints: (a: number, b: number, c: number) => [number, number];
 export const idesession_mount: (a: number, b: number, c: number, d: number, e: number) => void;
 export const idesession_new: () => number;
 export const idesession_remove_source: (a: number, b: number, c: number) => void;

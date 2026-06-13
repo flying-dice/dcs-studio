@@ -9,6 +9,8 @@ for installing the in-DCS bridge DLL and toggling MissionScripting.lua sanitizat
 The PseudoScript model in `model/` is the **spec**, not documentation-after-the-fact.
 Every change that touches behavior or architecture follows this order:
 
+> Use `pds -h` to check the model skill and language spec
+
 1. **Draft the model first.** Update (or add to) the relevant `model/*.pds` module
    to express the intended change — new callables, data shapes, error paths,
    features. Run `pds check <file>` until clean and `pds fmt --write <file>`.
@@ -42,13 +44,16 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | Module | Covers |
 | --- | --- |
 | `model/studio/core.pds` | `Studio` system, `Workbench` UI container (editor, console, dual-path `DcsCall`) |
-| `model/studio/files.pds` | `WorkspaceFs` — fs commands, project scaffolding (`crates/app/src/fs.rs`) |
-| `model/studio/link.pds` | `DcsLink` heartbeat + `BridgeClient` (`crates/app/src/dcs.rs`, `crates/dcs-bridge-client`) |
-| `model/studio/inject.pds` | `Injector` — bridge DLL/hook install (`crates/app/src/inject.rs`) |
+| `model/studio/files.pds` | `WorkspaceFs` — fs commands, project scaffolding (`crates/studio-services/src/fs.rs`; thin Tauri wrappers in `crates/app/src/fs.rs`) |
+| `model/studio/link.pds` | `DcsLink` heartbeat + `BridgeClient` (`crates/studio-services/src/link.rs`, `crates/app/src/dcs.rs`, `crates/dcs-bridge-client`) |
+| `model/studio/inject.pds` | `Injector` — bridge DLL/hook install (`crates/studio-services/src/inject.rs`) |
 | `model/studio/build.pds` | `Builder` — toolchain detection + cargo build with streamed output (issue #6 R1) |
+| `model/studio/cli.pds` | `Cli` agent-surface binary (`crates/dcs-studio-cli`), `TestRunner` — out-of-DCS Lua test runner (`tools/lua-runner`), `Bundler` — single-file require-graph bundler (issue #9) |
 | `model/studio/installer.pds` | `Installer` — manifest-driven `[[install]]` deploy to SavedGames/GameInstall roots (issue #6 R1) |
-| `model/studio/mission.pds` | `MissionScripting` sanitization manager (`crates/app/src/mission.rs`) |
-| `model/studio/lang.pds` | `LanguageIntel` provider layer + `DcsLua` embedded engine face + `RustAnalyzer` hosted-server face (`src/lib/lang/`) |
+| `model/studio/mission.pds` | `MissionScripting` sanitization manager (`crates/studio-services/src/mission.rs`) |
+| `model/studio/mcp.pds` | `McpServer` — the headless agent tool surface of `dcs-studio-cli mcp` (issue #8; `crates/dcs-studio-cli/src/mcp.rs` + `crates/studio-services`) |
+| `model/studio/todos.pds` | `TodoScanner` — workspace comment-tag scanner behind the Todos panel (`crates/dcs-studio-project/src/todos.rs`, `src/lib/todos.svelte.ts`) |
+| `model/studio/lang.pds` | `LanguageIntel` provider layer + `DcsLua` engine face + `LuaAnalyzer`/`RustAnalyzer` hosted-server faces (`src/lib/lang/`, `crates/lua-analyzer`) |
 | `model/studio/edit.pds` | `Formatting` — editor format (Document/Selection, format-on-save) over the shared `fmt::Fmt` engine (`crates/app/src/format.rs`, `src/lib/editor/format.ts`) |
 | `model/dcslua.pds` | `DcsLuaLs` engine system root |
 | `model/syntax.pds` | Lexer/parser/AST contract (`crates/dcs-lua-syntax`) |
@@ -76,27 +81,48 @@ back to `src/lib/dcs-ws.ts`, speaking the same wire protocol directly.
 ### Language intelligence (decisions/005)
 
 Lua diagnostics/outline/folding come from the **dcs-lua engine**
-(`crates/dcs-lua-{syntax,lsp-core,ide}` + `crates/dcs-studio-cli`), reached
+(`crates/dcs-lua-{syntax,lsp-core,ide}` + `crates/lua-analyzer`), reached
 two ways behind one `LanguageProvider` contract:
 
 - **Packaged app:** the backend host (`crates/app/src/lsp.rs`) spawns
-  `dcs-studio-cli lsp` — a genuine tower-lsp stdio server — and pumps
-  framed JSON-RPC over IPC events; `src/lib/lang/lsp-client.ts` +
-  `lsp-lua.ts` own the protocol. The CLI binary must sit next to the app
-  exe (`cargo build -p dcs-studio-cli`; `DCS_STUDIO_CLI` overrides).
+  **`lua-analyzer`** — a standalone tower-lsp stdio server (`crates/lua-analyzer`),
+  hosted exactly like rust-analyzer — and pumps framed JSON-RPC over IPC
+  events; `src/lib/lang/lsp-client.ts` + `lua-analyzer.ts` own the protocol.
+  `lua-analyzer` indexes the project itself from the `initialize` rootUri.
+  The binary must sit next to the app exe (`cargo build -p lua-analyzer`;
+  `DCS_LUA_ANALYZER` overrides).
 - **Plain browser (vite dev, Playwright):** the same engine as wasm
   in-page (`src/lib/dcs-lua-wasm/`, rebuild with `pnpm build:wasm` and
   commit). Same dual-path convention as `dcs-ws.ts`.
 
-**dcs-studio-cli is the agent surface**: `lsp` and `mcp` (tools:
-`init_project`, `check`, `build`) over stdio, plus direct `init` /
-`check` / `build` / `install` subcommands — an agent needs no Tauri
-app.
+**dcs-studio-cli is the agent surface**: `mcp` over stdio, plus direct
+`init` / `check` / `build` / `test` / `bundle` / `install` subcommands — an
+agent needs no Tauri app. (LSP is its own binary, `lua-analyzer`, which
+agents and editors spawn directly.) The MCP server
+(model/studio/mcp.pds, issue #8) exposes the IDE's services headless:
+project (`init_project`, `check`, `build`), workspace fs (`read_dir`,
+`read_text_file`, `write_text_file`, `path_exists`), the DCS link
+(`dcs_status`, `dcs_eval`, `dcs_call` — dialed lazily on first use;
+everything else works without DCS), injection (`detect_installs`,
+`injection_status`, `inject`, `eject`), mission scripting
+(`detect_mission_scripts`, `mission_script_status`,
+`mission_script_set`, `mission_script_restore`), and the real engine
+(`lua_diagnostics`, `lua_hover`; `lua_complete`/`lua_definition` answer
+a stable not-implemented error until the engine grows those queries).
+The service logic itself lives in the tauri-free
+**`crates/studio-services`** (fs, inject, mission, link); the app's
+Tauri commands are thin wrappers over it, so agents and the IDE always
+run the same code. `test` runs `tests/**/*.test.lua` outside DCS via
+the sibling `dcs-lua-runner` binary (`tools/lua-runner`, its OWN cargo
+workspace: mlua `vendored` must never feature-unify with dcs-bridge's
+`module`; `DCS_LUA_RUNNER` overrides the path); `bundle` amalgamates
+the `[build] entry` require graph into `dist/` via package.preload.
 
-**rust-analyzer is the second hosted server** (issue #6 R2):
+**rust-analyzer is a sibling hosted server** (issue #6 R2):
 `src/lib/lang/rust-analyzer.ts` mounts `.rs` files through the same
-provider seam, spawned by the same backend host with a real `rootUri`
-(rust-analyzer indexes the project itself — no didOpen of the world).
+provider seam, spawned by the same backend host as `lua-analyzer`, with a
+real `rootUri` (rust-analyzer indexes the project itself — no didOpen of
+the world, exactly as `lua-analyzer` now does for `.lua`).
 Detection goes through `dcs-studio-project::toolchain::rust_analyzer()`
 (PATH, then `rustup which`); a missing binary or a root without a
 Cargo.toml is non-fatal — Lua intelligence stays intact. Shared LSP
@@ -150,14 +176,26 @@ diagnostics, never a panic. The IDE side:
   only: no Tauri, no DCS. Cheap to run.
 - `cargo test -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide` — engine
   suites (units, conformance goldens, totality properties, corpus gate).
-- `cargo test -p dcs-studio-cli` — CLI suites incl. real-stdio LSP and MCP
-  end-to-end sessions.
+- `cargo test -p lua-analyzer` — the standalone Lua LSP server's real-stdio
+  suite (initialize → workspace walk → parse + `param-type-mismatch` type diagnostics,
+  didChange, hover).
+- `cargo test -p dcs-studio-cli` — CLI suites incl. the real-stdio MCP
+  end-to-end session (full tool surface, no-DCS guards, real-engine lang
+  tools). The `test`-subcommand and bundle-execution suites need the
+  lua-runner built first (below) and found via `DCS_LUA_RUNNER` or
+  `tools/lua-runner/target/debug`; they skip hermetically without it
+  (host_ipc pattern). CI builds it first and pins the env var.
+- `cargo test -p studio-services` — the extracted tauri-free service logic
+  (fs, inject, mission, DCS link guards).
+- `cargo test --manifest-path tools/lua-runner/Cargo.toml` — the Lua test
+  runner (issue #9). Its OWN cargo workspace, so `cargo test --workspace`
+  from the root never touches it; CI's `rust` job runs it explicitly.
 - `DCS_TEMPLATE_COMPILE=1 cargo test -p dcs-studio-project --test template_compile`
   — scaffold the rust-dll template and `cargo check` it (issue #22); skips
   without the env var so the default suite stays fast. CI's
   `template-compile` job sets it.
 - `cargo test -p dcs-studio --tests` — host↔real-server IPC integration
-  (needs `cargo build -p dcs-studio-cli` first; auto-skips without the binary).
+  (needs `cargo build -p lua-analyzer` first; auto-skips without the binary).
 - `pnpm build:wasm` — rebuild `src/lib/dcs-lua-wasm/` after engine changes.
 
 For live work against DCS (deploy the DLL, launch/control the sim, eval Lua),

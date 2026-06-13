@@ -25,10 +25,9 @@ tauri-plugin-window-state = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 dcs-bridge-client = { path = "../dcs-bridge-client" }
 dcs-studio-project = { path = "../dcs-studio-project" }
 dcs-lua-fmt = { path = "../dcs-lua-fmt" }
-
-[target.'cfg(windows)'.dependencies]
-winreg = "0.52"
+studio-services = { path = "../studio-services" }
 

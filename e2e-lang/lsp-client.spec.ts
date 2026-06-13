@@ -33,15 +33,18 @@ test("a server-to-client request gets answered, not ignored", async ({
   await expect(page.getByTestId("lsp-server-req")).toHaveText("answered");
 });
 
-test("hover answers convert to a title/body card", async ({ page }) => {
-  // The fake answers textDocument/hover with markdown MarkupContent;
-  // the provider strips the ** emphasis into the title and the rest
-  // becomes the body.
+test("hover answers render the server's markdown verbatim as the body", async ({
+  page,
+}) => {
+  // The fake answers textDocument/hover with fenced MarkupContent (the
+  // convention rust-analyzer and lua-analyzer share); the provider renders it
+  // as the card body with no title reconstruction.
   await page.getByTestId("lsp-hover").click();
-  await expect(page.getByTestId("lsp-hover-title")).toHaveText(
+  await expect(page.getByTestId("lsp-hover-title")).toHaveText("");
+  await expect(page.getByTestId("lsp-hover-body")).toContainText(
     "local x: number",
   );
-  await expect(page.getByTestId("lsp-hover-body")).toHaveText("the answer");
+  await expect(page.getByTestId("lsp-hover-body")).toContainText("the answer");
 });
 
 test("a server crash rejects the path instead of hanging", async ({

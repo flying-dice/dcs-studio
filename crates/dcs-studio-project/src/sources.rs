@@ -1,5 +1,6 @@
-//! Workspace source collection shared by `check`, the MCP `check` tool,
-//! and the LSP initialize walk.
+//! Workspace source collection — the `.lua` walk shared by the CLI
+//! (`check`, `fmt`, the MCP `check` tool) and the `lua-analyzer` LSP
+//! server's initialize walk.
 
 use std::fs;
 use std::path::Path;

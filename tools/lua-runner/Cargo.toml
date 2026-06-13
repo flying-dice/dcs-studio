@@ -1,0 +1,39 @@
+# dcs-lua-runner — runs mod Lua unit tests outside DCS (issue #9).
+#
+# Deliberately its OWN single-member cargo workspace, not a member of the
+# repo root workspace: mlua's `vendored` feature (compiles PUC Lua 5.1
+# from source) conflicts with the `module` feature dcs-bridge needs, and
+# cargo unifies features per package across a workspace build. A separate
+# workspace (own lockfile, own target dir) keeps the two mlua builds from
+# ever meeting. Build/test it with:
+#
+#   cargo test --manifest-path tools/lua-runner/Cargo.toml
+#
+# The ROOT .cargo/config.toml's LUA_LIB/LUA_LIB_NAME pin (which cargo
+# discovers walking up from here) does NOT leak into this build: mlua's
+# `vendored` path compiles lua-src and never consults LUA_LIB — verified
+# by building under the pin and running the binary with no lua.dll in
+# reach. If a future mlua bump changes that, give this directory its own
+# .cargo/config.toml overriding the two [env] keys.
+[workspace]
+
+[package]
+name = "dcs-lua-runner"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "dcs-lua-runner"
+path = "src/main.rs"
+
+[dependencies]
+mlua = { version = "0.10", features = ["lua51", "vendored"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Mirror the root workspace's pedantic lint posture. This is a separate
+# cargo workspace (mlua vendored vs module conflict) so workspace = true
+# is unavailable; the same rules are declared inline.
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+cast_possible_truncation = "allow"

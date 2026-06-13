@@ -1,0 +1,125 @@
+//! studio::todos — the Todos tool window (issue #16): comment tags scanned
+//! across the workspace (TODO, FIXME, HACK, XXX by default — which also
+//! surfaces the repo's `TODO: clean-code - <score> - <CAT>: …` skill
+//! markers), grouped by file with tag chips; entries navigate the editor.
+//!
+//! Matching rule (kept deliberately simple): a tag matches case-sensitively
+//! anywhere in a line when bounded by non-word characters on both sides
+//! (start/end of line count as boundaries); at most one entry per line —
+//! the earliest bounded tag wins. The scan walks gitignore-aware, skips
+//! files over 1 MiB and non-UTF-8 files, and never fails the panel.
+
+/// One scanned comment-tag hit. `line`/`column` are 1-based; `column`
+/// counts UTF-16 code units so the editor caret lands exactly on the tag.
+/// `text` is the line's content after the tag (label for the row).
+public data TodoEntry { path: string, line: number, column: number, tag: string, text: string }
+
+/// Workspace comment-tag scanner behind the Todos tool window. The scan
+/// itself runs in Rust (`dcs-studio-project::todos`, reached through thin
+/// Tauri commands); this container owns when it runs and what the panel
+/// shows.
+public container TodoScanner for studio::core::Studio {
+  /// Full rescan when a workspace opens: walk the project root for every
+  /// tag and publish the entries, sorted by path then line. A failed scan
+  /// is non-fatal — the panel just shows nothing.
+  #[onevent(studio::core::ProjectOpened)]
+  public RefreshAll(opened: studio::core::ProjectOpened): void {
+    scanned = Result<studio::todos::TodoEntry[], studio::files::IoError> from self.ScanWorkspace(opened.path)
+    if (scanned.isErr) {
+      self.PublishTodos(self.EmptyTodos())
+      return
+    }
+    self.PublishTodos(scanned.value)
+  }
+
+  /// Per-file rescan after a save: SPLICE, never replace — drop only the
+  /// saved file's old entries, insert its fresh ones, keep every other
+  /// file's entries untouched. No workspace open (or a failed scan) leaves
+  /// the panel as it was.
+  #[manual]
+  public RefreshFile(path: string): void {
+    tracking = bool from self.WorkspaceOpen()
+    if (!tracking) {
+      return
+    }
+    scanned = Result<studio::todos::TodoEntry[], studio::files::IoError> from self.ScanFile(path)
+    if (scanned.isErr) {
+      return
+    }
+    kept = studio::todos::TodoEntry[] from self.DropEntriesOf(path)
+    self.PublishTodos(self.MergeEntries(kept, scanned.value))
+  }
+
+  /// Manual refresh (the panel's refresh button): full rescan of the
+  /// remembered workspace root; a no-op while no workspace is open.
+  #[manual]
+  public RefreshManually(): void {
+    root = Option<string> from self.WorkspaceRoot()
+    if (root.isNone) {
+      return
+    }
+    scanned = Result<studio::todos::TodoEntry[], studio::files::IoError> from self.ScanWorkspace(root.value)
+    if (scanned.isErr) {
+      return
+    }
+    self.PublishTodos(scanned.value)
+  }
+
+  /// A Todos entry navigates to its tag: the file opens and the caret
+  /// lands on the entry's line and column.
+  #[manual]
+  public OpenTodo(entry: studio::todos::TodoEntry): void {
+    studio::core::Workbench.OpenFile(entry.path)
+    self.JumpTo(entry)
+  }
+
+  /// Walk the workspace for every configured tag (Rust scan via the
+  /// gitignore-aware walker; 1 MiB cap, non-UTF-8 skipped).
+  ScanWorkspace(root: string): Result<studio::todos::TodoEntry[], studio::files::IoError>;
+
+  /// Scan a single file for the configured tags.
+  ScanFile(path: string): Result<studio::todos::TodoEntry[], studio::files::IoError>;
+
+  /// Whether a workspace is currently tracked (a root was scanned and not
+  /// reset).
+  WorkspaceOpen(): bool;
+
+  /// The tracked workspace root, if any.
+  WorkspaceRoot(): Option<string>;
+
+  /// The published entries minus those belonging to `path` — the keep side
+  /// of the per-file splice.
+  DropEntriesOf(path: string): studio::todos::TodoEntry[];
+
+  /// Merge kept and fresh entries back into path-then-line order.
+  MergeEntries(kept: studio::todos::TodoEntry[], fresh: studio::todos::TodoEntry[]): studio::todos::TodoEntry[];
+
+  /// Hand entries to the UI: the Todos panel groups them by file with tag
+  /// chips and counts.
+  PublishTodos(entries: studio::todos::TodoEntry[]): void;
+
+  /// The empty entry list published when a full scan fails.
+  EmptyTodos(): studio::todos::TodoEntry[];
+
+  /// Place the editor caret on the entry's line and column and scroll it
+  /// into view.
+  JumpTo(entry: studio::todos::TodoEntry): void;
+}
+
+/// Saving a file refreshes exactly that file's todos — a splice, never a
+/// wholesale replace.
+feature SavedFileRefreshesItsTodos for studio::todos::TodoScanner {
+  given "the Todos panel lists entries from files A and B"
+  when "the developer saves B with its comment tags changed"
+  then "B's group shows exactly its new entries"
+  and "B's stale entries are gone"
+  and "A's entries are untouched"
+}
+
+/// Todos entries navigate to their tags.
+feature TodoClickNavigatesEditor for studio::todos::TodoScanner {
+  given "the Todos panel lists an entry in a file not currently open"
+  when "the developer clicks the entry"
+  then "that file opens in the editor"
+  and "the caret lands on the entry's line and column"
+}

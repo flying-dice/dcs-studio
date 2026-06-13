@@ -129,3 +129,234 @@
 		@apply m-0 h-full overflow-hidden bg-background text-foreground;
 	}
 }
+
+/* Inferred-type inlay hints, drawn as dimmed inline ghost text. */
+.cm-inlay-hint {
+	@apply text-muted-foreground/70;
+	font-style: italic;
+	opacity: 0.75;
+	padding-left: 1px;
+}
+
+/* ===========================================================================
+   CodeMirror chrome — shadcn skin
+   ---------------------------------------------------------------------------
+   The editor's floating surfaces (hover/lint tooltips, autocomplete popup,
+   search panel, fold markers) ship with CodeMirror's stock styling. Re-skin
+   them with the app's design tokens so they read as the same popover/card
+   language as the rest of the IDE. The tokens (--popover, --border, --muted,
+   …) are re-derived from the active editor theme by chromeVars() in
+   themes.ts, so these surfaces track whatever theme is selected — light or
+   dark — for free. Selectors are scoped under `.cm-editor` to outrank
+   CodeMirror's injected baseTheme.
+   ======================================================================== */
+
+/* --- shared tooltip shell (hover, lint, autocomplete) --------------------- */
+.cm-editor .cm-tooltip {
+	@apply bg-popover text-popover-foreground rounded-md shadow-md;
+	border: 1px solid var(--border);
+}
+/* The arrow is two stacked triangles: the outer matches the border, the inner
+   the surface. Recolor both for each placement so it reads as one popover. */
+.cm-editor .cm-tooltip.cm-tooltip-above .cm-tooltip-arrow:before {
+	border-top-color: var(--border);
+}
+.cm-editor .cm-tooltip.cm-tooltip-above .cm-tooltip-arrow:after {
+	border-top-color: var(--popover);
+}
+.cm-editor .cm-tooltip.cm-tooltip-below .cm-tooltip-arrow:before {
+	border-bottom-color: var(--border);
+}
+.cm-editor .cm-tooltip.cm-tooltip-below .cm-tooltip-arrow:after {
+	border-bottom-color: var(--popover);
+}
+
+/* --- hover card: code-signature tier + rendered-markdown prose tier ------- */
+.cm-dcs-hover {
+	@apply flex flex-col gap-1.5 p-3;
+	max-width: 420px;
+	/* Bound a tall doc and scroll it cleanly instead of overflowing the card. */
+	max-height: min(360px, 60vh);
+	overflow-y: auto;
+	overflow-x: hidden;
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
+}
+/* A subtle native scrollbar matching the shadcn scroll-area (border-coloured,
+   rounded, inset thumb on a transparent track). */
+.cm-dcs-hover::-webkit-scrollbar {
+	width: 10px;
+}
+.cm-dcs-hover::-webkit-scrollbar-thumb {
+	background-color: var(--border);
+	border-radius: 9999px;
+	border: 3px solid transparent;
+	background-clip: padding-box;
+}
+.cm-dcs-hover::-webkit-scrollbar-track {
+	background: transparent;
+}
+.cm-dcs-hover__title {
+	@apply font-mono text-xs text-foreground;
+	white-space: pre-wrap;
+}
+.cm-dcs-hover__body {
+	@apply border-t border-border pt-1.5 text-xs text-muted-foreground;
+}
+/* No title tier above (a fenced-markdown hover): the body is the whole card,
+   so drop the separator border it would otherwise draw at the very top. */
+.cm-dcs-hover__body:first-child {
+	@apply border-t-0 pt-0;
+}
+.cm-dcs-hover__body > :first-child {
+	margin-top: 0;
+}
+.cm-dcs-hover__body > :last-child {
+	margin-bottom: 0;
+}
+.cm-dcs-hover__body p {
+	margin: 0.25rem 0;
+}
+.cm-dcs-hover__body code {
+	@apply rounded-sm bg-muted px-1 py-0.5 font-mono text-foreground;
+	font-size: 0.85em;
+}
+.cm-dcs-hover__body pre {
+	@apply my-1.5 overflow-x-auto rounded-md bg-muted p-2;
+}
+.cm-dcs-hover__body pre code {
+	@apply bg-transparent p-0;
+}
+.cm-dcs-hover__body a {
+	@apply text-primary underline underline-offset-2;
+}
+.cm-dcs-hover__body strong {
+	@apply font-semibold text-foreground;
+}
+.cm-dcs-hover__body ul,
+.cm-dcs-hover__body ol {
+	@apply my-1 pl-4;
+}
+.cm-dcs-hover__body ul {
+	list-style: disc;
+}
+.cm-dcs-hover__body ol {
+	list-style: decimal;
+}
+.cm-dcs-hover__body li {
+	@apply my-0.5;
+}
+.cm-dcs-hover__body h1,
+.cm-dcs-hover__body h2,
+.cm-dcs-hover__body h3,
+.cm-dcs-hover__body h4 {
+	@apply mt-1.5 mb-0.5 text-xs font-semibold text-foreground;
+}
+.cm-dcs-hover__body hr {
+	@apply my-1.5 border-border;
+}
+
+/* --- lint/diagnostic tooltip: severity accent bar ------------------------- */
+.cm-editor .cm-tooltip-lint {
+	@apply p-1;
+}
+.cm-editor .cm-diagnostic {
+	@apply my-0.5 rounded-sm px-2 py-1 text-xs;
+	border-left-width: 2px;
+}
+.cm-editor .cm-diagnostic-error {
+	border-left-color: var(--destructive);
+}
+.cm-editor .cm-diagnostic-warning {
+	border-left-color: oklch(0.75 0.15 80);
+}
+.cm-editor .cm-diagnostic-info {
+	border-left-color: var(--muted-foreground);
+}
+
+/* --- autocomplete popup (styled ahead of the engine advertising it) ------- */
+.cm-editor .cm-tooltip-autocomplete {
+	@apply p-1;
+}
+.cm-editor .cm-tooltip-autocomplete > ul {
+	@apply font-sans text-sm;
+}
+.cm-editor .cm-tooltip-autocomplete > ul > li {
+	@apply rounded-sm px-2 py-1;
+}
+.cm-editor .cm-tooltip-autocomplete > ul > li[aria-selected] {
+	@apply bg-accent text-accent-foreground;
+}
+.cm-editor .cm-completionMatchedText {
+	@apply font-medium text-primary;
+	text-decoration: none;
+}
+.cm-editor .cm-completionDetail {
+	@apply text-muted-foreground;
+}
+.cm-editor .cm-completionIcon {
+	@apply text-muted-foreground;
+	opacity: 0.7;
+}
+
+/* --- search/replace panel: shadcn input + button look --------------------- */
+.cm-editor .cm-panels {
+	@apply bg-popover text-popover-foreground;
+	border-color: var(--border);
+}
+.cm-editor .cm-panel.cm-search {
+	@apply flex flex-wrap items-center gap-1.5 px-2 py-1.5 text-sm;
+}
+.cm-editor .cm-panel.cm-search label {
+	@apply inline-flex items-center gap-1 text-xs text-muted-foreground;
+}
+.cm-editor .cm-textfield {
+	@apply rounded-md border border-input bg-background px-2 py-1 text-sm;
+}
+.cm-editor .cm-textfield:focus-visible {
+	@apply ring-2 ring-ring;
+	outline: none;
+}
+.cm-editor .cm-button {
+	@apply rounded-md border border-border bg-secondary px-2 py-1 text-xs text-secondary-foreground;
+	background-image: none;
+}
+.cm-editor .cm-button:hover {
+	@apply bg-accent text-accent-foreground;
+}
+.cm-editor .cm-panel.cm-search button[name='close'] {
+	@apply text-muted-foreground;
+}
+
+/* --- selection: fix thememirror typo in createTheme's selectionBackground  --
+   thememirror@2.0.1 create-theme.js has ".cm-selectionBackgroundm" (extra "m")
+   so its .cm-selectionBackground spans are always transparent. This override
+   re-applies each theme's selection colour via the --cm-selection CSS variable
+   that chromeVars() emits, with specificity high enough to win over the broken
+   thememirror theme rule. One Dark (@codemirror/theme-one-dark) already has the
+   correct selector, but the higher specificity here is harmless. */
+.cm-editor.cm-focused .cm-selectionBackground,
+.cm-editor .cm-selectionBackground {
+	background-color: var(--cm-selection) !important;
+}
+
+/* --- cursor: sticky ease-in glide on position change ---------------------- */
+/* Starts slow (sticky feel) then accelerates to the new position.          */
+/* 80 ms keeps it imperceptible during rapid typing but visible on clicks.  */
+.cm-editor .cm-cursor {
+	transition: left 60ms cubic-bezier(0.2, 0, 0, 1), top 60ms cubic-bezier(0.2, 0, 0, 1);
+	border-left-width: 2px !important;
+}
+
+/* --- gutter: extra breathing room on line numbers ------------------------- */
+.cm-editor .cm-lineNumbers .cm-gutterElement {
+	padding: 0 12px 0 8px;
+}
+
+/* --- fold marker: muted pill --------------------------------------------- */
+.cm-editor .cm-foldPlaceholder {
+	@apply rounded-sm border border-border bg-muted px-1 text-muted-foreground;
+}
+.cm-editor .cm-foldGutter .cm-gutterElement {
+	@apply text-muted-foreground;
+}
