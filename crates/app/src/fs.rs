@@ -17,6 +17,46 @@ pub fn read_text_file(path: String) -> Result<String, String> {
     studio_services::fs::read_text_file(&path)
 }
 
+// ── classify-and-read (model studio::files ReadFile) ────────────────────────
+
+/// How many leading bytes the NUL sniff inspects (model `LooksBinary`).
+const SNIFF_BYTES: usize = 8192;
+
+/// Outcome of classifying a file by content (model studio::files FileLoad):
+/// valid UTF-8 comes back as `Text`; a NUL byte in the leading `SNIFF_BYTES`,
+/// or any non-UTF-8 byte, makes it `Binary`, reported by size only — those
+/// bytes never reach the editor.
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum FileLoad {
+    Text { text: String },
+    Binary { size: u64 },
+}
+
+/// Classify already-read bytes (model `LooksBinary`): a NUL byte in the leading
+/// `SNIFF_BYTES`, or any non-UTF-8 byte, means binary; otherwise the decoded
+/// text. Takes ownership so the UTF-8 decode reuses the buffer (no copy).
+fn classify(bytes: Vec<u8>) -> FileLoad {
+    let size = bytes.len() as u64;
+    if bytes.iter().take(SNIFF_BYTES).any(|&b| b == 0) {
+        return FileLoad::Binary { size };
+    }
+    match String::from_utf8(bytes) {
+        Ok(text) => FileLoad::Text { text },
+        Err(_) => FileLoad::Binary { size },
+    }
+}
+
+/// Read a file for the editor, classifying it by CONTENT not extension
+/// (model studio::files ReadFile): one read, then `classify`. Replaces the
+/// open path's `read_text_file`; `read_text_file` stays for saves and
+/// strict-UTF-8 callers.
+#[tauri::command]
+pub fn read_file(path: String) -> Result<FileLoad, String> {
+    let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
+    Ok(classify(bytes))
+}
+
 /// Write `contents` to a text file, creating or truncating it.
 #[tauri::command]
 pub fn write_text_file(path: String, contents: String) -> Result<(), String> {
@@ -46,4 +86,36 @@ pub fn create_project_from_template(
     template: String,
 ) -> Result<String, String> {
     studio_services::fs::create_project_from_template(&parent, &name, &template)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify, FileLoad};
+
+    #[test]
+    fn nul_byte_in_leading_chunk_is_binary() {
+        // A NUL anywhere in the sniff window means binary, size reported.
+        match classify(b"\x89PNG\x00\x00data".to_vec()) {
+            FileLoad::Binary { size } => assert_eq!(size, 10),
+            FileLoad::Text { .. } => panic!("NUL buffer classified as text"),
+        }
+    }
+
+    #[test]
+    fn non_utf8_without_nul_is_binary() {
+        // 0xFF 0xFE is not valid UTF-8 and carries no NUL byte.
+        match classify(vec![0xFF, 0xFE, 0x41]) {
+            FileLoad::Binary { size } => assert_eq!(size, 3),
+            FileLoad::Text { .. } => panic!("non-UTF-8 buffer classified as text"),
+        }
+    }
+
+    #[test]
+    fn valid_utf8_is_text_returned_verbatim() {
+        let src = "print(\"hello\")\nlocal x = 1\n";
+        match classify(src.as_bytes().to_vec()) {
+            FileLoad::Text { text } => assert_eq!(text, src),
+            FileLoad::Binary { .. } => panic!("UTF-8 source classified as binary"),
+        }
+    }
 }

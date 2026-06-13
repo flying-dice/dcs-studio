@@ -65,10 +65,11 @@
   };
   const store = new TodoScanner(scanner);
 
-  async function readFile(path: string): Promise<string> {
+  async function readFile(path: string) {
     const text = FILES.get(path);
     if (text === undefined) throw new Error(`no lab file: ${path}`);
-    return text;
+    // FileLoad-shaped now (issue #30 merged from main): these fixtures are text.
+    return { kind: "text" as const, text };
   }
 
   /** Stand-in for the workbench save hook (state.svelte.ts saveFile):

@@ -8,6 +8,13 @@ public data DirEntry { name: string, path: string, isDir: bool }
 /// A filesystem operation failure, carrying the offending path.
 public data IoError { message: string }
 
+/// A file read for the editor, classified by CONTENT not extension. Modeled as
+/// one flat record with a `kind` discriminator ("text" | "binary") because
+/// PseudoScript has no sum types; the wire form (crates/app/src/fs.rs FileLoad)
+/// is a tagged union — a "text" load carries `text` (size unused), a "binary"
+/// load carries `size` (its bytes stay on disk, `text` left blank).
+public data FileLoad { kind: string, text: string, size: number }
+
 /// Rust-side filesystem service of the Tauri backend.
 public container WorkspaceFs for studio::core::Studio {
   /// List the immediate children of a folder for lazy tree expansion:
@@ -29,6 +36,38 @@ public container WorkspaceFs for studio::core::Studio {
 
   /// Read a UTF-8 text file's contents.
   public ReadTextFile(path: string): Result<string, studio::files::IoError>;
+
+  /// Read a file for the editor, classifying it by CONTENT not extension:
+  /// `LooksBinary` decides — a NUL byte in the leading 8 KiB, or any non-UTF-8
+  /// byte, means binary and only the size is reported (the bytes never enter
+  /// the editor); a clean UTF-8 file comes back as text with its size. The
+  /// adapter fuses the sniff, size, and decode into one disk read. Replaces the
+  /// open path's ReadTextFile; ReadTextFile stays for saves and strict-UTF-8
+  /// callers. An unreadable path is the only Err.
+  public ReadFile(path: string): Result<studio::files::FileLoad, studio::files::IoError> {
+    binary = Result<bool, studio::files::IoError> from self.LooksBinary(path)
+    if (binary.isErr) {
+      return Err(binary.error)
+    }
+    size = number from self.FileSize(path)
+    if (binary.value) {
+      asBinary = studio::files::FileLoad from { "binary", "", size }
+      return Ok(asBinary)
+    }
+    contents = Result<string, studio::files::IoError> from self.ReadTextFile(path)
+    if (contents.isErr) {
+      return Err(contents.error)
+    }
+    asText = studio::files::FileLoad from { "text", contents.value, size }
+    return Ok(asText)
+  }
+
+  /// Whether a file's bytes look binary: a NUL byte in the leading 8 KiB, or
+  /// any non-UTF-8 byte. An unreadable path is the Err.
+  LooksBinary(path: string): Result<bool, studio::files::IoError>;
+
+  /// Byte length of a file on disk — the size the binary placeholder shows.
+  FileSize(path: string): number;
 
   /// Write a text file, creating or truncating it.
   public WriteTextFile(path: string, contents: string): Result<void, studio::files::IoError>;

@@ -22,10 +22,11 @@
 
   let ready = $state(false);
 
-  async function readFile(path: string): Promise<string> {
+  async function readFile(path: string) {
     const text = FILES.get(path);
     if (text === undefined) throw new Error(`no lab file: ${path}`);
-    return text;
+    // FileLoad-shaped now (issue #30 merged from main): these fixtures are text.
+    return { kind: "text" as const, text };
   }
 
   onMount(() => {
