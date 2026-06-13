@@ -19,6 +19,7 @@ import { listen } from "@tauri-apps/api/event";
 import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import { wsConnected } from "./dcs-ws";
 import { lang } from "./lang/intel.svelte";
+import { saveWithFormat } from "./save-format";
 import type { Extension } from "@codemirror/state";
 
 /** Persist one string to localStorage, swallowing quota / SSR-absence errors. */
@@ -132,6 +133,13 @@ class AppState {
   openFiles = $state<OpenDoc[]>([]);
   activePath = $state<string | null>(null);
   saving = $state(false);
+
+  // How to reformat the active buffer in place before a save (format-on-save).
+  // The editor registers this on mount and clears it on destroy; absent when no
+  // editor is mounted, so format-on-save has nothing to reformat (model
+  // FormatBeforeSave: no buffer → unchanged). Held here so EVERY save entry
+  // point (editor ⌘S, global ⌘S, File → Save) reformats identically.
+  private formatActiveBuffer: (() => Promise<void>) | null = null;
 
   /** The active tab's record, if any file is open. */
   get activeDoc(): OpenDoc | null {
@@ -435,20 +443,38 @@ class AppState {
   }
 
   /**
+   * Register how to reformat the active buffer in place (format-on-save). The
+   * editor sets this on mount and clears it (`null`) on destroy.
+   */
+  setBufferFormatter(format: (() => Promise<void>) | null) {
+    this.formatActiveBuffer = format;
+  }
+
+  /**
    * Persist the ACTIVE tab's buffer to the ACTIVE tab's path — never any
-   * other tab's (model `SaveFile`). No-op when clean or already saving.
+   * other tab's (model `SaveFile`). No-op when clean or already saving. The
+   * single save path for every entry point (editor ⌘S, global ⌘S, File → Save);
+   * when format-on-save is on it reformats the buffer first (model
+   * FormatBeforeSave), and a broken buffer never blocks the write
+   * (SaveNeverBlockedByBrokenLua).
    */
   async saveFile() {
     const doc = this.activeDoc;
     if (!doc || doc.docText === doc.savedText || this.saving) return;
     this.saving = true;
     try {
-      // Capture the buffer BEFORE the await: keystrokes that land while the
-      // write is in flight must keep the tab dirty, so the baseline is set
-      // to exactly what was written, not to the post-write buffer.
-      const text = doc.docText;
-      await writeTextFile(doc.path, text);
-      doc.savedText = text;
+      await saveWithFormat({
+        formatOnSave: this.formatOnSave,
+        format: () => this.formatActiveBuffer?.() ?? Promise.resolve(),
+        // Read the buffer AFTER any reformat, and capture it BEFORE the write:
+        // keystrokes that land while the write is in flight must keep the tab
+        // dirty, so the baseline is exactly what was written.
+        persist: async () => {
+          const text = doc.docText;
+          await writeTextFile(doc.path, text);
+          doc.savedText = text;
+        },
+      });
     } finally {
       this.saving = false;
     }

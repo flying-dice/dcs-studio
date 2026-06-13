@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { EditorView, basicSetup } from "codemirror";
-  import { keymap } from "@codemirror/view";
   import { EditorState, Compartment, type Extension } from "@codemirror/state";
   import { StreamLanguage } from "@codemirror/language";
   import { lua } from "@codemirror/legacy-modes/mode/lua";
@@ -70,21 +69,6 @@
       doc: text,
       extensions: [
         basicSetup,
-        keymap.of([
-          {
-            key: "Mod-s",
-            preventDefault: true,
-            run: (v) => {
-              // Format-on-save reformats the buffer into the view first (the
-              // update listener syncs docText), then saveFile writes it.
-              void (async () => {
-                if (app.formatOnSave) await runFormat(v, null);
-                await app.saveFile();
-              })();
-              return true;
-            },
-          },
-        ]),
         EditorView.updateListener.of((u) => {
           if (u.docChanged) {
             app.onDocEdited(path, u.state.doc.toString());
@@ -144,7 +128,18 @@
       parent: host,
       state: blankState(),
     });
-    return () => view?.destroy();
+    // Reformat the active buffer in place for format-on-save; app.saveFile
+    // applies it before the write. There is deliberately no editor save
+    // binding — the global ⌘S (+page.svelte) is the single save path, so the
+    // same keystroke can't both format-then-save here and save unformatted
+    // there.
+    app.setBufferFormatter(() =>
+      view ? runFormat(view, null) : Promise.resolve(),
+    );
+    return () => {
+      app.setBufferFormatter(null);
+      view?.destroy();
+    };
   });
 
   // Swap whole per-file states when the active tab changes; drop parked
