@@ -17,6 +17,25 @@ export function readTextFile(path: string): Promise<string> {
   return invoke<string>("read_text_file", { path });
 }
 
+/**
+ * A file read for the editor, classified by content (model studio::files
+ * FileLoad / Rust `FileLoad`): a tagged union — `text` carries the decoded
+ * contents, `binary` carries only the byte size (the bytes stay on disk).
+ */
+export type FileLoad =
+  | { kind: "text"; text: string }
+  | { kind: "binary"; size: number };
+
+/**
+ * Read a file, classifying it by CONTENT not extension: a NUL byte in the
+ * leading chunk, or any non-UTF-8 byte, means binary (size only); otherwise the
+ * decoded text. Replaces `readTextFile` on the editor's open path —
+ * `readTextFile` stays for saves and strict-UTF-8 callers.
+ */
+export function classifyAndRead(path: string): Promise<FileLoad> {
+  return invoke<FileLoad>("read_file", { path });
+}
+
 export function writeTextFile(path: string, contents: string): Promise<void> {
   return invoke<void>("write_text_file", { path, contents });
 }

@@ -12,8 +12,11 @@ public constant RECENTS_MAX = 8
 /// One open editor tab. Each tab owns its own buffer — text, undo history,
 /// selection, scroll — so no edit or undo in one tab can ever leak into
 /// another. `savedText` is the on-disk baseline; it diverges from `text`
-/// while there are unsaved edits (the tab is dirty).
-public data Document { path: string, name: string, text: string, savedText: string }
+/// while there are unsaved edits (the tab is dirty). `kind` is "loading" until
+/// the first read classifies the file "text" or "binary"; a binary tab shows a
+/// placeholder sized by `binarySize` (its bytes never enter the editor, so
+/// `text`/`savedText` stay blank).
+public data Document { path: string, name: string, text: string, savedText: string, kind: string, binarySize: number }
 
 /// A recently opened project, persisted to localStorage (most recent first).
 public data RecentProject { path: string, name: string, openedAt: datetime }
@@ -110,32 +113,39 @@ public container Workbench for studio::core::Studio {
   /// `LoadTab`.
   ActivateTab(doc: studio::core::Document): void;
 
-  /// Lazily load a first-activated tab's text from disk — into a fresh
-  /// buffer with an empty undo history, so the load itself is never
-  /// undoable. A failed read closes the tab and surfaces the error (an
-  /// empty buffer must never impersonate the file on disk). A load that
-  /// was superseded while the read was in flight — the developer activated
-  /// another tab (every activation invalidates older in-flight loads, even
-  /// re-activating the already-shown tab), closed this one, or this tab
-  /// otherwise lost the active spot — is discarded without touching the
-  /// shown buffer. The ONE superseded guard covers both arms symmetrically:
-  /// a superseded failed read closes nothing, exactly as a superseded
-  /// successful read shows nothing.
+  /// Lazily load a first-activated tab from disk via `ReadFile`, which
+  /// classifies the file by content. A text file lands in a fresh buffer with
+  /// an empty undo history, so the load itself is never undoable; a binary file
+  /// is marked (`MarkBinary`) with a blank buffer and its size and shows the
+  /// placeholder instead of its bytes — no `ShowTab`. A failed read closes the
+  /// tab and surfaces the error (an empty buffer must never impersonate the
+  /// file on disk). A load superseded while the read was in flight — the
+  /// developer activated another tab (every activation invalidates older
+  /// in-flight loads, even re-activating the already-shown tab), closed this
+  /// one, or this tab otherwise lost the active spot — is discarded without
+  /// touching the shown buffer. The ONE superseded guard covers all three arms
+  /// symmetrically: a superseded read (failed, text, or binary) closes nothing,
+  /// shows nothing, and marks nothing.
   #[manual]
-  LoadTab(doc: studio::core::Document): Result<string, studio::files::IoError> {
-    text = Result<string, studio::files::IoError> from studio::files::WorkspaceFs.ReadTextFile(doc.path)
+  LoadTab(doc: studio::core::Document): Result<studio::files::FileLoad, studio::files::IoError> {
+    load = Result<studio::files::FileLoad, studio::files::IoError> from studio::files::WorkspaceFs.ReadFile(doc.path)
     superseded = bool from self.LoadSuperseded(doc)
-    if (text.isErr) {
+    if (load.isErr) {
       if (!superseded) {
         self.CloseFile(doc.path)
       }
-      return Err(text.error)
+      return Err(load.error)
     }
     if (superseded) {
-      return Ok(text.value)
+      return Ok(load.value)
     }
-    self.ShowTab(doc, text.value)
-    return Ok(text.value)
+    binary = bool from load.value.kind == "binary"
+    if (binary) {
+      self.MarkBinary(doc, load.value.size)
+      return Ok(load.value)
+    }
+    self.ShowTab(doc, load.value.text)
+    return Ok(load.value)
   }
 
   /// Whether this load was overtaken while its read was in flight: the
@@ -147,6 +157,11 @@ public container Workbench for studio::core::Studio {
   /// Swap the freshly loaded text in as `doc`'s shown buffer and set both
   /// the buffer and the on-disk baseline to it (the tab starts clean).
   ShowTab(doc: studio::core::Document, text: string): void;
+
+  /// Mark a first-activated tab as binary: a blank, history-free buffer (the
+  /// bytes never enter the editor) and the file's size for the placeholder. No
+  /// ShowTab — the binary overlay renders from the tab's kind, not its text.
+  MarkBinary(doc: studio::core::Document, size: number): void;
 
   /// The currently focused tab, if any file is open.
   ActiveTab(): Option<studio::core::Document>;
@@ -315,6 +330,16 @@ feature StaleLoadNeverHijacksView for studio::core::Workbench {
   when "the developer activates A again before B's read lands"
   then "the editor keeps showing A's buffer when the stale read resolves"
   and "edits route into A's buffer, never B's"
+}
+
+/// A binary file opens a normal tab with a placeholder, never its bytes, and
+/// never the failed-read tab-close (issue #30): the classifying read marks the
+/// tab binary, its buffer stays blank, and the tab stays open.
+feature BinaryFileShowsPlaceholder for studio::core::Workbench {
+  given "a non-UTF-8 (binary) file is opened as a new tab"
+  when "the tab is activated for the first time and its read lands"
+  then "the tab shows the binary placeholder with the file's size"
+  and "the editor buffer is left blank and the tab is not closed"
 }
 
 /// Closing the active tab hands the view to a neighbour; closing any other

@@ -10,16 +10,18 @@
   import { markdown } from "@codemirror/lang-markdown";
   import { rust } from "@codemirror/lang-rust";
   import { app } from "$lib/state.svelte";
-  import { readTextFile } from "$lib/api";
+  import { classifyAndRead, type FileLoad } from "$lib/api";
   import { langIntelFor } from "$lib/lang/codemirror";
   import { editorCommands } from "$lib/editor/commands";
+  import BinaryPlaceholder from "$lib/components/BinaryPlaceholder.svelte";
 
   // Injectable file reader so /lab/buffers can drive the real per-tab buffer
   // machinery from a plain browser (no Tauri fs) — same seam convention as
-  // IntelFs in intel.svelte.ts.
+  // IntelFs in intel.svelte.ts. Classifies by content (model `ReadFile`): the
+  // result is text or a binary marker, never a failed read of binary bytes.
   let {
-    readFile = readTextFile,
-  }: { readFile?: (path: string) => Promise<string> } = $props();
+    readFile = classifyAndRead,
+  }: { readFile?: (path: string) => Promise<FileLoad> } = $props();
 
   let host: HTMLDivElement;
   let view: EditorView | undefined;
@@ -91,6 +93,11 @@
     });
   }
 
+  /** An empty, history-free state — the blank view for no-file and binary tabs. */
+  function blankState(): EditorState {
+    return EditorState.create({ doc: "" });
+  }
+
   /** Park the shown tab's state + scroll, unless its tab was closed. */
   function parkCurrent() {
     if (!view || shownPath === null) return;
@@ -120,7 +127,7 @@
   onMount(() => {
     view = new EditorView({
       parent: host,
-      state: EditorState.create({ doc: "" }),
+      state: blankState(),
     });
     return () => view?.destroy();
   });
@@ -148,7 +155,16 @@
     if (!path || !doc) {
       parkCurrent();
       shownPath = null;
-      view.setState(EditorState.create({ doc: "" }));
+      view.setState(blankState());
+      return;
+    }
+    // Known-binary fast-path (mirrors the parked fast-path): a re-activated
+    // binary tab shows a blank view behind the placeholder overlay — no read,
+    // no parked state (model `LoadTab`: binary marks the tab, never `ShowTab`).
+    if (doc.kind === "binary") {
+      parkCurrent();
+      shownPath = path;
+      view.setState(blankState());
       return;
     }
     const parked = parkedStates.get(path);
@@ -177,9 +193,9 @@
     // undoable.
     const name = doc.name;
     void (async () => {
-      let text: string;
+      let load: FileLoad;
       try {
-        text = await readFile(path);
+        load = await readFile(path);
       } catch (error) {
         // Failed read (model `LoadTab` Err arm): never leave an empty tab
         // impersonating the file on disk — close it, unless the load was
@@ -190,13 +206,21 @@
         if (seq === loadSeq && app.activePath === path) void app.closeFile(path);
         return;
       }
-      // Superseded while in flight (newer switch, or the tab was closed and
-      // a neighbour activated) — the stale text must not win the view.
+      // Superseded while in flight (newer switch, or the tab was closed and a
+      // neighbour activated) — the stale load must not win the view. The ONE
+      // guard covers the binary, text, and (above) failed arms alike.
       if (!view || seq !== loadSeq || app.activePath !== path) return;
       parkCurrent();
       shownPath = path;
-      view.setState(freshState(path, name, text));
-      app.onDocLoaded(path, text);
+      if (load.kind === "binary") {
+        // Binary (model `MarkBinary`): a blank view behind the placeholder —
+        // the bytes never enter the editor and the tab is never closed.
+        view.setState(blankState());
+        app.onDocBinary(path, load.size);
+        return;
+      }
+      view.setState(freshState(path, name, load.text));
+      app.onDocLoaded(path, load.text);
       applyPendingJump();
     })();
   });
@@ -212,6 +236,19 @@
     const cm = app.cm;
     view?.dispatch({ effects: themeComp.reconfigure(cm) });
   });
+
+  // The active tab when it's binary — drives the placeholder overlay (model
+  // BinaryFileShowsPlaceholder). Null for loading/text tabs.
+  const binaryDoc = $derived(
+    app.activeDoc?.kind === "binary" ? app.activeDoc : null,
+  );
 </script>
 
-<div class="h-full w-full overflow-hidden [&_.cm-editor]:h-full" bind:this={host}></div>
+<div class="relative h-full w-full">
+  <div class="h-full w-full overflow-hidden [&_.cm-editor]:h-full" bind:this={host}></div>
+  {#if binaryDoc}
+    <!-- Opaque placeholder over the blank editor view, JetBrains-Fleet style
+         (model BinaryFileShowsPlaceholder). The blank CodeMirror view sits behind. -->
+    <BinaryPlaceholder path={binaryDoc.path} size={binaryDoc.binarySize ?? 0} />
+  {/if}
+</div>
