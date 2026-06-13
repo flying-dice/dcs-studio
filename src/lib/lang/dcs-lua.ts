@@ -12,7 +12,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import init, { IdeSession } from "$lib/dcs-lua-wasm/dcs_lua_ide";
 import wasmUrl from "$lib/dcs-lua-wasm/dcs_lua_ide_bg.wasm?url";
-import { LspLuaProvider } from "./lsp-lua";
+import { LuaAnalyzerProvider } from "./lua-analyzer";
 import { ByteOffsets, lineStarts } from "./offsets";
 import type {
   CompletionItem,
@@ -20,9 +20,11 @@ import type {
   DocumentSymbol,
   FoldingRange,
   Hover,
+  InlayHint,
   LanguageProvider,
   Location,
   ProfileRule,
+  ProviderStatus,
   SourceFile,
 } from "./provider";
 
@@ -37,6 +39,11 @@ class WasmLuaProvider implements LanguageProvider {
   private initPromise: Promise<void> | null = null;
   private readonly texts = new Map<string, string>();
   private readonly offsets = new Map<string, ByteOffsets>();
+  private _status: ProviderStatus = "off";
+
+  get status(): ProviderStatus {
+    return this._status;
+  }
 
   private async ensureLoaded(): Promise<void> {
     this.initPromise ??= init({ module_or_path: wasmUrl }).then(() => {
@@ -64,11 +71,18 @@ class WasmLuaProvider implements LanguageProvider {
     rules: ProfileRule[],
     _root: string,
   ): Promise<void> {
-    await this.ensureLoaded();
+    this._status = "loading";
+    try {
+      await this.ensureLoaded();
+    } catch (error) {
+      this._status = "failed";
+      throw error;
+    }
     this.texts.clear();
     this.offsets.clear();
     for (const file of files) this.remember(file.path, file.text);
     this.session?.mount(files, rules);
+    this._status = "ready";
   }
 
   async setSource(path: string, text: string): Promise<void> {
@@ -131,8 +145,15 @@ class WasmLuaProvider implements LanguageProvider {
   async definition(path: string, offset: number): Promise<Location | null> {
     return this.session?.definition(path, this.toBytes(path, offset)) ?? null;
   }
+
+  async inlayHints(path: string): Promise<InlayHint[]> {
+    return (this.session?.inlay_hints(path) ?? []).map((hint) => ({
+      ...hint,
+      offset: this.toUtf16(path, hint.offset),
+    }));
+  }
 }
 
 export const dcsLuaProvider: LanguageProvider = isTauri()
-  ? new LspLuaProvider()
+  ? new LuaAnalyzerProvider()
   : new WasmLuaProvider();

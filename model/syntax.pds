@@ -149,6 +149,67 @@ public data UnOp =
 /// diagnostics collected while lexing and parsing. Parsing never fails.
 public data Parsed { chunk: syntax::Chunk, diagnostics: syntax::Diagnostic[] }
 
+/// A LuaLS/EmmyLua type expression (SPEC.md §4), the DCS Lua 5.1 subset.
+/// `Named` is a class/alias/enum reference resolved by the type table;
+/// `Any` is the total fallback for unknown names or malformed text, so the
+/// checker never false-positives. `Unknown` marks an expression the engine
+/// could not infer (distinct from the explicit `any` annotation).
+public data Type =
+  | Nil
+  | Boolean
+  | Number
+  | String
+  | Table
+  | Function { params: syntax::Type[], ret: syntax::Type[] }
+  | Array { element: syntax::Type }
+  | Dict { key: syntax::Type, value: syntax::Type }
+  | Union { members: syntax::Type[] }
+  | Optional { inner: syntax::Type }
+  | Named { name: string }
+  | Generic { name: string }
+  | LiteralString { value: string }
+  | LiteralNumber { raw: string }
+  | Any
+  | Unknown
+
+/// One `@param name type` declaration; `optional` is the `name?` form.
+public data ParamAnno { name: string, ty: syntax::Type, optional: bool }
+
+/// One `@field name type` of a `@class`; `[indexType]` index fields render
+/// their key type into `name`; `optional` is the `name?` form.
+public data FieldAnno { name: string, ty: syntax::Type, optional: bool }
+
+/// A structured `---` doc run attached to the following declaration. Only
+/// the tags this slice models are surfaced; unknown tags are dropped. A
+/// block carries at most one `@class`/`@alias`/`@enum` head.
+public data AnnotationBlock { params: syntax::ParamAnno[], returns: syntax::Type[], varType: Option<syntax::Type>, className: Option<string>, classParent: Option<string>, fields: syntax::FieldAnno[], aliasName: Option<string>, aliasType: Option<syntax::Type>, enumName: Option<string>, generics: string[], isMeta: bool, doc: string }
+
+/// Parses `---` doc runs into `AnnotationBlock`s and type expressions into
+/// `Type`s (SPEC.md §4). Total: an unknown tag is ignored and a malformed
+/// type expression yields `Type.Any`; the parse never fails.
+/// #critical
+public container Annotations for dcslua::DcsLuaLs {
+  /// Parse one contiguous doc run (already marker-stripped, in source
+  /// order) into the structured block.
+  public ParseBlock(lines: string[]): syntax::AnnotationBlock;
+
+  /// Parse one type expression: a name, `nil`/`any`, union (`A|B`),
+  /// optional (`T?`), array (`T[]`), `table<K, V>`, `{ k: T }`,
+  /// `fun(a: T): R`, varargs, or a string/number literal type. Malformed
+  /// input yields `Type.Any`.
+  public ParseType(text: string): syntax::Type;
+}
+
+/// The annotation layer never destabilises parsing or analysis.
+/// #critical
+feature AnnotationParsingIsTotal for syntax::Annotations {
+  given "a `---@param` line with an unknown tag or malformed type expression"
+  when "the annotation block is parsed"
+  then "the recognised tags still yield their declarations"
+  and "the malformed type expression degrades to the any type"
+  but "parsing never throws and never reports the user a parse error"
+}
+
 /// `crates/dcs-lua-syntax`. The foundation crate: source text to tokens and
 /// a typed arena AST, emitting the shared `Diagnostic`. WASM-safe, I/O-free.
 /// #critical

@@ -2,19 +2,19 @@
   // Browser test surface for the issue-#31 RE-ATTACH path: the
   // skip-handshake branch (`isNew=false`) the crash/fresh-spawn labs never
   // enter (their fakes always report a fresh spawn, so `if (isNew)` is
-  // always taken). Drives the EXACT `LspLuaProvider` / `RustAnalyzerProvider`
-  // + `LspClient` classes over a recording transport that reports
-  // `isNew=false`, proving the re-attach contract:
+  // always taken). Drives the EXACT `LuaAnalyzerProvider` /
+  // `RustAnalyzerProvider` + `LspClient` classes over a recording transport
+  // that reports `isNew=false`, proving the re-attach contract:
   //   - no `initialize`/`initialized` is sent (re-init = the #31 violation),
   //   - `markInitialized` is NOT called on a re-attach,
-  //   - the publishDiagnostics + server-exit handlers are still wired, and
-  //   - (dcs-lua) every mounted file is re-`didOpen`ed, while rust-analyzer
-  //     re-attaches with no `didOpen` storm.
-  // The fresh (`isNew=true`) mirror asserts the handshake + `markInitialized`
-  // fire exactly once.
+  //   - the publishDiagnostics + server-exit handlers are still wired.
+  // Both servers are now root-bound (they index from `rootUri`), so a
+  // re-attach mount sends nothing on the wire — a later edit opens the file
+  // and proves the publish handler is still wired. The fresh (`isNew=true`)
+  // mirror asserts the handshake + `markInitialized` fire exactly once.
   import { onMount } from "svelte";
   import { LspClient, type LspTransport } from "$lib/lang/lsp-client";
-  import { LspLuaProvider } from "$lib/lang/lsp-lua";
+  import { LuaAnalyzerProvider } from "$lib/lang/lua-analyzer";
   import { RustAnalyzerProvider } from "$lib/lang/rust-analyzer";
 
   const LUA_PATH = "C:\\lab\\main.lua";
@@ -183,10 +183,12 @@
 
   onMount(() => {
     void (async () => {
-      // dcs-lua, FRESH spawn: handshake once, then open the file.
+      // dcs-lua, FRESH spawn: lua-analyzer is root-bound (it indexes from
+      // rootUri), so a fresh mount handshakes (initialize → initialized) and
+      // does NOT didOpen the world — files open lazily on the first edit.
       {
         const { transport, rec } = recordingTransport(true, "lua");
-        const provider = new LspLuaProvider(() =>
+        const provider = new LuaAnalyzerProvider(() =>
           LspClient.withTransport(transport),
         );
         await provider.mount([{ path: LUA_PATH, text: LUA_SRC }], [], "C:\\lab");
@@ -194,19 +196,20 @@
         luaFreshMark = rec.markCount;
       }
 
-      // dcs-lua, RE-ATTACH: skip the handshake, still open the file and wire
-      // the publish + exit handlers.
+      // dcs-lua, RE-ATTACH: skip the handshake — a root-bound re-attach sends
+      // nothing on mount. The publish + exit handlers are still wired: a later
+      // edit opens the file and surfaces the finding, and a server death after
+      // re-attach surfaces on the next edit.
       {
         const { transport, rec } = recordingTransport(false, "lua");
-        const provider = new LspLuaProvider(() =>
+        const provider = new LuaAnalyzerProvider(() =>
           LspClient.withTransport(transport),
         );
         await provider.mount([{ path: LUA_PATH, text: LUA_SRC }], [], "C:\\lab");
         luaReWire = rec.sent.join(",");
         luaReMark = rec.markCount;
+        await provider.setSource(LUA_PATH, LUA_SRC);
         luaReFinding = (await provider.diagnostics())[0]?.code ?? "";
-        // Exit handler wired despite the skipped handshake: a server death
-        // must surface on the next edit.
         rec.emitExit();
         try {
           await provider.setSource(LUA_PATH, "x = 1\n");

@@ -49,15 +49,58 @@ Diagnostic { severity, span, code, code_description, message }
 
 ### §3.1 Code registry
 
+**Parse/lexical** findings carry stable `LUA-Exxx` codes — the analog of
+rustc's hard-error `E####` codes (a parse failure is not a lint):
+
 | Range | Stage | Examples |
 | --- | --- | --- |
 | `LUA-E0xx` | lexical | `LUA-E001` unexpected character · `LUA-E002` unterminated string · `LUA-E003` unterminated long bracket · `LUA-E004` malformed number |
 | `LUA-E1xx` | parse | `LUA-E100` unexpected token · `LUA-E101` expected token · `LUA-E102` unterminated block (missing `end`) · `LUA-E103` nesting too deep (recursion cap; totality on a 1 MiB stack) |
 | `LUA-Sxxx` | static (resolution) | reserved |
-| `LUA-Txxx` | types | reserved |
 | `DCS-Wxxx` | DCS-flavoured lints | reserved |
 
 A code, once shipped, MUST NOT be reused for a different rule.
+
+**Type lints** carry kebab-case **names** (rustc/clippy idiom) — they are
+*levelled*, not coded:
+
+| Lint | Fires on |
+| --- | --- |
+| `param-type-mismatch` | an argument not assignable to a declared `@param` type |
+| `operator-type-mismatch` | an operator on an unfit operand (arithmetic/concat/length on a non-numeric, non-coercible value) |
+| `param-usage-mismatch` | an argument that conflicts with how an un-annotated parameter is used in the body |
+| `unfulfilled-lint-expectation` | an `---@expect` whose named lint never fired |
+
+Each lint has a level — `allow` / `warn` / `deny` / `forbid` (rustc's ladder) —
+and a built-in default: `param-type-mismatch` is `deny` (an error),
+`operator-type-mismatch` and `param-usage-mismatch` are `warn`. The two `warn`
+lints are advisory because Lua 5.1 coerces numeric strings in arithmetic
+(`"10" + 5`) and numbers in concatenation, and a metamethod may overload an
+operator. No lint fires on `any`, `unknown`, or a generic, and a numeric string
+literal is accepted where a number is expected.
+
+### §3.2 Lint levels and inline directives
+
+A lint's effective level is resolved per finding, innermost winning: an inline
+directive over the project's `[lints.lua]` table over the built-in default. A
+`forbid` set in `[lints.lua]` cannot be downgraded inline. `allow` drops the
+finding; `warn`/`deny`/`forbid` keep it at Warning/Error severity.
+
+Inline directives are `---` doc comments placed above the statement they govern
+(Lua has no `#[attribute]` syntax, so the comment is the attribute) — the
+directive covers that whole statement, including a function body:
+
+| Directive | Effect |
+| --- | --- |
+| `---@allow <lint>, …` | set the lint(s) to `allow` over the next statement |
+| `---@warn <lint>, …` | set to `warn` |
+| `---@deny <lint>, …` | set to `deny` |
+| `---@expect <lint>, …` | silence, but raise `unfulfilled-lint-expectation` if it never fires (rustc's `#[expect]`) |
+
+Names are comma- or space-separated; a directive must name at least one lint.
+The project-wide `[lints.lua]` table in `dcs-studio.toml` mirrors Cargo's
+`[lints.rust]` / `[lints.clippy]` (`<lint-name> = "<level>"`). Level resolution
+runs once, at the finding-aggregation edge, so it covers every transport.
 
 ## §4 Annotation dialect
 
@@ -67,9 +110,15 @@ declaration. Tag set: `@class`, `@field`, `@param`, `@return`, `@type`,
 expressions: names, unions (`A|B`), optionals (`T?`), functions
 (`fun(a: T): R`), tables (`table<K, V>`), arrays (`T[]`), and literal types.
 
-The annotation grammar and its conformance layer (`CONFORMANCE/annot/`) are
-deferred until the annotation parser lands (plan Phase 3). The tag set and
-LuaLS compatibility are pinned now (decisions/003).
+The annotation parser reads a contiguous `---` run as the block attached to the
+following declaration and yields a structured `AnnotationBlock`. Type-carrying
+tags (`@param`, `@return`, `@type`, `@class`, `@field`, `@alias`, `@enum`) feed
+type checking; the remaining tags are parsed and surfaced (hover) but do not yet
+gate diagnostics. Parsing is total: an unknown tag or malformed type expression
+degrades to the `any` type and never fails the parse. The dialect targets the
+**DCS Lua 5.1/LuaJIT** runtime only — version-conditional semantics of other Lua
+runtimes are out of scope. Tag set and LuaLS compatibility are pinned by
+decisions/003; goldens live under `CONFORMANCE/annot/`.
 
 ## §5 Environment profiles
 

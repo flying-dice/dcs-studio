@@ -81,6 +81,52 @@ export interface Location {
 }
 
 /**
+ * One inferred-type inlay hint: a `: <type>` label the editor draws as
+ * ghost text after the byte `offset` (the end of the bound name).
+ */
+export interface InlayHint {
+  offset: number;
+  label: string;
+  /** LSP inlay-hint kind; currently always `"Type"`. */
+  kind: string;
+}
+
+/**
+ * Lifecycle state of a language provider.
+ * - `"off"` — never mounted (initial state, project closed)
+ * - `"not-applicable"` — provider has no work in this project (e.g. no
+ *   Cargo.toml for rust-analyzer); expected and silent in the UI
+ * - `"loading"` — connecting / initialising
+ * - `"ready"` — operational
+ * - `"disabled"` — project IS applicable but provider can't start (e.g.
+ *   binary not installed); shown as a warning in the UI
+ * - `"failed"` — crashed or unrecoverable error
+ */
+export type ProviderStatus =
+  | "off"
+  | "not-applicable"
+  | "loading"
+  | "ready"
+  | "disabled"
+  | "failed";
+
+/**
+ * A tooling-availability notice: emitted when a provider is `"disabled"`
+ * (binary not found) or `"failed"` (crashed). Surfaced in the Problems
+ * panel above file diagnostics so the developer sees why diagnostics are
+ * missing without hunting the status bar tooltip.
+ */
+export interface ProviderNotice {
+  /** Provider id, e.g. `"rust-analyzer"`. */
+  providerId: string;
+  severity: "error" | "warning";
+  /** Human-readable explanation. */
+  message: string;
+  /** Optional actionable hint, e.g. an install command to copy-paste. */
+  hint?: string;
+}
+
+/**
  * Every method is async so one contract spans both transports: the
  * backend-hosted LSP over IPC (packaged app) and the in-page wasm engine
  * (browser fallback) — decisions/005.
@@ -90,6 +136,8 @@ export interface LanguageProvider {
   id: string;
   /** Lowercase file suffixes this provider handles, e.g. `[".lua"]`. */
   extensions: string[];
+  /** Current lifecycle state; implementations that track it expose it here. */
+  readonly status?: ProviderStatus;
 
   /**
    * Load the engine and seed it with the workspace. `root` is the
@@ -118,6 +166,13 @@ export interface LanguageProvider {
    * Consumers re-pull `diagnostics()` so slow findings still surface.
    */
   onDiagnostics?(cb: () => void): void;
+  /**
+   * Optional progress push: `cb` fires with the current background task
+   * label while the server is busy (indexing, cargo check, …), and with
+   * `null` once all active tasks finish. Consumers drive the status-bar
+   * chip animation (model `ProgressFeedback`).
+   */
+  onProgress?(cb: (message: string | null) => void): void;
   /** The declaration outline of one file. */
   documentSymbols(path: string): Promise<DocumentSymbol[]>;
   /** Foldable regions of one file (offsets into the document text). */
@@ -128,4 +183,10 @@ export interface LanguageProvider {
   hover(path: string, offset: number): Promise<Hover | null>;
   /** Definition site of the symbol at an offset. */
   definition(path: string, offset: number): Promise<Location | null>;
+  /**
+   * Inferred-type inlay hints for one file, drawn as ghost text on
+   * unannotated local bindings. Optional: a provider without inferred-type
+   * support (rust-analyzer is hosted; some engines lack it) may omit it.
+   */
+  inlayHints?(path: string): Promise<InlayHint[]>;
 }

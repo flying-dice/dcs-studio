@@ -9,8 +9,8 @@
 //! `lsp://exit/{id}` and removes the server, so the client can reject
 //! in-flight requests instead of hanging.
 //!
-//! First hosted server: `dcs-studio-cli lsp`. rust-analyzer follows
-//! (issue #6 R2).
+//! Hosted servers: the `lua-analyzer` and rust-analyzer binaries, each a
+//! standalone process the backend spawns (issue #6 R2).
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -57,8 +57,9 @@ impl Registry {
     /// life). Re-attaching such a server for a DIFFERENT root would leave it
     /// indexing the old project while the client believes it switched; refusing
     /// here makes the caller evict it and spawn one that handshakes against the
-    /// new root (MR !20). `None` = root-agnostic (dcs-lua re-`didOpen`s every
-    /// file each mount), where any request re-attaches.
+    /// new root (MR !20). `None` = root-agnostic: any request re-attaches (no
+    /// production server uses this now — rust-analyzer and lua-analyzer both
+    /// index from a `rootUri` and so pass a concrete root).
     fn reattach_target(&self, logical_id: &str, root: Option<&str>) -> Option<String> {
         let physical = self.logical.get(logical_id)?;
         let handle = self.handles.get(physical)?;
@@ -109,7 +110,7 @@ struct ServerHandle {
     initialized: bool,
     /// The binding scope this server was spawned for — rust-analyzer's project
     /// root, fixed at `initialize`. A re-attach must match it
-    /// (`reattach_target`); `None` = root-agnostic (dcs-lua).
+    /// (`reattach_target`); `None` = root-agnostic.
     root: Option<String>,
 }
 
@@ -130,12 +131,13 @@ pub struct StartOutcome {
     is_new: bool,
 }
 
-/// Resolve the dcs-studio-cli binary: next to the app executable (both
-/// dev `target/debug` and packaged installs lay them out side by side),
-/// overridable via `DCS_STUDIO_CLI`.
+/// Resolve the `lua-analyzer` binary — the Lua language server, hosted like
+/// rust-analyzer (a standalone process the backend spawns). It sits next to
+/// the app executable (both dev `target/debug` and packaged installs lay them
+/// out side by side), overridable via `DCS_LUA_ANALYZER`.
 #[tauri::command]
-pub fn lsp_server_path() -> Result<String, String> {
-    if let Ok(overridden) = std::env::var("DCS_STUDIO_CLI") {
+pub fn lua_analyzer_path() -> Result<String, String> {
+    if let Ok(overridden) = std::env::var("DCS_LUA_ANALYZER") {
         return Ok(overridden);
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -143,15 +145,15 @@ pub fn lsp_server_path() -> Result<String, String> {
         .parent()
         .ok_or("executable has no parent directory")?
         .join(if cfg!(windows) {
-            "dcs-studio-cli.exe"
+            "lua-analyzer.exe"
         } else {
-            "dcs-studio-cli"
+            "lua-analyzer"
         });
     if sibling.is_file() {
         Ok(sibling.display().to_string())
     } else {
         Err(format!(
-            "dcs-studio-cli not found at {} (build it with `cargo build -p dcs-studio-cli`)",
+            "lua-analyzer not found at {} (build it with `cargo build -p lua-analyzer`)",
             sibling.display()
         ))
     }
@@ -171,7 +173,7 @@ pub fn lsp_server_path() -> Result<String, String> {
 /// root, so a root-bound server (rust-analyzer indexes from its `rootUri`) is
 /// never silently reused for a different project after a reload — that
 /// mismatch evicts it and spawns fresh against the new root (MR !20). `None`
-/// = root-agnostic (dcs-lua).
+/// = root-agnostic.
 #[tauri::command]
 pub fn lsp_get_or_start(
     app: AppHandle,
@@ -249,9 +251,11 @@ fn spawn_server(
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("spawning {program}: {e}"))?;
+    tracing::info!(server = %physical_id, %program, ?args, "spawning language server");
+    let mut child = command.spawn().map_err(|e| {
+        tracing::error!(server = %physical_id, %program, error = %e, "spawn failed");
+        format!("spawning {program}: {e}")
+    })?;
 
     let stdin = child.stdin.take().ok_or("child stdin not piped")?;
     let stdout = child.stdout.take().ok_or("child stdout not piped")?;
@@ -269,6 +273,7 @@ fn spawn_server(
             // SPONTANEOUS end (crash, abort, EOF) still holds it — reap
             // and tell the client either way, so nothing hangs.
             let code = reap(&reader_hosts, &message_id);
+            tracing::info!(server = %message_id, ?code, "language server exited");
             let _ = message_app.emit(&format!("lsp://exit/{message_id}"), ExitPayload { code });
         });
     }
@@ -278,6 +283,10 @@ fn spawn_server(
         let stderr_id = physical_id.to_string();
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                // Fold the child server's stderr into the app's own log so a
+                // crash or its tracing output is visible locally, then relay
+                // it to the webview for the in-app console.
+                tracing::warn!(target: "lsp.child", server = %stderr_id, "{line}");
                 let _ = stderr_app.emit(&format!("lsp://stderr/{stderr_id}"), line);
             }
         });
@@ -384,7 +393,7 @@ fn pump_messages(stdout: impl Read, deliver: impl Fn(String)) {
 ///
 /// `pub` solely so the host-IPC integration test (`tests/host_ipc.rs`)
 /// can drive the host's own frame reader against a real spawned
-/// `dcs-studio-cli lsp`; production code reaches it via `pump_messages`.
+/// `lua-analyzer`; production code reaches it via `pump_messages`.
 pub fn read_frame(reader: &mut BufReader<impl Read>) -> Option<String> {
     let mut content_length: Option<usize> = None;
     loop {

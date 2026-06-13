@@ -34,14 +34,21 @@ public data DocumentSymbol { name: string, kind: string, start: number, end: num
 /// One foldable region, in byte offsets; the editor folds by line.
 public data FoldingRange { start: number, end: number }
 
+/// One inferred-type inlay hint: a `: <type>` label drawn as ghost text
+/// after the byte `offset` — the end of a bound name, a function parameter
+/// name, or the parameter list's closing `)`.
+public data InlayHint { offset: number, label: string, kind: string }
+
 /// The embedded engine failed to load or initialise (e.g. the wasm module
 /// could not be fetched or instantiated).
 public data EngineError { message: string }
 
-/// The dcs-lua language engine (the crates/dcs-lua-* workspace members,
-/// compiled to wasm — see dcslua.pds for its internals). Modelled on the
-/// LSP but embedded in the webview; these signatures are the contract its
-/// IdeSession must satisfy.
+/// The dcs-lua language engine (the crates/dcs-lua-* workspace members —
+/// see dcslua.pds for its internals). Reached two ways behind one provider
+/// contract (decisions/005): compiled to wasm and embedded in the webview
+/// (browser/dev), or hosted as the native `lua-analyzer` binary that the
+/// backend spawns (packaged app — see studio::lang::LuaAnalyzer). These
+/// signatures are the contract both transports satisfy.
 public system DcsLua {
   /// Instantiate the wasm module and seed the session with the workspace.
   public Mount(files: studio::lang::SourceFile[], rules: studio::lang::ProfileRule[]): Result<void, studio::lang::EngineError>;
@@ -71,15 +78,38 @@ public system DcsLua {
 
   /// Definition site of the symbol at an offset, if known.
   public DefinitionOf(path: string, offset: number): Option<studio::lang::Location>;
+
+  /// Inferred-type inlay hints for one file, drawn as ghost text by the
+  /// editor on unannotated local bindings and on every function form
+  /// (`local function`, `function a.b.c`, `function obj:m`, `function(...)`
+  /// literals): one hint after each parameter whose type is inferred (its
+  /// `@param` annotation first, else its uses in the body) and one after the
+  /// parameter list for the body-inferred return type. Conflicting or
+  /// un-inferable parameters and returns are omitted.
+  public InlayHints(path: string): studio::lang::InlayHint[];
 }
 
-/// rust-analyzer, the third-party Rust language server: the second hosted
-/// server behind the provider seam, spawned by the same backend host that
-/// serves DcsLua's LSP (decisions/005) and consumed through the identical
-/// provider contract. Detection goes via the Rust toolchain (PATH, then
-/// rustup which); absence is non-fatal — the IDE stays fully usable with
-/// Lua intelligence intact.
+/// lua-analyzer, the DCS Lua language server: the native `lua-analyzer`
+/// binary (crates/lua-analyzer) hosting the DcsLua engine over stdio LSP,
+/// spawned by the backend host as the packaged app's Lua transport. It
+/// indexes the project itself from the `initialize` rootUri (like
+/// rust-analyzer), so the host hands it the workspace root rather than
+/// opening every file. Located next to the app executable (overridable via
+/// `DCS_LUA_ANALYZER`); a missing binary surfaces in the status bar but the
+/// IDE stays usable (model `EngineFailureIsNonFatal`).
+public system LuaAnalyzer;
+
+/// rust-analyzer, the third-party Rust language server: a hosted server
+/// behind the provider seam, spawned by the same backend host as
+/// lua-analyzer (decisions/005) and consumed through the identical provider
+/// contract. Detection goes via the Rust toolchain (PATH, then rustup
+/// which); absence is non-fatal — the IDE stays fully usable with Lua
+/// intelligence intact.
 public system RustAnalyzer;
+
+/// Lifecycle state of a language-intelligence provider surfaced in the
+/// status bar.
+public data ProviderStatus { id: string, state: string }
 
 /// Webview-side language-intelligence layer: decides which files each engine
 /// sees, keeps the sessions in sync with edits, and publishes findings to the
@@ -271,12 +301,34 @@ feature BrokenLuaShowsDiagnostic for studio::lang::LanguageIntel {
   and "the same finding is listed in the Problems panel"
 }
 
+/// Diagnostics that land after the lint pass already returned — rust-analyzer's
+/// first index and cargo check can lag seconds behind the edit, publishing
+/// through the late push channel — paint into the open editor on arrival, not
+/// only on the developer's next keystroke.
+feature LateDiagnosticsPaintWithoutEditing for studio::lang::LanguageIntel {
+  given "a Rust file is open and rust-analyzer is still indexing"
+  when "rust-analyzer publishes diagnostics after the lint pass already returned"
+  then "the new findings appear as inline editor squiggles without further editing"
+  and "the Problems panel lists them too"
+}
+
 /// Problems entries navigate to their findings.
 feature ProblemsClickOpensFile for studio::lang::LanguageIntel {
   given "the Problems panel lists a finding in another file"
   when "the developer clicks the entry"
   then "that file opens in the editor"
   and "the caret lands on the finding's line and column"
+}
+
+/// Status-bar problem counts are live navigation, not decoration.
+/// (Severity ordering and filter toggles inside the panel are presentation
+/// state, panel-local — deliberately not modelled.)
+feature StatusBarCountsOpenProblems for studio::lang::LanguageIntel {
+  given "the workspace has published findings"
+  when "the developer reads the status bar"
+  then "error and warning chips show the live finding counts"
+  and "clicking a chip opens the Problems panel"
+  but "zero counts render subdued instead of vanishing"
 }
 
 /// Language intelligence is an enhancement, never a gate.
@@ -311,4 +363,56 @@ feature RustProjectGetsDiagnostics for studio::lang::LanguageIntel {
   when "a Rust file is edited"
   then "rust-analyzer findings surface in the editor and Problems panel"
   but "a missing rust-analyzer leaves the IDE fully usable with Lua intelligence intact"
+}
+
+/// Reopening or switching projects re-mounts rust-analyzer cleanly: the
+/// server bound to the old workspace root is stopped and a fresh one is
+/// spawned (rust-analyzer fixes its root at initialize, so it cannot be
+/// re-rooted in place). A transient restart must never masquerade as a
+/// missing binary — only a genuinely absent binary reports "not found".
+feature RustAnalyzerSurvivesReopen for studio::lang::LanguageIntel {
+  given "a Cargo project was open with rust-analyzer running"
+  when "the developer closes it and reopens a Cargo project"
+  then "rust-analyzer reconnects and reports running"
+  but "a restart in flight is never reported as a missing binary"
+}
+
+/// Language providers surface their lifecycle state in the status bar so
+/// developers can see at a glance which engines are running and why one
+/// may be inactive (missing binary, no applicable project).
+feature ProviderStatusVisible for studio::lang::LanguageIntel {
+  given "a project is open"
+  when "the developer reads the status bar"
+  then "each language provider shows a coloured dot and short label"
+  and "hovering reveals a tooltip: running / starting / disabled / crashed"
+  but "a disabled provider does not prevent other providers from running"
+}
+
+/// A tooling-availability notice: surfaced in the Problems panel when a
+/// language provider is disabled or has failed. Not tied to a file span;
+/// always shown above file findings in the panel so the developer sees why
+/// diagnostics are missing before looking at code.
+public data ProviderNotice { provider: string, severity: string, message: string, hint: string }
+
+/// Background indexing feedback: while rust-analyzer is initialising the
+/// workspace or running cargo check, the status-bar chip pulses amber and
+/// the tooltip shows the current task so the developer knows diagnostics
+/// are on their way.
+feature ProgressFeedback for studio::lang::LanguageIntel {
+  given "a project with a Cargo.toml is open and rust-analyzer is running"
+  when "rust-analyzer is indexing the workspace or running cargo check"
+  then "the rust-analyzer chip pulses amber in the status bar"
+  and "hovering the chip reveals the current background task description"
+  but "progress feedback does not affect the editor or Problems panel"
+}
+
+/// Provider notices surface in the Problems panel so missing-tool errors
+/// are visible without opening the status bar tooltip.
+feature ProviderNoticesInProblems for studio::lang::LanguageIntel {
+  given "a project is open with at least one provider disabled or crashed"
+  when "the developer opens the Problems panel"
+  then "a notice for each affected provider appears above file diagnostics"
+  and "a disabled provider shows an install command as a copyable hint"
+  and "a crashed provider advises the developer to restart the IDE"
+  but "operational providers produce no notices"
 }

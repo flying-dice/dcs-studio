@@ -43,7 +43,9 @@ export class IdeSession {
         return ret;
     }
     /**
-     * All current findings across the mounted workspace.
+     * All current findings across the mounted workspace: parse diagnostics
+     * plus the type-checker's `LUA-Txxx` findings, via the shared
+     * `all_findings` aggregation (the same one the CLI/MCP/LSP edges use).
      * @returns {Diagnostic[]}
      */
     diagnostics() {
@@ -91,6 +93,19 @@ export class IdeSession {
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.idesession_hover(this.__wbg_ptr, ptr0, len0, offset);
         return ret;
+    }
+    /**
+     * Inferred-type inlay hints for one file (lsp-core resolution).
+     * @param {string} path
+     * @returns {InlayHint[]}
+     */
+    inlay_hints(path) {
+        const ptr0 = passStringToWasm0(path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.idesession_inlay_hints(this.__wbg_ptr, ptr0, len0);
+        var v2 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v2;
     }
     /**
      * Seed the session with the workspace's Lua sources and profile rules.

@@ -1,5 +1,5 @@
-// E2E: the issue-#31 RE-ATTACH path (LspLuaProvider / RustAnalyzerProvider +
-// LspClient — the classes the packaged app runs) over a recording transport
+// E2E: the issue-#31 RE-ATTACH path (LuaAnalyzerProvider / RustAnalyzerProvider
+// + LspClient — the classes the packaged app runs) over a recording transport
 // reporting `isNew=false`. This is the MR's headline behaviour and the one
 // the crash/fresh-spawn labs cannot reach: their fakes always report a fresh
 // spawn, so the `if (isNew)` skip-branch is otherwise never entered. A
@@ -15,24 +15,24 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("a fresh dcs-lua spawn handshakes exactly once, then opens the file", async ({
+test("a fresh dcs-lua spawn handshakes exactly once (root-bound, no didOpen storm)", async ({
   page,
 }) => {
-  // initialize (request) → initialized (notification) → didOpen, in order.
+  // lua-analyzer indexes the root itself: a fresh mount handshakes only —
+  // initialize (request) → initialized (notification), no didOpen.
   await expect(page.getByTestId("reattach-lua-fresh-wire")).toHaveText(
-    "«initialize,initialized,textDocument/didOpen»",
+    "«initialize,initialized»",
   );
   // markInitialized records the completed handshake exactly once.
   await expect(page.getByTestId("reattach-lua-fresh-mark")).toHaveText("1");
 });
 
-test("a re-attached dcs-lua skips the handshake but still re-opens the file", async ({
+test("a re-attached dcs-lua skips the handshake and the didOpen storm", async ({
   page,
 }) => {
-  // No initialize, no initialized — only the didOpen replay.
-  await expect(page.getByTestId("reattach-lua-re-wire")).toHaveText(
-    "«textDocument/didOpen»",
-  );
+  // Root-bound re-attach sends nothing on mount: no initialize, no
+  // initialized, no didOpen — the server is already indexing this root.
+  await expect(page.getByTestId("reattach-lua-re-wire")).toHaveText("«»");
   // markInitialized is NOT touched on a re-attach.
   await expect(page.getByTestId("reattach-lua-re-mark")).toHaveText("0");
 });
@@ -40,8 +40,8 @@ test("a re-attached dcs-lua skips the handshake but still re-opens the file", as
 test("a re-attached dcs-lua still wires the publish + exit handlers", async ({
   page,
 }) => {
-  // publishDiagnostics handler wired despite the skipped handshake: the
-  // didOpen replay surfaces the finding.
+  // publishDiagnostics handler wired despite the skipped handshake: a later
+  // edit opens the file and surfaces the finding.
   await expect(page.getByTestId("reattach-lua-re-finding")).toHaveText(
     "LUA-E102",
   );
