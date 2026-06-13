@@ -182,12 +182,17 @@ test("File → Close Editor closes the active tab and falls back to the neighbou
   await expect(tab(page, "lab/a.lua")).toHaveAttribute("data-active", "true");
   await expect(editor(page)).toContainText('print("hello")');
 
-  // Closing the last tab returns to the no-file-open state and actually
-  // blanks the view (model ClosingLastTabBlanksEditor) — the previous
-  // file's text must not linger in a tab-less editor.
+  // Closing the last tab returns to the no-file-open state. Prod
+  // (`routes/+page.svelte`) gates the Editor behind an open file, so the last
+  // close unmounts it and shows the no-file placeholder (model
+  // ClosingLastTabShowsPlaceholder). The previous file's text must not linger:
+  // the editor is gone entirely, not merely blanked.
   await page.getByTestId("close-active").click();
   await expect(page.locator('[data-testid="editor-tab"]')).toHaveCount(0);
-  await expect(editor(page)).toHaveText("");
+  await expect(page.getByTestId("no-file-placeholder")).toBeVisible();
+  await expect(
+    page.getByTestId("lab-editor").locator(".cm-content"),
+  ).toHaveCount(0);
 });
 
 test("re-activating a file discards its own stale first read", async ({

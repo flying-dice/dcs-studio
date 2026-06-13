@@ -403,11 +403,14 @@ feature TabSwitchRestoresScroll for studio::core::Workbench {
   then "A reappears at the same scroll position"
 }
 
-/// Closing the last tab blanks the editor view.
-feature ClosingLastTabBlanksEditor for studio::core::Workbench {
+/// Closing the last tab returns to the no-file-open state: the Editor is
+/// gated behind an open file (prod `routes/+page.svelte`), so the last close
+/// unmounts it and the no-file placeholder takes the view — not an empty
+/// buffer impersonating a file.
+feature ClosingLastTabShowsPlaceholder for studio::core::Workbench {
   given "one tab is open"
   when "the developer closes it"
-  then "the editor shows an empty buffer and no tab is active"
+  then "the no-file-open placeholder shows and no tab is active"
 }
 
 /// The save baseline is the text that was written, not the buffer at

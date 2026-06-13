@@ -172,13 +172,24 @@
   >
     <EditorTabs />
   </div>
-  <!-- Editor stays mounted with no file open: the component owns its own
-       blank state (the swap effect's no-active-tab arm), and the specs pin
-       that closing the last tab actually blanks the view. -->
+  <!-- Mirror prod (`routes/+page.svelte`): the Editor is gated behind an open
+       file. Closing the last tab unmounts it and shows the no-file
+       placeholder — this pins prod's real last-tab-close, not a lab-only
+       always-mounted blank editor. While files stay open (tab switches) the
+       Editor stays mounted, so the swap-effect lazy-loader is still exercised. -->
   <div
     class="min-h-0 flex-1 overflow-hidden rounded border [&_.cm-editor]:h-full"
     data-testid="lab-editor"
   >
-    <Editor {readFile} />
+    {#if app.filePath}
+      <Editor {readFile} />
+    {:else}
+      <div
+        class="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground"
+        data-testid="no-file-placeholder"
+      >
+        Pick a file from the project tree to start editing.
+      </div>
+    {/if}
   </div>
 </div>
