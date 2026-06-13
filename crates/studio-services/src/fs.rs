@@ -47,11 +47,17 @@ pub fn write_text_file(path: &str, contents: &str) -> Result<(), String> {
 }
 
 /// The final path component (folder/file name), used to label the workspace root.
+///
+/// DCS paths are Windows paths (`C:\Users\...\Saved Games\...`), but this runs
+/// on the Linux CI box too, where `Path::file_name` does not treat `\` as a
+/// separator — so split on BOTH separators explicitly, cross-platform.
 pub fn basename(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string())
+    path.trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(path)
+        .to_string()
 }
 
 /// Whether a path currently exists on disk. Used to flag stale recent projects.
