@@ -1,0 +1,22 @@
+[package]
+name = "lua-analyzer"
+version.workspace = true
+edition = "2024"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "lua-analyzer"
+path = "src/main.rs"
+
+[dependencies]
+dcs-lua-lsp-core = { path = "../dcs-lua-lsp-core" }
+dcs-lua-syntax = { path = "../dcs-lua-syntax" }
+dcs-studio-project = { path = "../dcs-studio-project" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
+tower-lsp = "0.20"
+tracing = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1"

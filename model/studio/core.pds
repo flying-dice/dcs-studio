@@ -9,11 +9,20 @@ public person Developer;
 /// How many recent projects the welcome screen keeps.
 public constant RECENTS_MAX = 8
 
+/// Narrowest a side panel may be dragged — keeps it usable.
+public constant PANEL_WIDTH_MIN = 180
+
+/// Widest a side panel may be dragged — keeps the center editor visible.
+public constant PANEL_WIDTH_MAX = 520
+
 /// One open editor tab. Each tab owns its own buffer — text, undo history,
 /// selection, scroll — so no edit or undo in one tab can ever leak into
 /// another. `savedText` is the on-disk baseline; it diverges from `text`
-/// while there are unsaved edits (the tab is dirty).
-public data Document { path: string, name: string, text: string, savedText: string }
+/// while there are unsaved edits (the tab is dirty). `kind` is "loading" until
+/// the first read classifies the file "text" or "binary"; a binary tab shows a
+/// placeholder sized by `binarySize` (its bytes never enter the editor, so
+/// `text`/`savedText` stay blank).
+public data Document { path: string, name: string, text: string, savedText: string, kind: string, binarySize: number }
 
 /// A recently opened project, persisted to localStorage (most recent first).
 public data RecentProject { path: string, name: string, openedAt: datetime }
@@ -34,15 +43,55 @@ public system Studio;
 /// and the Playwright e2e suite).
 public container Workbench for studio::core::Studio {
   /// Open a folder as the project workspace, remember it as recent, and
-  /// announce it to project-tracking tool windows.
+  /// announce it to project-tracking tool windows. Switching away while
+  /// open tabs have unsaved edits needs ONE confirmation naming how many
+  /// files would lose their work; declining aborts the switch entirely —
+  /// every tab, buffer, dirty flag, and the current project stay exactly
+  /// as they were. The initial open (no tabs yet) never prompts.
   #[manual]
   public OpenProject(path: string): void {
+    dirty = number from self.CountDirtyTabs()
+    if (dirty > 0) {
+      prompt = string from self.DiscardPrompt(dirty)
+      confirmed = bool from self.ConfirmDiscard(prompt)
+      if (!confirmed) {
+        return
+      }
+    }
     name = string from studio::files::WorkspaceFs.Basename(path)
     recent = studio::core::RecentProject from { path, name }
     self.RememberRecent(recent)
     opened = studio::core::ProjectOpened from { path }
     self.Announce(opened)
   }
+
+  /// How many open tabs have unsaved edits — the blast radius a project
+  /// switch or close would discard.
+  CountDirtyTabs(): number;
+
+  /// The count-naming confirmation prompt, e.g. "3 files have unsaved
+  /// changes. Discard them and continue?".
+  DiscardPrompt(dirtyCount: number): string;
+
+  /// Return to the welcome screen without quitting. Same guard as
+  /// OpenProject: unsaved tabs need one count-naming confirmation, and
+  /// declining keeps the workspace exactly as it was.
+  #[manual]
+  public CloseProject(): void {
+    dirty = number from self.CountDirtyTabs()
+    if (dirty > 0) {
+      prompt = string from self.DiscardPrompt(dirty)
+      confirmed = bool from self.ConfirmDiscard(prompt)
+      if (!confirmed) {
+        return
+      }
+    }
+    self.ShowWelcome()
+  }
+
+  /// Drop every tab and its parked buffer, leave the workspace, reset the
+  /// language engine, and show the welcome screen.
+  ShowWelcome(): void;
 
   /// Keep `recent` at the head of the recents list: dedupe by path, cap at
   /// RECENTS_MAX, persist to localStorage.
@@ -85,16 +134,27 @@ public container Workbench for studio::core::Studio {
   /// lazily on first activation (`LoadTab`), so opening never blocks on disk.
   #[manual]
   public OpenFile(path: string): studio::core::Document {
-    existing = Option<studio::core::Document> from self.FindOpen(path)
+    canonical = string from self.CanonicalPath(path)
+    existing = Option<studio::core::Document> from self.FindOpen(canonical)
     if (existing.isSome) {
       self.ActivateTab(existing.value)
       return existing.value
     }
-    doc = studio::core::Document from { path }
+    doc = studio::core::Document from { canonical }
     self.AppendTab(doc)
     self.ActivateTab(doc)
     return doc
   }
+
+  /// Reduce a filesystem path to one canonical identity regardless of its
+  /// source, so the same file is never two tabs. The OS file tree yields an
+  /// upper-case Windows drive letter (`C:\...`), while a language server's
+  /// `file://` URI round-trips to a lower-case one (`c:\...`); without a
+  /// single form the same file opens twice — a tree tab and a Problems-click
+  /// tab — and its diagnostics, keyed by the server's path, never match the
+  /// tree tab's. Upper-cases a leading drive letter; a POSIX path (no drive)
+  /// passes through unchanged.
+  CanonicalPath(path: string): string;
 
   /// The already-open tab for `path`, if any — opening never duplicates tabs.
   FindOpen(path: string): Option<studio::core::Document>;
@@ -110,32 +170,39 @@ public container Workbench for studio::core::Studio {
   /// `LoadTab`.
   ActivateTab(doc: studio::core::Document): void;
 
-  /// Lazily load a first-activated tab's text from disk — into a fresh
-  /// buffer with an empty undo history, so the load itself is never
-  /// undoable. A failed read closes the tab and surfaces the error (an
-  /// empty buffer must never impersonate the file on disk). A load that
-  /// was superseded while the read was in flight — the developer activated
-  /// another tab (every activation invalidates older in-flight loads, even
-  /// re-activating the already-shown tab), closed this one, or this tab
-  /// otherwise lost the active spot — is discarded without touching the
-  /// shown buffer. The ONE superseded guard covers both arms symmetrically:
-  /// a superseded failed read closes nothing, exactly as a superseded
-  /// successful read shows nothing.
+  /// Lazily load a first-activated tab from disk via `ReadFile`, which
+  /// classifies the file by content. A text file lands in a fresh buffer with
+  /// an empty undo history, so the load itself is never undoable; a binary file
+  /// is marked (`MarkBinary`) with a blank buffer and its size and shows the
+  /// placeholder instead of its bytes — no `ShowTab`. A failed read closes the
+  /// tab and surfaces the error (an empty buffer must never impersonate the
+  /// file on disk). A load superseded while the read was in flight — the
+  /// developer activated another tab (every activation invalidates older
+  /// in-flight loads, even re-activating the already-shown tab), closed this
+  /// one, or this tab otherwise lost the active spot — is discarded without
+  /// touching the shown buffer. The ONE superseded guard covers all three arms
+  /// symmetrically: a superseded read (failed, text, or binary) closes nothing,
+  /// shows nothing, and marks nothing.
   #[manual]
-  LoadTab(doc: studio::core::Document): Result<string, studio::files::IoError> {
-    text = Result<string, studio::files::IoError> from studio::files::WorkspaceFs.ReadTextFile(doc.path)
+  LoadTab(doc: studio::core::Document): Result<studio::files::FileLoad, studio::files::IoError> {
+    load = Result<studio::files::FileLoad, studio::files::IoError> from studio::files::WorkspaceFs.ReadFile(doc.path)
     superseded = bool from self.LoadSuperseded(doc)
-    if (text.isErr) {
+    if (load.isErr) {
       if (!superseded) {
         self.CloseFile(doc.path)
       }
-      return Err(text.error)
+      return Err(load.error)
     }
     if (superseded) {
-      return Ok(text.value)
+      return Ok(load.value)
     }
-    self.ShowTab(doc, text.value)
-    return Ok(text.value)
+    binary = bool from load.value.kind == "binary"
+    if (binary) {
+      self.MarkBinary(doc, load.value.size)
+      return Ok(load.value)
+    }
+    self.ShowTab(doc, load.value.text)
+    return Ok(load.value)
   }
 
   /// Whether this load was overtaken while its read was in flight: the
@@ -147,6 +214,11 @@ public container Workbench for studio::core::Studio {
   /// Swap the freshly loaded text in as `doc`'s shown buffer and set both
   /// the buffer and the on-disk baseline to it (the tab starts clean).
   ShowTab(doc: studio::core::Document, text: string): void;
+
+  /// Mark a first-activated tab as binary: a blank, history-free buffer (the
+  /// bytes never enter the editor) and the file's size for the placeholder. No
+  /// ShowTab — the binary overlay renders from the tab's kind, not its text.
+  MarkBinary(doc: studio::core::Document, size: number): void;
 
   /// The currently focused tab, if any file is open.
   ActiveTab(): Option<studio::core::Document>;
@@ -162,7 +234,8 @@ public container Workbench for studio::core::Studio {
     }
     dirty = bool from tab.value.text != tab.value.savedText
     if (dirty) {
-      confirmed = bool from self.ConfirmDiscard(tab.value)
+      prompt = string from tab.value.name
+      confirmed = bool from self.ConfirmDiscard(prompt)
       if (!confirmed) {
         return
       }
@@ -170,12 +243,13 @@ public container Workbench for studio::core::Studio {
     self.RemoveTab(tab.value)
   }
 
-  /// Ask the developer to confirm discarding a dirty tab's unsaved edits.
-  /// Dual-path like DcsCall: a native dialog in the packaged app
-  /// (window.confirm is a stub under Tauri), window.confirm in a plain
-  /// browser. With no confirm surface at all the answer is NO — unsaved
-  /// work is never silently discarded.
-  ConfirmDiscard(doc: studio::core::Document): bool;
+  /// Ask the developer to confirm discarding unsaved edits — one tab's
+  /// (CloseFile, prompt naming the file) or every dirty tab's (project
+  /// switch/close, prompt naming the count). Dual-path like DcsCall: a
+  /// native dialog in the packaged app (window.confirm is a stub under
+  /// Tauri), window.confirm in a plain browser. With no confirm surface
+  /// at all the answer is NO — unsaved work is never silently discarded.
+  ConfirmDiscard(prompt: string): bool;
 
   /// Drop the tab and its parked buffer (so reopening reloads from disk);
   /// re-activate a neighbour if it was the active tab.
@@ -282,6 +356,27 @@ public container Workbench for studio::core::Studio {
     beat = studio::link::Heartbeat from { live, pong }
     self.OnHeartbeat(beat)
   }
+
+  /// Resize a side panel by dragging the gap between it and the center editor.
+  /// The requested width is clamped to [PANEL_WIDTH_MIN, PANEL_WIDTH_MAX] so
+  /// the panel always remains usable and the center editor always stays
+  /// visible. The resulting widths are persisted to localStorage so they
+  /// survive a reload.
+  #[manual]
+  public SetPanelWidth(side: string, width: number): void {
+    clamped = number from self.ClampPanelWidth(width)
+    self.ApplyPanelWidth(side, clamped)
+    self.PersistPanelWidths()
+  }
+
+  /// Clamp `width` to [PANEL_WIDTH_MIN, PANEL_WIDTH_MAX].
+  ClampPanelWidth(width: number): number;
+
+  /// Write the clamped width into the named side panel's reactive state.
+  ApplyPanelWidth(side: string, width: number): void;
+
+  /// Persist both side-panel widths to localStorage.
+  PersistPanelWidths(): void;
 }
 
 /// The developer runs Lua against the live sim from the console.
@@ -328,6 +423,16 @@ feature StaleLoadNeverHijacksView for studio::core::Workbench {
   when "the developer activates A again before B's read lands"
   then "the editor keeps showing A's buffer when the stale read resolves"
   and "edits route into A's buffer, never B's"
+}
+
+/// A binary file opens a normal tab with a placeholder, never its bytes, and
+/// never the failed-read tab-close (issue #30): the classifying read marks the
+/// tab binary, its buffer stays blank, and the tab stays open.
+feature BinaryFileShowsPlaceholder for studio::core::Workbench {
+  given "a non-UTF-8 (binary) file is opened as a new tab"
+  when "the tab is activated for the first time and its read lands"
+  then "the tab shows the binary placeholder with the file's size"
+  and "the editor buffer is left blank and the tab is not closed"
 }
 
 /// Closing the active tab hands the view to a neighbour; closing any other
@@ -431,6 +536,31 @@ feature SaveLandsOnTheSavedTab for studio::core::Workbench {
   and "B's buffer and baseline are untouched"
 }
 
+/// Switching or closing a project never silently discards unsaved tabs:
+/// one confirmation names how many files are affected, and declining
+/// aborts the whole operation (issue #25). Covers both arms — OpenProject
+/// and CloseProject share the guard.
+feature DecliningProjectSwitchKeepsEverything for studio::core::Workbench {
+  given "a project is open and some open tabs have unsaved edits"
+  when "the developer opens another project (or closes the project) and declines the prompt"
+  then "the prompt named how many files have unsaved changes"
+  and "the switch/close is aborted: project, tabs, buffers, and dirty flags all unchanged"
+  and "accepting instead proceeds and discards the tabs"
+  and "with no dirty tabs no prompt appears at all"
+}
+
+/// The same file is one tab and one buffer no matter how it was opened.
+/// Opening from the file tree and clicking that file's diagnostic in the
+/// Problems panel — whose path comes round-trip through a language server's
+/// `file://` URI, lower-casing the Windows drive letter — must converge on
+/// one identity (issue: rust-analyzer diagnostics opened a duplicate tab).
+feature OpenFileHasOneIdentity for studio::core::Workbench {
+  given "a Rust file is open from the file tree"
+  when "the developer clicks that file's diagnostic in the Problems panel"
+  then "the existing tab is re-activated, not duplicated"
+  and "the file's diagnostics show inline in that one tab"
+}
+
 /// A fresh project opens immediately after scaffolding.
 feature CreateAndOpenProject for studio::core::Workbench {
   given "a template and a parent folder"
@@ -438,4 +568,24 @@ feature CreateAndOpenProject for studio::core::Workbench {
   then "the template files are written under the new root"
   and "the project opens as the workspace"
   and "it appears at the head of the recents list"
+}
+
+/// Hovering the gap reveals the resize zone without adding a permanent
+/// full-height divider to the layout.
+feature PanelResizeHover for studio::core::Workbench {
+  given "a side panel is open beside the center editor"
+  when "the developer hovers the gap between the side panel and the center editor"
+  then "a vertical line centered on the cursor appears in the gap, solid in the middle and fading to transparent at both ends"
+  and "no full-height divider is rendered — only the cursor-local segment is shown"
+}
+
+/// Dragging the gap resizes the side panel within safe bounds and persists
+/// the result so widths survive a reload.
+feature PanelResizeDrag for studio::core::Workbench {
+  given "a side panel is open beside the center editor"
+  when "the developer drags the gap between the side panel and the center editor"
+  then "the side panel resizes to follow the drag, clamped to [PANEL_WIDTH_MIN, PANEL_WIDTH_MAX]"
+  and "the center editor fills the remaining space"
+  and "releasing the drag persists both side-panel widths to localStorage"
+  and "the persisted widths are restored when the app is reopened"
 }

@@ -10,3 +10,4 @@ in full. Format per record: Context, Decision, Consequences.
 | [003](003-luals-compatible-annotations.md) | LuaLS/EmmyLua-compatible annotation dialect |
 | [004](004-lua-51-source-dialect.md) | Lua 5.1 source dialect; LuaJIT extensions excluded |
 | [005](005-stdio-lsp-edge.md) | dcs-studio-cli (LSP + MCP + init over stdio) + backend IPC host; supersedes 002 (wasm demoted to browser fallback) |
+| [006](006-lua-formatter-house-style.md) | In-house deterministic Lua formatter (`dcs-lua-fmt`) and its house style; StyLua rejected |

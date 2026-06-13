@@ -50,4 +50,24 @@ pub mod codes {
     pub const EXPECTED_TOKEN: &str = "LUA-E101";
     pub const UNTERMINATED_BLOCK: &str = "LUA-E102";
     pub const NESTING_TOO_DEEP: &str = "LUA-E103";
+
+    // Type lints carry kebab-case names (rustc/clippy idiom), not numeric
+    // codes — they are levelled (`allow`/`warn`/`deny`/`forbid`) inline and in
+    // `dcs-studio.toml`. The lexical/parse codes above keep `LUA-Exxx`, the
+    // analog of rustc's hard-error `E####` codes (a parse failure is not a lint).
+
+    /// An argument's type is not assignable to the declared `@param` type.
+    pub const ARGUMENT_TYPE_MISMATCH: &str = "param-type-mismatch";
+
+    /// An operator was applied to an operand whose type does not fit it
+    /// (arithmetic/concat/length on a non-numeric, non-coercible value).
+    pub const OPERATOR_TYPE_MISMATCH: &str = "operator-type-mismatch";
+
+    /// An argument's type conflicts with how the (un-annotated) parameter is
+    /// used in the callee body.
+    pub const ARGUMENT_USAGE_MISMATCH: &str = "param-usage-mismatch";
+
+    /// An `---@expect` directive named a lint that did not fire in its scope
+    /// (the analog of rustc's `unfulfilled_lint_expectations`).
+    pub const UNFULFILLED_EXPECTATION: &str = "unfulfilled-lint-expectation";
 }

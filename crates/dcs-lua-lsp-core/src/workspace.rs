@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 
 use dcs_lua_syntax::ast::Parsed;
+
+use crate::lints::LintLevel;
 use dcs_lua_syntax::token::SpannedTrivia;
 use dcs_lua_syntax::{lexer, parser};
 
@@ -32,6 +34,9 @@ pub struct ProfileRule {
 pub struct Workspace {
     files: HashMap<String, FileEntry>,
     profile_rules: Vec<ProfileRule>,
+    /// Per-lint levels set workspace-wide (the project's `[lints.lua]` table),
+    /// resolved against inline directives when aggregating findings.
+    lint_levels: HashMap<String, LintLevel>,
 }
 
 impl Workspace {
@@ -47,6 +52,18 @@ impl Workspace {
     #[must_use]
     pub fn profile_rules(&self) -> &[ProfileRule] {
         &self.profile_rules
+    }
+
+    /// Set the workspace-wide lint levels (the `[lints.lua]` table); carried
+    /// from mount, like the profile rules.
+    pub fn set_lint_levels(&mut self, levels: HashMap<String, LintLevel>) {
+        self.lint_levels = levels;
+    }
+
+    /// The workspace-wide lint levels, resolved against inline directives.
+    #[must_use]
+    pub fn lint_levels(&self) -> &HashMap<String, LintLevel> {
+        &self.lint_levels
     }
 
     /// Create or replace one file; a content-identical update is a no-op.

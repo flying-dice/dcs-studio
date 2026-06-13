@@ -38,6 +38,18 @@ function helper() end
   // Which file the Structure panel outlines (the lab's stand-in for the
   // workbench's active file); null stands in for "no file open".
   let path = $state<string | null>(LUA_PATH);
+  // The workbench can hide the panel (another left tool): unmounting must
+  // clear the outline (Structure's $effect cleanup) — the toggle drives it.
+  let panelVisible = $state(true);
+
+  // Outline fault injection for the e2e suite: LUA_PATH symbol queries can
+  // be delayed ("slow"), failed ("fail"), or failed late ("fail-slow") so
+  // the suite can pin the supersession discard and the engine-failure arm
+  // of refreshOutline — the wasm engine never misbehaves on its own.
+  type OutlineMode = "normal" | "slow" | "fail" | "fail-slow";
+  let outlineMode: OutlineMode = "normal";
+  const OUTLINE_DELAY_MS = 600;
+  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   // Caret readout for the e2e suite: the same debounced cursor store the
   // Structure highlight follows.
@@ -47,11 +59,22 @@ function helper() end
 
   onMount(() => {
     let view: EditorView | undefined;
+    let restore: (() => void) | undefined;
     void (async () => {
       lang.engineStatus = "loading";
       try {
         const provider = providerFor(LUA_PATH);
         if (!provider) throw new Error(`no provider for ${LUA_PATH}`);
+        const original = provider.documentSymbols.bind(provider);
+        provider.documentSymbols = async (p) => {
+          if (p === LUA_PATH && outlineMode !== "normal") {
+            if (outlineMode !== "fail") await delay(OUTLINE_DELAY_MS);
+            if (outlineMode !== "slow")
+              throw new Error("lab: injected outline failure");
+          }
+          return original(p);
+        };
+        restore = () => (provider.documentSymbols = original);
         await provider.mount(
           [
             { path: LUA_PATH, text: INITIAL },
@@ -75,7 +98,10 @@ function helper() end
       });
       ready = true;
     })();
-    return () => view?.destroy();
+    return () => {
+      restore?.();
+      view?.destroy();
+    };
   });
 </script>
 
@@ -105,9 +131,38 @@ function helper() end
     >
       close file
     </button>
+    <button
+      class="rounded border px-2 py-0.5"
+      data-testid="toggle-panel"
+      onclick={() => (panelVisible = !panelVisible)}
+    >
+      {panelVisible ? "hide panel" : "show panel"}
+    </button>
+    <button
+      class="rounded border px-2 py-0.5"
+      data-testid="outline-slow"
+      onclick={() => (outlineMode = "slow")}
+    >
+      slow outline
+    </button>
+    <button
+      class="rounded border px-2 py-0.5"
+      data-testid="outline-fail"
+      onclick={() => (outlineMode = "fail")}
+    >
+      fail outline
+    </button>
+    <button
+      class="rounded border px-2 py-0.5"
+      data-testid="outline-fail-slow"
+      onclick={() => (outlineMode = "fail-slow")}
+    >
+      fail outline late
+    </button>
     <span data-testid="cursor-offset"
       >cursor: {cursorOffset ?? "-"}</span
     >
+    <span data-testid="outline-path">outline-of: {lang.outlinePath ?? "-"}</span>
   </div>
   <div class="flex min-h-0 flex-1 gap-2">
     <div
@@ -116,7 +171,9 @@ function helper() end
       bind:this={host}
     ></div>
     <div class="w-64 shrink-0 overflow-auto rounded border">
-      <Structure {path} />
+      {#if panelVisible}
+        <Structure {path} />
+      {/if}
     </div>
   </div>
 </div>

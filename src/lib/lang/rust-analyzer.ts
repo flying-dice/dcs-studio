@@ -39,15 +39,29 @@ import type {
   LanguageProvider,
   Location,
   ProfileRule,
+  ProviderStatus,
   SourceFile,
 } from "./provider";
 
 const PUBLISH_TIMEOUT_MS = 3000;
 
+// A fresh host id per spawn. A project switch stops the old server and
+// starts a new one, but the backend host (crates/app/src/lsp.rs) only
+// closes the old process's stdin and schedules its kill — the handle
+// lingers in the host map until the reader thread reaps the exiting
+// process. A SHARED id would then hit lsp_start's idempotent guard
+// (already-present → no-op), so no fresh process spawns and the new client
+// talks to a dying one, surfacing as a false "binary not found". A unique
+// id never collides with the lingering old server.
+let hostConnectionSeq = 0;
+
 /** Production connection: ask the backend for the binary, host it. */
 async function connectViaHost(): Promise<LspClient> {
   const program = await invoke<string>("rust_analyzer_path");
-  return LspClient.start("rust-analyzer", program, []);
+  hostConnectionSeq += 1;
+  // `:`-separated, NOT `#`: the id becomes a Tauri event name
+  // (`lsp://message/<id>`) and Tauri rejects `#`, making listen() throw.
+  return LspClient.start(`rust-analyzer:${hostConnectionSeq}`, program, []);
 }
 
 /** Production Cargo.toml probe through the backend fs commands. */
@@ -65,11 +79,19 @@ export class RustAnalyzerProvider implements LanguageProvider {
   // Distinguishes "crashed, awaiting remount" (edits must surface the
   // failure) from "never mounted" (edits are quietly ignored).
   private exited = false;
+  private _status: ProviderStatus = "off";
+
+  get status(): ProviderStatus {
+    return this._status;
+  }
   private readonly texts = new Map<string, string>();
   private readonly versions = new Map<string, number>();
   private readonly findings = new Map<string, Diagnostic[]>();
   private readonly publishWaiters = new Map<string, () => void>();
   private readonly publishListeners: (() => void)[] = [];
+  // LSP work-done-progress: token → current task label.
+  private readonly activeProgress = new Map<string | number, string>();
+  private readonly progressListeners: ((message: string | null) => void)[] = [];
 
   /** Both seams injectable so `/lab/rust` drives this exact class. */
   constructor(
@@ -111,46 +133,99 @@ export class RustAnalyzerProvider implements LanguageProvider {
     }
     if (!isCargoProject) {
       this.disabled = true;
+      this._status = "not-applicable";
       return; // non-fatal: the IDE keeps every other provider
     }
     this.disabled = false;
 
     if (!this.client) {
+      this._status = "loading";
+      // Phase 1 — resolve and spawn the binary. The ONLY failure here is the
+      // binary genuinely missing (rust_analyzer_path errs) or unspawnable, so
+      // this is the one path that reports "binary not found" with install
+      // guidance. A handshake failure below must never reach this label.
+      let client: LspClient;
       try {
-        this.client = await this.connect();
-        this.client.onNotification(
-          "textDocument/publishDiagnostics",
-          (params) =>
-            this.onPublish(
-              params as { uri: string; diagnostics: LspWireDiagnostic[] },
-            ),
+        client = await this.connect();
+      } catch (error) {
+        this.disabled = true;
+        this._status = "disabled";
+        this.client = null;
+        console.warn("rust-analyzer unavailable:", error);
+        return; // non-fatal: the IDE keeps every other provider
+      }
+      // Phase 2 — the binary is present; complete the LSP handshake. A failure
+      // here is a crash or a wedged server (e.g. a reconnect racing the old
+      // server's shutdown), NOT an absent binary — so it reports "failed",
+      // never telling the developer to install what is already installed.
+      this.client = client;
+      try {
+        client.onNotification("textDocument/publishDiagnostics", (params) =>
+          this.onPublish(
+            params as { uri: string; diagnostics: LspWireDiagnostic[] },
+          ),
         );
-        this.client.onServerExit(() => {
+        client.onNotification("$/progress", (params) =>
+          this.onProgressReport(
+            params as {
+              token: string | number;
+              value: { kind: "begin" | "report" | "end"; title?: string; message?: string };
+            },
+          ),
+        );
+        client.onServerExit(() => {
           for (const [, release] of this.publishWaiters) release();
           this.publishWaiters.clear();
+          this.activeProgress.clear();
+          this.emitProgress();
           // Forget the dead session so the next mount() — same root or
           // not — reconnects and re-opens cleanly instead of talking to
           // a server that no longer exists.
           this.exited = true;
+          this._status = "failed";
           this.client = null;
           this.versions.clear();
           this.mountedRoot = null;
         });
-        await this.client.request("initialize", {
+        await client.request("initialize", {
           processId: null,
           // rust-analyzer walks the project itself from here.
           rootUri: pathToUri(root),
-          capabilities: { textDocument: { publishDiagnostics: {} } },
+          capabilities: {
+            textDocument: {
+              publishDiagnostics: {
+                // Related information gives context like "trait defined here".
+                relatedInformation: true,
+                // Tag support enables unused-code hints and deprecated markers.
+                tagSupport: { valueSet: [1, 2] },
+              },
+              hover: { contentFormat: ["markdown", "plaintext"] },
+            },
+            workspace: {
+              // Declaring configuration support lets rust-analyzer send
+              // workspace/configuration requests, which activates checkOnSave
+              // (cargo check in the background for dependency-level errors).
+              configuration: true,
+              workspaceFolders: true,
+              didChangeConfiguration: { dynamicRegistration: true },
+            },
+            window: {
+              // Declaring workDoneProgress lets rust-analyzer send $/progress
+              // notifications so we can surface indexing/check feedback.
+              workDoneProgress: true,
+            },
+          },
         });
-        await this.client.notify("initialized", {});
+        await client.notify("initialized", {});
         this.exited = false; // a fresh, live session
+        this._status = "ready";
       } catch (error) {
-        // A missing rust-analyzer binary (the error carries the rustup
-        // install guidance) is non-fatal — same quiet-idle path as a
-        // root without a Cargo.toml (header comment above).
+        // Handshake failed though the binary is present — a crash or wedged
+        // server, not absence. Report "failed", not "binary not found".
         this.disabled = true;
+        this._status = "failed";
         this.client = null;
-        console.warn("rust-analyzer unavailable:", error);
+        console.warn("rust-analyzer handshake failed:", error);
       }
     }
   }
@@ -164,6 +239,12 @@ export class RustAnalyzerProvider implements LanguageProvider {
       return;
     }
     if (!this.client.isAlive) throw new Error("language server exited");
+    // An unchanged re-lint — forced when a late publish repaints squiggles
+    // (codemirror.ts repaintDiagnostics) — must not churn the server with a
+    // no-op didChange: it would bump the version, restart the publish wait,
+    // and re-enter onPublish, looping the repaint. Skip only once the file
+    // is already open in the session; the first didOpen always goes through.
+    if (this.versions.has(path) && this.texts.get(path) === text) return;
     this.texts.set(path, text);
     const published = this.nextPublish(path);
     if (this.versions.has(path)) {
@@ -209,6 +290,32 @@ export class RustAnalyzerProvider implements LanguageProvider {
   /** Late-push surfacing: `cb` runs on every publishDiagnostics. */
   onDiagnostics(cb: () => void): void {
     this.publishListeners.push(cb);
+  }
+
+  /** Progress push: `cb` fires with the active task label or null when idle. */
+  onProgress(cb: (message: string | null) => void): void {
+    this.progressListeners.push(cb);
+  }
+
+  private onProgressReport(params: {
+    token: string | number;
+    value: { kind: "begin" | "report" | "end"; title?: string; message?: string };
+  }): void {
+    const { token, value } = params;
+    if (value.kind === "begin") {
+      this.activeProgress.set(token, value.title ?? "");
+    } else if (value.kind === "report" && value.message) {
+      this.activeProgress.set(token, value.message);
+    } else if (value.kind === "end") {
+      this.activeProgress.delete(token);
+    }
+    this.emitProgress();
+  }
+
+  private emitProgress(): void {
+    const messages = [...this.activeProgress.values()];
+    const current = messages.length > 0 ? messages[messages.length - 1] : null;
+    for (const cb of this.progressListeners) cb(current);
   }
 
   async documentSymbols(path: string): Promise<DocumentSymbol[]> {

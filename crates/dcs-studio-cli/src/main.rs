@@ -1,15 +1,15 @@
 //! dcs-studio-cli — the agent-complete companion binary (decisions/005).
 //!
 //! Everything an agent needs without the Tauri app: `init` scaffolds a
-//! project, `check` analyses a workspace, `lsp` serves the genuine
-//! Language Server Protocol over stdio, `mcp` serves MCP tools over
-//! stdio. The IDE's backend spawns `dcs-studio-cli lsp` as its Lua
-//! language server.
+//! project, `check` analyses a workspace, `mcp` serves MCP tools over
+//! stdio. The Lua Language Server is its own binary, `lua-analyzer`
+//! (hosted like rust-analyzer); agents and the IDE spawn that directly.
 
+mod bundle;
 mod check;
-mod lsp;
+mod fmt;
 mod mcp;
-mod sources;
+mod test;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -20,7 +20,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "dcs-studio-cli",
     version,
-    about = "DCS Studio companion CLI: project scaffolding, workspace checking, LSP and MCP over stdio"
+    about = "DCS Studio companion CLI: project scaffolding, workspace checking, and MCP over stdio"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -29,8 +29,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Serve the Lua language server over stdio (LSP).
-    Lsp,
     /// Serve project tools over stdio (Model Context Protocol).
     Mcp,
     /// Scaffold a new project from a template.
@@ -51,9 +49,48 @@ enum Command {
         #[arg(default_value = ".")]
         root: PathBuf,
     },
+    /// Format .lua files in place (house style, decisions/006); a
+    /// directory walks like `check`. Unparseable files are reported and
+    /// skipped — parse errors are `check`'s job. An internal guard trip
+    /// leaves the file unchanged and the walk continues, but the run
+    /// exits nonzero in both modes — a trip is a formatter bug leaving
+    /// a file non-canonical, and a gate built on fmt must go red.
+    Fmt {
+        /// Files or directories to format.
+        #[arg(default_value = ".")]
+        paths: Vec<PathBuf>,
+        /// Write nothing; list files that would change and exit 1 if any.
+        #[arg(long)]
+        check: bool,
+    },
     /// Build the project: `cargo build --release` for Rust projects,
     /// a no-op for everything else.
     Build {
+        /// Project root.
+        #[arg(default_value = ".")]
+        root: PathBuf,
+    },
+    /// Run the project's Lua unit tests outside DCS (issue #9): specs
+    /// from the manifest's [test] table (default tests/**/*.test.lua)
+    /// execute in the external dcs-lua-runner, each file in a fresh
+    /// Lua 5.1 state with the DCS stub environment. Any failing test —
+    /// or a missing runner — exits nonzero.
+    Test {
+        /// Project root.
+        #[arg(default_value = ".")]
+        root: PathBuf,
+        /// Output format; `junit` also writes XML to --junit-out.
+        #[arg(long, value_enum, default_value = "pretty")]
+        reporter: test::Reporter,
+        /// Where `--reporter junit` writes its XML.
+        #[arg(long, default_value = "junit.xml")]
+        junit_out: PathBuf,
+    },
+    /// Bundle a lua-script project into one dist/ file (issue #9):
+    /// the require graph from the manifest's [build] entry becomes
+    /// package.preload entries plus the entry body — require semantics
+    /// preserved, DCS-provided modules left untouched.
+    Bundle {
         /// Project root.
         #[arg(default_value = ".")]
         root: PathBuf,
@@ -73,15 +110,10 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    // Logs to stderr (stdout is reserved for `mcp`'s JSON-RPC and command
+    // output); quiet by default, raise with `DCS_LOG=debug`.
+    dcs_studio_project::logging::init("warn");
     match Cli::parse().command {
-        Command::Lsp => {
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .expect("tokio runtime construction cannot fail with default settings")
-                .block_on(lsp::serve());
-            ExitCode::SUCCESS
-        }
         Command::Mcp => match mcp::serve() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -122,6 +154,13 @@ fn main() -> ExitCode {
             // Exit codes above 100 are reserved for runner failures.
             ExitCode::from(u8::try_from(report.error_count.min(100)).unwrap_or(100))
         }
+        Command::Fmt { paths, check } => fmt::run(&paths, check),
+        Command::Test {
+            root,
+            reporter,
+            junit_out,
+        } => test::run(&root, reporter, &junit_out),
+        Command::Bundle { root } => bundle::run(&root),
         Command::Build { root } => build(&root),
         Command::Install {
             root,

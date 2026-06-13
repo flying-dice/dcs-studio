@@ -1,5 +1,7 @@
 <script lang="ts">
   import { app } from "$lib/state.svelte";
+  import { build } from "$lib/build.svelte";
+  import { installer } from "$lib/install.svelte";
   import { EDITOR_THEMES, editorThemeById } from "$lib/themes";
   import { fileIconFor } from "$lib/file-icons";
   import FileIcon from "$lib/components/FileIcon.svelte";
@@ -9,10 +11,13 @@
   import LuaConsole from "$lib/components/LuaConsole.svelte";
   import MissionScriptingManager from "$lib/components/MissionScriptingManager.svelte";
   import Problems from "$lib/components/Problems.svelte";
+  import ProblemChips from "$lib/components/ProblemChips.svelte";
   import Structure from "$lib/components/Structure.svelte";
+  import Todos from "$lib/components/Todos.svelte";
   import Editor from "$lib/components/Editor.svelte";
   import EditorTabs from "$lib/components/EditorTabs.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
+  import PanelResizeHandle from "$lib/components/PanelResizeHandle.svelte";
   import { lang } from "$lib/lang/intel.svelte";
   import { cn } from "$lib/utils.js";
 
@@ -33,6 +38,7 @@
     Sparkles,
     SquareTerminal,
     TriangleAlert,
+    ListTodo,
     ScrollText,
     FolderOpen,
     Boxes,
@@ -40,6 +46,8 @@
     Moon,
     Search,
     Hammer,
+    PackageCheck,
+    PackageMinus,
     Play,
     Bug,
     Settings,
@@ -47,6 +55,7 @@
     Syringe,
     ShieldOff,
     FileCode,
+    LoaderCircle,
     type LucideIcon,
   } from "@lucide/svelte";
 
@@ -60,10 +69,10 @@
   // the rest pop open a labelled placeholder island for now.
   const leftTools: Tool[] = [
     { id: "project", label: "Project", icon: FolderTree },
-    { id: "structure", label: "Structure", icon: ListTree },
     { id: "bookmarks", label: "Bookmarks", icon: Bookmark },
   ];
   const rightTools: Tool[] = [
+    { id: "structure", label: "Structure", icon: ListTree },
     { id: "inject", label: "Inject", icon: Syringe },
     { id: "mission", label: "Mission", icon: ShieldOff },
     { id: "database", label: "Database", icon: Database },
@@ -74,11 +83,30 @@
     { id: "lua", label: "Lua Console", icon: FileCode },
     { id: "terminal", label: "Terminal", icon: SquareTerminal },
     { id: "problems", label: "Problems", icon: TriangleAlert },
+    { id: "todos", label: "Todos", icon: ListTodo },
     { id: "output", label: "Output", icon: ScrollText },
   ];
 
   const labelFor = (list: Tool[], id: string | null) =>
     list.find((t) => t.id === id)?.label ?? "";
+
+  const providerShortLabel: Record<string, string> = {
+    "dcs-lua": "Lua",
+    "rust-analyzer": "Rust",
+  };
+  function providerLabel(id: string): string {
+    return providerShortLabel[id] ?? id;
+  }
+  function providerStatusTitle(id: string, pStatus: string): string {
+    const label = providerLabel(id);
+    const progress = lang.providerProgress[id];
+    if (pStatus === "ready" && progress) return `${label}: ${progress}`;
+    if (pStatus === "ready") return `${label}: running`;
+    if (pStatus === "loading") return `${label}: starting…`;
+    if (pStatus === "disabled") return `${label}: binary not found — run: rustup component add rust-analyzer`;
+    if (pStatus === "failed") return `${label}: crashed`;
+    return `${label}: off`;
+  }
 
   // Top-left application menu. Items with an `action` are wired; the rest are
   // representative placeholders. View items toggle the panel islands.
@@ -88,14 +116,14 @@
     {
       label: "File",
       items: [
-        { label: "New Project…", action: () => app.closeProject() },
+        { label: "New Project…", action: () => void app.closeProject() },
         { label: "Open Project…", shortcut: "⌘O", action: () => app.openFolder() },
         { sep: true },
         { label: "New File", shortcut: "⌘N" },
         { label: "Save", shortcut: "⌘S", action: () => app.saveFile() },
         { sep: true },
         { label: "Close Editor", action: () => app.closeActiveFile() },
-        { label: "Close Project", action: () => app.closeProject() },
+        { label: "Close Project", action: () => void app.closeProject() },
       ],
     },
     {
@@ -128,12 +156,15 @@
     { label: "Help", items: [{ label: "About DCS Studio" }] },
   ];
 
-  // Top-right IDE controls.
+  // Top-right IDE controls (placeholder, no actions wired yet).
   const controls: { icon: LucideIcon; label: string }[] = [
-    { icon: Hammer, label: "Build" },
     { icon: Play, label: "Run" },
     { icon: Bug, label: "Debug" },
   ];
+
+  function openOutput() {
+    app.bottomTool = "output";
+  }
 
   // Global Save shortcut — works regardless of editor focus.
   function onKeydown(e: KeyboardEvent) {
@@ -204,6 +235,35 @@
 {/snippet}
 
 <!-- A top-right toolbar control: icon button with a tooltip. -->
+{#snippet actionBtn(
+  Icon: LucideIcon,
+  label: string,
+  onclick: () => void,
+  disabled: boolean,
+  loading: boolean,
+)}
+  <Tooltip.Root>
+    <Tooltip.Trigger>
+      {#snippet child({ props })}
+        <Button
+          {...props}
+          variant="ghost"
+          size="icon-sm"
+          class="text-muted-foreground hover:text-foreground"
+          aria-label={label}
+          {onclick}
+          {disabled}
+        >
+          {#if loading}<LoaderCircle class="animate-spin" />{:else}<Icon />{/if}
+        </Button>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Tooltip.Content side="bottom" class="font-mono text-[11px] tracking-wide">
+      {label}
+    </Tooltip.Content>
+  </Tooltip.Root>
+{/snippet}
+
 {#snippet headerBtn(Icon: LucideIcon, label: string)}
   <Tooltip.Root>
     <Tooltip.Trigger>
@@ -272,9 +332,28 @@
         {/if}
       </div>
 
-      <!-- Top-right controls: Search · Build/Run/Debug · Quick settings -->
+      <!-- Top-right controls: Search · Build/Install/Uninstall · Run/Debug · Quick settings -->
       <div class="flex items-center gap-0.5">
         {@render headerBtn(Search, "Search")}
+        <Separator orientation="vertical" class="mx-1 !h-4" />
+        {@render actionBtn(
+          Hammer, "Build",
+          () => { if (app.rootPath) { void build.start(app.rootPath); openOutput(); } },
+          build.running || !app.rootPath,
+          build.running,
+        )}
+        {@render actionBtn(
+          PackageCheck, "Install",
+          () => { if (app.rootPath) { void installer.install(app.rootPath); openOutput(); } },
+          installer.installing || !app.rootPath,
+          installer.installing,
+        )}
+        {@render actionBtn(
+          PackageMinus, "Uninstall",
+          () => { if (app.rootPath) { void installer.uninstall(app.rootPath); openOutput(); } },
+          installer.uninstalling || !app.rootPath || !installer.status?.installed,
+          installer.uninstalling,
+        )}
         <Separator orientation="vertical" class="mx-1 !h-4" />
         {#each controls as c (c.label)}
           {@render headerBtn(c.icon, c.label)}
@@ -349,10 +428,10 @@
       </nav>
 
       <!-- CONTENT COLUMN: top row of islands + optional bottom island -->
-      <div class="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-        <div class="flex min-h-0 flex-1 gap-2">
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div class="flex min-h-0 flex-1">
         {#if app.leftTool}
-          <Card class="flex h-full min-h-0 w-[270px] shrink-0 flex-col gap-0 rounded-xl py-0">
+          <Card class="flex h-full min-h-0 shrink-0 flex-col gap-0 rounded-xl py-0" style="width: {app.leftPanelWidth}px">
             <div class="flex h-9 shrink-0 items-center justify-between gap-2 px-3">
               <span class="truncate font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                 {app.leftTool === "project"
@@ -376,15 +455,15 @@
                 <ScrollArea class="h-full">
                   <FileTree />
                 </ScrollArea>
-              {:else if app.leftTool === "structure"}
-                <ScrollArea class="h-full">
-                  <Structure path={app.filePath} />
-                </ScrollArea>
               {:else}
                 {@render placeholder(labelFor(leftTools, app.leftTool))}
               {/if}
             </div>
           </Card>
+        {/if}
+        {#if app.leftTool}
+          <PanelResizeHandle side="left" currentSize={app.leftPanelWidth}
+            onresize={(w) => app.setPanelSize("left", w)} />
         {/if}
 
         <!-- CENTER island: tab strip as the head, editor as the body. -->
@@ -412,13 +491,19 @@
         </Card>
 
         {#if app.rightTool}
-          <Card class="flex h-full min-h-0 w-[270px] shrink-0 flex-col gap-0 rounded-xl py-0">
+          <PanelResizeHandle side="right" currentSize={app.rightPanelWidth}
+            onresize={(w) => app.setPanelSize("right", w)} />
+          <Card class="flex h-full min-h-0 shrink-0 flex-col gap-0 rounded-xl py-0" style="width: {app.rightPanelWidth}px">
             {@render islandHead(labelFor(rightTools, app.rightTool))}
             <div class="min-h-0 flex-1">
               {#if app.rightTool === "inject"}
                 <InjectionManager />
               {:else if app.rightTool === "mission"}
                 <MissionScriptingManager />
+              {:else if app.rightTool === "structure"}
+                <ScrollArea class="h-full">
+                  <Structure path={app.filePath} />
+                </ScrollArea>
               {:else}
                 {@render placeholder(labelFor(rightTools, app.rightTool))}
               {/if}
@@ -430,13 +515,17 @@
         <!-- BOTTOM PANEL island spans the content column, so its left/right
              edges line up with the top row's panels automatically. -->
         {#if app.bottomTool}
-          <Card class="flex h-52 shrink-0 flex-col gap-0 rounded-xl py-0">
+          <PanelResizeHandle side="bottom" currentSize={app.bottomPanelHeight}
+            onresize={(h) => app.setPanelSize("bottom", h)} />
+          <Card class="flex shrink-0 flex-col gap-0 rounded-xl py-0" style="height: {app.bottomPanelHeight}px">
             {@render islandHead(labelFor(bottomTools, app.bottomTool))}
             <div class="min-h-0 flex-1">
               {#if app.bottomTool === "lua"}
                 <LuaConsole />
               {:else if app.bottomTool === "problems"}
                 <Problems />
+              {:else if app.bottomTool === "todos"}
+                <Todos />
               {:else if app.bottomTool === "output"}
                 <BuildOutput />
               {:else}
@@ -463,30 +552,55 @@
           <span class="shrink-0 font-mono text-[11px] text-primary">● {app.saving ? "saving…" : "modified"}</span>
         {/if}
       </div>
-      <!-- Language engine: findings count while ready, plain status otherwise. -->
-      <span
-        class="flex shrink-0 items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground"
-        data-testid="engine-status"
-      >
+      <!-- Per-provider language intelligence status chips. Only providers
+           that are not "off" or "not-applicable" get a chip — "not-applicable"
+           means the provider has nothing to do (e.g. no Cargo.toml), which is
+           expected and not worth surfacing. "disabled" means applicable but
+           broken (binary not found) — shown amber so it's actionable. -->
+      {#each Object.entries(lang.providerStatuses).filter(([, s]) => s !== "off" && s !== "not-applicable") as [id, pStatus]}
+        {@const busy = Boolean(lang.providerProgress[id])}
         <span
-          class={cn(
-            "size-1.5 rounded-full",
-            lang.engineStatus === "ready" && "bg-emerald-500",
-            lang.engineStatus === "loading" && "bg-amber-500",
-            lang.engineStatus === "failed" && "bg-red-500",
-            lang.engineStatus === "off" && "bg-muted-foreground/40",
-          )}
-        ></span>
-        {#if lang.engineStatus === "ready"}
-          Lua: {lang.diagnostics.length === 0 ? "no problems" : `${lang.diagnostics.length} problem${lang.diagnostics.length === 1 ? "" : "s"}`}
-        {:else if lang.engineStatus === "loading"}
-          Lua: loading
-        {:else if lang.engineStatus === "failed"}
-          Lua: unavailable
-        {:else}
-          Lua: off
-        {/if}
-      </span>
+          class="flex shrink-0 items-center gap-1 font-mono text-[11px] tracking-wide text-muted-foreground"
+          data-testid="provider-status-{id}"
+          title={providerStatusTitle(id, pStatus)}
+        >
+          <span
+            class={cn(
+              "size-1.5 rounded-full",
+              pStatus === "ready" && !busy && "bg-emerald-500",
+              pStatus === "ready" && busy && "animate-pulse bg-amber-400",
+              (pStatus === "loading") && "animate-pulse bg-amber-500",
+              pStatus === "disabled" && "bg-amber-500",
+              pStatus === "failed" && "bg-red-500",
+            )}
+          ></span>
+          {providerLabel(id)}
+        </span>
+      {/each}
+      <!-- Fallback while no project is open (no provider has mounted yet). -->
+      {#if Object.keys(lang.providerStatuses).length === 0}
+        <span
+          class="flex shrink-0 items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground"
+          data-testid="engine-status"
+        >
+          <span
+            class={cn(
+              "size-1.5 rounded-full",
+              lang.engineStatus === "loading" && "bg-amber-500",
+              lang.engineStatus === "failed" && "bg-red-500",
+              (lang.engineStatus === "off" || lang.engineStatus === "ready") && "bg-muted-foreground/40",
+            )}
+          ></span>
+          {lang.engineStatus === "off" ? "No project" : lang.engineStatus}
+        </span>
+      {/if}
+      <!-- Problem count chips: click opens the Problems panel
+           (model StatusBarCountsOpenProblems). -->
+      <ProblemChips
+        onOpen={() => {
+          if (app.bottomTool !== "problems") app.toggleTool("bottom", "problems");
+        }}
+      />
       <Separator orientation="vertical" class="!h-3" />
       <!-- DCS link: dot = WS liveness (green = mission running, amber = in menu). -->
       <span class="flex shrink-0 items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground">

@@ -8,9 +8,17 @@ mod lsp;
 // Exposed for the host-IPC integration test - exactly one item wide.
 pub use lsp::read_frame;
 mod mission;
+mod todos_cmd;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Logs to stderr (visible in the `tauri dev` terminal) AND to a file on
+    // disk so traces survive the session; tune with `DCS_LOG=debug`. Hosted
+    // language servers' stderr is folded into these events too, so one file
+    // holds the whole picture.
+    let log_path = dcs_studio_project::logging::default_log_path();
+    dcs_studio_project::logging::init_to_file("info", &log_path);
+    tracing::info!(log = %log_path.display(), "dcs-studio app starting");
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -32,6 +40,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             fs::read_dir,
             fs::read_text_file,
+            fs::read_file,
             fs::write_text_file,
             fs::basename,
             fs::path_exists,
@@ -40,16 +49,20 @@ pub fn run() {
             build::toolchain_status,
             build::rust_analyzer_path,
             install_cmd::install_project,
+            install_cmd::install_status,
+            install_cmd::uninstall_project,
             dcs::dcs_call,
             dcs::dcs_status,
             inject::dcs_detect_installs,
             inject::dcs_injection_status,
             inject::dcs_inject,
             inject::dcs_eject,
-            lsp::lsp_server_path,
+            lsp::lua_analyzer_path,
             lsp::lsp_start,
             lsp::lsp_send,
             lsp::lsp_stop,
+            todos_cmd::scan_todos,
+            todos_cmd::scan_file_todos,
             mission::dcs_detect_mission_scripts,
             mission::dcs_mission_script_status,
             mission::dcs_mission_script_set,

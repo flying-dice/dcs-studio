@@ -17,6 +17,25 @@ export function readTextFile(path: string): Promise<string> {
   return invoke<string>("read_text_file", { path });
 }
 
+/**
+ * A file read for the editor, classified by content (model studio::files
+ * FileLoad / Rust `FileLoad`): a tagged union — `text` carries the decoded
+ * contents, `binary` carries only the byte size (the bytes stay on disk).
+ */
+export type FileLoad =
+  | { kind: "text"; text: string }
+  | { kind: "binary"; size: number };
+
+/**
+ * Read a file, classifying it by CONTENT not extension: a NUL byte in the
+ * leading chunk, or any non-UTF-8 byte, means binary (size only); otherwise the
+ * decoded text. Replaces `readTextFile` on the editor's open path —
+ * `readTextFile` stays for saves and strict-UTF-8 callers.
+ */
+export function classifyAndRead(path: string): Promise<FileLoad> {
+  return invoke<FileLoad>("read_file", { path });
+}
+
 export function writeTextFile(path: string, contents: string): Promise<void> {
   return invoke<void>("write_text_file", { path, contents });
 }
@@ -63,6 +82,19 @@ export interface BuildDone {
 /** What an install run did. */
 export interface InstallReport {
   copied: number;
+  files: string[];
+}
+
+/** What an uninstall run did. */
+export interface UninstallReport {
+  removed: number;
+  files: string[];
+}
+
+/** Whether the project's deployed files are present and current. */
+export interface InstallStatus {
+  installed: boolean;
+  up_to_date: boolean;
 }
 
 /**
@@ -82,6 +114,16 @@ export function toolchainStatus(): Promise<ToolchainStatus> {
 /** Apply the project's dcs-studio.toml [[install]] rules to this machine. */
 export function installProject(root: string): Promise<InstallReport> {
   return invoke<InstallReport>("install_project", { root });
+}
+
+/** Check whether the project's deployed files are present and current. */
+export function installStatus(root: string): Promise<InstallStatus> {
+  return invoke<InstallStatus>("install_status", { root });
+}
+
+/** Remove every file the project's [[install]] rules deployed. */
+export function uninstallProject(root: string): Promise<UninstallReport> {
+  return invoke<UninstallReport>("uninstall_project", { root });
 }
 
 /** Snapshot of the editor↔DCS link state (see `dcs_status` in dcs.rs). */

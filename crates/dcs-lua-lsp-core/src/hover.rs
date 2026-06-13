@@ -8,11 +8,8 @@
 //! read from the cached trivia, never a re-lex. A cross-file global
 //! appends `defined in <path>:<line>`.
 
-use std::collections::HashMap;
-
 use dcs_lua_syntax::ast::{Ast, BinOp, ExprId, ExprKind, FuncBody, UnOp};
 use dcs_lua_syntax::span::LineIndex;
-use dcs_lua_syntax::token::Trivia;
 
 use crate::resolve::{Decl, Ident, ident_at, resolve, resolve_dotted};
 use crate::symbols::render_func_name;
@@ -129,24 +126,10 @@ fn infer(ast: &Ast, value: Option<ExprId>) -> String {
 /// `decl_line`, joined with newlines and trimmed. Texts come from the
 /// cached trivia, already marker-stripped.
 fn doc_run(entry: &FileEntry, index: &LineIndex, decl_line: u32) -> String {
-    let mut docs_by_line: HashMap<u32, &str> = HashMap::new();
-    for spanned in &entry.trivia {
-        if let Trivia::DocComment { text } = &spanned.trivia {
-            let (line, _) = index.line_col(spanned.span.start);
-            docs_by_line.insert(line, text);
-        }
-    }
-    let mut lines: Vec<&str> = Vec::new();
-    let mut line = decl_line;
-    while line > 1 {
-        line -= 1;
-        let Some(text) = docs_by_line.get(&line) else {
-            break;
-        };
-        lines.push(text);
-    }
-    lines.reverse();
-    lines.join("\n").trim().to_string()
+    crate::annot::doc_lines(entry, index, decl_line)
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 #[cfg(test)]

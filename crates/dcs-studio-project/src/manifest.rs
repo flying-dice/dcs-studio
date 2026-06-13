@@ -12,6 +12,62 @@ pub struct Manifest {
     pub project: ProjectMeta,
     #[serde(default)]
     pub install: Vec<InstallRule>,
+    /// `[format]` — Lua formatter options (SPEC.md §7); an absent section
+    /// (or field) formats with house-style defaults.
+    #[serde(default)]
+    pub format: dcs_lua_fmt::FormatConfig,
+    /// `[test]` — Lua test discovery (issue #9); an absent section means
+    /// the defaults (`tests/**/*.test.lua`).
+    #[serde(default)]
+    pub test: TestConfig,
+    /// `[build]` — Lua bundling (issue #9). Optional: bundling without a
+    /// declared entry is an error, never a guess.
+    #[serde(default)]
+    pub build: BuildConfig,
+    /// `[lints]` — per-lint levels, the Cargo `[lints]` idiom. Absent section
+    /// means every lint keeps its built-in default.
+    #[serde(default)]
+    pub lints: LintsConfig,
+}
+
+/// `[lints]` — lint levels by language, mirroring Cargo's `[lints.rust]` /
+/// `[lints.clippy]`. `[lints.lua]` maps a Lua lint name to a level
+/// (`allow`/`warn`/`deny`/`forbid`).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct LintsConfig {
+    /// `[lints.lua]` — `<lint-name> = "<level>"` (e.g.
+    /// `operator-type-mismatch = "allow"`).
+    pub lua: std::collections::HashMap<String, String>,
+}
+
+/// `[test]` — where `dcs-studio-cli test` discovers spec files.
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct TestConfig {
+    /// Project-relative directory walked for specs.
+    pub dir: String,
+    /// Filename suffix a spec must carry.
+    pub suffix: String,
+}
+
+impl Default for TestConfig {
+    fn default() -> Self {
+        Self {
+            dir: "tests".to_string(),
+            suffix: ".test.lua".to_string(),
+        }
+    }
+}
+
+/// `[build]` — what `dcs-studio-cli bundle` amalgamates.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct BuildConfig {
+    /// Project-relative entry script the require graph grows from.
+    pub entry: Option<String>,
+    /// Bundle filename under `dist/`; defaults to `<project slug>.lua`.
+    pub output: Option<String>,
 }
 
 /// `[project]` metadata; only the fields the toolchain acts on.
@@ -52,6 +108,15 @@ pub fn load(root: &Path) -> Result<Manifest, String> {
     let text =
         std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
     parse(&text)
+}
+
+/// The project's `[lints.lua]` levels (`name -> "level"`), or empty when the
+/// manifest is absent or invalid. The one place the "no manifest → defaults"
+/// rule lives, so every edge (LSP server, CLI, MCP) honours `[lints.lua]`
+/// identically.
+#[must_use]
+pub fn lua_lint_levels(root: &Path) -> std::collections::HashMap<String, String> {
+    load(root).map(|manifest| manifest.lints.lua).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -103,5 +168,65 @@ mod tests {
                 .expect("tolerant parse");
         assert_eq!(manifest.project.name, "x");
         assert!(manifest.install.is_empty());
+    }
+
+    #[test]
+    fn absent_test_and_build_sections_mean_defaults() {
+        let manifest = parse("[project]\nname = \"x\"\n").expect("parse");
+        assert_eq!(manifest.test.dir, "tests");
+        assert_eq!(manifest.test.suffix, ".test.lua");
+        assert_eq!(manifest.build.entry, None);
+        assert_eq!(manifest.build.output, None);
+    }
+
+    #[test]
+    fn test_and_build_sections_parse_per_field() {
+        let manifest = parse(
+            "[project]\nname = \"x\"\n\n[test]\ndir = \"specs\"\n\n[build]\nentry = \"main.lua\"\noutput = \"bundle.lua\"\n",
+        )
+        .expect("parse");
+        assert_eq!(manifest.test.dir, "specs");
+        // Untouched field keeps its default.
+        assert_eq!(manifest.test.suffix, ".test.lua");
+        assert_eq!(manifest.build.entry.as_deref(), Some("main.lua"));
+        assert_eq!(manifest.build.output.as_deref(), Some("bundle.lua"));
+    }
+
+    #[test]
+    fn absent_lints_section_means_no_levels() {
+        let manifest = parse("[project]\nname = \"x\"\n").expect("parse");
+        assert!(manifest.lints.lua.is_empty());
+    }
+
+    #[test]
+    fn lints_lua_table_maps_names_to_levels() {
+        let manifest = parse(
+            "[project]\nname = \"x\"\n\n[lints.lua]\noperator-type-mismatch = \"allow\"\nparam-usage-mismatch = \"deny\"\n",
+        )
+        .expect("parse");
+        assert_eq!(manifest.lints.lua.get("operator-type-mismatch").map(String::as_str), Some("allow"));
+        assert_eq!(manifest.lints.lua.get("param-usage-mismatch").map(String::as_str), Some("deny"));
+    }
+
+    #[test]
+    fn absent_format_section_means_house_defaults() {
+        let manifest = parse("[project]\nname = \"x\"\n").expect("parse");
+        assert_eq!(manifest.format, dcs_lua_fmt::FormatConfig::default());
+    }
+
+    #[test]
+    fn format_section_overrides_per_field() {
+        let manifest = parse(
+            "[project]\nname = \"x\"\n\n[format]\nindent_width = 2\nquote_style = \"single\"\nfuture_knob = true\n",
+        )
+        .expect("parse");
+        assert_eq!(manifest.format.indent_width, 2);
+        assert_eq!(manifest.format.quote_style, dcs_lua_fmt::QuoteStyle::Single);
+        // Untouched fields keep their defaults; unknown keys are tolerated.
+        assert_eq!(manifest.format.max_width, 100);
+        assert_eq!(
+            manifest.format.trailing_comma,
+            dcs_lua_fmt::TrailingComma::Multiline
+        );
     }
 }

@@ -7,15 +7,20 @@
   // TabSwitchKeepsUnsavedEdits, SaveDirtyFile and friends).
   import { onMount } from "svelte";
   import { app } from "$lib/state.svelte";
+  import { type FileLoad } from "$lib/api";
   import Editor from "$lib/components/Editor.svelte";
   import EditorTabs from "$lib/components/EditorTabs.svelte";
   import { lang } from "$lib/lang/intel.svelte";
   import { providerFor } from "$lib/lang/registry";
 
-  const FILES = new Map<string, string>([
-    ["lab/a.lua", 'print("hello")\n'],
-    ["lab/b.lua", 'print("world")\n'],
-    ["lab/c.lua", 'print("third")\n'],
+  // FileLoad-shaped store (model `ReadFile`): text files carry their contents,
+  // bin.dat is a binary marker — so the lab drives the real classify path and
+  // the binary placeholder without Tauri.
+  const FILES = new Map<string, FileLoad>([
+    ["lab/a.lua", { kind: "text", text: 'print("hello")\n' }],
+    ["lab/b.lua", { kind: "text", text: 'print("world")\n' }],
+    ["lab/c.lua", { kind: "text", text: 'print("third")\n' }],
+    ["lab/bin.dat", { kind: "binary", size: 4096 }],
   ]);
 
   let ready = $state(false);
@@ -27,9 +32,9 @@
   let holdNextB = false;
   let releaseB = $state<(() => void) | null>(null);
 
-  async function readFile(path: string): Promise<string> {
-    const text = FILES.get(path);
-    if (text === undefined) throw new Error(`no lab file: ${path}`);
+  async function readFile(path: string): Promise<FileLoad> {
+    const load = FILES.get(path);
+    if (load === undefined) throw new Error(`no lab file: ${path}`);
     if (holdNextB && path === "lab/b.lua") {
       holdNextB = false;
       await new Promise<void>((resolve) => {
@@ -39,7 +44,7 @@
         };
       });
     }
-    return text;
+    return load;
   }
 
   // In-memory writer behind app.writeFile, with the same one-shot
@@ -72,11 +77,12 @@
       try {
         const provider = providerFor("lab/a.lua");
         if (!provider) throw new Error("no provider for lab/a.lua");
-        await provider.mount(
-          [...FILES].map(([path, text]) => ({ path, text })),
-          [],
-          "lab",
+        // Mount only the text files into the engine; the binary marker has no
+        // contents to index.
+        const textFiles = [...FILES].flatMap(([path, load]) =>
+          load.kind === "text" ? [{ path, text: load.text }] : [],
         );
+        await provider.mount(textFiles, [], "lab");
         lang.engineStatus = "ready";
       } catch (error) {
         console.error("language engine failed to mount:", error);
@@ -126,6 +132,13 @@
       onclick={() => app.openFile("lab/missing.lua", "missing.lua")}
     >
       open missing.lua
+    </button>
+    <button
+      class="rounded border px-2 py-0.5"
+      data-testid="open-bin"
+      onclick={() => app.openFile("lab/bin.dat", "bin.dat")}
+    >
+      open bin.dat
     </button>
     <button
       class="rounded border px-2 py-0.5"

@@ -1,7 +1,7 @@
 # dcs-lua-ls — language-engine specification
 
 Normative spec for the DCS-flavoured Lua language engine. Sections are
-numbered §1–§6 and cited from `CONFORMANCE/`, `PATTERNS.md`, and `decisions/`
+numbered §1–§7 and cited from `CONFORMANCE/`, `PATTERNS.md`, and `decisions/`
 as `SPEC.md §N`.
 
 ## §1 Scope
@@ -49,15 +49,58 @@ Diagnostic { severity, span, code, code_description, message }
 
 ### §3.1 Code registry
 
+**Parse/lexical** findings carry stable `LUA-Exxx` codes — the analog of
+rustc's hard-error `E####` codes (a parse failure is not a lint):
+
 | Range | Stage | Examples |
 | --- | --- | --- |
 | `LUA-E0xx` | lexical | `LUA-E001` unexpected character · `LUA-E002` unterminated string · `LUA-E003` unterminated long bracket · `LUA-E004` malformed number |
 | `LUA-E1xx` | parse | `LUA-E100` unexpected token · `LUA-E101` expected token · `LUA-E102` unterminated block (missing `end`) · `LUA-E103` nesting too deep (recursion cap; totality on a 1 MiB stack) |
 | `LUA-Sxxx` | static (resolution) | reserved |
-| `LUA-Txxx` | types | reserved |
 | `DCS-Wxxx` | DCS-flavoured lints | reserved |
 
 A code, once shipped, MUST NOT be reused for a different rule.
+
+**Type lints** carry kebab-case **names** (rustc/clippy idiom) — they are
+*levelled*, not coded:
+
+| Lint | Fires on |
+| --- | --- |
+| `param-type-mismatch` | an argument not assignable to a declared `@param` type |
+| `operator-type-mismatch` | an operator on an unfit operand (arithmetic/concat/length on a non-numeric, non-coercible value) |
+| `param-usage-mismatch` | an argument that conflicts with how an un-annotated parameter is used in the body |
+| `unfulfilled-lint-expectation` | an `---@expect` whose named lint never fired |
+
+Each lint has a level — `allow` / `warn` / `deny` / `forbid` (rustc's ladder) —
+and a built-in default: `param-type-mismatch` is `deny` (an error),
+`operator-type-mismatch` and `param-usage-mismatch` are `warn`. The two `warn`
+lints are advisory because Lua 5.1 coerces numeric strings in arithmetic
+(`"10" + 5`) and numbers in concatenation, and a metamethod may overload an
+operator. No lint fires on `any`, `unknown`, or a generic, and a numeric string
+literal is accepted where a number is expected.
+
+### §3.2 Lint levels and inline directives
+
+A lint's effective level is resolved per finding, innermost winning: an inline
+directive over the project's `[lints.lua]` table over the built-in default. A
+`forbid` set in `[lints.lua]` cannot be downgraded inline. `allow` drops the
+finding; `warn`/`deny`/`forbid` keep it at Warning/Error severity.
+
+Inline directives are `---` doc comments placed above the statement they govern
+(Lua has no `#[attribute]` syntax, so the comment is the attribute) — the
+directive covers that whole statement, including a function body:
+
+| Directive | Effect |
+| --- | --- |
+| `---@allow <lint>, …` | set the lint(s) to `allow` over the next statement |
+| `---@warn <lint>, …` | set to `warn` |
+| `---@deny <lint>, …` | set to `deny` |
+| `---@expect <lint>, …` | silence, but raise `unfulfilled-lint-expectation` if it never fires (rustc's `#[expect]`) |
+
+Names are comma- or space-separated; a directive must name at least one lint.
+The project-wide `[lints.lua]` table in `dcs-studio.toml` mirrors Cargo's
+`[lints.rust]` / `[lints.clippy]` (`<lint-name> = "<level>"`). Level resolution
+runs once, at the finding-aggregation edge, so it covers every transport.
 
 ## §4 Annotation dialect
 
@@ -67,9 +110,15 @@ declaration. Tag set: `@class`, `@field`, `@param`, `@return`, `@type`,
 expressions: names, unions (`A|B`), optionals (`T?`), functions
 (`fun(a: T): R`), tables (`table<K, V>`), arrays (`T[]`), and literal types.
 
-The annotation grammar and its conformance layer (`CONFORMANCE/annot/`) are
-deferred until the annotation parser lands (plan Phase 3). The tag set and
-LuaLS compatibility are pinned now (decisions/003).
+The annotation parser reads a contiguous `---` run as the block attached to the
+following declaration and yields a structured `AnnotationBlock`. Type-carrying
+tags (`@param`, `@return`, `@type`, `@class`, `@field`, `@alias`, `@enum`) feed
+type checking; the remaining tags are parsed and surfaced (hover) but do not yet
+gate diagnostics. Parsing is total: an unknown tag or malformed type expression
+degrades to the `any` type and never fails the parse. The dialect targets the
+**DCS Lua 5.1/LuaJIT** runtime only — version-conditional semantics of other Lua
+runtimes are out of scope. Tag set and LuaLS compatibility are pinned by
+decisions/003; goldens live under `CONFORMANCE/annot/`.
 
 ## §5 Environment profiles
 
@@ -99,3 +148,59 @@ A later layer overrides an earlier layer's function signatures and `@type`
 declarations per symbol. `@class` fields merge additively; on a per-field
 conflict the later layer wins. This ordering is what makes hand-written
 refinements over generated stubs durable across regeneration.
+
+## §7 Formatter
+
+The formatter (`crates/dcs-lua-fmt`, decisions/006) prints one canonical
+shape for §2-dialect source. It is a printer over the §2/§3 front-end —
+never a second parser — and it MUST hold these invariants:
+
+- **Total or untouched.** `format` and `format_range` return either the
+  formatted text or `Err` carrying the parse diagnostics. Source with any
+  error-severity diagnostic is never partially formatted.
+- **Deterministic.** Output is a pure function of `(source, config)` — no
+  environment, clock, or iteration-order dependence.
+- **Idempotent.** `format(format(s)) == format(s)` byte-for-byte.
+- **Semantic-preserving.** Re-parsing the output MUST yield a tree
+  structurally identical to the input's, comparing spans-ignored and short
+  strings by decoded value, with the multiset of comment texts intact. The
+  formatter MUST verify this before returning and yield the input
+  unchanged on any mismatch, signalling the trip to the caller
+  (`Formatted::guard_tripped`) — never aborting. Statement separators
+  (`;`) are dropped, table `;` separators become `,`, paren-free call
+  sugar gains parentheses, and trailing commas are normalised — all
+  tree-neutral; a statement beginning with `(` is printed with a leading
+  `;` when (and only when) a statement precedes it in its block, so
+  separator dropping can never merge statements. At a block's start the
+  `;` MUST be suppressed: Lua 5.1's grammar (`chunk ::= {stat [';']}`)
+  admits `;` only after a statement, and the output MUST stay loadable
+  under PUC Lua 5.1.
+- **Comment-preserving.** Every comment (line, long-bracket with its exact
+  level, `---` doc run) survives with verbatim text. A comment inside an
+  expression MAY move to the end of its statement's line. Blank-line runs
+  between statements survive capped at two; runs at file start/end and
+  block edges are dropped.
+- **Range formatting.** `format_range(source, byte_range, config)` widens
+  the range to the smallest run of whole statements in the deepest
+  statement-reachable block containing it (blocks inside expression-level
+  function literals widen to their enclosing statement) and MUST leave
+  every byte outside the spliced run identical. The `(`-statement merge
+  guard is suppressed when the untouched prefix already ends with a `;`
+  separator: the splice MUST NOT produce `;;`, which PUC Lua 5.1 rejects.
+
+Config keys (`dcs-studio.toml` `[format]`, parsed by
+`crates/dcs-studio-project`; absent section or field → default):
+
+| Key | Values | Default |
+| --- | --- | --- |
+| `indent_width` | 1–16 | `4` |
+| `indent_style` | `"space"` \| `"tab"` | `"space"` |
+| `quote_style` | `"double"` \| `"single"` | `"double"` |
+| `max_width` | line-width budget in UTF-8 **bytes**, not display columns (deterministic, cheap proxy; non-ASCII wraps early — conservative); values below 20 clamp to 20 | `100` |
+| `trailing_comma` | `"multiline"` \| `"never"` | `"multiline"` |
+
+The house style (spacing, quoting, wrapping, blank-line rules) is pinned in
+decisions/006 and exercised by `CONFORMANCE/format/` goldens: `name.lua`
+(input) → `name.formatted.lua` (hand-written expected output, default
+config). Every golden's expected output MUST itself be a fixed point of the
+formatter.

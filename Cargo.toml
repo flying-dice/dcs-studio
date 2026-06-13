@@ -5,10 +5,13 @@ members = [
     "crates/dcs-bridge-client",
     "crates/dcs-bridge",
     "crates/dcs-lua-syntax",
+    "crates/dcs-lua-fmt",
     "crates/dcs-lua-lsp-core",
     "crates/dcs-lua-ide",
     "crates/dcs-studio-cli",
     "crates/dcs-studio-project",
+    "crates/lua-analyzer",
+    "crates/studio-services",
 ]
 
 [workspace.package]
@@ -28,3 +31,8 @@ cast_possible_truncation = "allow"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# Structured logging across the crates. `tracing` is the lightweight facade
+# every crate emits through (wasm-safe — no subscriber); native binaries
+# install `tracing-subscriber` to render it (stderr + env-filter via DCS_LOG).
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

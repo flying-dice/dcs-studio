@@ -245,16 +245,21 @@ test("closing a dirty tab prompts; declining keeps the buffer", async ({
   await editor(page).fill('print("edited")\n');
   await expect(page.getByTestId("lab-status")).toContainText("dirty: true");
 
-  // Declining the confirm keeps the tab and its edits.
+  // Declining the confirm keeps the tab and its edits. The prompt names
+  // the file (issue #25 moved the message to the closeFile call site —
+  // the per-file form must not regress into the project-switch count form).
   let prompted = false;
+  let message = "";
   page.once("dialog", (dialog) => {
     prompted = true;
+    message = dialog.message();
     void dialog.dismiss();
   });
   await page.getByTestId("tab-close").click();
   await expect(tab(page, "lab/a.lua")).toBeVisible();
   await expect(editor(page)).toContainText('print("edited")');
   expect(prompted).toBe(true);
+  expect(message).toBe("a.lua has unsaved changes. Close it and discard them?");
 
   // Accepting discards the edits and closes the last tab.
   page.once("dialog", (dialog) => void dialog.accept());
