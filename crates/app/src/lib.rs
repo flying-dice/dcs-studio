@@ -33,6 +33,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             fs::read_dir,
             fs::read_text_file,
+            fs::read_file,
             fs::write_text_file,
             fs::basename,
             fs::path_exists,

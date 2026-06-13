@@ -65,12 +65,19 @@ export interface RecentProject {
  * on-disk baseline; `docText` is the live buffer — the tab is dirty while
  * they diverge. The CodeMirror state (undo history, selection, scroll) is
  * parked per tab by the Editor component, keyed by `path`.
+ *
+ * `kind` is "loading" until the first read classifies the file (model
+ * `LoadTab`): "text" tabs edit normally; a "binary" tab shows a placeholder
+ * sized by `binarySize` and keeps `docText`/`savedText` blank — its bytes
+ * never enter the editor.
  */
 export interface OpenDoc {
   path: string;
   name: string;
   docText: string;
   savedText: string;
+  kind: "loading" | "text" | "binary";
+  binarySize?: number;
 }
 
 const RECENTS_KEY = "dcs.recents";
@@ -345,7 +352,7 @@ class AppState {
       this.activePath = path;
       return;
     }
-    this.openFiles.push({ path, name, docText: "", savedText: "" });
+    this.openFiles.push({ path, name, docText: "", savedText: "", kind: "loading" });
     this.activePath = path;
   }
 
@@ -400,12 +407,25 @@ class AppState {
     return false;
   }
 
-  /** Called by the editor once a file's contents have loaded from disk. */
+  /** Called by the editor once a text file's contents have loaded from disk. */
   onDocLoaded(path: string, text: string) {
     const doc = this.openFiles.find((f) => f.path === path);
     if (!doc) return;
+    doc.kind = "text";
     doc.savedText = text;
     doc.docText = text;
+  }
+
+  /**
+   * Called by the editor when a first-activated tab classifies as binary
+   * (model `MarkBinary`): the buffer stays blank — its bytes never enter the
+   * editor — and the tab shows the placeholder sized by `size`.
+   */
+  onDocBinary(path: string, size: number) {
+    const doc = this.openFiles.find((f) => f.path === path);
+    if (!doc) return;
+    doc.kind = "binary";
+    doc.binarySize = size;
   }
 
   /** Called by the editor on every user edit to the tab for `path`. */
