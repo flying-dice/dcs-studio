@@ -12,6 +12,7 @@
   import { app } from "$lib/state.svelte";
   import { readTextFile } from "$lib/api";
   import { langIntelFor } from "$lib/lang/codemirror";
+  import { editorCommands } from "$lib/editor/commands";
 
   // Injectable file reader so /lab/buffers can drive the real per-tab buffer
   // machinery from a plain browser (no Tauri fs) — same seam convention as
@@ -76,6 +77,9 @@
             app.onDocEdited(path, u.state.doc.toString());
           }
         }),
+        // The IDE's editor-function keymap (toggle comment, move/duplicate
+        // line) — an owned, documented contract, not a basicSetup default.
+        editorCommands,
         themeComp.of(app.cm),
         langComp.of(languageFor(name)),
         langIntelComp.of(langIntelFor(path)),
