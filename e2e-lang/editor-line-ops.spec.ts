@@ -1,7 +1,13 @@
-// E2E: the editor-function keymap — line/selection ops (issue #18), in a plain
-// browser: no Tauri, no engine. Drives the owned `editorCommands` keymap on
-// /lab/editor and reads the document back. Toggle comment, move line, and
-// duplicate line need no syntax tree, so the assertions are exact.
+// E2E: the editor-function keymap — line ops (issue #18), in a plain browser:
+// no Tauri, no engine. Reads the document back after driving keystrokes; toggle
+// comment, move line, and duplicate line need no syntax tree, so the assertions
+// are exact.
+//
+// These specs guard `editorCommands` specifically — not basicSetup's identical
+// defaults. /lab/editor installs a default-precedence decoy that swallows these
+// keys with a no-op, so only `editorCommands` (Prec.high) makes the ops fire.
+// Delete `editorCommands` and every spec below goes red — that is the guarantee
+// (mutation-verified). See the decoy in src/routes/lab/editor/+page.svelte.
 //
 // Expand selection is deliberately absent: it needs a Lezer Lua grammar (the
 // StreamLanguage tree is token-flat, so selectParentSyntax dead-ends) — see
