@@ -49,6 +49,7 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | `model/studio/installer.pds` | `Installer` — manifest-driven `[[install]]` deploy to SavedGames/GameInstall roots (issue #6 R1) |
 | `model/studio/mission.pds` | `MissionScripting` sanitization manager (`crates/app/src/mission.rs`) |
 | `model/studio/lang.pds` | `LanguageIntel` provider layer + `DcsLua` embedded engine face + `RustAnalyzer` hosted-server face (`src/lib/lang/`) |
+| `model/studio/edit.pds` | `Formatting` — editor format (Document/Selection, format-on-save) over the shared `fmt::Fmt` engine (`crates/app/src/format.rs`, `src/lib/editor/format.ts`) |
 | `model/dcslua.pds` | `DcsLuaLs` engine system root |
 | `model/syntax.pds` | Lexer/parser/AST contract (`crates/dcs-lua-syntax`) |
 | `model/lspcore.pds` | Workspace + query layer (`crates/dcs-lua-lsp-core`) |

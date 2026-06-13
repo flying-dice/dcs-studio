@@ -2,7 +2,7 @@
 //! design: unknown sections and fields are ignored so manifests written by
 //! newer tools still load.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -56,6 +56,35 @@ pub fn load(root: &Path) -> Result<Manifest, String> {
     let text =
         std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
     parse(&text)
+}
+
+/// The directory of the nearest `dcs-studio.toml` governing `path`: walk up
+/// from `path` itself when it is a directory, or its parent when it is a file,
+/// returning the first ancestor that holds a manifest. `None` when none does.
+#[must_use]
+pub fn nearest(path: &Path) -> Option<PathBuf> {
+    let start = if path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or(path)
+    };
+    start
+        .ancestors()
+        .find(|dir| dir.join("dcs-studio.toml").is_file())
+        .map(Path::to_path_buf)
+}
+
+/// The `[format]` config governing `path`: the `[format]` table of the
+/// [`nearest`] manifest, house defaults when no manifest is found or the
+/// nearest one cannot be read or parsed. Silent — a malformed manifest must
+/// not wedge formatting; the editor and `dcs-studio fmt` resolve config the
+/// same way so a buffer formatted in the editor matches what CI checks.
+#[must_use]
+pub fn format_config_for(path: &Path) -> dcs_lua_fmt::FormatConfig {
+    nearest(path)
+        .and_then(|dir| load(&dir).ok())
+        .map(|manifest| manifest.format)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -128,6 +157,68 @@ mod tests {
         assert_eq!(
             manifest.format.trailing_comma,
             dcs_lua_fmt::TrailingComma::Multiline
+        );
+    }
+
+    /// A throwaway directory tree under the system temp dir; removed on drop so
+    /// a panicking assertion never leaks a fixture.
+    struct TempTree(PathBuf);
+
+    impl TempTree {
+        fn new(tag: &str) -> Self {
+            let root =
+                std::env::temp_dir().join(format!("dcs-fmtcfg-test-{tag}-{}", std::process::id()));
+            std::fs::create_dir_all(&root).expect("create temp root");
+            TempTree(root)
+        }
+        fn write(&self, rel: &str, contents: &str) {
+            let path = self.0.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).expect("create parent");
+            std::fs::write(path, contents).expect("write file");
+        }
+    }
+
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn format_config_defaults_when_no_manifest() {
+        let tree = TempTree::new("nomanifest");
+        tree.write("src/m.lua", "x = 1\n");
+        assert_eq!(
+            format_config_for(&tree.0.join("src/m.lua")),
+            dcs_lua_fmt::FormatConfig::default()
+        );
+    }
+
+    #[test]
+    fn format_config_reads_nearest_manifest_walking_up() {
+        let tree = TempTree::new("walkup");
+        tree.write(
+            "dcs-studio.toml",
+            "[project]\nname = \"x\"\n\n[format]\nindent_width = 2\n",
+        );
+        // A file nested two levels below the manifest still resolves it.
+        tree.write("a/b/deep.lua", "x = 1\n");
+        let config = format_config_for(&tree.0.join("a/b/deep.lua"));
+        assert_eq!(config.indent_width, 2);
+        // Untouched fields keep their house defaults.
+        assert_eq!(config.max_width, 100);
+    }
+
+    #[test]
+    fn format_config_defaults_when_manifest_is_malformed() {
+        let tree = TempTree::new("malformed");
+        // Present but unparseable manifest must fall back to defaults, never
+        // wedge formatting.
+        tree.write("dcs-studio.toml", "this is = not [valid toml");
+        tree.write("m.lua", "x = 1\n");
+        assert_eq!(
+            format_config_for(&tree.0.join("m.lua")),
+            dcs_lua_fmt::FormatConfig::default()
         );
     }
 }

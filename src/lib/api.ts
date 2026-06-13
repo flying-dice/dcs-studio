@@ -21,6 +21,33 @@ export function writeTextFile(path: string, contents: string): Promise<void> {
   return invoke<void>("write_text_file", { path, contents });
 }
 
+/** A formatting outcome (model `fmt::Formatted`). */
+export interface FormatResult {
+  /** The formatted source, or the input unchanged when `guard_tripped`. */
+  text: string;
+  /**
+   * The formatter's semantic guard rejected the printed text and `text` is
+   * the input unchanged — a formatter bug. The editor warns and keeps the
+   * buffer as-is; it never aborts the action.
+   */
+  guard_tripped: boolean;
+}
+
+/**
+ * Format Lua `text` belonging to the file at `path` through the same engine
+ * the CLI `fmt` runs (its enclosing dcs-studio.toml `[format]` governs style).
+ * `range` (`[start, end)` byte offsets) formats only the statements enclosing
+ * the selection; omit it to format the whole document. Rejects when the
+ * buffer does not parse — the caller keeps the original text.
+ */
+export function formatSource(
+  path: string,
+  text: string,
+  range: [number, number] | null,
+): Promise<FormatResult> {
+  return invoke<FormatResult>("format_source", { path, text, range });
+}
+
 export function basename(path: string): Promise<string> {
   return invoke<string>("basename", { path });
 }

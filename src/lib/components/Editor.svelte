@@ -13,6 +13,12 @@
   import { readTextFile } from "$lib/api";
   import { langIntelFor } from "$lib/lang/codemirror";
   import { editorCommands } from "$lib/editor/commands";
+  import {
+    formatKeymap,
+    formatterFacet,
+    makeTauriFormatter,
+    runFormat,
+  } from "$lib/editor/format";
 
   // Injectable file reader so /lab/buffers can drive the real per-tab buffer
   // machinery from a plain browser (no Tauri fs) — same seam convention as
@@ -66,8 +72,13 @@
           {
             key: "Mod-s",
             preventDefault: true,
-            run: () => {
-              void app.saveFile();
+            run: (v) => {
+              // Format-on-save reformats the buffer into the view first (the
+              // update listener syncs docText), then saveFile writes it.
+              void (async () => {
+                if (app.formatOnSave) await runFormat(v, null);
+                await app.saveFile();
+              })();
               return true;
             },
           },
@@ -80,6 +91,10 @@
         // The IDE's editor-function keymap (toggle comment, move/duplicate
         // line) — an owned, documented contract, not a basicSetup default.
         editorCommands,
+        // Format Document / Selection (Shift-Alt-F) over the shared dcs-lua
+        // engine, reached through the Tauri command for this tab's file.
+        formatKeymap,
+        formatterFacet.of(makeTauriFormatter(path)),
         themeComp.of(app.cm),
         langComp.of(languageFor(name)),
         langIntelComp.of(langIntelFor(path)),

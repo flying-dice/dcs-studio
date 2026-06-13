@@ -1156,6 +1156,7 @@ name = "dcs-studio"
 version = "0.1.0"
 dependencies = [
  "dcs-bridge-client",
+ "dcs-lua-fmt",
  "dcs-studio-project",
  "serde",
  "serde_json",

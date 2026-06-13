@@ -1,6 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod build;
 mod dcs;
+mod format;
 mod fs;
 mod inject;
 mod install_cmd;
@@ -40,6 +41,7 @@ pub fn run() {
             build::toolchain_status,
             build::rust_analyzer_path,
             install_cmd::install_project,
+            format::format_source,
             dcs::dcs_call,
             dcs::dcs_status,
             inject::dcs_detect_installs,

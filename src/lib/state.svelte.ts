@@ -21,6 +21,16 @@ import { wsConnected } from "./dcs-ws";
 import { lang } from "./lang/intel.svelte";
 import type { Extension } from "@codemirror/state";
 
+/** Persist one string to localStorage, swallowing quota / SSR-absence errors. */
+function writeLocalStorage(key: string, value: string): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* ignore quota / serialization errors */
+  }
+}
+
 const EDITOR_THEME_KEY = "dcs.editorTheme";
 
 function loadEditorThemeId(): string {
@@ -30,12 +40,18 @@ function loadEditorThemeId(): string {
 }
 
 function saveEditorThemeId(id: string): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(EDITOR_THEME_KEY, id);
-  } catch {
-    /* ignore quota errors */
-  }
+  writeLocalStorage(EDITOR_THEME_KEY, id);
+}
+
+const FORMAT_ON_SAVE_KEY = "dcs.formatOnSave";
+
+function loadFormatOnSave(): boolean {
+  if (typeof localStorage === "undefined") return false;
+  return localStorage.getItem(FORMAT_ON_SAVE_KEY) === "true";
+}
+
+function saveFormatOnSave(on: boolean): void {
+  writeLocalStorage(FORMAT_ON_SAVE_KEY, String(on));
 }
 
 export interface RecentProject {
@@ -72,12 +88,7 @@ function loadRecents(): RecentProject[] {
 }
 
 function saveRecents(recents: RecentProject[]): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(RECENTS_KEY, JSON.stringify(recents));
-  } catch {
-    /* ignore quota / serialization errors */
-  }
+  writeLocalStorage(RECENTS_KEY, JSON.stringify(recents));
 }
 
 class AppState {
@@ -88,6 +99,9 @@ class AppState {
   editorThemeId = $state<string>(DEFAULT_DARK_THEME);
   lastDark = $state<string>(DEFAULT_DARK_THEME);
   lastLight = $state<string>(DEFAULT_LIGHT_THEME);
+  // Whether the editor reformats the buffer before each save (model
+  // studio::edit::Formatting) — an editor preference, off by default.
+  formatOnSave = $state<boolean>(loadFormatOnSave());
 
   constructor() {
     const id = loadEditorThemeId();
@@ -247,6 +261,12 @@ class AppState {
   /** Flip light/dark, restoring the last editor theme used at that brightness. */
   toggleMode() {
     this.setEditorTheme(this.dark ? this.lastLight : this.lastDark);
+  }
+
+  /** Turn format-on-save on or off (reformat the buffer before each write). */
+  setFormatOnSave(on: boolean) {
+    this.formatOnSave = on;
+    saveFormatOnSave(on);
   }
 
   /** Open the native folder picker, then load the chosen folder as the project. */

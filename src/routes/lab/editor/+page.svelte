@@ -16,6 +16,11 @@
   import { StreamLanguage } from "@codemirror/language";
   import { lua } from "@codemirror/legacy-modes/mode/lua";
   import { editorCommands } from "$lib/editor/commands";
+  import {
+    formatKeymap,
+    formatterFacet,
+    type Formatter,
+  } from "$lib/editor/format";
 
   // Three plain statements: line ops reorder/duplicate/comment them with no
   // dependence on a syntax tree, so the assertions are exact.
@@ -51,6 +56,19 @@
   let docText = $state(INITIAL);
   let ready = $state(false);
 
+  // The real formatter runs in Rust behind the `format_source` Tauri command —
+  // unreachable from this plain browser. A deterministic stub stands in so the
+  // suite can drive the Shift-Alt-F wiring (key → range → applied result): it
+  // records the range it was handed ("doc" for a whole-document format, else
+  // "from,to") and collapses runs of spaces as a recognisable transform. The
+  // engine's actual formatting and range-scoping are proven in Rust
+  // (crates/app/src/format.rs); this exercises only the editor integration.
+  let formatRange = $state("-");
+  const stubFormatter: Formatter = async (text, range) => {
+    formatRange = range ? `${range.from},${range.to}` : "doc";
+    return { text: text.replace(/ {2,}/g, " "), guard_tripped: false };
+  };
+
   onMount(() => {
     const view = new EditorView({
       parent: host,
@@ -61,6 +79,11 @@
           basicSetup,
           StreamLanguage.define(lua),
           editorCommands,
+          // Format Document / Selection (Shift-Alt-F), backed by the stub.
+          // Shift-Alt-F is not a basicSetup default, so removing formatKeymap
+          // makes the key inert and the format specs go red — no decoy needed.
+          formatKeymap,
+          formatterFacet.of(stubFormatter),
           EditorView.updateListener.of((u) => {
             docText = u.state.doc.toString();
           }),
@@ -84,4 +107,7 @@
   <pre
     class="shrink-0 overflow-auto rounded border p-2 text-xs"
     data-testid="doc-text">{docText}</pre>
+  <div class="shrink-0 text-xs text-muted-foreground" data-testid="format-range">
+    {formatRange}
+  </div>
 </div>

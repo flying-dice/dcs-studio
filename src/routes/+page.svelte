@@ -306,6 +306,14 @@
               Dark mode
             </DropdownMenu.CheckboxItem>
 
+            <DropdownMenu.CheckboxItem
+              checked={app.formatOnSave}
+              onCheckedChange={(v) => app.setFormatOnSave(v)}
+            >
+              <Sparkles />
+              Format on save
+            </DropdownMenu.CheckboxItem>
+
             <DropdownMenu.Sub>
               <DropdownMenu.SubTrigger>
                 <Palette />
