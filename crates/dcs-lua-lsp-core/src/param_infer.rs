@@ -134,7 +134,7 @@ pub(crate) fn is_void_return(workspace: &Workspace, path: &str, func: &FuncBody)
     let ast = &entry.parsed.ast;
     let mut firsts = Vec::new();
     collect_returns(ast, func.body, &mut firsts);
-    firsts.is_empty() || firsts.iter().all(|f| f.is_none())
+    firsts.is_empty() || firsts.iter().all(std::option::Option::is_none)
 }
 
 /// The type of a single `return` value expression, reusing an inferred

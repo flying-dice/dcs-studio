@@ -125,6 +125,14 @@ fn resolve_dest(dest: &str, roots: &RootMap) -> Result<PathBuf, String> {
 
 /// Check whether the project's deployed files are present and match their
 /// sources (model: `studio::installer::Installer.StatusProject`).
+///
+/// # Errors
+/// Returns `Err` when the manifest cannot be read or an install rule's `dest`
+/// does not resolve under a named root.
+///
+/// # Panics
+/// Panics if a file-rule source passes `is_file()` yet has no final path
+/// component — not reachable for a real on-disk file.
 pub fn status(root: &Path, roots: &RootMap) -> Result<InstallStatus, String> {
     let manifest = crate::manifest::load(root)?;
     if manifest.install.is_empty() {
@@ -150,7 +158,7 @@ pub fn status(root: &Path, roots: &RootMap) -> Result<InstallStatus, String> {
                 all_ok = false;
             }
         } else if source.is_dir() {
-            for entry in WalkDir::new(&source).into_iter().filter_map(|e| e.ok()) {
+            for entry in WalkDir::new(&source).into_iter().filter_map(std::result::Result::ok) {
                 if !entry.file_type().is_file() {
                     continue;
                 }
@@ -172,11 +180,9 @@ pub fn status(root: &Path, roots: &RootMap) -> Result<InstallStatus, String> {
             // Source missing — check dest by filename only; can't compare content.
             if let Some(name) =
                 Path::new(rule.source.trim_end_matches(['/', '\\'])).file_name()
-            {
-                if dest_dir.join(name).is_file() {
+                && dest_dir.join(name).is_file() {
                     any_installed = true;
                 }
-            }
             all_ok = false;
         }
     }
@@ -192,6 +198,10 @@ pub fn status(root: &Path, roots: &RootMap) -> Result<InstallStatus, String> {
 /// File rules are resolved by filename alone so they work even after a clean
 /// build. Directory rules require the source tree to still exist so the file
 /// list can be reconstructed; if the source is gone the rule is skipped.
+///
+/// # Errors
+/// Returns `Err` when the manifest cannot be read or an install rule's `dest`
+/// does not resolve under a named root.
 pub fn uninstall(root: &Path, roots: &RootMap) -> Result<UninstallReport, String> {
     let manifest = crate::manifest::load(root)?;
     let mut files: Vec<String> = Vec::new();
@@ -202,7 +212,7 @@ pub fn uninstall(root: &Path, roots: &RootMap) -> Result<UninstallReport, String
         let dest_dir = resolve_dest(&rule.dest, roots)?;
         let source = root.join(rule.source.trim_end_matches(['/', '\\']));
         if source.is_dir() {
-            for entry in WalkDir::new(&source).into_iter().filter_map(|e| e.ok()) {
+            for entry in WalkDir::new(&source).into_iter().filter_map(std::result::Result::ok) {
                 if !entry.file_type().is_file() {
                     continue;
                 }
