@@ -22,6 +22,11 @@
   const RUST_ROOT = "C:\\lab\\rsproj";
   const RUST_PATH = "C:\\lab\\rsproj\\main.rs";
   const RUST_SRC = 'fn main() { let x: u32 = "oops"; }\n';
+  // A project-root switch (issue #31 / MR !20): two distinct Cargo roots.
+  const RUST_ROOT_A = "C:\\lab\\proj-a";
+  const RUST_ROOT_B = "C:\\lab\\proj-b";
+  const RUST_A_PATH = "C:\\lab\\proj-a\\main.rs";
+  const RUST_B_PATH = "C:\\lab\\proj-b\\main.rs";
 
   let ready = $state(false);
   let luaFreshWire = $state("");
@@ -33,6 +38,10 @@
   let rustReWire = $state("");
   let rustReMark = $state(0);
   let rustReFinding = $state("");
+  let rustSwitchWire = $state("");
+  let rustSwitchInitRoot = $state("");
+  let rustSwitchFinding = $state("");
+  let rustSameRootWire = $state("");
 
   function lineCharOf(
     text: string,
@@ -76,6 +85,7 @@
   interface Recording {
     sent: string[];
     markCount: number;
+    initRootUri: string;
     emitExit: () => void;
   }
 
@@ -85,7 +95,12 @@
     isNew: boolean,
     kind: "lua" | "rust",
   ): { transport: LspTransport; rec: Recording } {
-    const rec: Recording = { sent: [], markCount: 0, emitExit: () => {} };
+    const rec: Recording = {
+      sent: [],
+      markCount: 0,
+      initRootUri: "",
+      emitExit: () => {},
+    };
     let emitMessage: (raw: string) => void = () => {};
     const transport: LspTransport = {
       async start(onMessage, onExit) {
@@ -96,6 +111,10 @@
       async send(raw: string) {
         const message = JSON.parse(raw);
         if (typeof message.method === "string") rec.sent.push(message.method);
+        // Capture the rootUri the client handshakes with, so a root-switch
+        // test can prove a fresh spawn re-initializes against the NEW root.
+        if (message.method === "initialize")
+          rec.initRootUri = message.params?.rootUri ?? "";
         queueMicrotask(() => {
           // A client→server response (id, no method) needs no reply.
           if (message.id !== undefined && message.method === undefined) return;
@@ -128,6 +147,38 @@
       },
     };
     return { transport, rec };
+  }
+
+  // A stateful fake of the backend host (crates/app/src/lsp.rs): it owns at
+  // most one live server, bound to the root it was spawned for. connect(root)
+  // re-attaches (isNew=false) only when that root matches; any other root
+  // "evicts + spawns fresh" (isNew=true) — exactly what reattach_target's root
+  // key now decides. `lastRec` exposes the most recent spawn's recorded wire.
+  function rootKeyedHost(kind: "lua" | "rust") {
+    let boundRoot: string | null = null;
+    let live = false;
+    let lastRec: Recording = {
+      sent: [],
+      markCount: 0,
+      initRootUri: "",
+      emitExit: () => {},
+    };
+    const connect = async (root: string) => {
+      const isNew = !(live && boundRoot === root);
+      if (isNew) {
+        boundRoot = root;
+        live = true;
+      }
+      const { transport, rec } = recordingTransport(isNew, kind);
+      lastRec = rec;
+      return LspClient.withTransport(transport);
+    };
+    return {
+      connect,
+      get lastRec(): Recording {
+        return lastRec;
+      },
+    };
   }
 
   onMount(() => {
@@ -180,6 +231,53 @@
         rustReFinding = (await provider.diagnostics())[0]?.code ?? "";
       }
 
+      // rust-analyzer, RE-ATTACH AFTER A PROJECT-ROOT SWITCH (issue #31 /
+      // MR !20 regression): a webview reload wipes the FE provider
+      // (client=null) while the backend rust-analyzer SURVIVES, still rooted at
+      // the OLD project. rust-analyzer is root-bound — rootUri is sent once at
+      // initialize and it never didOpens — so a root-blind re-attach keeps
+      // indexing the dead root forever and Rust diagnostics silently die. The
+      // root-keyed host re-attaches only for a matching root; a switch must
+      // spawn fresh and re-initialize against the NEW root.
+      {
+        const host = rootKeyedHost("rust");
+
+        // Before the reload: open project A — fresh spawn, handshake vs A.
+        const before = new RustAnalyzerProvider(host.connect, async () => true);
+        await before.mount([{ path: RUST_A_PATH, text: RUST_SRC }], [], RUST_ROOT_A);
+
+        // Reload: a NEW provider instance (client=null) while the A-rooted
+        // server lives. Open project B (different root): must NOT re-attach to
+        // the stale server — fresh spawn + initialize carrying B's rootUri.
+        const afterSwitch = new RustAnalyzerProvider(
+          host.connect,
+          async () => true,
+        );
+        await afterSwitch.mount(
+          [{ path: RUST_B_PATH, text: RUST_SRC }],
+          [],
+          RUST_ROOT_B,
+        );
+        rustSwitchWire = host.lastRec.sent.join(",");
+        rustSwitchInitRoot = host.lastRec.initRootUri;
+        await afterSwitch.setSource(RUST_B_PATH, RUST_SRC);
+        rustSwitchFinding = (await afterSwitch.diagnostics())[0]?.code ?? "";
+
+        // Reload again, re-open the SAME project B: the live server is now
+        // rooted at B, so this re-attaches with no handshake — the warm path
+        // issue #31 preserves, intact for an unchanged root.
+        const afterSame = new RustAnalyzerProvider(
+          host.connect,
+          async () => true,
+        );
+        await afterSame.mount(
+          [{ path: RUST_B_PATH, text: RUST_SRC }],
+          [],
+          RUST_ROOT_B,
+        );
+        rustSameRootWire = host.lastRec.sent.join(",");
+      }
+
       ready = true;
     })();
   });
@@ -196,4 +294,8 @@
   <div data-testid="reattach-rust-re-wire">«{rustReWire}»</div>
   <div data-testid="reattach-rust-re-mark">{rustReMark}</div>
   <div data-testid="reattach-rust-re-finding">{rustReFinding}</div>
+  <div data-testid="reattach-rust-switch-wire">«{rustSwitchWire}»</div>
+  <div data-testid="reattach-rust-switch-initroot">{rustSwitchInitRoot}</div>
+  <div data-testid="reattach-rust-switch-finding">{rustSwitchFinding}</div>
+  <div data-testid="reattach-rust-same-wire">«{rustSameRootWire}»</div>
 </div>

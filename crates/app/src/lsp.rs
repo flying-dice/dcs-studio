@@ -45,14 +45,24 @@ struct Registry {
 }
 
 impl Registry {
-    /// Physical id of a server safe to RE-ATTACH to for `logical_id`:
-    /// stdin still open (not mid-stop) and the initialize handshake already
-    /// done. A re-attaching client skips the handshake instead of illegally
-    /// re-initializing a live server (the issue-#31 failure).
-    fn reattach_target(&self, logical_id: &str) -> Option<String> {
+    /// Physical id of a server safe to RE-ATTACH to for `logical_id`: stdin
+    /// still open (not mid-stop), the initialize handshake already done, AND
+    /// bound to the same `root` it was spawned for. A re-attaching client
+    /// skips the handshake instead of illegally re-initializing a live server
+    /// (the issue-#31 failure) — but only when the inherited server is rooted
+    /// where the client now wants it.
+    ///
+    /// `root` is an opaque binding scope (rust-analyzer's project root, sent
+    /// once at `initialize` and never re-sent — the server indexes from it for
+    /// life). Re-attaching such a server for a DIFFERENT root would leave it
+    /// indexing the old project while the client believes it switched; refusing
+    /// here makes the caller evict it and spawn one that handshakes against the
+    /// new root (MR !20). `None` = root-agnostic (dcs-lua re-`didOpen`s every
+    /// file each mount), where any request re-attaches.
+    fn reattach_target(&self, logical_id: &str, root: Option<&str>) -> Option<String> {
         let physical = self.logical.get(logical_id)?;
         let handle = self.handles.get(physical)?;
-        if handle.stdin.is_some() && handle.initialized {
+        if handle.stdin.is_some() && handle.initialized && handle.root.as_deref() == root {
             Some(physical.clone())
         } else {
             None
@@ -97,6 +107,10 @@ struct ServerHandle {
     /// Set once the webview reports a completed initialize handshake; gates
     /// the re-attach decision in `lsp_get_or_start`.
     initialized: bool,
+    /// The binding scope this server was spawned for — rust-analyzer's project
+    /// root, fixed at `initialize`. A re-attach must match it
+    /// (`reattach_target`); `None` = root-agnostic (dcs-lua).
+    root: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -149,8 +163,15 @@ pub fn lsp_server_path() -> Result<String, String> {
 /// recreated by a page refresh or HMR asks here on every (re)mount and is
 /// told whether it inherited a live, already-initialized server (re-attach,
 /// `is_new=false`, skip the handshake) or got a fresh spawn (`is_new=true`,
-/// run it). A stale or never-initialized leftover is killed first so the
-/// replacement never shares a physical id — or an event stream — with it.
+/// run it). A stale, never-initialized, or wrong-`root` leftover is killed
+/// first so the replacement never shares a physical id — or an event stream —
+/// with it.
+///
+/// `root` binds the spawn to a scope: a re-attach is granted only for the SAME
+/// root, so a root-bound server (rust-analyzer indexes from its `rootUri`) is
+/// never silently reused for a different project after a reload — that
+/// mismatch evicts it and spawns fresh against the new root (MR !20). `None`
+/// = root-agnostic (dcs-lua).
 #[tauri::command]
 pub fn lsp_get_or_start(
     app: AppHandle,
@@ -158,16 +179,18 @@ pub fn lsp_get_or_start(
     logical_id: String,
     program: String,
     args: Vec<String>,
+    root: Option<String>,
 ) -> Result<StartOutcome, String> {
     let shared = state.0.clone();
 
     // One critical section decides the outcome: re-attach to a healthy
-    // initialized server, or evict any stale leftover and reserve a fresh
-    // physical id. The evicted child is killed AFTER the lock releases, so
-    // its blocking wait never stalls another command.
+    // initialized server rooted where the client wants, or evict any stale
+    // leftover (dead, pre-handshake, OR rooted elsewhere) and reserve a fresh
+    // physical id. The evicted child is killed AFTER the lock releases, so its
+    // blocking wait never stalls another command.
     let (physical, stale) = {
         let mut reg = shared.lock().map_err(|e| e.to_string())?;
-        if let Some(physical) = reg.reattach_target(&logical_id) {
+        if let Some(physical) = reg.reattach_target(&logical_id, root.as_deref()) {
             return Ok(StartOutcome {
                 server_id: physical,
                 is_new: false,
@@ -181,7 +204,7 @@ pub fn lsp_get_or_start(
         let _ = stale.child.wait();
     }
 
-    spawn_server(&app, &shared, &logical_id, &physical, &program, &args)?;
+    spawn_server(&app, &shared, &logical_id, &physical, &program, &args, root)?;
     Ok(StartOutcome {
         server_id: physical,
         is_new: true,
@@ -212,6 +235,7 @@ fn spawn_server(
     physical_id: &str,
     program: &str,
     args: &[String],
+    root: Option<String>,
 ) -> Result<(), String> {
     let mut command = Command::new(program);
     command
@@ -266,6 +290,7 @@ fn spawn_server(
             child,
             stdin: Some(stdin),
             initialized: false,
+            root,
         },
     );
     Ok(())
@@ -451,6 +476,7 @@ mod tests {
                 child,
                 stdin: Some(stdin),
                 initialized: false,
+                root: None,
             },
         );
 
@@ -473,7 +499,13 @@ mod tests {
 
     /// Register a throwaway-backed handle under `logical`/`physical` — also
     /// exercises `Registry::register`, the path `spawn_server` uses.
-    fn insert_handle(reg: &mut Registry, logical: &str, physical: &str, initialized: bool) {
+    fn insert_handle(
+        reg: &mut Registry,
+        logical: &str,
+        physical: &str,
+        initialized: bool,
+        root: Option<&str>,
+    ) {
         let mut child = throwaway_child();
         let stdin = child.stdin.take().expect("piped stdin");
         reg.register(
@@ -483,6 +515,7 @@ mod tests {
                 child,
                 stdin: Some(stdin),
                 initialized,
+                root: root.map(str::to_owned),
             },
         );
     }
@@ -501,32 +534,68 @@ mod tests {
     fn reattach_only_to_a_healthy_initialized_server() {
         let mut reg = Registry::default();
         // Unknown logical id: nothing to inherit.
-        assert_eq!(reg.reattach_target("dcs-lua"), None);
+        assert_eq!(reg.reattach_target("dcs-lua", None), None);
 
         // Live but pre-handshake: re-attaching would skip the initialize the
         // server still expects — refuse.
-        insert_handle(&mut reg, "dcs-lua", "dcs-lua:1", false);
-        assert_eq!(reg.reattach_target("dcs-lua"), None);
+        insert_handle(&mut reg, "dcs-lua", "dcs-lua:1", false, None);
+        assert_eq!(reg.reattach_target("dcs-lua", None), None);
 
         // Handshake done: re-attach to exactly this physical id.
         reg.mark_initialized("dcs-lua:1");
         assert_eq!(
-            reg.reattach_target("dcs-lua").as_deref(),
+            reg.reattach_target("dcs-lua", None).as_deref(),
             Some("dcs-lua:1")
         );
 
         // Mid-stop (stdin closed) is unhealthy even when initialized.
         reg.handles.get_mut("dcs-lua:1").unwrap().stdin = None;
-        assert_eq!(reg.reattach_target("dcs-lua"), None);
+        assert_eq!(reg.reattach_target("dcs-lua", None), None);
 
         drain(&mut reg);
+    }
+
+    /// A root-bound server (rust-analyzer) re-attaches ONLY for the same root.
+    /// A re-attach for a different project root must miss — otherwise the
+    /// inherited server keeps indexing the old root forever (Rust diagnostics
+    /// silently dead after a cross-project reload, MR !20). The miss is what
+    /// drives the caller to evict the stale server and spawn one that
+    /// handshakes against the new root.
+    #[test]
+    fn reattach_requires_matching_root() {
+        let mut reg = Registry::default();
+        insert_handle(
+            &mut reg,
+            "rust-analyzer",
+            "rust-analyzer:1",
+            true,
+            Some("/work/proj-a"),
+        );
+
+        // Same root: re-attach to the warm, already-indexed server.
+        assert_eq!(
+            reg.reattach_target("rust-analyzer", Some("/work/proj-a"))
+                .as_deref(),
+            Some("rust-analyzer:1")
+        );
+        // Different root: the live server is rooted elsewhere — refuse, so the
+        // caller evicts it and spawns fresh against the new root.
+        assert_eq!(reg.reattach_target("rust-analyzer", Some("/work/proj-b")), None);
+
+        // The eviction the caller then performs clears both index levels, so
+        // the next get_or_start spawns cleanly under a fresh physical id.
+        let mut evicted = reg.remove("rust-analyzer").expect("stale present");
+        let _ = evicted.child.kill();
+        let _ = evicted.child.wait();
+        assert!(reg.handles.is_empty());
+        assert!(reg.logical.is_empty());
     }
 
     /// Evicting a stale server clears both index levels and is idempotent.
     #[test]
     fn remove_evicts_logical_and_physical() {
         let mut reg = Registry::default();
-        insert_handle(&mut reg, "dcs-lua", "dcs-lua:1", true);
+        insert_handle(&mut reg, "dcs-lua", "dcs-lua:1", true, None);
 
         let mut evicted = reg.remove("dcs-lua").expect("handle present");
         let _ = evicted.child.kill();

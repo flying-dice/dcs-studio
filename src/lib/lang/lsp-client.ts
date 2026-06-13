@@ -49,6 +49,11 @@ class TauriTransport implements LspTransport {
     private readonly logicalId: string,
     private readonly program: string,
     private readonly args: string[],
+    // The scope this spawn is bound to (a root-bound server's project root),
+    // or null when root-agnostic. The backend grants a re-attach only for a
+    // matching root, so a server rooted at the old project is never silently
+    // reused after a switch (issue #31 / MR !20).
+    private readonly root: string | null,
   ) {}
 
   async start(
@@ -62,6 +67,7 @@ class TauriTransport implements LspTransport {
       logicalId: this.logicalId,
       program: this.program,
       args: this.args,
+      root: this.root,
     });
     this.physicalId = physicalId;
     // Listen only after the spawn returns the physical id. The gap is safe:
@@ -111,17 +117,21 @@ export class LspClient {
   private constructor(private readonly transport: LspTransport) {}
 
   /**
-   * Spawn (or re-attach to) `program args` behind the backend host. The
-   * `isNew` flag is true for a fresh spawn the caller must hand-shake,
-   * false when re-attached to a server that survived a webview reload.
+   * Spawn (or re-attach to) `program args` behind the backend host. `root`
+   * binds the spawn to a scope (a root-bound server's project root, or null
+   * when root-agnostic): the backend re-attaches only for a matching root,
+   * else spawns fresh. The `isNew` flag is true for a fresh spawn the caller
+   * must hand-shake, false when re-attached to a server that survived a
+   * webview reload AND is rooted where the caller now wants it.
    */
   static async start(
     logicalId: string,
     program: string,
     args: string[],
+    root: string | null,
   ): Promise<{ client: LspClient; isNew: boolean }> {
     return LspClient.withTransport(
-      new TauriTransport(logicalId, program, args),
+      new TauriTransport(logicalId, program, args, root),
     );
   }
 

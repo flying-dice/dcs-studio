@@ -64,3 +64,35 @@ test("a re-attached rust-analyzer skips the handshake and the didOpen storm", as
     "E0308",
   );
 });
+
+test("a re-attach after a project-root switch spawns fresh and re-initializes against the new root", async ({
+  page,
+}) => {
+  // The MR's headline regression (CODEOWNER, MR !20): rust-analyzer is
+  // root-bound, so a reload that re-attaches to the OLD-rooted server leaves
+  // Rust diagnostics silently dead. After the fix a SWITCHED root must NOT
+  // reuse it — a fresh handshake runs (initialize → initialized), and it
+  // carries the NEW rootUri, not the stale one.
+  await expect(page.getByTestId("reattach-rust-switch-wire")).toHaveText(
+    "«initialize,initialized»",
+  );
+  await expect(page.getByTestId("reattach-rust-switch-initroot")).toContainText(
+    "proj-b",
+  );
+  await expect(
+    page.getByTestId("reattach-rust-switch-initroot"),
+  ).not.toContainText("proj-a");
+  // Diagnostics for the NEW root surface — the "findings refresh" the old
+  // root-blind re-attach could never deliver.
+  await expect(page.getByTestId("reattach-rust-switch-finding")).toHaveText(
+    "E0308",
+  );
+});
+
+test("a re-attach to the unchanged root still skips the handshake", async ({
+  page,
+}) => {
+  // Re-opening the SAME root after the switch re-attaches warm — issue #31's
+  // skip-handshake path, intact for an unchanged root (no re-init regression).
+  await expect(page.getByTestId("reattach-rust-same-wire")).toHaveText("«»");
+});

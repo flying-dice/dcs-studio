@@ -38,7 +38,10 @@ const PUBLISH_TIMEOUT_MS = 3000;
 /** Production connection: ask the backend where the CLI lives, host it. */
 async function connectViaHost(): Promise<{ client: LspClient; isNew: boolean }> {
   const program = await invoke<string>("lsp_server_path");
-  return LspClient.start("dcs-lua", program, ["lsp"]);
+  // Root-agnostic: dcs-lua takes `rootUri: null` and re-`didOpen`s every file
+  // on each mount, so a re-attach is correct regardless of project root —
+  // pass null and the backend re-attaches by logical id alone.
+  return LspClient.start("dcs-lua", program, ["lsp"], null);
 }
 
 export class LspLuaProvider implements LanguageProvider {

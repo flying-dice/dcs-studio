@@ -45,12 +45,17 @@ import type {
 const PUBLISH_TIMEOUT_MS = 3000;
 
 /** Production connection: ask the backend for the binary, host it. */
-async function connectViaHost(): Promise<{
+async function connectViaHost(root: string): Promise<{
   client: LspClient;
   isNew: boolean;
 }> {
   const program = await invoke<string>("rust_analyzer_path");
-  return LspClient.start("rust-analyzer", program, []);
+  // rust-analyzer is root-bound: it indexes from the `rootUri` sent once at
+  // initialize and never re-roots. Pass `root` as the re-attach key so the
+  // backend re-attaches only to a server rooted here — a different root evicts
+  // the stale server and spawns fresh, re-initializing against the new project
+  // (issue #31 / MR !20).
+  return LspClient.start("rust-analyzer", program, [], root);
 }
 
 /** Production Cargo.toml probe through the backend fs commands. */
@@ -76,7 +81,7 @@ export class RustAnalyzerProvider implements LanguageProvider {
 
   /** Both seams injectable so `/lab/rust` drives this exact class. */
   constructor(
-    private readonly connect: () => Promise<{
+    private readonly connect: (root: string) => Promise<{
       client: LspClient;
       isNew: boolean;
     }> = connectViaHost,
@@ -123,7 +128,7 @@ export class RustAnalyzerProvider implements LanguageProvider {
 
     if (!this.client) {
       try {
-        const { client, isNew } = await this.connect();
+        const { client, isNew } = await this.connect(root);
         this.client = client;
         this.client.onNotification(
           "textDocument/publishDiagnostics",
@@ -143,10 +148,12 @@ export class RustAnalyzerProvider implements LanguageProvider {
           this.versions.clear();
           this.mountedRoot = null;
         });
-        // A server re-attached after a webview reload keeps its rootUri and
-        // index; re-initializing it is the issue-#31 protocol violation.
-        // Only a fresh spawn handshakes (and re-walks the project); findings
-        // for a re-attached server refresh on the next edit.
+        // A re-attach (isNew=false) now happens only for the SAME root: the
+        // backend keys re-attach on the project root, evicting a server bound
+        // to a different root and spawning fresh (isNew=true) so this mount
+        // re-initializes against the new rootUri. So a re-attached server is
+        // already indexing THIS root — skipping the handshake is safe and its
+        // findings stand; re-initializing a live server is the #31 violation.
         if (isNew) {
           await this.client.request("initialize", {
             processId: null,
