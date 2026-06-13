@@ -17,11 +17,32 @@ import {
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
+import { canonicalPath } from "./paths";
 import { wsConnected } from "./dcs-ws";
 import { lang } from "./lang/intel.svelte";
+import { todos } from "./todos.svelte";
 import type { Extension } from "@codemirror/state";
 
 const EDITOR_THEME_KEY = "dcs.editorTheme";
+const PANEL_SIZES_KEY = "dcs.panelSizes";
+
+const _pw = (() => {
+  if (typeof localStorage === "undefined") return { left: 270, right: 270, bottom: 208 };
+  try {
+    const raw = localStorage.getItem(PANEL_SIZES_KEY);
+    const p = raw ? JSON.parse(raw) : {};
+    return {
+      left:   typeof p.left   === "number" ? p.left   : 270,
+      right:  typeof p.right  === "number" ? p.right  : 270,
+      bottom: typeof p.bottom === "number" ? p.bottom : 208,
+    };
+  } catch { return { left: 270, right: 270, bottom: 208 }; }
+})();
+
+function savePanelSizes(left: number, right: number, bottom: number): void {
+  try { localStorage.setItem(PANEL_SIZES_KEY, JSON.stringify({ left, right, bottom })); }
+  catch { /* ignore */ }
+}
 
 function loadEditorThemeId(): string {
   if (typeof localStorage === "undefined") return DEFAULT_DARK_THEME;
@@ -62,6 +83,19 @@ export interface OpenDoc {
   savedText: string;
   kind: "loading" | "text" | "binary";
   binarySize?: number;
+}
+
+/**
+ * openPath / closeProject's environment-touching collaborators: basename
+ * resolution (a Tauri command) and the language-engine mount/reset.
+ * Injectable so the browser lab (/lab/project-switch) can drive the real
+ * switch/close guards without Tauri — same seam convention as LangIntel's
+ * IntelFs.
+ */
+export interface ProjectOps {
+  basename(path: string): Promise<string>;
+  mountWorkspace(path: string): Promise<void>;
+  resetWorkspace(): void;
 }
 
 const RECENTS_KEY = "dcs.recents";
@@ -118,6 +152,17 @@ class AppState {
   openFiles = $state<OpenDoc[]>([]);
   activePath = $state<string | null>(null);
   saving = $state(false);
+  // One project switch/close at a time: under Tauri the confirm dialog is
+  // async (it doesn't block like window.confirm), so a double-click on a
+  // recent must not run the flow — or the dialog — twice (mirrors `saving`).
+  switching = $state(false);
+
+  /** See `ProjectOps` — the lab route swaps in in-memory stand-ins. */
+  projectOps: ProjectOps = {
+    basename,
+    mountWorkspace: (path) => lang.mountWorkspace(path),
+    resetWorkspace: () => lang.reset(),
+  };
 
   /** The active tab's record, if any file is open. */
   get activeDoc(): OpenDoc | null {
@@ -236,6 +281,10 @@ class AppState {
   rightTool = $state<string | null>(null);
   bottomTool = $state<string | null>(null);
 
+  leftPanelWidth   = $state(_pw.left);
+  rightPanelWidth  = $state(_pw.right);
+  bottomPanelHeight = $state(_pw.bottom);
+
   /** The CodeMirror extension for the currently selected editor theme. */
   get cm(): Extension {
     return editorThemeById(this.editorThemeId).ext;
@@ -263,18 +312,38 @@ class AppState {
     await this.openPath(path);
   }
 
-  /** Load a project by absolute path (from the picker or a recent entry). */
-  async openPath(path: string) {
-    this.rootPath = path;
-    this.rootName = await basename(path);
-    this.openFiles = [];
-    this.activePath = null;
-    this.leftTool = "project";
-    this.remember(path, this.rootName);
-    // Project-opened announcement: mount the workspace into the language
-    // engine (model/studio/lang.pds MountWorkspace). Fire-and-forget — an
-    // engine failure is non-fatal and surfaces in the status bar.
-    void lang.mountWorkspace(path);
+  /**
+   * Load a project by absolute path (from the picker or a recent entry).
+   * Switching away while open tabs have unsaved edits asks ONE count-naming
+   * confirmation (model `OpenProject`); declining aborts the switch with
+   * every tab, buffer, dirty flag, and the current project intact. The
+   * initial open (no tabs yet) never prompts — the dirty count is 0.
+   */
+  async openPath(path: string): Promise<void> {
+    if (this.switching) return;
+    this.switching = true;
+    try {
+      const dirty = this.countDirtyTabs();
+      if (dirty > 0) {
+        const confirmed = await this.confirmDiscard(this.discardPrompt(dirty));
+        if (!confirmed) return;
+      }
+      this.rootPath = path;
+      this.rootName = await this.projectOps.basename(path);
+      this.openFiles = [];
+      this.activePath = null;
+      this.leftTool = "project";
+      this.remember(path, this.rootName);
+      // Project-opened announcement: mount the workspace into the language
+      // engine (model/studio/lang.pds MountWorkspace). Fire-and-forget — an
+      // engine failure is non-fatal and surfaces in the status bar.
+      void this.projectOps.mountWorkspace(path);
+      // …and rescan comment tags for the Todos panel (model/studio/todos.pds
+      // RefreshAll) — equally fire-and-forget and non-fatal.
+      void todos.refreshAll(path);
+    } finally {
+      this.switching = false;
+    }
   }
 
   /**
@@ -287,13 +356,42 @@ class AppState {
     return path;
   }
 
-  /** Return to the welcome screen without quitting. */
-  closeProject() {
-    this.rootPath = null;
-    this.rootName = "";
-    this.openFiles = [];
-    this.activePath = null;
-    lang.reset();
+  /**
+   * Return to the welcome screen without quitting (model `CloseProject`).
+   * Same guard as openPath: unsaved tabs need one count-naming
+   * confirmation, and declining keeps the workspace exactly as it was.
+   */
+  async closeProject(): Promise<void> {
+    if (this.switching) return;
+    this.switching = true;
+    try {
+      const dirty = this.countDirtyTabs();
+      if (dirty > 0) {
+        const confirmed = await this.confirmDiscard(this.discardPrompt(dirty));
+        if (!confirmed) return;
+      }
+      this.rootPath = null;
+      this.rootName = "";
+      this.openFiles = [];
+      this.activePath = null;
+      this.projectOps.resetWorkspace();
+      todos.reset();
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  /** How many open tabs have unsaved edits — the blast radius a project
+   * switch or close would discard (model `CountDirtyTabs`). */
+  private countDirtyTabs(): number {
+    return this.openFiles.filter((f) => f.docText !== f.savedText).length;
+  }
+
+  /** The count-naming confirmation prompt (model `DiscardPrompt`). */
+  private discardPrompt(count: number): string {
+    return count === 1
+      ? "1 file has unsaved changes. Discard it and continue?"
+      : `${count} files have unsaved changes. Discard them and continue?`;
   }
 
   /** Record (or bump) a project in the recents list. */
@@ -326,14 +424,29 @@ class AppState {
    * activation and reports it via `onDocLoaded`.
    */
   openFile(path: string, name: string, jumpTo?: { line: number; col: number }) {
+    // One identity per file no matter the source: the file tree gives an
+    // upper-case Windows drive letter, a Problems-click's path comes round-
+    // trip through a language server's file:// URI (lower-cased). Canonicalise
+    // before the dedup or the same file opens twice (model/studio/core.pds
+    // CanonicalPath, OpenFileHasOneIdentity).
+    const canonical = canonicalPath(path);
     this.pendingJump = jumpTo ?? null;
-    const existing = this.openFiles.find((f) => f.path === path);
+    const existing = this.openFiles.find((f) => f.path === canonical);
     if (existing) {
-      this.activePath = path;
+      this.activePath = canonical;
       return;
     }
-    this.openFiles.push({ path, name, docText: "", savedText: "", kind: "loading" });
-    this.activePath = path;
+    // Combine both lines of work: develop's canonical-path identity (so the
+    // same file never opens twice) + main's load state machine (`kind` starts
+    // "loading" until the first read classifies the file — issue #30).
+    this.openFiles.push({
+      path: canonical,
+      name,
+      docText: "",
+      savedText: "",
+      kind: "loading",
+    });
+    this.activePath = canonical;
   }
 
   /** Make an already-open tab the active one (model `ActivateTab`). */
@@ -350,7 +463,9 @@ class AppState {
     const tab = this.openFiles.find((f) => f.path === path);
     if (!tab) return;
     if (tab.docText !== tab.savedText) {
-      const confirmed = await this.confirmDiscard(tab.name);
+      const confirmed = await this.confirmDiscard(
+        `${tab.name} has unsaved changes. Close it and discard them?`,
+      );
       if (!confirmed) return;
     }
     // Re-locate the tab: the list may have changed while the dialog was up.
@@ -369,15 +484,15 @@ class AppState {
   }
 
   /**
-   * Ask the developer before discarding a dirty tab (model `ConfirmDiscard`).
-   * Dual-path like dcsCall: the native dialog in the packaged app
-   * (window.confirm is a non-functional stub in Tauri's webview),
-   * window.confirm in a plain browser (vite dev, Playwright). With no
-   * confirm surface at all the answer is NO — never silently discard
-   * unsaved work.
+   * Ask the developer before discarding unsaved edits — one tab's
+   * (closeFile) or every dirty tab's (project switch/close); the caller
+   * provides the prompt (model `ConfirmDiscard`). Dual-path like dcsCall:
+   * the native dialog in the packaged app (window.confirm is a
+   * non-functional stub in Tauri's webview), window.confirm in a plain
+   * browser (vite dev, Playwright). With no confirm surface at all the
+   * answer is NO — never silently discard unsaved work.
    */
-  private async confirmDiscard(name: string): Promise<boolean> {
-    const message = `${name} has unsaved changes. Close it and discard them?`;
+  private async confirmDiscard(message: string): Promise<boolean> {
     if (isTauri()) {
       return confirmDialog(message, { title: "Unsaved changes", kind: "warning" });
     }
@@ -429,6 +544,9 @@ class AppState {
       const text = doc.docText;
       await writeTextFile(doc.path, text);
       doc.savedText = text;
+      // Saved-file rescan for the Todos panel (model/studio/todos.pds
+      // RefreshFile): splices only this file's entries.
+      void todos.refreshFile(doc.path);
     } finally {
       this.saving = false;
     }
@@ -438,6 +556,13 @@ class AppState {
   toggleTool(stripe: "left" | "right" | "bottom", id: string) {
     const key = `${stripe}Tool` as const;
     this[key] = this[key] === id ? null : id;
+  }
+
+  setPanelSize(side: "left" | "right" | "bottom", size: number) {
+    if (side === "left")        this.leftPanelWidth   = size;
+    else if (side === "right")  this.rightPanelWidth  = size;
+    else                        this.bottomPanelHeight = size;
+    savePanelSizes(this.leftPanelWidth, this.rightPanelWidth, this.bottomPanelHeight);
   }
 }
 

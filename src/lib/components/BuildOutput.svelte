@@ -6,28 +6,16 @@
   import { onMount } from "svelte";
   import { app } from "$lib/state.svelte";
   import { build } from "$lib/build.svelte";
-  import { installProject } from "$lib/api";
+  import { installer } from "$lib/install.svelte";
+  import { cn } from "$lib/utils.js";
   import { Button } from "$lib/components/ui/button/index.js";
-  import { Hammer, PackageCheck, LoaderCircle } from "@lucide/svelte";
+  import { Hammer, PackageCheck, PackageMinus, LoaderCircle } from "@lucide/svelte";
 
   let outputHost = $state<HTMLDivElement | undefined>();
-  let installing = $state(false);
 
-  async function install() {
-    if (!app.rootPath || installing) return;
-    installing = true;
-    try {
-      const report = await installProject(app.rootPath);
-      build.lines.push(`Installed ${report.copied} file(s).`);
-    } catch (e) {
-      build.lines.push(`Install failed: ${e instanceof Error ? e.message : e}`);
-    } finally {
-      installing = false;
-    }
-  }
-
-  onMount(() => {
+  onMount(async () => {
     void build.refreshToolchain();
+    if (app.rootPath) await installer.refreshStatus(app.rootPath);
   });
 
   // Keep the latest output in view (same pattern as LuaConsole.svelte).
@@ -62,16 +50,53 @@
       class="text-muted-foreground hover:text-foreground"
       title="Install per dcs-studio.toml [[install]] rules"
       data-testid="build-install"
-      disabled={installing || !app.rootPath}
-      onclick={() => install()}
+      disabled={installer.installing || !app.rootPath}
+      onclick={() => app.rootPath && installer.install(app.rootPath)}
     >
-      {#if installing}
+      {#if installer.installing}
         <LoaderCircle class="animate-spin" />
       {:else}
         <PackageCheck />
       {/if}
       Install
     </Button>
+    <Button
+      variant="ghost"
+      size="sm"
+      class="text-muted-foreground hover:text-foreground"
+      title="Remove installed files"
+      data-testid="build-uninstall"
+      disabled={installer.uninstalling || !app.rootPath || !installer.status?.installed}
+      onclick={() => app.rootPath && installer.uninstall(app.rootPath)}
+    >
+      {#if installer.uninstalling}
+        <LoaderCircle class="animate-spin" />
+      {:else}
+        <PackageMinus />
+      {/if}
+      Uninstall
+    </Button>
+
+    {#if installer.status}
+      <span class="flex items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground">
+        <span
+          class={cn(
+            "size-1.5 rounded-full",
+            !installer.status.installed && "bg-muted-foreground/40",
+            installer.status.installed &&
+              (installer.status.up_to_date ? "bg-emerald-500" : "bg-amber-500"),
+          )}
+        ></span>
+        {#if !installer.status.installed}
+          not installed
+        {:else if installer.status.up_to_date}
+          installed
+        {:else}
+          installed · outdated
+        {/if}
+      </span>
+    {/if}
+
     <span
       class="ml-auto truncate font-mono text-[11px] tracking-wide text-muted-foreground"
       data-testid="build-status"

@@ -13,3 +13,17 @@ path = "src/lib.rs"
 [dependencies]
 dcs-lua-syntax = { path = "../dcs-lua-syntax" }
 serde = { version = "1", features = ["derive"] }
+# Facade only (wasm-safe); native binaries install the subscriber.
+tracing = { workspace = true }
+
+[dev-dependencies]
+cucumber = "0.21"
+tokio = { workspace = true }
+
+# The LuaLS-parity BDD suite (plan "Cucumber harness"): Gherkin features
+# under tests/features with step definitions carrying the assertions. The
+# real cucumber runner, distinct from the golden-diffing conformance tests
+# in dcs-lua-syntax.
+[[test]]
+name = "parity"
+harness = false

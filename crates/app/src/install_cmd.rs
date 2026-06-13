@@ -7,7 +7,19 @@
 
 use std::path::Path;
 
-use dcs_studio_project::{install, InstallReport, RootMap};
+use dcs_studio_project::{install, InstallReport, InstallStatus, RootMap, UninstallReport};
+
+fn resolve_roots() -> Result<RootMap, String> {
+    let saved_games = crate::inject::default_write_dir().ok_or_else(|| {
+        "No DCS Saved Games write dir found — run DCS once so it creates \
+         Saved Games\\DCS, then try again"
+            .to_string()
+    })?;
+    Ok(RootMap {
+        saved_games,
+        game_install: crate::mission::default_game_install(),
+    })
+}
 
 /// Install the project at `root` per its manifest's `[[install]]` rules.
 #[tauri::command]
@@ -19,14 +31,17 @@ pub fn install_project(root: String) -> Result<InstallReport, String> {
     if manifest.install.is_empty() {
         return Err("nothing to install: the manifest declares no [[install]] rules".to_string());
     }
-    let saved_games = crate::inject::default_write_dir().ok_or_else(|| {
-        "No DCS Saved Games write dir found — run DCS once so it creates \
-         Saved Games\\DCS, then try again"
-            .to_string()
-    })?;
-    let roots = RootMap {
-        saved_games,
-        game_install: crate::mission::default_game_install(),
-    };
-    install::install(Path::new(&root), &roots)
+    install::install(Path::new(&root), &resolve_roots()?)
+}
+
+/// Check whether the project's deployed files are present and current.
+#[tauri::command]
+pub fn install_status(root: String) -> Result<InstallStatus, String> {
+    install::status(Path::new(&root), &resolve_roots()?)
+}
+
+/// Remove every file the project's `[[install]]` rules deployed.
+#[tauri::command]
+pub fn uninstall_project(root: String) -> Result<UninstallReport, String> {
+    install::uninstall(Path::new(&root), &resolve_roots()?)
 }

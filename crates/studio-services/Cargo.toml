@@ -1,0 +1,21 @@
+# Tauri-free IDE service logic shared by the desktop app (thin Tauri command
+# wrappers in crates/app) and the headless MCP server in dcs-studio-cli
+# (model/studio/mcp.pds, issue #8).
+#
+# Edition 2021 to match the app crate the logic moved from; the engine
+# crates' pedantic workspace lints are deliberately not opted into so the
+# moved code stays behaviourally identical.
+[package]
+name = "studio-services"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+dcs-bridge-client = { path = "../dcs-bridge-client" }
+dcs-studio-project = { path = "../dcs-studio-project" }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"

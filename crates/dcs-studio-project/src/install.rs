@@ -17,6 +17,21 @@ pub struct RootMap {
 #[derive(Debug, serde::Serialize)]
 pub struct InstallReport {
     pub copied: usize,
+    pub files: Vec<String>,
+}
+
+/// What an uninstall pass did.
+#[derive(Debug, serde::Serialize)]
+pub struct UninstallReport {
+    pub removed: usize,
+    pub files: Vec<String>,
+}
+
+/// Whether the project's deployed files are present and current.
+#[derive(Debug, serde::Serialize)]
+pub struct InstallStatus {
+    pub installed: bool,
+    pub up_to_date: bool,
 }
 
 /// Apply every `[[install]]` rule of the project at `root`, rule by rule.
@@ -33,7 +48,7 @@ pub fn install(root: &Path, roots: &RootMap) -> Result<InstallReport, String> {
     if manifest.install.is_empty() {
         return Err("dcs-studio.toml declares no [[install]] rules — nothing to install".into());
     }
-    let mut copied = 0usize;
+    let mut files: Vec<String> = Vec::new();
     for rule in &manifest.install {
         if !stays_under(&rule.source) {
             return Err(format!(
@@ -41,7 +56,7 @@ pub fn install(root: &Path, roots: &RootMap) -> Result<InstallReport, String> {
                 rule.source
             ));
         }
-        let dest = resolve_dest(&rule.dest, roots)?;
+        let dest_dir = resolve_dest(&rule.dest, roots)?;
         let source = root.join(rule.source.trim_end_matches(['/', '\\']));
         if !source.exists() {
             let hint = if Path::new(&rule.source).starts_with("target") {
@@ -55,16 +70,19 @@ pub fn install(root: &Path, roots: &RootMap) -> Result<InstallReport, String> {
             ));
         }
         if source.is_dir() {
-            copied += copy_tree(&source, &dest)?;
+            let copied = copy_tree(&source, &dest_dir)?;
+            files.extend(copied.into_iter().map(|p| p.to_string_lossy().into_owned()));
         } else {
             let file_name = source
                 .file_name()
                 .ok_or_else(|| format!("install rule source '{}' has no file name", rule.source))?;
-            copy_file(&source, &dest.join(file_name))?;
-            copied += 1;
+            let dest = dest_dir.join(file_name);
+            copy_file(&source, &dest)?;
+            files.push(dest.to_string_lossy().into_owned());
         }
     }
-    Ok(InstallReport { copied })
+    let copied = files.len();
+    Ok(InstallReport { copied, files })
 }
 
 /// Every component is a plain name — no `..`, no `.`, no absolute or
@@ -105,9 +123,119 @@ fn resolve_dest(dest: &str, roots: &RootMap) -> Result<PathBuf, String> {
     }
 }
 
-/// Copy every file under `source` to the same relative path under `dest`.
-fn copy_tree(source: &Path, dest: &Path) -> Result<usize, String> {
-    let mut copied = 0usize;
+/// Check whether the project's deployed files are present and match their
+/// sources (model: `studio::installer::Installer.StatusProject`).
+pub fn status(root: &Path, roots: &RootMap) -> Result<InstallStatus, String> {
+    let manifest = crate::manifest::load(root)?;
+    if manifest.install.is_empty() {
+        return Ok(InstallStatus { installed: false, up_to_date: false });
+    }
+    let mut any_installed = false;
+    let mut all_ok = true;
+    for rule in &manifest.install {
+        if !stays_under(&rule.source) {
+            all_ok = false;
+            continue;
+        }
+        let dest_dir = resolve_dest(&rule.dest, roots)?;
+        let source = root.join(rule.source.trim_end_matches(['/', '\\']));
+        if source.is_file() {
+            let dest = dest_dir.join(source.file_name().unwrap());
+            if dest.is_file() {
+                any_installed = true;
+                if fs::read(&source).ok() != fs::read(&dest).ok() {
+                    all_ok = false;
+                }
+            } else {
+                all_ok = false;
+            }
+        } else if source.is_dir() {
+            for entry in WalkDir::new(&source).into_iter().filter_map(|e| e.ok()) {
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                let Ok(relative) = entry.path().strip_prefix(&source) else {
+                    all_ok = false;
+                    continue;
+                };
+                let dest = dest_dir.join(relative);
+                if dest.is_file() {
+                    any_installed = true;
+                    if fs::read(entry.path()).ok() != fs::read(&dest).ok() {
+                        all_ok = false;
+                    }
+                } else {
+                    all_ok = false;
+                }
+            }
+        } else {
+            // Source missing — check dest by filename only; can't compare content.
+            if let Some(name) =
+                Path::new(rule.source.trim_end_matches(['/', '\\'])).file_name()
+            {
+                if dest_dir.join(name).is_file() {
+                    any_installed = true;
+                }
+            }
+            all_ok = false;
+        }
+    }
+    Ok(InstallStatus {
+        installed: any_installed,
+        up_to_date: any_installed && all_ok,
+    })
+}
+
+/// Remove every file that the project's `[[install]]` rules deployed
+/// (model: `studio::installer::Installer.UninstallProject`).
+///
+/// File rules are resolved by filename alone so they work even after a clean
+/// build. Directory rules require the source tree to still exist so the file
+/// list can be reconstructed; if the source is gone the rule is skipped.
+pub fn uninstall(root: &Path, roots: &RootMap) -> Result<UninstallReport, String> {
+    let manifest = crate::manifest::load(root)?;
+    let mut files: Vec<String> = Vec::new();
+    for rule in &manifest.install {
+        if !stays_under(&rule.source) {
+            continue;
+        }
+        let dest_dir = resolve_dest(&rule.dest, roots)?;
+        let source = root.join(rule.source.trim_end_matches(['/', '\\']));
+        if source.is_dir() {
+            for entry in WalkDir::new(&source).into_iter().filter_map(|e| e.ok()) {
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                if let Ok(relative) = entry.path().strip_prefix(&source) {
+                    let dest = dest_dir.join(relative);
+                    if dest.is_file() {
+                        let _ = fs::remove_file(&dest);
+                        files.push(dest.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        } else {
+            let file_name = Path::new(rule.source.trim_end_matches(['/', '\\']))
+                .file_name()
+                .ok_or_else(|| {
+                    format!("install rule source '{}' has no file name", rule.source)
+                })?;
+            let dest = dest_dir.join(file_name);
+            if dest.is_file() {
+                fs::remove_file(&dest)
+                    .map_err(|e| format!("removing {}: {e}", dest.display()))?;
+                files.push(dest.to_string_lossy().into_owned());
+            }
+        }
+    }
+    let removed = files.len();
+    Ok(UninstallReport { removed, files })
+}
+
+/// Copy every file under `source` to the same relative path under `dest`,
+/// returning the list of destination paths written.
+fn copy_tree(source: &Path, dest: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut written: Vec<PathBuf> = Vec::new();
     for entry in WalkDir::new(source) {
         let entry = entry.map_err(|e| format!("walking {}: {e}", source.display()))?;
         if !entry.file_type().is_file() {
@@ -117,10 +245,11 @@ fn copy_tree(source: &Path, dest: &Path) -> Result<usize, String> {
             .path()
             .strip_prefix(source)
             .map_err(|e| format!("resolving {}: {e}", entry.path().display()))?;
-        copy_file(entry.path(), &dest.join(relative))?;
-        copied += 1;
+        let dest_file = dest.join(relative);
+        copy_file(entry.path(), &dest_file)?;
+        written.push(dest_file);
     }
-    Ok(copied)
+    Ok(written)
 }
 
 fn copy_file(source: &Path, dest: &Path) -> Result<(), String> {

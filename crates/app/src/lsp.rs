@@ -41,12 +41,13 @@ struct ExitPayload {
     code: Option<i32>,
 }
 
-/// Resolve the dcs-studio-cli binary: next to the app executable (both
-/// dev `target/debug` and packaged installs lay them out side by side),
-/// overridable via `DCS_STUDIO_CLI`.
+/// Resolve the `lua-analyzer` binary — the Lua language server, hosted like
+/// rust-analyzer (a standalone process the backend spawns). It sits next to
+/// the app executable (both dev `target/debug` and packaged installs lay them
+/// out side by side), overridable via `DCS_LUA_ANALYZER`.
 #[tauri::command]
-pub fn lsp_server_path() -> Result<String, String> {
-    if let Ok(overridden) = std::env::var("DCS_STUDIO_CLI") {
+pub fn lua_analyzer_path() -> Result<String, String> {
+    if let Ok(overridden) = std::env::var("DCS_LUA_ANALYZER") {
         return Ok(overridden);
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -54,15 +55,15 @@ pub fn lsp_server_path() -> Result<String, String> {
         .parent()
         .ok_or("executable has no parent directory")?
         .join(if cfg!(windows) {
-            "dcs-studio-cli.exe"
+            "lua-analyzer.exe"
         } else {
-            "dcs-studio-cli"
+            "lua-analyzer"
         });
     if sibling.is_file() {
         Ok(sibling.display().to_string())
     } else {
         Err(format!(
-            "dcs-studio-cli not found at {} (build it with `cargo build -p dcs-studio-cli`)",
+            "lua-analyzer not found at {} (build it with `cargo build -p lua-analyzer`)",
             sibling.display()
         ))
     }
@@ -96,9 +97,11 @@ pub fn lsp_start(
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("spawning {program}: {e}"))?;
+    tracing::info!(server = %server_id, %program, ?args, "spawning language server");
+    let mut child = command.spawn().map_err(|e| {
+        tracing::error!(server = %server_id, %program, error = %e, "spawn failed");
+        format!("spawning {program}: {e}")
+    })?;
 
     let stdin = child.stdin.take().ok_or("child stdin not piped")?;
     let stdout = child.stdout.take().ok_or("child stdout not piped")?;
@@ -116,6 +119,7 @@ pub fn lsp_start(
             // SPONTANEOUS end (crash, abort, EOF) still holds it — reap
             // and tell the client either way, so nothing hangs.
             let code = reap(&reader_hosts, &message_id);
+            tracing::info!(server = %message_id, ?code, "language server exited");
             let _ = message_app.emit(&format!("lsp://exit/{message_id}"), ExitPayload { code });
         });
     }
@@ -125,6 +129,10 @@ pub fn lsp_start(
         let stderr_id = server_id.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                // Fold the child server's stderr into the app's own log so a
+                // crash or its tracing output is visible locally, then relay
+                // it to the webview for the in-app console.
+                tracing::warn!(target: "lsp.child", server = %stderr_id, "{line}");
                 let _ = stderr_app.emit(&format!("lsp://stderr/{stderr_id}"), line);
             }
         });

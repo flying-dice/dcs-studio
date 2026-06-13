@@ -10,6 +10,10 @@ public data SourceFile { path: string, text: string }
 /// endpoints so the host never re-indexes the source.
 public data WireDiagnostic { path: string, severity: string, code: string, codeDescription: string, message: string, start: number, end: number, startLine: number, startCol: number, endLine: number, endCol: number }
 
+/// One inferred-type inlay hint for the editor: the `: <type>` label, the
+/// byte offset it follows, and the LSP inlay-hint kind.
+public data WireInlayHint { offset: number, label: string, kind: string }
+
 /// The embedded language engine session. The host pushes sources in
 /// (mount/set/remove); the editor pulls answers out.
 /// #critical
@@ -45,6 +49,9 @@ public container IdeSession for dcslua::DcsLuaLs {
   public HoverAt(path: string, offset: number): Option<lspcore::HoverInfo> {
     return lspcore::Queries.HoverAt(path, offset)
   }
+
+  /// Inferred-type inlay hints for one file: delegates to lspcore.
+  public InlayHints(path: string): ide::WireInlayHint[];
 }
 
 /// The session answers from wholesale-replaced state only.
