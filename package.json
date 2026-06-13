@@ -20,7 +20,7 @@
     "build:wasm": "wasm-pack build crates/dcs-lua-ide --release --target web --out-dir ../../src/lib/dcs-lua-wasm && node -e \"['.gitignore','package.json','README.md'].forEach(f=>{try{require('fs').unlinkSync('src/lib/dcs-lua-wasm/'+f)}catch{}})\"",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri",
-    "pretauri:dev": "cargo build -p lua-analyzer",
+    "pretauri:dev": "cargo build -p lua-analyzer -p dcs-studio-cli",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "sidecar": "node scripts/prepare-sidecar.mjs"
