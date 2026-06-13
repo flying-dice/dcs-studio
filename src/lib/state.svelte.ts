@@ -426,9 +426,11 @@ class AppState {
 // hand every component a fresh `AppState` — dropping the open project and
 // its tabs, and orphaning the backend language servers the prior instance
 // connected. Stash the singleton in `import.meta.hot.data` so the next
-// instance reuses it; the open project survives and the re-mount effect in
-// +layout.svelte re-attaches the engine. `import.meta.hot` is statically
-// undefined in production builds, so this collapses to `new AppState()`.
+// instance reuses it; the open project survives — and the warm engine
+// survives with it (lang + providers are preserved the same way in
+// intel.svelte.ts / registry.ts), so no re-mount is needed.
+// `import.meta.hot` is statically undefined in production builds, so this
+// collapses to `new AppState()`.
 export const app: AppState =
   (import.meta.hot?.data.app as AppState | undefined) ?? new AppState();
 if (import.meta.hot) {
