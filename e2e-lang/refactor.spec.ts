@@ -14,7 +14,10 @@ async function result(page: Page): Promise<string> {
 
 test.beforeEach(async ({ page }) => {
   await page.goto(labUrl("refactor"));
-  await expect(page.getByTestId("lab-status")).toContainText("ready");
+  // The first test after app launch spawns lua-analyzer cold — allow for it.
+  await expect(page.getByTestId("lab-status")).toContainText("ready", {
+    timeout: 30_000,
+  });
 });
 
 test("definition jumps from a use to the cross-file declaration", async ({ page }) => {
@@ -58,5 +61,17 @@ test("rename to an invalid identifier is refused with a message", async ({ page 
   // The engine's refusal message reaches the editor (not a silent no-op).
   expect(await page.getByTestId("error").textContent()).toMatch(/identifier|valid/i);
   // And no edit was produced.
+  expect(await result(page)).toBe("");
+});
+
+test("editor rename is refused while an affected file has unsaved edits", async ({ page }) => {
+  // model RenameRefusesWithUnsavedAffectedFiles: an affected buffer is dirtied,
+  // so renameSymbol must refuse before applying any edit.
+  await page.getByTestId("run-rename-dirty").click();
+  await expect.poll(async () =>
+    (await page.getByTestId("error").textContent()) ?? "",
+  ).not.toBe("");
+  expect(await page.getByTestId("error").textContent()).toMatch(/save|unsaved/i);
+  // Nothing was applied.
   expect(await result(page)).toBe("");
 });

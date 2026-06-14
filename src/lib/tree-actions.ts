@@ -68,7 +68,9 @@ export async function createEntry(
   if (kind === "file") {
     const created = await createFile(root(), parentDir, trimmed);
     app.refreshTree();
-    app.openFile(created, trimmed);
+    // Label the tab from the path the backend actually created, not the raw
+    // typed name, so the two can never desync.
+    app.openFile(created, created.split(/[\\/]/).pop() || trimmed);
   } else {
     await createDir(root(), parentDir, trimmed);
     app.refreshTree();

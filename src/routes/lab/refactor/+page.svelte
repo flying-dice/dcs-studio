@@ -8,6 +8,8 @@
   import { onMount } from "svelte";
   import { providerFor } from "$lib/lang/registry";
   import { lang } from "$lib/lang/intel.svelte";
+  import { app } from "$lib/state.svelte";
+  import { renameSymbol } from "$lib/editor/refactor";
   import type { LanguageProvider } from "$lib/lang/provider";
 
   const LIB = "C:\\dcs-studio-lab\\refactor\\lib.lua";
@@ -66,6 +68,23 @@
       errorText = error instanceof Error ? error.message : String(error);
     }
   }
+
+  // Drive the editor-side rename (model RenameSymbol) with an affected file
+  // left DIRTY: the dirty-buffer guard must refuse before any edit is applied
+  // (model RenameRefusesWithUnsavedAffectedFiles). MAIN is an affected file
+  // (it holds two uses); opening it and editing its buffer makes it dirty.
+  async function runEditorRenameDirty() {
+    errorText = "";
+    result = "";
+    app.openFile(MAIN, "main.lua");
+    app.onDocEdited(MAIN, `${MAIN_SRC}-- dirty\n`);
+    try {
+      const count = await renameSymbol(MAIN, 0, "renamed");
+      result = `applied ${count}`;
+    } catch (error) {
+      errorText = error instanceof Error ? error.message : String(error);
+    }
+  }
 </script>
 
 <div class="flex h-screen flex-col gap-2 p-3" data-testid="refactor-lab">
@@ -92,6 +111,13 @@
       onclick={() => runRename("1bad")}
     >
       rename → 1bad
+    </button>
+    <button
+      class="rounded border px-2 py-0.5"
+      data-testid="run-rename-dirty"
+      onclick={runEditorRenameDirty}
+    >
+      editor rename (dirty affected)
     </button>
   </div>
   <pre class="shrink-0 overflow-auto rounded border p-2 text-xs" data-testid="result">{result}</pre>

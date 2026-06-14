@@ -152,10 +152,13 @@
         void commitRename();
       } else if (e.key === "Escape") {
         e.preventDefault();
+        // Reset to the original name so the ensuing blur-commit is a no-op
+        // (Escape cancels; clicking away commits the typed name).
+        renameValue = entry.name;
         renaming = false;
       }
     }}
-    onblur={() => (renaming = false)}
+    onblur={() => void commitRename()}
   />
 {:else}
   <ContextMenu.Root>
@@ -223,10 +226,11 @@
         void commitCreate();
       } else if (e.key === "Escape") {
         e.preventDefault();
+        // Cancel: clearing `creating` makes the ensuing blur-commit a no-op.
         creating = null;
       }
     }}
-    onblur={() => (creating = null)}
+    onblur={() => void commitCreate()}
   />
 {/if}
 

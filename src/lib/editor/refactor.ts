@@ -216,6 +216,10 @@ export async function renameSymbol(
  * as one undoable transaction; every other affected file is rewritten on disk
  * (the engine kept in sync) and, when open in a background tab, its parked
  * buffer is evicted so reactivation reloads the renamed text.
+ *
+ * @throws Error when an affected file became dirty after the caller's guard
+ * (a background tab edited during the engine round-trip) — refused before any
+ * write, so unsaved work is never clobbered.
  */
 async function applyWorkspaceEdit(edit: WorkspaceEdit): Promise<void> {
   const byPath = new Map<string, TextEdit[]>();
@@ -225,27 +229,44 @@ async function applyWorkspaceEdit(edit: WorkspaceEdit): Promise<void> {
     byPath.set(e.path, list);
   }
 
-  const evicted: string[] = [];
-  for (const [path, edits] of byPath) {
-    const view = editorViewFor(path);
-    if (view) {
-      // CodeMirror applies a sorted, non-overlapping change set as one
-      // undoable transaction; rename spans never overlap.
-      const changes = [...edits]
-        .sort((a, b) => a.start - b.start)
-        .map((e) => ({ from: e.start, to: e.end, insert: e.newText }));
-      view.dispatch({ changes });
-    } else {
-      // Closed (or background) file: read-modify-write back-to-front so each
-      // span stays valid, then sync the engine's mounted copy.
-      let text = await readTextFile(path);
-      for (const e of [...edits].sort((a, b) => b.start - a.start)) {
-        text = text.slice(0, e.start) + e.newText + text.slice(e.end);
-      }
-      await writeTextFile(path, text);
-      await lang.updateSource(path, text);
-      if (app.openFiles.some((f) => f.path === path)) evicted.push(path);
-    }
+  // Re-check the dirty guard here (not just in renameSymbol): the engine
+  // round-trip is async, so a background tab could have been dirtied since.
+  // Refuse before writing a single byte — the active editor's transaction is
+  // undoable, but a disk rewrite that strands a background buffer is not.
+  const dirty = [...byPath.keys()].filter(
+    (path) => !editorViewFor(path) && app.isDirty(path),
+  );
+  if (dirty.length > 0) {
+    const names = dirty.map((p) => p.split(/[\\/]/).pop() || p).join(", ");
+    throw new Error(`Save ${names} before renaming — ${dirty.length === 1 ? "it has" : "they have"} unsaved changes.`);
   }
-  if (evicted.length > 0) app.evictBuffers(evicted);
+
+  // Evict written-and-open background buffers even if a later write throws, so
+  // a partial apply never leaves a stale buffer shadowing the new disk text.
+  const evicted: string[] = [];
+  try {
+    for (const [path, edits] of byPath) {
+      const view = editorViewFor(path);
+      if (view) {
+        // CodeMirror applies a sorted, non-overlapping change set as one
+        // undoable transaction; rename spans never overlap.
+        const changes = [...edits]
+          .sort((a, b) => a.start - b.start)
+          .map((e) => ({ from: e.start, to: e.end, insert: e.newText }));
+        view.dispatch({ changes });
+      } else {
+        // Closed (or background) file: read-modify-write back-to-front so each
+        // span stays valid, then sync the engine's mounted copy.
+        let text = await readTextFile(path);
+        for (const e of [...edits].sort((a, b) => b.start - a.start)) {
+          text = text.slice(0, e.start) + e.newText + text.slice(e.end);
+        }
+        await writeTextFile(path, text);
+        if (app.openFiles.some((f) => f.path === path)) evicted.push(path);
+        await lang.updateSource(path, text);
+      }
+    }
+  } finally {
+    if (evicted.length > 0) app.evictBuffers(evicted);
+  }
 }

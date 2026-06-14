@@ -304,37 +304,45 @@ public container Workbench for studio::core::Studio {
   #[manual]
   public RenameWorkspacePath(root: string, src: string, dst: string): Result<void, studio::files::IoError> {
     canonical = string from self.CanonicalPath(src)
-    open = Option<studio::core::Document> from self.FindOpen(canonical)
-    if (open.isSome) {
-      // A rename moves the file but not its content, so a clean tab can
-      // simply follow and reload from the new path. Unsaved edits live only
-      // in the buffer, which a path change would strand — refuse until the
-      // developer saves, so a rename never silently discards work.
-      dirty = bool from open.value.text != open.value.savedText
-      if (dirty) {
-        unsaved = studio::files::IoError from { src }
-        return Err(unsaved)
-      }
+    // The affected tabs: the renamed file's own tab, plus — when a FOLDER is
+    // renamed — every open tab for a descendant under it.
+    affected = studio::core::Document[] from self.TabsUnder(canonical)
+    // A rename moves files but not their content, so a clean tab can follow
+    // and reload from the new path. Unsaved edits live only in the buffer,
+    // which a path change would strand — refuse until the developer saves, so
+    // a rename never silently discards work.
+    dirty = bool from self.AnyTabDirty(affected)
+    if (dirty) {
+      unsaved = studio::files::IoError from { src }
+      return Err(unsaved)
     }
     moved = Result<void, studio::files::IoError> from studio::files::WorkspaceFs.RenamePath(root, src, dst)
     if (moved.isErr) {
       return Err(moved.error)
     }
-    if (open.isSome) {
-      self.RetargetTab(open.value, dst)
-    }
+    self.RetargetTabs(affected, canonical, dst)
     return Ok
   }
 
-  /// Follow an open (saved) tab to its file's new path: the old tab closes and
-  /// the renamed file reopens at `dst`, reloading its unchanged content — so
-  /// the editor tracks the file instead of orphaning a tab at a vanished path.
-  RetargetTab(doc: studio::core::Document, dst: string): void;
+  /// Every open tab at or under `canonical`: the path's own tab, plus every
+  /// open descendant tab when `canonical` is a folder being renamed/deleted.
+  TabsUnder(canonical: string): studio::core::Document[];
+
+  /// Whether any of the tabs has unsaved edits — the rename dirty guard.
+  AnyTabDirty(tabs: studio::core::Document[]): bool;
+
+  /// Follow each affected (saved) tab to its file's new path: each tab closes
+  /// and reopens under `dst` (the old prefix `canonical` swapped for `dst`),
+  /// reloading the unchanged content; the previously active tab stays active —
+  /// so the editor tracks renamed files instead of orphaning tabs at vanished
+  /// paths.
+  RetargetTabs(tabs: studio::core::Document[], canonical: string, dst: string): void;
 
   /// Delete a workspace path from the file tree to the Recycle Bin, then
-  /// keep the editor in sync: on a successful delete, an open tab for the
-  /// path is closed (the file is gone — its unsaved edits go with it, no
-  /// discard prompt). A failed delete leaves every tab as it was.
+  /// keep the editor in sync: on a successful delete, every open tab for the
+  /// path (and, for a folder, its descendants) is closed — the files are gone,
+  /// their unsaved edits go with them, no discard prompt. A failed delete
+  /// leaves every tab as it was.
   #[manual]
   public DeleteWorkspacePath(root: string, path: string): Result<void, studio::files::IoError> {
     removed = Result<void, studio::files::IoError> from studio::files::WorkspaceFs.DeleteToTrash(root, path)
@@ -342,9 +350,9 @@ public container Workbench for studio::core::Studio {
       return Err(removed.error)
     }
     canonical = string from self.CanonicalPath(path)
-    open = Option<studio::core::Document> from self.FindOpen(canonical)
-    if (open.isSome) {
-      self.RemoveTab(open.value)
+    affected = studio::core::Document[] from self.TabsUnder(canonical)
+    for (tab in affected) {
+      self.RemoveTab(tab)
     }
     return Ok
   }

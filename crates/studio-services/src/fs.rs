@@ -387,7 +387,32 @@ mod tests {
 
         create_dir(&root_s, &root_s, "pkg").expect("create dir");
         let err = create_dir(&root_s, &root_s, "pkg").expect_err("must refuse a collision");
-        assert!(err.contains("already exists"), "err was: {err}");
+        // Discriminate the GUARD's refusal from the OS error: `std::fs::create_dir`
+        // on an existing dir also fails, but with a "Failed to create" prefix.
+        // Asserting the guard form (no prefix) keeps the test able to fail if the
+        // guard is removed — without this, the OS message ("already exists") would
+        // pass the check and the guard would be unpinned.
+        assert!(
+            err.contains("already exists") && !err.contains("Failed to create"),
+            "expected the guard's refusal, got: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn delete_to_trash_removes_the_file_from_the_workspace() {
+        let root = temp_dir("trash-delete");
+        let file = root.join("doomed.lua");
+        std::fs::write(&file, "x").expect("seed");
+        let path = file.to_string_lossy().into_owned();
+        match delete_to_trash(&root.to_string_lossy(), &path) {
+            // The file is gone from the workspace (recoverable from the OS
+            // Recycle Bin — that recovery half is a documented manual check).
+            Ok(()) => assert!(!path_exists(&path), "the deleted file must be gone"),
+            // No OS recycle-bin backend (e.g. a headless container with no XDG
+            // trash): the happy path is unverifiable here — skip, don't fail.
+            Err(e) => eprintln!("skipping recycle-bin assertion (no trash backend): {e}"),
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
