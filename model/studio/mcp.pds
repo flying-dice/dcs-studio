@@ -1,12 +1,18 @@
-//! studio::mcp — the MCP server inside dcs-studio-cli (issue #8): the IDE's
-//! services exposed headless to LLM agents over stdio (newline-delimited
-//! JSON-RPC, protocol 2024-11-05). Every tool delegates to the owning
-//! container — workspace fs, the project kit, the injection and mission
-//! scripting managers, the DCS link, and the dcs-lua engine — so an agent
-//! and the IDE always run the same logic (crates/studio-services). Calls
-//! into the sim target the dcs::bridge::Dcs published face only.
+//! studio::mcp — the MCP server hosted by the running IDE (issue #33): the
+//! IDE's services exposed to LLM agents over a loopback JSON-RPC transport
+//! (newline-delimited, protocol 2024-11-05). Every tool delegates to the
+//! owning container — workspace fs, the project kit, the injection and
+//! mission scripting managers, the DCS link, and the dcs-lua engine — so an
+//! agent and the IDE always run the same logic (crates/studio-services).
+//! Calls into the sim target the dcs::bridge::Dcs published face only.
+//!
+//! Moved off the standalone `dcs-studio-cli mcp` stdio binary (issue #33): a
+//! second headless process dialed its own DCS link and collided with the one
+//! open IDE on the shared bridge. The surface now lives in the app and shares
+//! the IDE's already-open link, so there is one DCS connection, not two.
 
-/// LLM agent driving `dcs-studio-cli mcp` over stdio — no Tauri app, no IDE.
+/// LLM agent attaching to the running IDE's loopback MCP server, sharing the
+/// IDE's live DCS link — there is no separate headless process.
 public person Agent;
 
 /// Snapshot answered by the dcs_status tool. Unlike the app's scheduled
@@ -18,14 +24,16 @@ public data DcsStatus { connected: bool, simRunning: bool, latencyMs: Option<num
 /// reserved and the error is stable, so agent contracts don't churn.
 public data NotImplemented { message: string }
 
-/// MCP server (`dcs-studio-cli mcp`): newline-delimited JSON-RPC over stdio
-/// — stdout is the wire, so nothing else may print to it. Tools are thin
-/// delegates; the only logic owned here is the lazy DCS link and the
-/// on-demand status ping.
+/// MCP server hosted by the IDE: newline-delimited JSON-RPC over a loopback
+/// transport (127.0.0.1, gated by a session token the agent reads from a
+/// known file). Tools are thin delegates; the DCS tools run over the app's
+/// already-open link (the shared `studio::link` state), not a link this
+/// server dials — so the agent and the IDE share one DCS connection rather
+/// than colliding on the bridge.
 ///
 /// Recorded decision: the workspace fs tools take absolute host paths with
 /// no sandbox root, exactly like the IDE's own fs commands they delegate to
-/// — the server runs on the agent's machine with the agent's rights, and the
+/// — the server runs on the developer's machine with their rights, and the
 /// MCP host (not this server) owns tool-permission policy.
 public container McpServer for studio::core::Studio {
   /// init_project — scaffold a project from a template (same kit as the
@@ -256,12 +264,14 @@ feature AgentEditsWorkspaceFile for studio::mcp::McpServer {
   and "read_dir lists the new file and path_exists confirms it"
 }
 
-/// The whole surface serves headless — no Tauri app, no DCS, no IDE.
-feature HeadlessServesWithoutIde for studio::mcp::McpServer {
-  given "only the dcs-studio-cli binary, no Tauri app and no DCS"
-  when "an agent starts `dcs-studio-cli mcp` and lists tools"
+/// The surface serves from the running IDE over the loopback transport,
+/// sharing the IDE's one DCS link (issue #33).
+feature ServesFromTheRunningIde for studio::mcp::McpServer {
+  given "the IDE running with its MCP server bound on loopback"
+  when "an agent attaches with the session token and lists tools"
   then "the full tool surface is advertised"
-  and "dcs_status answers connected:false instead of erroring"
+  and "the DCS tools run over the IDE's already-open link, not a second one"
+  but "with no DCS listening dcs_status answers connected:false, never erroring"
 }
 
 /// Lang tools answer from the real engine, not stubs.
