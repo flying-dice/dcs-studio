@@ -521,6 +521,18 @@ class AppState {
    * answer is NO — never silently discard unsaved work.
    */
   private async confirmDiscard(message: string): Promise<boolean> {
+    // Test seam (issue #32): the e2e-lang suite drives the REAL app, where the
+    // confirm is a native Tauri dialog Playwright/CDP can neither read nor
+    // answer (it auto-cancels). An injected probe lets the suite see the prompt
+    // and decide. Production never sets it, so this is inert outside the test.
+    const probe = (
+      globalThis as {
+        __dcsConfirm__?: (m: string) => boolean | Promise<boolean>;
+      }
+    ).__dcsConfirm__;
+    if (probe) {
+      return probe(message);
+    }
     if (isTauri()) {
       return confirmDialog(message, { title: "Unsaved changes", kind: "warning" });
     }

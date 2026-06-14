@@ -8,6 +8,16 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 /** Open `url` outside the app: the OS default browser under Tauri, a new tab
  *  in a plain browser (vite dev, Playwright). */
 export async function openExternal(url: string): Promise<void> {
+  // Test seam (issue #32): the e2e-lang suite drives the REAL app, where this
+  // opens the OS browser via the Tauri opener — a side effect CDP cannot
+  // observe. An injected probe lets the suite record what WOULD open instead.
+  // Production never sets it, so this is inert outside the test.
+  const probe = (globalThis as { __dcsOpenExternal__?: (u: string) => void })
+    .__dcsOpenExternal__;
+  if (probe) {
+    probe(url);
+    return;
+  }
   if (isTauri()) {
     await openUrl(url);
   } else {
