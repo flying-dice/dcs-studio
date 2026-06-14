@@ -13,7 +13,8 @@
 // StreamLanguage tree is token-flat, so selectParentSyntax dead-ends) — see
 // src/lib/editor/commands.ts and docs/keybindings.md.
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, labUrl } from "./_tauri";
+import type { Page } from "@playwright/test";
 
 // Must match /lab/editor's seeded document.
 const INITIAL = "local a = 1\nlocal b = 2\nlocal c = 3\n";
@@ -30,7 +31,7 @@ async function caretToStart(page: Page): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/lab/editor");
+  await page.goto(labUrl("editor"));
   await expect(page.getByTestId("lab-ready")).toHaveText("editor ready");
   await expect.poll(() => doc(page)).toBe(INITIAL);
 });

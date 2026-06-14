@@ -4,7 +4,8 @@
 // path drives the placeholder; reveal-in-explorer / open-with-app are isTauri()
 // no-ops here (model/studio/core.pds BinaryFileShowsPlaceholder).
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, labUrl } from "./_tauri";
+import type { Page } from "@playwright/test";
 
 const overlay = (page: Page) => page.getByTestId("binary-overlay");
 const tab = (page: Page, path: string) =>
@@ -13,7 +14,7 @@ const editor = (page: Page) =>
   page.getByTestId("lab-editor").locator(".cm-content");
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/lab/buffers");
+  await page.goto(labUrl("buffers"));
   await expect(page.getByTestId("lab-status")).toContainText("ready", {
     timeout: 30_000,
   });

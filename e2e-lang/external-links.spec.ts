@@ -4,21 +4,22 @@
 // swallowed. Exercises `openLinksExternally` directly so it doesn't depend on
 // flaky hover/mouse timing.
 
-import { test, expect } from "@playwright/test";
+import { test, expect, labUrl } from "./_tauri";
 
 test("card links route externally and resolve unresolved rust doc refs", async ({
   page,
 }) => {
-  await page.goto("/lab/lua");
+  await page.goto(labUrl("lua"));
 
   const result = await page.evaluate(async () => {
     const { openLinksExternally } = await import("/src/lib/external.ts");
     const opened: string[] = [];
-    // In a plain browser openExternal falls back to window.open — spy on it.
-    window.open = ((url: string) => {
-      opened.push(String(url));
-      return null;
-    }) as typeof window.open;
+    // In the real app openExternal opens the OS browser via the Tauri opener
+    // (CDP can't observe that), so record through openExternal's test probe.
+    (globalThis as { __dcsOpenExternal__?: (u: string) => void }).__dcsOpenExternal__ =
+      (url: string) => {
+        opened.push(String(url));
+      };
 
     const el = document.createElement("div");
     // hrefs as the markdown renderer emits them (rust-analyzer doc refs arrive

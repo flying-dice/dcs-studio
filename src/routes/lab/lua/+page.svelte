@@ -12,7 +12,10 @@
   import { lang } from "$lib/lang/intel.svelte";
   import type { LanguageProvider } from "$lib/lang/provider";
 
-  const PATH = "lab/main.lua";
+  // Absolute so it round-trips through the hosted server's file:// URIs
+  // (a driveless relative path fails `Url::to_file_path` on Windows, and the
+  // server then never keys the buffer — positional queries would miss).
+  const PATH = "C:/dcs-studio-lab/main.lua";
   // The multibyte comment line makes UTF-16 and byte offsets diverge
   // before `f` — the probe's indexOf offset (UTF-16) only resolves if
   // the provider converts to bytes at the engine boundary.
@@ -42,6 +45,11 @@
         provider = providerFor(PATH);
         if (!provider) throw new Error(`no provider for ${PATH}`);
         await provider.mount([{ path: PATH, text: INITIAL }], [], "lab");
+        // Open the seed file so the engine holds the buffer — the wasm
+        // session keeps mounted text, but the hosted lua-analyzer answers
+        // positional queries (hover/symbols) only for didOpen-ed documents.
+        // This mirrors the IDE opening a file after the project mounts.
+        await provider.setSource(PATH, INITIAL);
         lang.engineStatus = "ready";
       } catch (error) {
         console.error("language engine failed to mount:", error);

@@ -16,7 +16,8 @@
 // lab's save binding owns it: drop `saveWithFormat` (or the binding) and the
 // format-on-save specs go red.
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, labUrl } from "./_tauri";
+import type { Page } from "@playwright/test";
 
 /** The editor's current text, read exactly (newlines preserved). */
 async function doc(page: Page): Promise<string> {
@@ -41,7 +42,7 @@ async function selectAllAndType(page: Page, text: string): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/lab/editor");
+  await page.goto(labUrl("editor"));
   await expect(page.getByTestId("lab-ready")).toHaveText("editor ready");
 });
 

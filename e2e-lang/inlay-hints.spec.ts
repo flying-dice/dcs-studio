@@ -2,7 +2,8 @@
 // through the real wasm engine in a plain browser — no Tauri, no DCS
 // (model/lspcore.pds InferredTypesShowAsInlayHints, ArgumentTypeIsChecked).
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, labUrl } from "./_tauri";
+import type { Page } from "@playwright/test";
 
 async function setEditorText(page: Page, code: string): Promise<void> {
   const content = page.getByTestId("lab-editor").locator(".cm-content");
@@ -11,7 +12,7 @@ async function setEditorText(page: Page, code: string): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/lab/lua");
+  await page.goto(labUrl("lua"));
   await expect(page.getByTestId("lab-engine-status")).toContainText(
     "editor ready",
     { timeout: 30_000 },

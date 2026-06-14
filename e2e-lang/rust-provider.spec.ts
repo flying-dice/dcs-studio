@@ -4,10 +4,10 @@
 // publishDiagnostics conversion for .rs sources, and the no-Cargo.toml
 // root disabling the provider without a crash.
 
-import { test, expect } from "@playwright/test";
+import { test, expect, labUrl } from "./_tauri";
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/lab/rust");
+  await page.goto(labUrl("rust"));
   await expect(page.getByTestId("rust-status")).toHaveText("ready", {
     timeout: 30_000,
   });

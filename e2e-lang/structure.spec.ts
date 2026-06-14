@@ -3,7 +3,8 @@
 // (model/studio/lang.pds ClickSymbolNavigatesEditor and
 // OutlineNeverGoesStale).
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, labUrl } from "./_tauri";
+import type { Page } from "@playwright/test";
 
 // Must match /lab/structure's seeded document.
 const INITIAL = `-- наводка °
@@ -25,7 +26,7 @@ async function setEditorText(page: Page, code: string): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/lab/structure");
+  await page.goto(labUrl("structure"));
   await expect(page.getByTestId("lab-engine-status")).toContainText(
     "editor ready",
     { timeout: 30_000 },
@@ -242,7 +243,7 @@ test("editing a file the panel does not outline leaves the outline alone", async
 
   expect(await page.getByTestId("structure-entry").count()).toBe(0);
   await expect(page.getByTestId("outline-path")).toHaveText(
-    "outline-of: lab/notes.txt",
+    "outline-of: C:/dcs-studio-lab/structure/notes.txt",
   );
   await expect(panel).toContainText("No structure for this file type");
 });
@@ -348,7 +349,7 @@ test("hiding the panel clears the outline", async ({ page }) => {
     timeout: 15_000,
   });
   await expect(page.getByTestId("outline-path")).toHaveText(
-    "outline-of: lab/main.lua",
+    "outline-of: C:/dcs-studio-lab/structure/main.lua",
   );
 
   // Unmounting runs the $effect cleanup: a hidden panel must not keep the

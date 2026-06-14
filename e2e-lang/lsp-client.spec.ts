@@ -3,10 +3,10 @@
 // real wire shapes. Covers request correlation, publishDiagnostics push,
 // UTF-16 conversion on non-ASCII text, and the crash path.
 
-import { test, expect } from "@playwright/test";
+import { test, expect, labUrl } from "./_tauri";
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/lab/lsp");
+  await page.goto(labUrl("lsp"));
   await expect(page.getByTestId("lsp-status")).toContainText("ready", {
     timeout: 30_000,
   });

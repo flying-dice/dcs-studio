@@ -5,14 +5,14 @@
 // the save-time per-file splice, and the open+jump mechanics under test
 // are the production ones.
 
-import { test, expect } from "@playwright/test";
+import { test, expect, labUrl } from "./_tauri";
 
 // Must match /lab/todos's seeded files.
 const ALPHA =
   '-- TODO: wire alpha gauge\nprint("alpha")\n-- цель — FIXME: refit alpha sensor\n';
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/lab/todos");
+  await page.goto(labUrl("todos"));
   await expect(page.getByTestId("lab-status")).toContainText("ready", {
     timeout: 30_000,
   });

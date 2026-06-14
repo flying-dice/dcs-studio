@@ -2,7 +2,8 @@
 // in the Problems panel — via the embedded wasm engine. Runs in a plain
 // browser: no Tauri, no DCS (model/studio/lang.pds BrokenLuaShowsDiagnostic).
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, labUrl } from "./_tauri";
+import type { Page } from "@playwright/test";
 
 async function setEditorText(page: Page, code: string): Promise<void> {
   // `.fill` on the contenteditable replaces wholesale and cannot be
@@ -13,7 +14,7 @@ async function setEditorText(page: Page, code: string): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/lab/lua");
+  await page.goto(labUrl("lua"));
   await expect(page.getByTestId("lab-engine-status")).toContainText(
     "editor ready",
     { timeout: 30_000 },

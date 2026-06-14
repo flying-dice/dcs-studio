@@ -6,7 +6,8 @@
 // CloseActiveTabActivatesNeighbour, RetriggeredLoadDiscardsStaleRead,
 // CloseDirtyTabPrompts).
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, labUrl, armConfirm, confirmPrompts } from "./_tauri";
+import type { Page } from "@playwright/test";
 
 const editor = (page: Page) =>
   page.getByTestId("lab-editor").locator(".cm-content");
@@ -14,7 +15,7 @@ const tab = (page: Page, path: string) =>
   page.locator(`[data-testid="editor-tab"][data-path="${path}"]`);
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/lab/buffers");
+  await page.goto(labUrl("buffers"));
   await expect(page.getByTestId("lab-status")).toContainText("ready", {
     timeout: 30_000,
   });
@@ -248,21 +249,18 @@ test("closing a dirty tab prompts; declining keeps the buffer", async ({
   // Declining the confirm keeps the tab and its edits. The prompt names
   // the file (issue #25 moved the message to the closeFile call site —
   // the per-file form must not regress into the project-switch count form).
-  let prompted = false;
-  let message = "";
-  page.once("dialog", (dialog) => {
-    prompted = true;
-    message = dialog.message();
-    void dialog.dismiss();
-  });
+  await armConfirm(page, /* accept */ false);
   await page.getByTestId("tab-close").click();
   await expect(tab(page, "lab/a.lua")).toBeVisible();
   await expect(editor(page)).toContainText('print("edited")');
-  expect(prompted).toBe(true);
-  expect(message).toBe("a.lua has unsaved changes. Close it and discard them?");
+  const prompts = await confirmPrompts(page);
+  expect(prompts.length).toBeGreaterThan(0);
+  expect(prompts.join("\n")).toContain(
+    "a.lua has unsaved changes. Close it and discard them?",
+  );
 
   // Accepting discards the edits and closes the last tab.
-  page.once("dialog", (dialog) => void dialog.accept());
+  await armConfirm(page, /* accept */ true);
   await page.getByTestId("tab-close").click();
   await expect(page.locator('[data-testid="editor-tab"]')).toHaveCount(0);
 });
@@ -281,14 +279,10 @@ test("declining a dirty non-active tab's close leaves the active tab focused", a
   await expect(editor(page)).toContainText('print("world")');
   await expect(tab(page, "lab/b.lua")).toHaveAttribute("data-active", "true");
 
-  let prompted = false;
-  page.once("dialog", (dialog) => {
-    prompted = true;
-    void dialog.dismiss();
-  });
+  await armConfirm(page, /* accept */ false);
   await tab(page, "lab/a.lua").getByTestId("tab-close").click();
 
-  expect(prompted).toBe(true);
+  expect((await confirmPrompts(page)).length).toBeGreaterThan(0);
   // b keeps the view; a keeps its tab, edits, and dirty flag.
   await expect(tab(page, "lab/b.lua")).toHaveAttribute("data-active", "true");
   await expect(tab(page, "lab/a.lua")).toHaveAttribute("data-active", "false");
@@ -336,7 +330,7 @@ test("reopening a tab closed while parked reloads from disk", async ({
   await expect(editor(page)).toContainText('print("hello")');
   await expect(tab(page, "lab/b.lua")).toHaveAttribute("data-dirty", "true");
 
-  page.once("dialog", (dialog) => void dialog.accept());
+  await armConfirm(page, /* accept */ true);
   await tab(page, "lab/b.lua").getByTestId("tab-close").click();
   await expect(tab(page, "lab/b.lua")).toHaveCount(0);
 
@@ -361,7 +355,7 @@ test("reopening a tab closed while shown reloads from disk", async ({
   await editor(page).fill('print("edited b")\n');
   await expect(page.getByTestId("lab-status")).toContainText("dirty: true");
 
-  page.once("dialog", (dialog) => void dialog.accept());
+  await armConfirm(page, /* accept */ true);
   await tab(page, "lab/b.lua").getByTestId("tab-close").click();
   await expect(tab(page, "lab/b.lua")).toHaveCount(0);
   await expect(editor(page)).toContainText('print("hello")');

@@ -5,10 +5,11 @@
 // StatusBarCountsOpenProblems). Runs against /lab/problems, which seeds
 // mixed-severity findings the real engine cannot produce today.
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, labUrl } from "./_tauri";
+import type { Page } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/lab/problems");
+  await page.goto(labUrl("problems"));
   await expect(page.getByTestId("lab-status")).toContainText("ready");
 });
 
