@@ -15,6 +15,24 @@ on Windows/Linux and `Cmd` on macOS. These are owned by
 | Duplicate line up    | `Shift-Alt-ArrowUp`     | Copies the current line or selection above.               |
 | Duplicate line down  | `Shift-Alt-ArrowDown`   | Copies the current line or selection below.               |
 
+## Formatting
+
+Owned by `src/lib/editor/format.ts`; exercised by `e2e-lang/format.spec.ts`. The
+formatter runs in Rust (`crates/dcs-lua-fmt`) behind the `format_source` Tauri
+command — the **same engine** the CLI `dcs-studio fmt` / `fmt --check` runs, so
+a buffer formatted in the editor is byte-for-byte what CI checks.
+
+| Action            | Keybinding    | Notes                                                                 |
+| ----------------- | ------------- | --------------------------------------------------------------------- |
+| Format Document   | `Shift-Alt-F` | Reformats the whole buffer when nothing is selected.                  |
+| Format Selection  | `Shift-Alt-F` | With a non-empty selection, reformats only the statements it spans.   |
+
+Style comes from the `[format]` table of the project's `dcs-studio.toml` (house
+defaults when absent). A buffer that does not parse is left untouched (its
+findings show in the Problems panel). **Format on save** (Quick settings, off by
+default) reformats the buffer before each write; a syntax error never blocks the
+save.
+
 ## Navigation / editing from the base setup
 
 These come from CodeMirror's `basicSetup` and are listed here for completeness;

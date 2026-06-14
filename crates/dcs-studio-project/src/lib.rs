@@ -27,7 +27,7 @@ pub mod toolchain;
 
 pub use detect::default_saved_games;
 pub use install::{InstallReport, InstallStatus, RootMap, UninstallReport};
-pub use manifest::{InstallRule, Manifest, ProjectMeta};
+pub use manifest::{InstallRule, Manifest, ProjectMeta, format_config_for};
 pub use process::quiet_command;
 pub use templates::{TemplateContents, TemplateFile};
 pub use toolchain::ToolchainStatus;

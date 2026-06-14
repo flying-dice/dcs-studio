@@ -20,8 +20,19 @@ import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import { canonicalPath } from "./paths";
 import { wsConnected } from "./dcs-ws";
 import { lang } from "./lang/intel.svelte";
+import { saveWithFormat } from "./save-format";
 import { todos } from "./todos.svelte";
 import type { Extension } from "@codemirror/state";
+
+/** Persist one string to localStorage, swallowing quota / SSR-absence errors. */
+function writeLocalStorage(key: string, value: string): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* ignore quota / serialization errors */
+  }
+}
 
 const EDITOR_THEME_KEY = "dcs.editorTheme";
 const PANEL_SIZES_KEY = "dcs.panelSizes";
@@ -51,12 +62,18 @@ function loadEditorThemeId(): string {
 }
 
 function saveEditorThemeId(id: string): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(EDITOR_THEME_KEY, id);
-  } catch {
-    /* ignore quota errors */
-  }
+  writeLocalStorage(EDITOR_THEME_KEY, id);
+}
+
+const FORMAT_ON_SAVE_KEY = "dcs.formatOnSave";
+
+function loadFormatOnSave(): boolean {
+  if (typeof localStorage === "undefined") return false;
+  return localStorage.getItem(FORMAT_ON_SAVE_KEY) === "true";
+}
+
+function saveFormatOnSave(on: boolean): void {
+  writeLocalStorage(FORMAT_ON_SAVE_KEY, String(on));
 }
 
 export interface RecentProject {
@@ -113,12 +130,7 @@ function loadRecents(): RecentProject[] {
 }
 
 function saveRecents(recents: RecentProject[]): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(RECENTS_KEY, JSON.stringify(recents));
-  } catch {
-    /* ignore quota / serialization errors */
-  }
+  writeLocalStorage(RECENTS_KEY, JSON.stringify(recents));
 }
 
 class AppState {
@@ -129,6 +141,9 @@ class AppState {
   editorThemeId = $state<string>(DEFAULT_DARK_THEME);
   lastDark = $state<string>(DEFAULT_DARK_THEME);
   lastLight = $state<string>(DEFAULT_LIGHT_THEME);
+  // Whether the editor reformats the buffer before each save (model
+  // studio::edit::Formatting) — an editor preference, off by default.
+  formatOnSave = $state<boolean>(loadFormatOnSave());
 
   constructor() {
     const id = loadEditorThemeId();
@@ -163,6 +178,13 @@ class AppState {
     mountWorkspace: (path) => lang.mountWorkspace(path),
     resetWorkspace: () => lang.reset(),
   };
+
+  // How to reformat the active buffer in place before a save (format-on-save).
+  // The editor registers this on mount and clears it on destroy; absent when no
+  // editor is mounted, so format-on-save has nothing to reformat (model
+  // FormatBeforeSave: no buffer → unchanged). Held here so EVERY save entry
+  // point (editor ⌘S, global ⌘S, File → Save) reformats identically.
+  private formatActiveBuffer: (() => Promise<void>) | null = null;
 
   /** The active tab's record, if any file is open. */
   get activeDoc(): OpenDoc | null {
@@ -303,6 +325,12 @@ class AppState {
   /** Flip light/dark, restoring the last editor theme used at that brightness. */
   toggleMode() {
     this.setEditorTheme(this.dark ? this.lastLight : this.lastDark);
+  }
+
+  /** Turn format-on-save on or off (reformat the buffer before each write). */
+  setFormatOnSave(on: boolean) {
+    this.formatOnSave = on;
+    saveFormatOnSave(on);
   }
 
   /** Open the native folder picker, then load the chosen folder as the project. */
@@ -530,6 +558,14 @@ class AppState {
   }
 
   /**
+   * Register how to reformat the active buffer in place (format-on-save). The
+   * editor sets this on mount and clears it (`null`) on destroy.
+   */
+  setBufferFormatter(format: (() => Promise<void>) | null) {
+    this.formatActiveBuffer = format;
+  }
+
+  /**
    * Injectable file writer so /lab/buffers can exercise `saveFile` in a
    * plain browser (no Tauri fs) — same seam convention as the Editor
    * component's `readFile` prop and IntelFs in intel.svelte.ts.
@@ -538,24 +574,34 @@ class AppState {
 
   /**
    * Persist the ACTIVE tab's buffer to the ACTIVE tab's path — never any
-   * other tab's (model `SaveFile`). No-op when clean or already saving.
+   * other tab's (model `SaveFile`). No-op when clean or already saving. The
+   * single save path for every entry point (editor ⌘S, global ⌘S, File → Save);
+   * when format-on-save is on it reformats the buffer first (model
+   * FormatBeforeSave), and a broken buffer never blocks the write
+   * (SaveNeverBlockedByBrokenLua).
    */
   async saveFile() {
     const doc = this.activeDoc;
     if (!doc || doc.docText === doc.savedText || this.saving) return;
     this.saving = true;
     try {
-      // Capture the buffer BEFORE the await: keystrokes that land while the
-      // write is in flight must keep the tab dirty, so the baseline is set
-      // to exactly what was written, not to the post-write buffer. The
-      // baseline lands on `doc` — the tab that was saved — never on
-      // whichever tab is active by the time the write finishes.
-      const text = doc.docText;
-      await this.writeFile(doc.path, text);
-      doc.savedText = text;
-      // Saved-file rescan for the Todos panel (model/studio/todos.pds
-      // RefreshFile): splices only this file's entries.
-      void todos.refreshFile(doc.path);
+      await saveWithFormat({
+        formatOnSave: this.formatOnSave,
+        format: () => this.formatActiveBuffer?.() ?? Promise.resolve(),
+        // Read the buffer AFTER any reformat, and capture it BEFORE the write:
+        // keystrokes that land while the write is in flight must keep the tab
+        // dirty, so the baseline is exactly what was written — and it lands on
+        // `doc` (the saved tab), never on whichever tab is active by the time
+        // the write finishes.
+        persist: async () => {
+          const text = doc.docText;
+          await this.writeFile(doc.path, text);
+          doc.savedText = text;
+          // Saved-file rescan for the Todos panel (model/studio/todos.pds
+          // RefreshFile): splices only this file's entries.
+          void todos.refreshFile(doc.path);
+        },
+      });
     } finally {
       this.saving = false;
     }

@@ -54,6 +54,7 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | `model/studio/mcp.pds` | `McpServer` — the headless agent tool surface of `dcs-studio-cli mcp` (issue #8; `crates/dcs-studio-cli/src/mcp.rs` + `crates/studio-services`) |
 | `model/studio/todos.pds` | `TodoScanner` — workspace comment-tag scanner behind the Todos panel (`crates/dcs-studio-project/src/todos.rs`, `src/lib/todos.svelte.ts`) |
 | `model/studio/lang.pds` | `LanguageIntel` provider layer + `DcsLua` engine face + `LuaAnalyzer`/`RustAnalyzer` hosted-server faces (`src/lib/lang/`, `crates/lua-analyzer`) |
+| `model/studio/edit.pds` | `Formatting` — editor format (Document/Selection, format-on-save) over the shared `fmt::Fmt` engine (`crates/app/src/format.rs`, `src/lib/editor/format.ts`) |
 | `model/dcslua.pds` | `DcsLuaLs` engine system root |
 | `model/syntax.pds` | Lexer/parser/AST contract (`crates/dcs-lua-syntax`) |
 | `model/lspcore.pds` | Workspace + query layer (`crates/dcs-lua-lsp-core`) |

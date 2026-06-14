@@ -133,25 +133,19 @@ fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
 
 /// The `[format]` config governing `path`: the nearest `dcs-studio.toml`
 /// walking up from the path (the directory itself for a dir, the parent
-/// for a file). Absent or unreadable manifest → house defaults; a present
-/// but invalid manifest is reported and falls back to defaults.
+/// for a file). Absent manifest → house defaults; a present but invalid
+/// manifest is reported and falls back to defaults. The walk-up is shared
+/// with the editor (`dcs_studio_project::format_config_for`) so both resolve
+/// the same config; the CLI adds the loud malformed-manifest warning.
 fn config_for(path: &Path) -> FormatConfig {
-    let start = if path.is_dir() {
-        path
-    } else {
-        path.parent().unwrap_or(path)
+    let Some(dir) = dcs_studio_project::manifest::nearest(path) else {
+        return FormatConfig::default();
     };
-    for dir in start.ancestors() {
-        if !dir.join("dcs-studio.toml").is_file() {
-            continue;
+    match dcs_studio_project::manifest::load(&dir) {
+        Ok(manifest) => manifest.format,
+        Err(error) => {
+            eprintln!("fmt: {error}; using default format config");
+            FormatConfig::default()
         }
-        return match dcs_studio_project::manifest::load(dir) {
-            Ok(manifest) => manifest.format,
-            Err(error) => {
-                eprintln!("fmt: {error}; using default format config");
-                FormatConfig::default()
-            }
-        };
     }
-    FormatConfig::default()
 }

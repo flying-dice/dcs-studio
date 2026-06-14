@@ -28,5 +28,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 dcs-bridge-client = { path = "../dcs-bridge-client" }
 dcs-studio-project = { path = "../dcs-studio-project" }
+dcs-lua-fmt = { path = "../dcs-lua-fmt" }
 studio-services = { path = "../studio-services" }
 

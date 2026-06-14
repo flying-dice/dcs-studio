@@ -16,6 +16,13 @@
   import { StreamLanguage } from "@codemirror/language";
   import { lua } from "@codemirror/legacy-modes/mode/lua";
   import { editorCommands } from "$lib/editor/commands";
+  import {
+    formatKeymap,
+    formatterFacet,
+    runFormat,
+    type Formatter,
+  } from "$lib/editor/format";
+  import { saveWithFormat } from "$lib/save-format";
 
   // Three plain statements: line ops reorder/duplicate/comment them with no
   // dependence on a syntax tree, so the assertions are exact.
@@ -51,6 +58,29 @@
   let docText = $state(INITIAL);
   let ready = $state(false);
 
+  // The real formatter runs in Rust behind the `format_source` Tauri command —
+  // unreachable from this plain browser. A deterministic stub stands in so the
+  // suite can drive the Shift-Alt-F wiring (key → range → applied result): it
+  // records the range it was handed ("doc" for a whole-document format, else
+  // "from,to") and collapses runs of spaces as a recognisable transform. The
+  // engine's actual formatting and range-scoping are proven in Rust
+  // (crates/app/src/format.rs); this exercises only the editor integration.
+  let formatRange = $state("-");
+  // Format-on-save knobs (e2e-lang/format.spec.ts): the preference toggle, and
+  // a switch that makes the stub throw — standing in for an unparseable buffer
+  // / engine error, to exercise the save-is-never-blocked contract.
+  let formatOnSave = $state(false);
+  let formatThrows = $state(false);
+  // What the last save persisted, and how many writes it made — the save path
+  // records here instead of touching a real filesystem.
+  let persisted = $state("<unsaved>");
+  let persistCount = $state(0);
+  const stubFormatter: Formatter = async (text, range) => {
+    formatRange = range ? `${range.from},${range.to}` : "doc";
+    if (formatThrows) throw new Error("stub formatter: unparseable buffer");
+    return { text: text.replace(/ {2,}/g, " "), guard_tripped: false };
+  };
+
   onMount(() => {
     const view = new EditorView({
       parent: host,
@@ -61,6 +91,33 @@
           basicSetup,
           StreamLanguage.define(lua),
           editorCommands,
+          // Format Document / Selection (Shift-Alt-F), backed by the stub.
+          // Shift-Alt-F is not a basicSetup default, so removing formatKeymap
+          // makes the key inert and the format specs go red — no decoy needed.
+          formatKeymap,
+          formatterFacet.of(stubFormatter),
+          // Save through the SAME orchestrator the app uses (saveWithFormat):
+          // format-on-save reformats the buffer in place first, then persists;
+          // a throwing formatter must never block the persist. Mod-s is not a
+          // basicSetup default, so this binding owns it — remove saveWithFormat
+          // or this binding and the format-on-save specs go red.
+          keymap.of([
+            {
+              key: "Mod-s",
+              preventDefault: true,
+              run: (v) => {
+                void saveWithFormat({
+                  formatOnSave,
+                  format: () => runFormat(v, null),
+                  persist: async () => {
+                    persisted = v.state.doc.toString();
+                    persistCount += 1;
+                  },
+                });
+                return true;
+              },
+            },
+          ]),
           EditorView.updateListener.of((u) => {
             docText = u.state.doc.toString();
           }),
@@ -84,4 +141,29 @@
   <pre
     class="shrink-0 overflow-auto rounded border p-2 text-xs"
     data-testid="doc-text">{docText}</pre>
+  <div class="shrink-0 text-xs text-muted-foreground" data-testid="format-range">
+    {formatRange}
+  </div>
+  <div class="flex shrink-0 items-center gap-2 text-xs">
+    <button
+      type="button"
+      class="rounded border px-2 py-1"
+      data-testid="toggle-format-on-save"
+      onclick={() => (formatOnSave = !formatOnSave)}
+    >
+      format-on-save: {formatOnSave ? "on" : "off"}
+    </button>
+    <button
+      type="button"
+      class="rounded border px-2 py-1"
+      data-testid="toggle-formatter-throws"
+      onclick={() => (formatThrows = !formatThrows)}
+    >
+      formatter: {formatThrows ? "throws" : "ok"}
+    </button>
+    <span data-testid="persist-count">{persistCount}</span>
+  </div>
+  <pre
+    class="shrink-0 overflow-auto rounded border p-2 text-xs"
+    data-testid="persisted-text">{persisted}</pre>
 </div>

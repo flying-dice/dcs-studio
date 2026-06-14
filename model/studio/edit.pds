@@ -1,0 +1,96 @@
+//! studio::edit — editor operations on the active buffer (issue #18):
+//! formatting (Document, Selection, format-on-save) over the shared dcs-lua
+//! formatter. The editor and the CLI `fmt` / `fmt --check` run the IDENTICAL
+//! engine (model fmt::Fmt, crates/dcs-lua-fmt) over the IDENTICAL `[format]`
+//! config resolved from dcs-studio.toml, so a buffer formatted in the editor
+//! is byte-for-byte what CI checks — they cannot disagree.
+//!
+//! Format-on-save is an editor preference, off by default — NOT a formatter
+//! option: fmt::FormatConfig stays pure (no editor concerns, no I/O). Rename
+//! Symbol and Find Usages also belong to issue #18 but are blocked on
+//! lang-engine contracts (References / RenameEdits on dcslua::DcsLuaLs) and
+//! land with their engine — see model/studio/lang.pds.
+
+/// Editor-side formatting of the active CodeMirror buffer: a thin seam over
+/// the formatter face that resolves the governing config and delegates to
+/// fmt::Fmt, so the editor and the CLI never diverge. Applying the result to
+/// the buffer (the CodeMirror transaction and caret) and persisting the
+/// on-save preference are plumbing, out of the model.
+public container Formatting for studio::core::Studio {
+  /// The `[format]` config governing `path`: the `[format]` table of the
+  /// nearest dcs-studio.toml walking up from the file, house defaults when no
+  /// manifest is found or the nearest one cannot be read or parsed (a
+  /// malformed manifest must not wedge formatting). Resolved the same way the
+  /// CLI resolves it, so the editor and `dcs-studio fmt` format alike.
+  FormatConfigFor(path: string): fmt::FormatConfig;
+
+  /// Format the whole buffer through fmt::Fmt.Format with the config
+  /// FormatConfigFor(path) resolves. A buffer that does not parse is returned
+  /// via Err with the parse diagnostics — never half-formatted; the caller
+  /// keeps the original text.
+  public FormatDocument(path: string, text: string): Result<fmt::Formatted, syntax::Diagnostic[]>;
+
+  /// Format the smallest run of whole statements enclosing a byte range
+  /// through fmt::Fmt.FormatRange with the resolved config; every byte
+  /// outside the run is identical to the input.
+  public FormatSelection(path: string, text: string, range: syntax::Span): Result<fmt::Formatted, syntax::Diagnostic[]>;
+
+  /// Whether the editor reformats the buffer on save — an editor preference,
+  /// off by default, persisted client-side.
+  FormatOnSaveEnabled(): bool;
+
+  /// The text to persist when the active buffer is saved: the buffer
+  /// unchanged when format-on-save is off, or when the buffer does not parse
+  /// (a syntax error never blocks a save — its findings already show in the
+  /// Problems panel); the formatted text otherwise. A semantic-guard trip
+  /// leaves the buffer unchanged and is surfaced, never blocks the save (a
+  /// trip degrades to "unchanged", never an abort — model fmt::Fmt).
+  #[manual]
+  public FormatBeforeSave(path: string, text: string): string {
+    enabled = bool from self.FormatOnSaveEnabled()
+    if (!enabled) {
+      return text
+    }
+    outcome = Result<fmt::Formatted, syntax::Diagnostic[]> from self.FormatDocument(path, text)
+    if (outcome.isErr) {
+      return text
+    }
+    formatted = fmt::Formatted from outcome.value
+    if (formatted.guardTripped) {
+      self.WarnGuardTripped(path)
+      return text
+    }
+    return formatted.text
+  }
+
+  /// Surface a semantic-guard trip to the developer: the formatted output was
+  /// rejected as semantics-changing, so the buffer is left unchanged. A
+  /// formatter bug — surfaced, never silently swallowed.
+  WarnGuardTripped(path: string): void;
+}
+
+/// The editor formats through the same engine and the same config as CI, so a
+/// file formatted in the editor is exactly what `fmt --check` accepts.
+/// #critical
+feature FormatMatchesCi for studio::edit::Formatting {
+  given "a project whose dcs-studio.toml [format] config is in effect"
+  when "a buffer is formatted in the editor"
+  then "the result is byte-identical to `dcs-studio fmt` on the same file"
+  and "`dcs-studio fmt --check` on the saved file stays green"
+}
+
+/// A syntax error never costs the developer a save.
+feature SaveNeverBlockedByBrokenLua for studio::edit::Formatting {
+  given "format-on-save is enabled and the buffer has a syntax error"
+  when "the developer saves"
+  then "the buffer is written to disk unchanged"
+  and "the parse findings remain in the Problems panel"
+}
+
+/// Format-on-save reformats a parseable buffer before it is written.
+feature FormatOnSaveReformatsBuffer for studio::edit::Formatting {
+  given "format-on-save is enabled and the buffer parses"
+  when "the developer saves"
+  then "the buffer is reformatted with the project's [format] config before the write"
+  but "an already-formatted buffer is written unchanged"
+}

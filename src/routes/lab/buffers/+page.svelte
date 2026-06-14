@@ -91,7 +91,20 @@
       ready = true;
     })();
   });
+
+  // Mirror prod (`routes/+page.svelte`): a global ⌘S / Ctrl-S saves the active
+  // buffer. The Editor has no save binding on the format branch (#18) — the
+  // single save path is this window handler, so the lab must provide it too or
+  // Ctrl+S is dead here and the save specs never fire `saveFile`.
+  function onKeydown(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      void app.saveFile();
+    }
+  }
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 <div class="flex h-screen flex-col gap-2 p-3" data-testid="buffers-lab">
   <div class="text-xs text-muted-foreground" data-testid="lab-status">
