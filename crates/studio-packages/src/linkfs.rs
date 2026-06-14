@@ -70,3 +70,25 @@ fn symlink_file(target: &Path, dest: &Path) -> std::io::Result<()> {
 fn symlink_file(target: &Path, dest: &Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_file(target, dest)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn place_file_refuses_to_clobber_an_existing_destination() {
+        let dir = std::env::temp_dir().join(format!("pkg-clobber-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("source.txt");
+        let dest = dir.join("dest.txt");
+        std::fs::write(&target, "store").unwrap();
+        std::fs::write(&dest, "precious user file").unwrap();
+
+        let err = place_file(&target, &dest).expect_err("must refuse to clobber");
+        assert!(err.contains("already exists"), "{err}");
+        // The pre-existing file is untouched.
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "precious user file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

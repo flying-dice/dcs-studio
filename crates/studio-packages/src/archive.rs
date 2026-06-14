@@ -124,3 +124,32 @@ fn read_json<T: serde::de::DeserializeOwned, R: Read + std::io::Seek>(
 fn to_pretty<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, String> {
     serde_json::to_vec_pretty(value).map_err(|e| format!("serialising: {e}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn extract_payload_refuses_a_zip_entry_that_escapes() {
+        let dir = std::env::temp_dir().join(format!("pkg-zip-escape-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join("evil.dcspkg");
+        // A hand-built zip whose payload entry climbs out via `..` (zip-slip).
+        {
+            let file = std::fs::File::create(&archive).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("files/../escape.txt", opts).unwrap();
+            zip.write_all(b"pwned").unwrap();
+            zip.finish().unwrap();
+        }
+        let dest = dir.join("out");
+        let err = extract_payload(&archive, &dest).expect_err("escape must be refused");
+        assert!(err.contains("escapes the payload root"), "{err}");
+        // Nothing was written outside the destination.
+        assert!(!dir.join("escape.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

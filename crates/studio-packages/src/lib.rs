@@ -19,7 +19,7 @@ pub mod signing;
 
 mod fsutil;
 
-pub use build::build_package;
+pub use build::{build_package, build_package_with};
 pub use identity::{Identity, IdentityProvider, StaticIdentity};
 pub use install::{
     discover, entry_for, install, installed_packages, revalidate_installed, uninstall,

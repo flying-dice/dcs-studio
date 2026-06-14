@@ -7,15 +7,15 @@ use std::process::ExitCode;
 
 use clap::Subcommand;
 use dcs_studio_project::RootMap;
-use studio_packages::{HttpSigningClient, Identity, build_package, discover, entry_for, install};
+use studio_packages::{
+    HttpSigningClient, StaticIdentity, build_package_with, discover, entry_for, install,
+};
 
 /// `pack` — build a signed package from the project's `[[install]]` rules.
 pub fn pack(root: &Path, out: &Path, signing_url: &str, user: &str, token: &str) -> ExitCode {
     let signer = HttpSigningClient::new(signing_url, token);
-    let me = Identity {
-        login: user.to_string(),
-    };
-    match build_package(root, out, &me, &signer) {
+    let idp = StaticIdentity::new(user);
+    match build_package_with(root, out, &idp, &signer) {
         Ok(path) => {
             println!("packaged {}", path.display());
             ExitCode::SUCCESS

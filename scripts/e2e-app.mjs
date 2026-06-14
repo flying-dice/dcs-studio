@@ -53,6 +53,12 @@ if (mockBuild.status === 0) {
   rmSync(roots, { recursive: true, force: true });
   mkdirSync(roots, { recursive: true });
   process.env.DCS_SAVED_GAMES = roots;
+  // Per-run package store/incoming so the packages spec is isolation-safe
+  // (no app-config state carried across suite runs).
+  const pkgDir = join(tmpdir(), "dcs-studio-e2e-packages");
+  rmSync(pkgDir, { recursive: true, force: true });
+  mkdirSync(pkgDir, { recursive: true });
+  process.env.DCS_PACKAGES_DIR = pkgDir;
 }
 
 const child = spawn("pnpm", ["tauri", "dev"], {

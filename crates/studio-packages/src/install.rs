@@ -140,8 +140,13 @@ pub fn install(
     }
 
     // Commit: move the payload into the store, then link each rule's dest in.
+    // Replace any prior install of this exact package CLEANLY first — drop its
+    // ledgered links, not just the store dir — so a re-install never collides
+    // with its own surviving destinations (and never strands dangling links).
     let store = store_dir.join(&id);
-    let _ = std::fs::remove_dir_all(&store);
+    if store.exists() {
+        let _ = uninstall(&id, store_dir);
+    }
     let files_dir = store.join(FILES_DIR);
     move_dir(&staging, &files_dir).inspect_err(|_| {
         rm(&staging);

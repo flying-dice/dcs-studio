@@ -13,8 +13,8 @@ use tauri::{AppHandle, Manager};
 
 use dcs_studio_project::RootMap;
 use studio_packages::{
-    build_package, discover, entry_for, install, installed_packages, revalidate_installed,
-    uninstall, HttpSigningClient, Identity, PackageEntry, PackageInstallReport, StalePackage,
+    build_package_with, discover, entry_for, install, installed_packages, revalidate_installed,
+    uninstall, HttpSigningClient, PackageEntry, PackageInstallReport, StalePackage, StaticIdentity,
 };
 
 /// The signing-server base URL — `DCS_SIGNING_URL` or the local mock default.
@@ -27,11 +27,14 @@ fn signing_token() -> String {
     std::env::var("DCS_SIGNING_TOKEN").unwrap_or_else(|_| "dev".to_string())
 }
 
-/// The current signing identity. A single static user for now (the polymorphic
-/// IDP's stand-in); GitHub device-flow login (#11) replaces this.
-fn identity() -> Identity {
-    Identity {
-        login: std::env::var("DCS_SIGNING_USER").unwrap_or_else(|_| "dev-user".to_string()),
+/// The identity provider — a single static user from `DCS_SIGNING_USER` (the
+/// polymorphic IDP's stand-in), or logged-out when unset, so packaging is gated
+/// on being signed in (model `BuildRequiresLogin`). GitHub device-flow login
+/// (#11) replaces this.
+fn identity_provider() -> StaticIdentity {
+    match std::env::var("DCS_SIGNING_USER") {
+        Ok(user) if !user.trim().is_empty() => StaticIdentity::new(user),
+        _ => StaticIdentity::logged_out(),
     }
 }
 
@@ -39,14 +42,18 @@ fn client() -> HttpSigningClient {
     HttpSigningClient::new(signing_url(), signing_token())
 }
 
-/// `<app-config>/packages/<sub>`, created on demand.
+/// `<base>/<sub>`, created on demand. The base is `DCS_PACKAGES_DIR` when set
+/// (a per-run isolation seam the e2e uses), else `<app-config>/packages`.
 fn packages_dir(app: &AppHandle, sub: &str) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| format!("no app config dir: {e}"))?
-        .join("packages")
-        .join(sub);
+    let base = match std::env::var_os("DCS_PACKAGES_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => app
+            .path()
+            .app_config_dir()
+            .map_err(|e| format!("no app config dir: {e}"))?
+            .join("packages"),
+    };
+    let dir = base.join(sub);
     std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     Ok(dir)
 }
@@ -73,7 +80,12 @@ fn resolve_roots() -> Result<RootMap, String> {
 #[tauri::command]
 pub fn pack_project(app: AppHandle, root: String) -> Result<String, String> {
     let out = packages_dir(&app, "incoming")?;
-    let path = build_package(std::path::Path::new(&root), &out, &identity(), &client())?;
+    let path = build_package_with(
+        std::path::Path::new(&root),
+        &out,
+        &identity_provider(),
+        &client(),
+    )?;
     Ok(path.to_string_lossy().into_owned())
 }
 

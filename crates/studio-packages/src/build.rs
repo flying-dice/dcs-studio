@@ -3,9 +3,29 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::identity::Identity;
+use crate::identity::{Identity, IdentityProvider};
 use crate::manifest::{PackageManifest, Rule};
 use crate::signing::SigningClient;
+
+/// Package the project at `root`, gated on a logged-in identity (model
+/// `Packager.BuildPackage`: signing is only available to an identified author).
+/// Resolves the current identity from `idp` and refuses when nobody is signed
+/// in, then delegates to [`build_package`].
+///
+/// # Errors
+/// Returns `Err` when no identity is available, or for any [`build_package`]
+/// failure.
+pub fn build_package_with(
+    root: &Path,
+    out_dir: &Path,
+    idp: &dyn IdentityProvider,
+    signer: &dyn SigningClient,
+) -> Result<PathBuf, String> {
+    let identity = idp
+        .current()
+        .ok_or_else(|| "not signed in — sign in to package and ship a mod".to_string())?;
+    build_package(root, out_dir, &identity, signer)
+}
 
 /// Bundle the project at `root` into a signed `.dcspkg` under `out_dir`.
 ///

@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 
 use dcs_studio_project::RootMap;
 use studio_packages::{
-    build_package, discover, install, revalidate_installed, uninstall, Identity, MockSigningClient,
+    build_package, build_package_with, discover, entry_for, install, revalidate_installed,
+    uninstall, Identity, MockSigningClient, PackageManifest, Rule, SigningClient, StaticIdentity,
 };
 
 fn temp(tag: &str) -> PathBuf {
@@ -166,6 +167,100 @@ fn a_revoked_author_becomes_stale_and_cannot_reinstall() {
     let err = install(&entry, &roots(&saved), &store, &signer).expect_err("revoked refused");
     assert!(err.contains("rejected") || err.contains("revoked"), "{err}");
 
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn build_requires_a_logged_in_identity() {
+    let base = temp("login");
+    let project = base.join("project");
+    fixture_project(&project);
+    let signer = MockSigningClient::new();
+    // Logged out → packaging is refused (model BuildRequiresLogin).
+    let err = build_package_with(
+        &project,
+        &base.join("out"),
+        &StaticIdentity::logged_out(),
+        &signer,
+    )
+    .expect_err("logged out must be refused");
+    assert!(err.contains("signed in"), "{err}");
+    // Logged in → it packages.
+    build_package_with(
+        &project,
+        &base.join("out"),
+        &StaticIdentity::new("alice"),
+        &signer,
+    )
+    .expect("logged in builds");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn reinstalling_over_an_existing_install_replaces_it_cleanly() {
+    let base = temp("reinstall");
+    let project = base.join("project");
+    fixture_project(&project);
+    let out = base.join("out");
+    let saved = base.join("saved");
+    let store = base.join("store");
+    let signer = MockSigningClient::new();
+    let me = Identity {
+        login: "alice".into(),
+    };
+    build_package(&project, &out, &me, &signer).expect("build");
+    let entry = discover(&out).remove(0);
+
+    install(&entry, &roots(&saved), &store, &signer).expect("install 1");
+    // Re-install WITHOUT uninstalling first must succeed (idempotent), not
+    // collide with its own surviving destination links.
+    let report = install(&entry, &roots(&saved), &store, &signer).expect("install 2");
+    assert_eq!(report.linked, 3);
+    assert_eq!(
+        std::fs::read_to_string(saved.join("Mods/mod.lua")).unwrap(),
+        "print('mod')\n"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn install_refuses_a_signed_manifest_whose_rule_escapes_the_root() {
+    // A forged but VALIDLY SIGNED package whose manifest rule escapes the root
+    // must still be refused at install time (defense in depth beyond build).
+    let base = temp("install-escape");
+    let project = base.join("project");
+    fixture_project(&project);
+    let out = base.join("out");
+    let signer = MockSigningClient::new();
+    let me = Identity {
+        login: "alice".into(),
+    };
+    let artifact = build_package(&project, &out, &me, &signer).expect("build");
+
+    // Extract the payload, then re-sign a manifest with an escaping rule and the
+    // matching payload hash, so validation passes but the rule guard must fire.
+    let payload = base.join("payload");
+    studio_packages::archive::extract_payload(&artifact, &payload).expect("extract");
+    let forged = PackageManifest {
+        name: "Forged".into(),
+        version: "1.0.0".into(),
+        author: "alice".into(),
+        created_at: "0".into(),
+        content_hash: studio_packages::hash::content_hash(&payload).expect("hash"),
+        rules: vec![Rule {
+            source: "../../etc/evil".into(),
+            dest: "{SavedGames}/x".into(),
+        }],
+    };
+    let sig = signer.sign(&me, &forged).expect("sign forged");
+    let forged_path = out.join("forged.dcspkg");
+    studio_packages::archive::write(&forged_path, &forged, &sig, &payload).expect("rezip");
+
+    let entry = entry_for(&forged_path).expect("entry");
+    let saved = base.join("saved");
+    let store = base.join("store");
+    let err = install(&entry, &roots(&saved), &store, &signer).expect_err("escape refused");
+    assert!(err.contains("escapes"), "{err}");
     let _ = std::fs::remove_dir_all(&base);
 }
 
