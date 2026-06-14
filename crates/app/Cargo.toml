@@ -33,4 +33,5 @@ dcs-lua-fmt = { path = "../dcs-lua-fmt" }
 studio-services = { path = "../studio-services" }
 studio-mcp = { path = "../studio-mcp" }
 getrandom = "0.2"
+base64 = "0.22"
 

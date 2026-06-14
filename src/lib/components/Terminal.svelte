@@ -18,6 +18,7 @@
   import { terminal } from "$lib/terminal.svelte";
   import { editorThemeById, type EditorTheme } from "$lib/themes";
   import { termWrite, termResize, termReplay, type TermData } from "$lib/api";
+  import { OutputSplicer, decodeBase64 } from "$lib/terminalSplice";
   import { cn } from "$lib/utils.js";
   import { Plus, X, SquareTerminal } from "@lucide/svelte";
   import { onMount } from "svelte";
@@ -47,10 +48,11 @@
     private observer: ResizeObserver;
     private unlistenData: UnlistenFn | null = null;
     private disposed = false;
-    // Splice state: `lastSeq` is the highest byte offset already written, so a
-    // replayed tail and the live chunks queued during replay merge without a
-    // gap or a repeat.
-    private lastSeq = 0;
+    // Splice state: the cursor tracks the highest byte offset already written so
+    // a replayed tail and the live chunks queued during replay merge without a
+    // gap or a repeat; `pending` holds live chunks that arrive before the replay
+    // is written.
+    private splicer = new OutputSplicer();
     private replayed = false;
     private pending: TermData[] = [];
 
@@ -87,26 +89,24 @@
       this.unlistenData = unlisten;
       const snapshot = await termReplay(this.id);
       if (this.disposed) return;
-      this.writeChunk(snapshot.bytes, snapshot.seq);
-      for (const chunk of this.pending) this.writeChunk(chunk.bytes, chunk.seq);
+      this.writeChunk(snapshot.data, snapshot.seq);
+      for (const chunk of this.pending) this.writeChunk(chunk.data, chunk.seq);
       this.pending = [];
       this.replayed = true;
     }
 
     private onData(chunk: TermData): void {
-      if (this.replayed) this.writeChunk(chunk.bytes, chunk.seq);
+      if (this.replayed) this.writeChunk(chunk.data, chunk.seq);
       else this.pending.push(chunk);
     }
 
-    /** Write only the part of `bytes` past what's already shown. `seq` is the
-     *  byte offset of this chunk's end; bytes at or below `lastSeq` are skipped,
-     *  a straddling chunk is sliced. */
-    private writeChunk(bytes: number[], seq: number): void {
-      if (this.disposed || seq <= this.lastSeq) return;
-      const start = seq - bytes.length;
-      const from = Math.max(0, this.lastSeq - start);
-      this.term.write(Uint8Array.from(from > 0 ? bytes.slice(from) : bytes));
-      this.lastSeq = seq;
+    /** Decode a base64 output chunk and write only the part past what the splice
+     *  cursor has already shown — the replayed tail and the live stream merge
+     *  without a gap or a repeat (model ReplayThenLiveOnRemount). */
+    private writeChunk(data: string, seq: number): void {
+      if (this.disposed) return;
+      const slice = this.splicer.next(decodeBase64(data), seq);
+      if (slice && slice.length > 0) this.term.write(slice);
     }
 
     /** Fit to the host and push the new size to the PTY — but only when the host

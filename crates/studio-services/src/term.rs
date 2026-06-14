@@ -17,7 +17,7 @@
 //! a remounting view can splice replay and live output with neither a gap nor
 //! a repeat (model `ReplayThenLiveOnRemount`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
@@ -104,9 +104,13 @@ struct Session {
     profile_id: String,
     label: String,
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    /// The child's stdin, behind its own lock so a blocking write — a child not
+    /// draining its input — stalls only this session, never the registry map:
+    /// other tabs' commands and every output pump keep running (model
+    /// `ConcurrentSessionsAreIsolated`).
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
-    buffer: Vec<u8>,
+    buffer: VecDeque<u8>,
     produced: usize,
 }
 
@@ -118,11 +122,15 @@ pub struct TermRegistry {
     sessions: Arc<Mutex<HashMap<String, Session>>>,
 }
 
-/// Append `chunk` to a session's ring buffer, trimming the oldest bytes so the
-/// buffer never exceeds `cap` — the model's "ring buffer capped at
-/// BUFFER_REPLAY_BYTES" rule. A chunk larger than `cap` keeps only its tail.
-fn append_capped(buffer: &mut Vec<u8>, chunk: &[u8], cap: usize) {
-    buffer.extend_from_slice(chunk);
+/// Append `chunk` to a session's ring buffer, trimming the oldest bytes from the
+/// head so the buffer never exceeds `cap` — the model's "ring buffer capped at
+/// BUFFER_REPLAY_BYTES" rule. A `VecDeque`, so both the append and the head trim
+/// are amortized O(1): the trim advances the head instead of memmoving the
+/// retained tail, so sustained bulk output (a build, a log tail) never pays an
+/// O(cap) shift per chunk under the registry lock. A chunk larger than `cap`
+/// keeps only its tail.
+fn append_capped(buffer: &mut VecDeque<u8>, chunk: &[u8], cap: usize) {
+    buffer.extend(chunk.iter().copied());
     if buffer.len() > cap {
         let overflow = buffer.len() - cap;
         buffer.drain(..overflow);
@@ -143,6 +151,16 @@ impl TermRegistry {
         spec: SpawnSpec,
         sink: impl Fn(TermEvent) + Send + 'static,
     ) -> Result<(), String> {
+        // Reject a duplicate id before opening a pseudo-terminal, so a caller
+        // bug never spawns a child we'd immediately discard. The authoritative
+        // re-check is under the lock below, in case a concurrent spawn races us.
+        {
+            let sessions = self.sessions.lock().map_err(|e| e.to_string())?;
+            if sessions.contains_key(&id) {
+                return Err(format!("terminal session '{id}' already exists"));
+            }
+        }
+
         let pty = native_pty_system()
             .openpty(PtySize {
                 rows: spec.rows,
@@ -176,6 +194,9 @@ impl TermRegistry {
         {
             let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
             if sessions.contains_key(&id) {
+                // A concurrent spawn won the race after our pre-check — kill the
+                // child we just started rather than leak it on the dropped pty.
+                let _ = child.kill();
                 return Err(format!("terminal session '{id}' already exists"));
             }
             sessions.insert(
@@ -184,9 +205,9 @@ impl TermRegistry {
                     profile_id: spec.profile_id,
                     label: spec.label,
                     master: pty.master,
-                    writer,
+                    writer: Arc::new(Mutex::new(writer)),
                     killer,
-                    buffer: Vec::new(),
+                    buffer: VecDeque::new(),
                     produced: 0,
                 },
             );
@@ -201,14 +222,21 @@ impl TermRegistry {
     /// (model `Terminal.Write`). Writing to a gone session is a no-op, never an
     /// error — the tab may be mid-teardown.
     pub fn write(&self, id: &str, bytes: &[u8]) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
-        let Some(session) = sessions.get_mut(id) else {
-            return Ok(());
+        // Take a handle to just this session's writer under a short lock, then
+        // release the registry map before the (potentially blocking) write: a
+        // child not draining its input must stall only this tab, not freeze the
+        // whole terminal (model `ConcurrentSessionsAreIsolated`).
+        let writer = {
+            let sessions = self.sessions.lock().map_err(|e| e.to_string())?;
+            match sessions.get(id) {
+                Some(session) => Arc::clone(&session.writer),
+                None => return Ok(()),
+            }
         };
-        session
-            .writer
+        let mut writer = writer.lock().map_err(|e| e.to_string())?;
+        writer
             .write_all(bytes)
-            .and_then(|()| session.writer.flush())
+            .and_then(|()| writer.flush())
             .map_err(|e| e.to_string())
     }
 
@@ -253,9 +281,17 @@ impl TermRegistry {
             .lock()
             .ok()
             .and_then(|sessions| {
-                sessions.get(id).map(|session| ReplaySnapshot {
-                    bytes: session.buffer.clone(),
-                    seq: session.produced,
+                sessions.get(id).map(|session| {
+                    // The ring buffer may wrap; flatten its two slices into the
+                    // contiguous tail the view replays.
+                    let (head, tail) = session.buffer.as_slices();
+                    let mut bytes = Vec::with_capacity(head.len() + tail.len());
+                    bytes.extend_from_slice(head);
+                    bytes.extend_from_slice(tail);
+                    ReplaySnapshot {
+                        bytes,
+                        seq: session.produced,
+                    }
                 })
             })
             .unwrap_or(ReplaySnapshot {
@@ -371,6 +407,7 @@ fn on_path(program: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -424,15 +461,19 @@ mod tests {
 
     #[test]
     fn append_capped_keeps_only_the_tail() {
-        let mut buffer = Vec::new();
+        let mut buffer = VecDeque::new();
         append_capped(&mut buffer, &[1, 2, 3], 4);
-        assert_eq!(buffer, vec![1, 2, 3]);
+        assert_eq!(buffer, VecDeque::from([1, 2, 3]));
         append_capped(&mut buffer, &[4, 5], 4);
-        assert_eq!(buffer, vec![2, 3, 4, 5], "oldest byte trimmed to the cap");
+        assert_eq!(
+            buffer,
+            VecDeque::from([2, 3, 4, 5]),
+            "oldest byte trimmed to the cap"
+        );
         append_capped(&mut buffer, &[6, 7, 8, 9, 10], 4);
         assert_eq!(
             buffer,
-            vec![7, 8, 9, 10],
+            VecDeque::from([7, 8, 9, 10]),
             "a chunk over the cap keeps its tail"
         );
     }

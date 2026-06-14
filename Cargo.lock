@@ -1262,6 +1262,7 @@ dependencies = [
 name = "dcs-studio"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "dcs-bridge-client",
  "dcs-lua-fmt",
  "dcs-studio-project",

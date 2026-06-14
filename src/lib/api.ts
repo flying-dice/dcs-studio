@@ -337,17 +337,20 @@ export interface TermSession {
   label: string;
 }
 
-/** A session's replay buffer + the byte offset of its end (model
- *  `Terminal.Replay`): a remounting view writes `bytes`, then ignores any live
- *  chunk whose `seq` is `<= seq` here — so replay and live never gap or repeat. */
+/** A session's replay tail (base64) + the byte offset of its end (model
+ *  `Terminal.Replay`): a remounting view writes the decoded bytes, then ignores
+ *  any live chunk whose `seq` is `<= seq` here — so replay and live never gap or
+ *  repeat. */
 export interface TermReplay {
-  bytes: number[];
+  data: string;
   seq: number;
 }
 
-/** `term://data/{id}` payload — a chunk of raw output and its running byte offset. */
+/** `term://data/{id}` payload — a chunk of output (base64-encoded, to cross the
+ *  IPC as a compact string rather than a JSON array of per-byte numbers) and its
+ *  running byte offset. */
 export interface TermData {
-  bytes: number[];
+  data: string;
   seq: number;
 }
 

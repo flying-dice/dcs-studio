@@ -10,8 +10,10 @@
 //! environment before launch (the model's `EnsureHarnessMcp`, soft-dep on the
 //! MCP server #8 — best-effort, since the harness-side consumer lands there).
 
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine as _;
 use serde::Serialize;
-use studio_services::term::{EnvVar, ReplaySnapshot, SessionInfo, SpawnSpec, TermEvent};
+use studio_services::term::{EnvVar, SessionInfo, SpawnSpec, TermEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 pub use studio_services::term::TermRegistry;
@@ -20,11 +22,13 @@ pub use studio_services::term::TermRegistry;
 /// IDE's MCP discovery file so an agentic CLI can find the tool surface.
 const MCP_ENV_VAR: &str = "DCS_STUDIO_MCP";
 
-/// `term://data/{id}` payload — a chunk of raw output and the running byte
+/// `term://data/{id}` payload — a chunk of output, base64-encoded so it crosses
+/// the IPC as one compact string rather than a JSON array of per-byte numbers
+/// (~6–8× larger, on the terminal's hot output path), plus the running byte
 /// offset (`seq`) a remounting view splices replay and live output against.
 #[derive(Clone, Serialize)]
 struct DataPayload {
-    bytes: Vec<u8>,
+    data: String,
     seq: usize,
 }
 
@@ -32,6 +36,15 @@ struct DataPayload {
 #[derive(Clone, Serialize)]
 struct ExitPayload {
     code: Option<i32>,
+}
+
+/// `term_replay` result — the replay tail base64-encoded (so it crosses the IPC
+/// as a string, matching the model's `Replay(id): string`) and its byte offset,
+/// the splice point the view dedups live chunks against.
+#[derive(Clone, Serialize)]
+pub struct ReplayPayload {
+    data: String,
+    seq: usize,
 }
 
 /// The built-in default shell profile's command + args (model
@@ -67,7 +80,13 @@ pub fn term_spawn(
     let ev_id = id.clone();
     state.spawn(id, spec, move |event| match event {
         TermEvent::Data { bytes, seq } => {
-            let _ = ev_app.emit(&format!("term://data/{ev_id}"), DataPayload { bytes, seq });
+            let _ = ev_app.emit(
+                &format!("term://data/{ev_id}"),
+                DataPayload {
+                    data: B64.encode(&bytes),
+                    seq,
+                },
+            );
         }
         TermEvent::Exit(code) => {
             let _ = ev_app.emit(&format!("term://exit/{ev_id}"), ExitPayload { code });
@@ -101,10 +120,15 @@ pub fn term_kill(state: State<'_, TermRegistry>, id: String) -> Result<(), Strin
 
 /// The session's replay buffer + its byte offset — the recent output a freshly
 /// mounted view writes before live streaming resumes, and the splice point it
-/// dedups live chunks against. Empty for an unknown session.
+/// dedups live chunks against. Base64-encoded for the IPC. Empty for an unknown
+/// session.
 #[tauri::command]
-pub fn term_replay(state: State<'_, TermRegistry>, id: String) -> ReplaySnapshot {
-    state.replay(&id)
+pub fn term_replay(state: State<'_, TermRegistry>, id: String) -> ReplayPayload {
+    let snapshot = state.replay(&id);
+    ReplayPayload {
+        data: B64.encode(&snapshot.bytes),
+        seq: snapshot.seq,
+    }
 }
 
 /// The live sessions, for rebuilding the tab strip.

@@ -78,6 +78,13 @@ function loadUserProfiles(): TermProfile[] {
   }
 }
 
+/** A collision-proof session id. Independent of any counter or backend state,
+ *  so a session opened before `rehydrate()` has reseeded can never alias a
+ *  session still live in the backend across a webview reload. */
+function newSessionId(): string {
+  return `term-${crypto.randomUUID()}`;
+}
+
 /** A friendly label for the detected shell command (model ResolveProfile). */
 function shellLabel(command: string): string {
   const base = command.replace(/\\/g, "/").split("/").pop() ?? command;
@@ -96,7 +103,6 @@ export class TerminalStore {
   /** Launch profiles: detected shell first, the harnesses, then user-defined. */
   profiles = $state<TermProfile[]>([...BUILTIN_HARNESSES]);
 
-  private seq = 0;
   private exitUnlisten = new Map<string, UnlistenFn>();
   private initialised = false;
 
@@ -136,9 +142,6 @@ export class TerminalStore {
       if (this.tabs.some((t) => t.id === session.id)) continue;
       this.tabs.push({ ...session, error: null });
       await this.watchExit(session.id);
-      // Keep new-tab ids from colliding with rehydrated `term-N` ids.
-      const n = Number(session.id.replace(/^term-/, ""));
-      if (Number.isFinite(n) && n > this.seq) this.seq = n;
     }
     if (!this.activeId && this.tabs.length > 0) this.activeId = this.tabs[0].id;
   }
@@ -163,7 +166,7 @@ export class TerminalStore {
   async open(profileId: string): Promise<void> {
     const profile = this.profile(profileId);
     if (!profile || !isTauri()) return;
-    const id = `term-${++this.seq}`;
+    const id = newSessionId();
     this.tabs.push({ id, profileId, label: profile.label, error: null });
     this.activeId = id;
     await this.watchExit(id);
