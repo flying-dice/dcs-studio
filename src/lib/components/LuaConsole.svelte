@@ -10,44 +10,23 @@
   import { StreamLanguage } from "@codemirror/language";
   import { lua } from "@codemirror/legacy-modes/mode/lua";
   import { app } from "$lib/state.svelte";
-  import { dcsCall } from "$lib/api";
+  import { luaConsole } from "$lib/lua-console.svelte";
   import { cn } from "$lib/utils.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Play, Trash2, LoaderCircle } from "@lucide/svelte";
 
-  interface ConsoleEntry {
-    code: string;
-    ok: boolean;
-    output: string;
-    at: Date;
-  }
-
   let host: HTMLDivElement;
   let outputHost: HTMLDivElement | undefined = $state();
   let view: EditorView | undefined;
-  let running = $state(false);
-  let entries = $state<ConsoleEntry[]>([]);
+  // The run log + busy flag live in the shared store so the editor's "Run
+  // Selection in Lua Console" feeds the same log (model RunLua).
+  const entries = $derived(luaConsole.entries);
+  const running = $derived(luaConsole.running);
 
   const themeComp = new Compartment();
 
-  function formatResult(result: unknown): string {
-    if (result === null || result === undefined) return "nil";
-    return JSON.stringify(result, null, 2);
-  }
-
   async function run() {
-    const code = view?.state.doc.toString().trim();
-    if (!code || running) return;
-    running = true;
-    try {
-      const result = await dcsCall("eval", { code });
-      entries.push({ code, ok: true, output: formatResult(result), at: new Date() });
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      entries.push({ code, ok: false, output: message, at: new Date() });
-    } finally {
-      running = false;
-    }
+    await luaConsole.run(view?.state.doc.toString() ?? "");
   }
 
   onMount(() => {
@@ -124,7 +103,7 @@
         title="Clear output"
         aria-label="Clear output"
         data-testid="lua-console-clear"
-        onclick={() => (entries = [])}
+        onclick={() => luaConsole.clear()}
       >
         <Trash2 />
       </Button>

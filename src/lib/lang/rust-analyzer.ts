@@ -18,8 +18,10 @@ import { lineStarts } from "./offsets";
 import {
   convertDiagnostic,
   convertHover,
+  convertLocation,
   convertSymbol,
   convertSymbolInformation,
+  convertWorkspaceEdit,
   lineEnd,
   lineStart,
   offsetToPosition,
@@ -27,8 +29,11 @@ import {
   uriToPath,
   type LspWireDiagnostic,
   type LspWireHover,
+  type LspWireLocation,
+  type LspWireLocationLink,
   type LspWireSymbol,
   type LspWireSymbolInformation,
+  type LspWireWorkspaceEdit,
 } from "./lsp-wire";
 import type {
   CompletionItem,
@@ -41,6 +46,7 @@ import type {
   ProfileRule,
   ProviderStatus,
   SourceFile,
+  WorkspaceEdit,
 } from "./provider";
 
 const PUBLISH_TIMEOUT_MS = 3000;
@@ -366,8 +372,45 @@ export class RustAnalyzerProvider implements LanguageProvider {
     return convertHover(response);
   }
 
-  async definition(_path: string, _offset: number): Promise<Location | null> {
-    return null;
+  async definition(path: string, offset: number): Promise<Location | null> {
+    if (!this.client || this.disabled) return null;
+    const response = (await this.client.request("textDocument/definition", {
+      textDocument: { uri: pathToUri(path) },
+      position: offsetToPosition(lineStarts(this.textOf(path)), offset),
+    })) as LspWireLocation | LspWireLocationLink | LspWireLocation[] | null;
+    const first = Array.isArray(response) ? response[0] : response;
+    return first ? convertLocation(first, (p) => this.textOf(p)) : null;
+  }
+
+  async references(path: string, offset: number): Promise<Location[]> {
+    if (!this.client || this.disabled) return [];
+    const response = (await this.client.request("textDocument/references", {
+      textDocument: { uri: pathToUri(path) },
+      position: offsetToPosition(lineStarts(this.textOf(path)), offset),
+      context: { includeDeclaration: true },
+    })) as LspWireLocation[] | null;
+    return (response ?? []).map((loc) => convertLocation(loc, (p) => this.textOf(p)));
+  }
+
+  async rename(
+    path: string,
+    offset: number,
+    newName: string,
+  ): Promise<WorkspaceEdit> {
+    if (!this.client || this.disabled) {
+      throw new Error("rust-analyzer unavailable");
+    }
+    const response = (await this.client.request("textDocument/rename", {
+      textDocument: { uri: pathToUri(path) },
+      position: offsetToPosition(lineStarts(this.textOf(path)), offset),
+      newName,
+    })) as LspWireWorkspaceEdit | null;
+    return convertWorkspaceEdit(response, (p) => this.textOf(p));
+  }
+
+  /** The remembered text of a mounted file (empty if not mounted). */
+  private textOf(path: string): string {
+    return this.texts.get(path) ?? "";
   }
 
   // ---- diagnostics push ----------------------------------------------------

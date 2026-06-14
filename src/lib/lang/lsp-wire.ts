@@ -5,7 +5,14 @@
 
 import { lineStarts } from "./offsets";
 import { canonicalPath } from "../paths";
-import type { Diagnostic, DocumentSymbol, Hover } from "./provider";
+import type {
+  Diagnostic,
+  DocumentSymbol,
+  Hover,
+  Location,
+  TextEdit,
+  WorkspaceEdit,
+} from "./provider";
 
 export interface LspPosition {
   line: number;
@@ -162,6 +169,79 @@ export function convertHover(wire: LspWireHover | null): Hover | null {
   if (!wire) return null;
   const markdown = hoverMarkdown(wire.contents).trim();
   return markdown === "" ? null : { title: "", body: markdown };
+}
+
+/** A `textDocument/definition` / `references` result element. */
+export interface LspWireLocation {
+  uri: string;
+  range: LspRange;
+}
+
+/** A `LocationLink` — what rust-analyzer sends when the client declares
+ * `definition.linkSupport`. We don't, but normalise defensively. */
+export interface LspWireLocationLink {
+  targetUri: string;
+  targetSelectionRange: LspRange;
+  targetRange?: LspRange;
+}
+
+export interface LspWireTextEdit {
+  range: LspRange;
+  newText: string;
+}
+
+/** A `WorkspaceEdit` in its `changes` form (uri → edits). */
+export interface LspWireWorkspaceEdit {
+  changes?: Record<string, LspWireTextEdit[]>;
+}
+
+/** Normalise a definition/references element (plain `Location` or
+ * `LocationLink`) to `{ uri, range }`. */
+function asLocation(
+  wire: LspWireLocation | LspWireLocationLink,
+): LspWireLocation {
+  if ("targetUri" in wire) {
+    return { uri: wire.targetUri, range: wire.targetSelectionRange };
+  }
+  return wire;
+}
+
+/** Wire location → our `Location` (offsets are UTF-16, against the TARGET
+ * file's text, supplied by `textFor` — it may differ from the queried file). */
+export function convertLocation(
+  wire: LspWireLocation | LspWireLocationLink,
+  textFor: (path: string) => string,
+): Location {
+  const { uri, range } = asLocation(wire);
+  const path = uriToPath(uri);
+  const starts = lineStarts(textFor(path));
+  return {
+    path,
+    start: positionToOffset(starts, range.start),
+    end: positionToOffset(starts, range.end),
+  };
+}
+
+/** Wire `WorkspaceEdit.changes` → our flat `WorkspaceEdit`; offsets convert
+ * against each affected file's text (`textFor`). */
+export function convertWorkspaceEdit(
+  wire: LspWireWorkspaceEdit | null,
+  textFor: (path: string) => string,
+): WorkspaceEdit {
+  const edits: TextEdit[] = [];
+  for (const [uri, list] of Object.entries(wire?.changes ?? {})) {
+    const path = uriToPath(uri);
+    const starts = lineStarts(textFor(path));
+    for (const edit of list) {
+      edits.push({
+        path,
+        start: positionToOffset(starts, edit.range.start),
+        end: positionToOffset(starts, edit.range.end),
+        newText: edit.newText,
+      });
+    }
+  }
+  return { edits };
 }
 
 /** Map one flat `SymbolInformation` onto our hierarchical shape. */

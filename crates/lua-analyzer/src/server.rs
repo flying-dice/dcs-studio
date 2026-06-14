@@ -17,11 +17,12 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability, Hover, HoverContents,
-    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-    InlayHint, InlayHintKind, InlayHintLabel, InlayHintParams, MarkupContent, MarkupKind,
-    NumberOrString, OneOf, Position, Range, ServerCapabilities, ServerInfo,
-    TextDocumentSyncCapability, TextDocumentSyncKind, SymbolKind, Url,
+    FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, InitializedParams, InlayHint, InlayHintKind,
+    InlayHintLabel, InlayHintParams, Location, MarkupContent, MarkupKind, NumberOrString, OneOf,
+    Position, Range, ReferenceParams, RenameParams, ServerCapabilities, ServerInfo, SymbolKind,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
@@ -97,6 +98,9 @@ impl LanguageServer for Backend {
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 inlay_hint_provider: Some(OneOf::Left(true)),
+                definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -284,6 +288,101 @@ impl LanguageServer for Backend {
             })
             .collect();
         Ok(Some(hints))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let position = params.text_document_position_params;
+        let Some(path) = uri_path(&position.text_document.uri) else {
+            return Ok(None);
+        };
+        let workspace = self.workspace.lock().expect("workspace lock");
+        let Some(entry) = workspace.file(&path) else {
+            return Ok(None);
+        };
+        let offset = offset_of(&entry.source, position.position);
+        let Some(location) = dcs_lua_lsp_core::definition(&workspace, &path, offset) else {
+            return Ok(None);
+        };
+        Ok(to_lsp_location(&workspace, &location).map(GotoDefinitionResponse::Scalar))
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let position = params.text_document_position;
+        let Some(path) = uri_path(&position.text_document.uri) else {
+            return Ok(None);
+        };
+        let workspace = self.workspace.lock().expect("workspace lock");
+        let Some(entry) = workspace.file(&path) else {
+            return Ok(None);
+        };
+        let offset = offset_of(&entry.source, position.position);
+        let locations = dcs_lua_lsp_core::references(&workspace, &path, offset)
+            .iter()
+            .filter_map(|location| to_lsp_location(&workspace, location))
+            .collect();
+        Ok(Some(locations))
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let position = params.text_document_position;
+        let Some(path) = uri_path(&position.text_document.uri) else {
+            return Ok(None);
+        };
+        let workspace = self.workspace.lock().expect("workspace lock");
+        let Some(entry) = workspace.file(&path) else {
+            return Ok(None);
+        };
+        let offset = offset_of(&entry.source, position.position);
+        // A refused rename (invalid name, nothing to rename) is surfaced to
+        // the editor as an error so it can show the message, not swallowed.
+        match dcs_lua_lsp_core::rename(&workspace, &path, offset, &params.new_name) {
+            Ok(edit) => Ok(Some(to_lsp_workspace_edit(&workspace, &edit))),
+            Err(error) => Err(tower_lsp::jsonrpc::Error::invalid_params(error.message)),
+        }
+    }
+}
+
+/// An engine [`Location`](dcs_lua_lsp_core::Location) → an LSP `Location` with
+/// a UTF-16 range, read from the TARGET file's source (which may differ from
+/// the queried file for a cross-file global).
+fn to_lsp_location(workspace: &Workspace, location: &dcs_lua_lsp_core::Location) -> Option<Location> {
+    let entry = workspace.file(&location.path)?;
+    let uri = Url::from_file_path(&location.path).ok()?;
+    let index = LineIndex::new(&entry.source);
+    Some(Location {
+        uri,
+        range: span_range(&entry.source, &index, location.span),
+    })
+}
+
+/// An engine [`WorkspaceEdit`](dcs_lua_lsp_core::WorkspaceEdit) → an LSP
+/// `WorkspaceEdit`, grouping the per-occurrence edits by file URI with
+/// UTF-16 ranges. An edit whose file is no longer mounted is dropped.
+fn to_lsp_workspace_edit(
+    workspace: &Workspace,
+    edit: &dcs_lua_lsp_core::WorkspaceEdit,
+) -> WorkspaceEdit {
+    let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+        std::collections::HashMap::new();
+    for text_edit in &edit.edits {
+        let Some(entry) = workspace.file(&text_edit.path) else {
+            continue;
+        };
+        let Ok(uri) = Url::from_file_path(&text_edit.path) else {
+            continue;
+        };
+        let index = LineIndex::new(&entry.source);
+        changes.entry(uri).or_default().push(TextEdit {
+            range: span_range(&entry.source, &index, text_edit.span),
+            new_text: text_edit.new_text.clone(),
+        });
+    }
+    WorkspaceEdit {
+        changes: Some(changes),
+        ..WorkspaceEdit::default()
     }
 }
 

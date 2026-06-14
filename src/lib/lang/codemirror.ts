@@ -100,6 +100,12 @@ const CURSOR_DEBOUNCE_MS = 150;
  * view (model/studio/lang.pds `OpenSymbol`). False when no live editor
  * shows the file.
  */
+/** The live editor view showing `path`, if any — lets the rename apply edits
+ * to an open buffer as a transaction (undoable) instead of a disk rewrite. */
+export function editorViewFor(path: string): EditorView | undefined {
+  return editors.get(path);
+}
+
 export function revealInEditor(path: string, offset: number): boolean {
   const view = editors.get(path);
   if (!view) return false;

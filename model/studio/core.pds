@@ -296,6 +296,59 @@ public container Workbench for studio::core::Studio {
     self.MarkSaved(active.value)
   }
 
+  /// Rename a workspace path from the file tree, then keep the editor in
+  /// sync: on a successful move, an open tab for the old path follows the
+  /// file to its new path (its buffer, dirty flag, undo history, and scroll
+  /// untouched) rather than orphaning a stale tab pointing at a vanished
+  /// file. A refused rename (collision, escape) leaves every tab as it was.
+  #[manual]
+  public RenameWorkspacePath(root: string, src: string, dst: string): Result<void, studio::files::IoError> {
+    canonical = string from self.CanonicalPath(src)
+    open = Option<studio::core::Document> from self.FindOpen(canonical)
+    if (open.isSome) {
+      // A rename moves the file but not its content, so a clean tab can
+      // simply follow and reload from the new path. Unsaved edits live only
+      // in the buffer, which a path change would strand — refuse until the
+      // developer saves, so a rename never silently discards work.
+      dirty = bool from open.value.text != open.value.savedText
+      if (dirty) {
+        unsaved = studio::files::IoError from { src }
+        return Err(unsaved)
+      }
+    }
+    moved = Result<void, studio::files::IoError> from studio::files::WorkspaceFs.RenamePath(root, src, dst)
+    if (moved.isErr) {
+      return Err(moved.error)
+    }
+    if (open.isSome) {
+      self.RetargetTab(open.value, dst)
+    }
+    return Ok
+  }
+
+  /// Follow an open (saved) tab to its file's new path: the old tab closes and
+  /// the renamed file reopens at `dst`, reloading its unchanged content — so
+  /// the editor tracks the file instead of orphaning a tab at a vanished path.
+  RetargetTab(doc: studio::core::Document, dst: string): void;
+
+  /// Delete a workspace path from the file tree to the Recycle Bin, then
+  /// keep the editor in sync: on a successful delete, an open tab for the
+  /// path is closed (the file is gone — its unsaved edits go with it, no
+  /// discard prompt). A failed delete leaves every tab as it was.
+  #[manual]
+  public DeleteWorkspacePath(root: string, path: string): Result<void, studio::files::IoError> {
+    removed = Result<void, studio::files::IoError> from studio::files::WorkspaceFs.DeleteToTrash(root, path)
+    if (removed.isErr) {
+      return Err(removed.error)
+    }
+    canonical = string from self.CanonicalPath(path)
+    open = Option<studio::core::Document> from self.FindOpen(canonical)
+    if (open.isSome) {
+      self.RemoveTab(open.value)
+    }
+    return Ok
+  }
+
   /// Whether a save's write is still in flight — a second save during it
   /// is a no-op rather than a concurrent write.
   SaveInFlight(): bool;
@@ -576,6 +629,19 @@ feature OpenFileHasOneIdentity for studio::core::Workbench {
   when "the developer clicks that file's diagnostic in the Problems panel"
   then "the existing tab is re-activated, not duplicated"
   and "the file's diagnostics show inline in that one tab"
+}
+
+/// Renaming an open file in the tree follows it in the editor: the tab
+/// retargets to the new path instead of orphaning a stale tab at a vanished
+/// file. A rename never silently discards unsaved work — a dirty file is
+/// refused until saved (its edits live only in the buffer a path change would
+/// strand).
+feature RenamingOpenFileFollowsInEditor for studio::core::Workbench {
+  given "a saved file is open in the editor"
+  when "the developer renames that file in the file tree"
+  then "the open tab now points at the new path and name"
+  but "renaming the file while it has unsaved edits is refused until it is saved"
+  and "deleting an open file instead closes its tab"
 }
 
 /// A fresh project opens immediately after scaffolding.

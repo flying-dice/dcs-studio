@@ -14,6 +14,7 @@
   import ProblemChips from "$lib/components/ProblemChips.svelte";
   import Structure from "$lib/components/Structure.svelte";
   import Todos from "$lib/components/Todos.svelte";
+  import Usages from "$lib/components/Usages.svelte";
   import Editor from "$lib/components/Editor.svelte";
   import EditorTabs from "$lib/components/EditorTabs.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
@@ -89,6 +90,7 @@
     { id: "lua", label: "Lua Console", icon: FileCode },
     { id: "terminal", label: "Terminal", icon: SquareTerminal },
     { id: "problems", label: "Problems", icon: TriangleAlert },
+    { id: "usages", label: "Usages", icon: Search },
     { id: "todos", label: "Todos", icon: ListTodo },
     { id: "output", label: "Output", icon: ScrollText },
   ];
@@ -538,6 +540,8 @@
                 <LuaConsole />
               {:else if app.bottomTool === "problems"}
                 <Problems />
+              {:else if app.bottomTool === "usages"}
+                <Usages />
               {:else if app.bottomTool === "todos"}
                 <Todos />
               {:else if app.bottomTool === "output"}

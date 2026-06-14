@@ -69,6 +69,114 @@ public container Formatting for studio::core::Studio {
   WarnGuardTripped(path: string): void;
 }
 
+/// Editor refactorings driven by the language engine (issue #18): navigate to
+/// a definition, list a symbol's uses, and rename it across the workspace.
+/// The engine answers the queries (model studio::lang DcsLua); this container
+/// owns the editor-side flow — navigation, the Usages panel, and applying the
+/// rename's multi-file edit through the same write path as saves.
+public container Refactoring for studio::core::Studio {
+  /// Jump to the definition of the symbol under the cursor: query the engine
+  /// (DefinitionOf) and, when it resolves, open the target file and land the
+  /// caret on the declaration. An offset that resolves to nothing does
+  /// nothing.
+  #[manual]
+  public GoToDefinition(path: string, offset: number): void {
+    target = Option<studio::lang::Location> from studio::lang::DcsLua.DefinitionOf(path, offset)
+    if (target.isNone) {
+      return
+    }
+    self.RevealLocation(target.value)
+  }
+
+  /// Open a location's file and place the caret at its span, scrolling it into
+  /// view — the shared navigation used by go-to-definition and the Usages
+  /// panel.
+  RevealLocation(location: studio::lang::Location): void;
+
+  /// List every use of the symbol under the cursor in the Usages panel: query
+  /// the engine (References) and publish the results. Each row navigates via
+  /// RevealLocation. An empty result clears the panel to its empty state.
+  #[manual]
+  public FindUsages(path: string, offset: number): void {
+    found = studio::lang::Location[] from studio::lang::DcsLua.References(path, offset)
+    self.PublishUsages(found)
+  }
+
+  /// Hand the usages list to the Usages panel.
+  PublishUsages(locations: studio::lang::Location[]): void;
+
+  /// Rename the symbol under the cursor across the workspace. The engine
+  /// produces the multi-file edit (RenameEdits); an invalid name or an
+  /// unresolved offset is refused there. Before applying, refuse when ANY
+  /// affected file has unsaved edits — a rename must not silently clobber or
+  /// half-merge a dirty buffer; the developer saves first and retries. With
+  /// every affected buffer clean, the edits apply through the save write path.
+  #[manual]
+  public RenameSymbol(path: string, offset: number, newName: string): Result<studio::lang::WorkspaceEdit, studio::lang::RenameError> {
+    computed = Result<studio::lang::WorkspaceEdit, studio::lang::RenameError> from studio::lang::DcsLua.RenameEdits(path, offset, newName)
+    if (computed.isErr) {
+      return Err(computed.error)
+    }
+    dirty = bool from self.AnyAffectedFileDirty(computed.value)
+    if (dirty) {
+      message = string from self.DirtyRenameMessage(computed.value)
+      blocked = studio::lang::RenameError from { message }
+      return Err(blocked)
+    }
+    self.ApplyWorkspaceEdit(computed.value)
+    return Ok(computed.value)
+  }
+
+  /// Whether any file the rename would edit currently has unsaved buffer
+  /// edits — the guard that refuses a rename over dirty work.
+  AnyAffectedFileDirty(edit: studio::lang::WorkspaceEdit): bool;
+
+  /// The refusal message naming the dirty affected files.
+  DirtyRenameMessage(edit: studio::lang::WorkspaceEdit): string;
+
+  /// Apply a multi-file edit: the active editor's buffer takes its edits as
+  /// one undoable transaction (keeping undo history), and every other affected
+  /// file is rewritten on disk (the engine kept in sync) — a file open in a
+  /// background tab has its stale buffer dropped so it reloads the new text on
+  /// reactivation. Per-file edits apply back-to-front so earlier spans stay
+  /// valid.
+  ApplyWorkspaceEdit(edit: studio::lang::WorkspaceEdit): void;
+}
+
+/// Go-to-definition navigates the editor to a symbol's declaration.
+feature GoToDefinitionNavigates for studio::edit::Refactoring {
+  given "a Lua file uses a function declared elsewhere in the workspace"
+  when "the developer invokes go-to-definition on the use"
+  then "the declaring file opens"
+  and "the caret lands on the declaration"
+  but "invoking it on something that resolves to nothing does nothing"
+}
+
+/// Find-usages lists every occurrence of a symbol, declaration included.
+feature FindUsagesListsAllOccurrences for studio::edit::Refactoring {
+  given "a symbol is used several times across the workspace"
+  when "the developer invokes find-usages on it"
+  then "the Usages panel lists every occurrence including the declaration"
+  and "each row navigates to its location"
+}
+
+/// Rename rewrites every occurrence of a symbol across files in one action.
+feature RenameAppliesAcrossFiles for studio::edit::Refactoring {
+  given "a global symbol is used in several files, all saved"
+  when "the developer renames it to a valid new name"
+  then "every occurrence including the declaration is rewritten"
+  but "an invalid new name (not an identifier, or a keyword) is refused"
+}
+
+/// A rename never clobbers unsaved work: it is refused while any affected
+/// file has unsaved edits, and the developer is told to save first.
+feature RenameRefusesWithUnsavedAffectedFiles for studio::edit::Refactoring {
+  given "a symbol's rename would touch a file with unsaved edits"
+  when "the developer invokes rename"
+  then "the rename is refused naming the dirty file"
+  and "no file on disk and no buffer is changed"
+}
+
 /// The editor formats through the same engine and the same config as CI, so a
 /// file formatted in the editor is exactly what `fmt --check` accepts.
 /// #critical

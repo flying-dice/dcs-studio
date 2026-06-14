@@ -22,8 +22,19 @@ public data CompletionItem { label: string, kind: string, detail: string }
 /// Markdown hover card for the symbol under the cursor.
 public data Hover { title: string, body: string }
 
-/// A span in a workspace file — a go-to-definition target.
+/// A span in a workspace file — a go-to-definition or find-usages target.
 public data Location { path: string, start: number, end: number }
+
+/// One text replacement: the byte span to replace and its new text.
+public data TextEdit { path: string, start: number, end: number, newText: string }
+
+/// A multi-file edit set produced by a rename — every occurrence of the
+/// symbol across the workspace, the declaration included.
+public data WorkspaceEdit { edits: studio::lang::TextEdit[] }
+
+/// A rename was refused: an invalid new name (not an identifier, or a Lua
+/// keyword), or the cursor resolves to nothing renameable.
+public data RenameError { message: string }
 
 /// One outline entry: a function, local, or global declaration, with
 /// nested declarations as children. `start..end` spans the whole
@@ -77,6 +88,17 @@ public system DcsLua {
 
   /// Definition site of the symbol at an offset, if known.
   public DefinitionOf(path: string, offset: number): Option<studio::lang::Location>;
+
+  /// Every use of the symbol at an offset across the mounted workspace, the
+  /// declaration included — scope-aware (a local's uses stay in its scope; a
+  /// global's span the workspace). Empty when the offset resolves to nothing.
+  public References(path: string, offset: number): studio::lang::Location[];
+
+  /// A workspace edit renaming the symbol at an offset to `newName`: every
+  /// occurrence References would find, each as a TextEdit. Refused when
+  /// `newName` is not a valid Lua identifier (or is a keyword), or the offset
+  /// resolves to nothing renameable.
+  public RenameEdits(path: string, offset: number, newName: string): Result<studio::lang::WorkspaceEdit, studio::lang::RenameError>;
 
   /// Inferred-type inlay hints for one file, drawn as ghost text by the
   /// editor on unannotated local bindings and on every function form

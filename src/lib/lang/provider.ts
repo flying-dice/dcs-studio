@@ -71,11 +71,24 @@ export interface Hover {
   body: string;
 }
 
-/** A go-to-definition target. */
+/** A go-to-definition or find-usages target. */
 export interface Location {
   path: string;
   start: number;
   end: number;
+}
+
+/** One text replacement (offsets are document UTF-16 offsets). */
+export interface TextEdit {
+  path: string;
+  start: number;
+  end: number;
+  newText: string;
+}
+
+/** A multi-file edit set produced by a rename. */
+export interface WorkspaceEdit {
+  edits: TextEdit[];
 }
 
 /**
@@ -180,6 +193,21 @@ export interface LanguageProvider {
   hover(path: string, offset: number): Promise<Hover | null>;
   /** Definition site of the symbol at an offset. */
   definition(path: string, offset: number): Promise<Location | null>;
+  /**
+   * Every use of the symbol at an offset across the workspace, the
+   * declaration included. Optional: a provider without resolution omits it.
+   */
+  references?(path: string, offset: number): Promise<Location[]>;
+  /**
+   * A workspace edit renaming the symbol at an offset to `newName`. Rejects
+   * (the promise) when the engine refuses — an invalid name, or nothing to
+   * rename — so the caller can surface the message. Optional.
+   */
+  rename?(
+    path: string,
+    offset: number,
+    newName: string,
+  ): Promise<WorkspaceEdit>;
   /**
    * Inferred-type inlay hints for one file, drawn as ghost text on
    * unannotated local bindings. Optional: a provider without inferred-type
