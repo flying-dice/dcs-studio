@@ -243,6 +243,39 @@ mod tests {
         handle.join().expect("server thread");
     }
 
+    /// A `BufRead` whose read always fails with `kind` — stands in for a socket
+    /// that reports a close (or a still-open timeout) without a live peer.
+    struct FailingReader(std::io::ErrorKind);
+    impl std::io::Read for FailingReader {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(self.0.into())
+        }
+    }
+    impl BufRead for FailingReader {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            Err(self.0.into())
+        }
+        fn consume(&mut self, _: usize) {}
+    }
+
+    #[test]
+    fn assert_connection_closed_accepts_an_abortive_reset() {
+        // An abortive close (RST) surfaces as ConnectionReset/Aborted, not EOF —
+        // under load the server can drop its socket while our read is armed.
+        // Both are "closed"; neither must panic.
+        assert_connection_closed(&mut FailingReader(std::io::ErrorKind::ConnectionReset));
+        assert_connection_closed(&mut FailingReader(std::io::ErrorKind::ConnectionAborted));
+    }
+
+    #[test]
+    #[should_panic(expected = "expected the server to close the connection")]
+    fn assert_connection_closed_still_rejects_a_live_socket() {
+        // The pin that keeps the reset-acceptance from going vacuous: a genuinely
+        // open socket times out (WouldBlock/TimedOut under the armed read
+        // timeout) and MUST still fail loudly, not be mistaken for a close.
+        assert_connection_closed(&mut FailingReader(std::io::ErrorKind::WouldBlock));
+    }
+
     #[test]
     fn a_valid_token_unlocks_the_full_tool_surface() {
         let (client, server) = loopback_pair();

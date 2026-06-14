@@ -53,7 +53,7 @@ const PUBLISH_TIMEOUT_MS = 3000;
 // open), starving every positional query. The salt makes each page load's ids
 // disjoint, so a reload always gets a fresh server. Tauri event names allow
 // alphanumerics and `-/:_`, so the token stays within that set.
-const HOST_SESSION = Math.random().toString(36).slice(2, 8);
+const HOST_CONNECTION_SALT = Math.random().toString(36).slice(2, 8);
 let hostConnectionSeq = 0;
 
 /** Production connection: ask the backend for the lua-analyzer binary, host
@@ -65,7 +65,7 @@ let hostConnectionSeq = 0;
 async function connectViaHost(): Promise<LspClient> {
   const program = await invoke<string>("lua_analyzer_path");
   hostConnectionSeq += 1;
-  return LspClient.start(`dcs-lua:${HOST_SESSION}-${hostConnectionSeq}`, program, []);
+  return LspClient.start(`dcs-lua:${HOST_CONNECTION_SALT}-${hostConnectionSeq}`, program, []);
 }
 
 export class LuaAnalyzerProvider implements LanguageProvider {

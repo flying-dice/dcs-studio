@@ -262,6 +262,16 @@ fn tool_dto<T: serde::Serialize>(value: &T) -> Value {
     tool_json(&serde_json::to_value(value).unwrap_or(Value::Null), false)
 }
 
+/// A service `Result` rendered as a tool response: the status value as a DTO,
+/// or the error message as a tool error. Shared by the inject and mission tool
+/// groups, whose service calls both return `Result<impl Serialize, String>`.
+fn status_or_error<T: serde::Serialize>(result: Result<T, String>) -> Value {
+    match result {
+        Ok(status) => tool_dto(&status),
+        Err(message) => tool_text(&message, true),
+    }
+}
+
 // ---- project tools (init_project / check / build) ---------------------------
 
 fn project_tool_specs() -> Vec<Value> {
@@ -554,11 +564,6 @@ fn inject_tool_specs() -> Vec<Value> {
 }
 
 fn inject_tools(name: &str, args: &Value) -> Option<Result<Value, ToolError>> {
-    let status_result = |result: Result<studio_services::inject::InjectionStatus, String>| match result
-    {
-        Ok(status) => tool_dto(&status),
-        Err(message) => tool_text(&message, true),
-    };
     match name {
         "detect_installs" => Some(Ok(tool_dto(&studio_services::inject::detect_installs()))),
         "injection_status" => Some(
@@ -567,11 +572,11 @@ fn inject_tools(name: &str, args: &Value) -> Option<Result<Value, ToolError>> {
         ),
         "inject" => Some(
             require_str(args, "write_dir", "inject")
-                .map(|dir| status_result(studio_services::inject::inject(dir))),
+                .map(|dir| status_or_error(studio_services::inject::inject(dir))),
         ),
         "eject" => Some(
             require_str(args, "write_dir", "eject")
-                .map(|dir| status_result(studio_services::inject::eject(dir))),
+                .map(|dir| status_or_error(studio_services::inject::eject(dir))),
         ),
         _ => None,
     }
@@ -623,12 +628,6 @@ fn mission_tool_specs() -> Vec<Value> {
 }
 
 fn mission_tools(name: &str, args: &Value) -> Option<Result<Value, ToolError>> {
-    let status_result = |result: Result<studio_services::mission::MissionScriptStatus, String>| {
-        match result {
-            Ok(status) => tool_dto(&status),
-            Err(message) => tool_text(&message, true),
-        }
-    };
     match name {
         "detect_mission_scripts" => Some(Ok(tool_dto(
             &studio_services::mission::detect_mission_scripts(),
@@ -640,7 +639,7 @@ fn mission_tools(name: &str, args: &Value) -> Option<Result<Value, ToolError>> {
         "mission_script_set" => Some(mission_script_set_tool(args)),
         "mission_script_restore" => Some(
             require_str(args, "path", "mission_script_restore")
-                .map(|path| status_result(studio_services::mission::restore(path))),
+                .map(|path| status_or_error(studio_services::mission::restore(path))),
         ),
         _ => None,
     }

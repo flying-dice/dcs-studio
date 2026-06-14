@@ -43,7 +43,7 @@
   // A synchronous fake Lua provider: flags every mounted file (both seeded
   // files are broken), so findings track exactly which workspace LangIntel
   // last mounted — the discriminator the race / skip / reset specs assert on.
-  function fakeLua(): LanguageProvider {
+  function createFakeLuaProvider(): LanguageProvider {
     let files: SourceFile[] = [];
     const findings = (): Diagnostic[] =>
       files.map((f) => ({
@@ -98,7 +98,7 @@
     };
   }
 
-  const provider = fakeLua();
+  const provider = createFakeLuaProvider();
   const intel = new LangIntel(fakeFs, () => [provider]);
 </script>
 
