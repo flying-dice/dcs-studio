@@ -123,6 +123,7 @@ impl<'a> Printer<'a> {
     /// level, interior line breaks); a CRLF file's trailing `\r` on line
     /// comments is shed because the printer emits its own line endings.
     fn push_comment_slice(&mut self, span: Span) {
+        // TODO: clean-code - 0.45 - PANIC: src[span.start..span.end] slices unchecked on a degenerate span (start>end, or a recovery node whose end < start) when the parse carried only warning-severity findings and slipped past the format() error gate; the sibling same_line() already guards `from <= to && to <= len` before slicing — mirror that here (clamp/`get`).
         let slice = &self.src[span.start as usize..span.end as usize];
         self.out.push_str(slice.trim_end_matches('\r'));
     }
@@ -658,6 +659,7 @@ impl<'a> Printer<'a> {
                     }
                     return Some("{}".to_string());
                 }
+                // TODO: clean-code - 0.45 - PANIC: src[expr.span.start..expr.span.end] slices unchecked on a degenerate table-expr span (start>end from a recovery node) that passed the format() error gate on a warning-only parse; guard with `from <= to && to <= len` like same_line(), or use `.get()` and bail.
                 let slice = &self.src[expr.span.start as usize..expr.span.end as usize];
                 if slice.contains('\n') || self.has_comment_in(expr.span.start, expr.span.end) {
                     return None;
