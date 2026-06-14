@@ -566,6 +566,13 @@ class AppState {
   }
 
   /**
+   * Injectable file writer so /lab/buffers can exercise `saveFile` in a
+   * plain browser (no Tauri fs) — same seam convention as the Editor
+   * component's `readFile` prop and IntelFs in intel.svelte.ts.
+   */
+  writeFile: (path: string, contents: string) => Promise<void> = writeTextFile;
+
+  /**
    * Persist the ACTIVE tab's buffer to the ACTIVE tab's path — never any
    * other tab's (model `SaveFile`). No-op when clean or already saving. The
    * single save path for every entry point (editor ⌘S, global ⌘S, File → Save);
@@ -583,10 +590,12 @@ class AppState {
         format: () => this.formatActiveBuffer?.() ?? Promise.resolve(),
         // Read the buffer AFTER any reformat, and capture it BEFORE the write:
         // keystrokes that land while the write is in flight must keep the tab
-        // dirty, so the baseline is exactly what was written.
+        // dirty, so the baseline is exactly what was written — and it lands on
+        // `doc` (the saved tab), never on whichever tab is active by the time
+        // the write finishes.
         persist: async () => {
           const text = doc.docText;
-          await writeTextFile(doc.path, text);
+          await this.writeFile(doc.path, text);
           doc.savedText = text;
           // Saved-file rescan for the Todos panel (model/studio/todos.pds
           // RefreshFile): splices only this file's entries.
