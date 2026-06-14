@@ -65,7 +65,8 @@ public container Installer for studio::core::Studio {
   public StatusProject(root: string): Result<studio::installer::InstallStatus, studio::files::IoError> {
     rules = studio::installer::InstallRule[] from self.ReadManifestRules(root)
     if (!self.HasRules(rules)) {
-      return Ok({ installed: false, upToDate: false })
+      empty = studio::installer::InstallStatus from { rules }
+      return Ok(empty)
     }
     roots = studio::installer::RootMap from self.ResolveRoots()
     status = studio::installer::InstallStatus from self.CheckRules(rules, roots)
