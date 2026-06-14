@@ -127,8 +127,10 @@ pub fn package_id(name: &str, content_hash: &str) -> String {
         })
         .collect();
     let slug = slug.trim_matches('-');
-    let prefix = &content_hash[..content_hash.len().min(12)];
-    format!("{slug}-{prefix}")
+    // The FULL content hash (not a 12-hex prefix): the id keys the content
+    // store, and install drops a colliding store entry before placing — a
+    // short prefix lets a crafted package force-uninstall a victim's links.
+    format!("{slug}-{content_hash}")
 }
 
 fn now_rfc3339() -> String {

@@ -95,13 +95,14 @@
         <div
           class="flex items-center gap-2 rounded px-2 py-1 hover:bg-accent/50"
           data-testid="pkg-installed-row"
-          data-stale={packages.isStale(pkg.id)}
+          data-revoked={packages.isRevoked(pkg.id)}
+          data-unverified={packages.isUnverified(pkg.id)}
         >
           <Package class="size-3.5 shrink-0 text-muted-foreground" />
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-1.5">
               <span class="truncate font-medium">{pkg.name}</span>
-              {#if packages.isStale(pkg.id)}
+              {#if packages.isRevoked(pkg.id)}
                 <span
                   class="flex shrink-0 items-center gap-1 rounded bg-destructive/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-destructive"
                   title="The author was revoked — this package is no longer trusted"
@@ -109,6 +110,15 @@
                 >
                   <ShieldAlert class="size-2.5" />
                   revoked
+                </span>
+              {:else if packages.isUnverified(pkg.id)}
+                <span
+                  class="flex shrink-0 items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-amber-600 dark:text-amber-500"
+                  title="The signing server could not be reached — trust unconfirmed"
+                  data-testid="pkg-unverified-badge"
+                >
+                  <ShieldAlert class="size-2.5" />
+                  unverified
                 </span>
               {/if}
             </div>

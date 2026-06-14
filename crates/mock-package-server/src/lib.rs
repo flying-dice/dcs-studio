@@ -92,6 +92,14 @@ fn sign(body: &[u8], state: &State) -> (u16, String) {
     if req.token.trim().is_empty() {
         return (401, json_err("not authenticated"));
     }
+    // Bind authorship to the signer: a caller cannot mint a package that
+    // displays someone else's `author` (which `key_id` keys revocation on).
+    if req.manifest.author != req.user {
+        return (
+            403,
+            json_err("manifest author does not match the authenticated signer"),
+        );
+    }
     let key = state.key_for(&req.user);
     let sig = key.sign(&req.manifest.canonical_bytes());
     let signature = Signature {
@@ -219,5 +227,16 @@ mod tests {
         let body = serde_json::json!({ "user": "alice", "token": "", "manifest": manifest("a") });
         let (code, _) = handle("/sign", body.to_string().as_bytes(), &state);
         assert_eq!(code, 401);
+    }
+
+    #[test]
+    fn sign_rejects_a_manifest_author_that_is_not_the_signer() {
+        // `manifest.author` is "alice" but the authenticated user is "mallory" —
+        // a forged authorship attempt must be refused.
+        let state = State::new();
+        let body =
+            serde_json::json!({ "user": "mallory", "token": "t", "manifest": manifest("a") });
+        let (code, out) = handle("/sign", body.to_string().as_bytes(), &state);
+        assert_eq!(code, 403, "{out}");
     }
 }

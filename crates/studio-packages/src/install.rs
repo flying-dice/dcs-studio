@@ -41,11 +41,16 @@ pub struct PackageInstallReport {
     pub files: Vec<String>,
 }
 
-/// An installed package whose author has since been revoked.
+/// An installed package that is no longer known-good: its author was revoked,
+/// or the signing server could not be reached to confirm it. `status` keeps the
+/// two apart so a transient outage never silently downgrades a REVOKED package
+/// to trusted (fail-closed, not fail-open).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StalePackage {
     pub id: String,
     pub author: String,
+    /// `"revoked"` (server says invalid) or `"unverified"` (server unreachable).
+    pub status: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -294,13 +299,19 @@ pub fn revalidate_installed(
         let Ok((manifest, signature)) = read_header(&store) else {
             continue;
         };
-        match signer.validate(&manifest, &signature) {
-            Ok(v) if !v.valid => stale.push(StalePackage {
-                id: package_id(&manifest.name, &manifest.content_hash),
-                author: manifest.author,
-            }),
-            _ => {}
-        }
+        // Fail-closed: a transport error yields `"unverified"` (a standing
+        // warning), NOT silence — so a server outage never downgrades a revoked
+        // package to trusted. Only a server `valid: true` clears the package.
+        let status = match signer.validate(&manifest, &signature) {
+            Ok(v) if v.valid => continue,
+            Ok(_) => "revoked",
+            Err(_) => "unverified",
+        };
+        stale.push(StalePackage {
+            id: package_id(&manifest.name, &manifest.content_hash),
+            author: manifest.author,
+            status: status.to_string(),
+        });
     }
     Ok(stale)
 }

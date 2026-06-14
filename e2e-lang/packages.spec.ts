@@ -41,4 +41,7 @@ test("pack → install → revoke → stale", async ({ page }) => {
   await expect.poll(() => text(page, "stale")).not.toBe("stale: ");
   // Still listed as installed, but marked stale.
   await expect.poll(() => text(page, "installed")).toContain(PKG);
+  // The REAL PackagesManager renders the revoked badge (prod wiring, not the
+  // lab's re-implementation).
+  await expect(page.getByTestId("pkg-stale-badge").first()).toBeVisible();
 });

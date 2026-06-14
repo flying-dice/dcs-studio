@@ -152,10 +152,12 @@ export interface PackageInstallReport {
   files: string[];
 }
 
-/** An installed package whose author has since been revoked. */
+/** An installed package no longer known-good: `status` is `"revoked"` (server
+ * says invalid) or `"unverified"` (server unreachable — fail-closed). */
 export interface StalePackage {
   id: string;
   author: string;
+  status: string;
 }
 
 /** Pack the project at `root` into a signed `.dcspkg`; returns its path. */

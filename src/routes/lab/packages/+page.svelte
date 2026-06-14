@@ -11,6 +11,7 @@
   import { createDir, writeTextFile } from "$lib/api";
   import { app } from "$lib/state.svelte";
   import { packages } from "$lib/packages.svelte";
+  import PackagesManager from "$lib/components/PackagesManager.svelte";
 
   // Must match scripts/e2e-app.mjs.
   const SIGNING_URL = "http://127.0.0.1:8799";
@@ -58,7 +59,7 @@
 
   const discovered = $derived(packages.discovered.map((p) => p.name).join(","));
   const installed = $derived(packages.installed.map((p) => p.name).join(","));
-  const stale = $derived(packages.staleIds.join(","));
+  const stale = $derived(packages.revokedIds.join(","));
   function installDiscovered() {
     const pkg = packages.discovered.find((p) => p.name === PKG_NAME);
     if (pkg) void packages.install(pkg.path);
@@ -87,4 +88,9 @@
   <div class="text-xs" data-testid="installed">installed: {installed}</div>
   <div class="text-xs" data-testid="stale">stale: {stale}</div>
   <pre class="shrink-0 overflow-auto rounded border p-2 text-xs" data-testid="error">{packages.error ?? ""}</pre>
+  <!-- The REAL Packages panel, so the production badge wiring (isRevoked →
+       pkg-stale-badge) is what the spec asserts, not a lab re-implementation. -->
+  <div class="min-h-0 flex-1 overflow-hidden rounded border">
+    <PackagesManager />
+  </div>
 </div>

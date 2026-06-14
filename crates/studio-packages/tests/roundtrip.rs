@@ -7,8 +7,21 @@ use std::path::{Path, PathBuf};
 use dcs_studio_project::RootMap;
 use studio_packages::{
     build_package, build_package_with, discover, entry_for, install, revalidate_installed,
-    uninstall, Identity, MockSigningClient, PackageManifest, Rule, SigningClient, StaticIdentity,
+    uninstall, Identity, MockSigningClient, PackageManifest, Rule, Signature, SigningClient,
+    StaticIdentity, Validity,
 };
+
+/// A signer that is always offline — every call is a transport error. Used to
+/// prove revalidation fails CLOSED (unverified), not open.
+struct OfflineSigner;
+impl SigningClient for OfflineSigner {
+    fn sign(&self, _: &Identity, _: &PackageManifest) -> Result<Signature, String> {
+        Err("offline".into())
+    }
+    fn validate(&self, _: &PackageManifest, _: &Signature) -> Result<Validity, String> {
+        Err("connection refused".into())
+    }
+}
 
 fn temp(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("studio-packages-{tag}-{}", std::process::id()));
@@ -161,12 +174,37 @@ fn a_revoked_author_becomes_stale_and_cannot_reinstall() {
     let stale = revalidate_installed(&store, &signer).expect("revalidate");
     assert_eq!(stale.len(), 1);
     assert_eq!(stale[0].author, "mallory");
+    assert_eq!(stale[0].status, "revoked");
 
     // And a fresh install of the same package is now refused.
     uninstall(&entry.id, &store).expect("uninstall");
     let err = install(&entry, &roots(&saved), &store, &signer).expect_err("revoked refused");
     assert!(err.contains("rejected") || err.contains("revoked"), "{err}");
 
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn an_unreachable_server_marks_installed_packages_unverified_not_trusted() {
+    // Fail-closed: a signing-server outage must NOT silently clear a package to
+    // trusted — it is reported "unverified" (a standing warning).
+    let base = temp("unverified");
+    let project = base.join("project");
+    fixture_project(&project);
+    let out = base.join("out");
+    let saved = base.join("saved");
+    let store = base.join("store");
+    let signer = MockSigningClient::new();
+    let me = Identity {
+        login: "alice".into(),
+    };
+    build_package(&project, &out, &me, &signer).expect("build");
+    let entry = discover(&out).remove(0);
+    install(&entry, &roots(&saved), &store, &signer).expect("install");
+
+    let stale = revalidate_installed(&store, &OfflineSigner).expect("revalidate");
+    assert_eq!(stale.len(), 1);
+    assert_eq!(stale[0].status, "unverified");
     let _ = std::fs::remove_dir_all(&base);
 }
 

@@ -88,7 +88,10 @@ mod tests {
         let err = place_file(&target, &dest).expect_err("must refuse to clobber");
         assert!(err.contains("already exists"), "{err}");
         // The pre-existing file is untouched.
-        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "precious user file");
+        assert_eq!(
+            std::fs::read_to_string(&dest).unwrap(),
+            "precious user file"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

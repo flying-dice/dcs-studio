@@ -11,6 +11,15 @@ const MANIFEST_NAME: &str = "package.json";
 const SIGNATURE_NAME: &str = "signature.json";
 const FILES_PREFIX: &str = "files/";
 
+/// Hard cap on total extracted payload bytes — extraction runs on UNTRUSTED
+/// input BEFORE the signature gate, so a decompression bomb or a forged
+/// uncompressed size must not exhaust memory/disk. 512 MiB is generous for a
+/// real mod and bounds the bomb.
+const MAX_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
+/// Cap on the header JSON entries (`package.json` / `signature.json`) — small
+/// by construction; anything larger is hostile.
+const MAX_HEADER_BYTES: u64 = 4 * 1024 * 1024;
+
 /// Write a `.dcspkg` to `out_path`: the manifest, the signature, and every file
 /// under `payload_root` placed at `files/<rel>`.
 ///
@@ -62,9 +71,16 @@ pub fn read_header(artifact: &Path) -> Result<(PackageManifest, Signature), Stri
 /// # Errors
 /// Returns `Err` on any I/O or zip failure.
 pub fn extract_payload(artifact: &Path, dest_dir: &Path) -> Result<(), String> {
+    extract_payload_bounded(artifact, dest_dir, MAX_PAYLOAD_BYTES)
+}
+
+/// [`extract_payload`] with an explicit total-byte cap (the cap is injectable
+/// so the bomb guard is testable without a 512 MiB fixture).
+fn extract_payload_bounded(artifact: &Path, dest_dir: &Path, max_bytes: u64) -> Result<(), String> {
     let file = std::fs::File::open(artifact)
         .map_err(|e| format!("opening {}: {e}", artifact.display()))?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("reading zip: {e}"))?;
+    let mut total: u64 = 0;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| format!("zip entry {i}: {e}"))?;
         if entry.is_dir() {
@@ -86,10 +102,21 @@ pub fn extract_payload(artifact: &Path, dest_dir: &Path) -> Result<(), String> {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("creating {}: {e}", parent.display()))?;
         }
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
+        // Read BOUNDED — never trust the zip's declared `size()` for allocation
+        // (a forged size overflows `with_capacity`; the real decompressed stream
+        // may be a bomb). Read at most the remaining budget + 1, and reject if
+        // the total would exceed the cap.
+        let remaining = max_bytes.saturating_sub(total);
+        let mut bytes = Vec::new();
         entry
+            .by_ref()
+            .take(remaining + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| format!("reading entry {name}: {e}"))?;
+        if bytes.len() as u64 > remaining {
+            return Err("package payload exceeds the size limit".to_string());
+        }
+        total += bytes.len() as u64;
         std::fs::write(&out, &bytes).map_err(|e| format!("writing {}: {e}", out.display()))?;
     }
     Ok(())
@@ -114,8 +141,12 @@ fn read_json<T: serde::de::DeserializeOwned, R: Read + std::io::Seek>(
     let mut entry = zip
         .by_name(name)
         .map_err(|e| format!("package is missing {name}: {e}"))?;
+    // Bounded: the header is small by construction; a forged size must not
+    // exhaust memory. A truncated read fails to parse below — also rejected.
     let mut text = String::new();
     entry
+        .by_ref()
+        .take(MAX_HEADER_BYTES)
         .read_to_string(&mut text)
         .map_err(|e| format!("reading {name}: {e}"))?;
     serde_json::from_str(&text).map_err(|e| format!("parsing {name}: {e}"))
@@ -150,6 +181,28 @@ mod tests {
         assert!(err.contains("escapes the payload root"), "{err}");
         // Nothing was written outside the destination.
         assert!(!dir.join("escape.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extract_payload_is_bounded_against_a_decompression_bomb() {
+        let dir = std::env::temp_dir().join(format!("pkg-bomb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join("bomb.dcspkg");
+        {
+            let file = std::fs::File::create(&archive).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("files/big.bin", opts).unwrap();
+            zip.write_all(&vec![0u8; 4096]).unwrap();
+            zip.finish().unwrap();
+        }
+        // A tiny cap stands in for the 512 MiB production cap: extraction must
+        // refuse rather than write the over-budget payload.
+        let dest = dir.join("out");
+        let err = extract_payload_bounded(&archive, &dest, 64).expect_err("must be capped");
+        assert!(err.contains("exceeds the size limit"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

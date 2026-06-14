@@ -34,8 +34,10 @@ public data PackageEntry { id: string, name: string, author: string, signedAt: s
 /// What an install run linked into the DCS roots.
 public data PackageInstallReport { linked: number, files: string[] }
 
-/// An installed package whose author has since been revoked — now untrusted.
-public data StalePackage { id: string, author: string }
+/// An installed package that is no longer known-good: `status` is "revoked"
+/// (the server says invalid) or "unverified" (the server was unreachable, so
+/// trust cannot be confirmed — fail-closed, never silently cleared to trusted).
+public data StalePackage { id: string, author: string, status: string }
 
 /// A packaging or install failure.
 public data PackageError { message: string }
@@ -153,8 +155,9 @@ public container PackageLibrary for studio::core::Studio {
   public UninstallPackage(id: string): Result<void, studio::package::PackageError>;
 
   /// Re-validate every installed package against the SigningService and report
-  /// those whose author has since been revoked — they are stale regardless of
-  /// where they came from.
+  /// those no longer known-good: a revoked author, or one the server could not
+  /// be reached to confirm (unverified). Stale regardless of where the package
+  /// came from; a server outage never silently clears a revoked package.
   #[manual]
   public RevalidateInstalled(): studio::package::StalePackage[] {
     installed = studio::package::PackageEntry[] from self.InstalledPackages()
@@ -165,8 +168,9 @@ public container PackageLibrary for studio::core::Studio {
   /// Every currently-installed package.
   InstalledPackages(): studio::package::PackageEntry[];
 
-  /// Validate each installed package and keep those the server now rejects
-  /// (author revoked).
+  /// Validate each installed package, keeping the ones the server rejects
+  /// ("revoked") and the ones it could not confirm ("unverified"); only a
+  /// server `valid` clears a package.
   CollectStale(installed: studio::package::PackageEntry[]): studio::package::StalePackage[];
 }
 

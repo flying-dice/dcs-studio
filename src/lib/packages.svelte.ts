@@ -23,24 +23,33 @@ class PackagesStore {
   /** Installed packages. */
   installed = $state<PackageEntry[]>([]);
   /** Ids of installed packages whose author has been revoked. */
-  staleIds = $state<string[]>([]);
+  revokedIds = $state<string[]>([]);
+  /** Ids the signing server could not be reached to confirm (fail-closed). */
+  unverifiedIds = $state<string[]>([]);
   busy = $state(false);
   error = $state<string | null>(null);
 
-  /** Whether an installed package is stale (author revoked). */
-  isStale(id: string): boolean {
-    return this.staleIds.includes(id);
+  /** Whether an installed package's author has been revoked. */
+  isRevoked(id: string): boolean {
+    return this.revokedIds.includes(id);
   }
 
-  /** Refresh discovered + installed lists and the stale set (revalidates
-   * against the signing server, so a revoked author surfaces immediately). */
+  /** Whether an installed package could not be revalidated (server outage). */
+  isUnverified(id: string): boolean {
+    return this.unverifiedIds.includes(id);
+  }
+
+  /** Refresh discovered + installed lists and the health set (revalidates
+   * against the signing server). A revoked author surfaces as revoked; a
+   * server outage surfaces as unverified — never silently cleared to trusted. */
   async refresh(): Promise<void> {
     this.error = null;
     try {
       this.discovered = await discoverPackages();
       this.installed = await installedPackageList();
-      const stale = await revalidatePackages();
-      this.staleIds = stale.map((s) => s.id);
+      const health = await revalidatePackages();
+      this.revokedIds = health.filter((h) => h.status === "revoked").map((h) => h.id);
+      this.unverifiedIds = health.filter((h) => h.status === "unverified").map((h) => h.id);
     } catch (error) {
       this.error = message(error);
     }
