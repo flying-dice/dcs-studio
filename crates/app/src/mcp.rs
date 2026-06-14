@@ -108,12 +108,28 @@ fn serve_conn(stream: &TcpStream, link: Arc<LinkShared>, token: &str) -> std::io
 
 /// The first message must be `{ "method": "authenticate", "params": { "token": <session token> } }`.
 fn is_valid_auth(message: &Value, token: &str) -> bool {
-    message.get("method").and_then(Value::as_str) == Some("authenticate")
-        && message
-            .get("params")
-            .and_then(|params| params.get("token"))
-            .and_then(Value::as_str)
-            == Some(token)
+    if message.get("method").and_then(Value::as_str) != Some("authenticate") {
+        return false;
+    }
+    message
+        .get("params")
+        .and_then(|params| params.get("token"))
+        .and_then(Value::as_str)
+        .is_some_and(|presented| constant_time_eq(presented.as_bytes(), token.as_bytes()))
+}
+
+/// Constant-time byte equality, so timing the per-connection comparison can't
+/// recover the secret that gates `dcs_eval`. Length is not secret here — the
+/// token is a fixed 32 hex chars.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// 32 hex chars of OS randomness; `None` if the OS has no entropy source.
@@ -130,8 +146,18 @@ fn write_session_file(app: &AppHandle, port: u16, token: &str) -> std::io::Resul
         .app_config_dir()
         .map_err(|error| std::io::Error::other(error.to_string()))?;
     std::fs::create_dir_all(&dir)?;
+    let path = dir.join(SESSION_FILE);
     let payload = json!({ "port": port, "token": token });
-    std::fs::write(dir.join(SESSION_FILE), payload.to_string())
+    std::fs::write(&path, payload.to_string())?;
+    // The file carries the `dcs_eval` token. On *nix a default 0644 in a
+    // traversable config dir lets a sibling local user read it; lock it to the
+    // owner. (Windows `%APPDATA%` is already per-user ACL'd.)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

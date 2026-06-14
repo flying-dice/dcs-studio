@@ -118,6 +118,20 @@ pub fn lsp_start(
     let stdout = child.stdout.take().ok_or("child stdout not piped")?;
     let stderr = child.stderr.take().ok_or("child stderr not piped")?;
 
+    // Register the handle BEFORE spawning the reader thread. The reader reaps
+    // (removes the handle + emits `lsp://exit`) when stdout EOFs; if a child
+    // died before the handle was in the map, the reader would find nothing and
+    // the dead handle would later be inserted and linger — violating this
+    // module's "process exit always removes the server" contract. Inserting
+    // first closes that window.
+    hosts.lock().map_err(|e| e.to_string())?.insert(
+        server_id.clone(),
+        ServerHandle {
+            child,
+            stdin: Some(stdin),
+        },
+    );
+
     {
         let message_app = app.clone();
         let message_id = server_id.clone();
@@ -137,7 +151,7 @@ pub fn lsp_start(
 
     {
         let stderr_app = app.clone();
-        let stderr_id = server_id.clone();
+        let stderr_id = server_id;
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 // Fold the child server's stderr into the app's own log so a
@@ -149,13 +163,6 @@ pub fn lsp_start(
         });
     }
 
-    hosts.lock().map_err(|e| e.to_string())?.insert(
-        server_id,
-        ServerHandle {
-            child,
-            stdin: Some(stdin),
-        },
-    );
     Ok(())
 }
 
