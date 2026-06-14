@@ -44,6 +44,16 @@ const PUBLISH_TIMEOUT_MS = 3000;
 // idempotent guard and the new client would talk to a dying server. The
 // logical provider id stays "dcs-lua" (below); only the host connection id is
 // sequenced.
+//
+// The sequence is also salted with a per-page-load token: a full page
+// navigation (which the e2e-lang suite does between specs against the one
+// running app) resets module state to seq 0, so without the salt every load's
+// first connection would reuse id `dcs-lua:1` — and lsp_start, idempotent on
+// id, would hand back the PREVIOUS load's now-stale server (its old file still
+// open), starving every positional query. The salt makes each page load's ids
+// disjoint, so a reload always gets a fresh server. Tauri event names allow
+// alphanumerics and `-/:_`, so the token stays within that set.
+const HOST_SESSION = Math.random().toString(36).slice(2, 8);
 let hostConnectionSeq = 0;
 
 /** Production connection: ask the backend for the lua-analyzer binary, host
@@ -55,7 +65,7 @@ let hostConnectionSeq = 0;
 async function connectViaHost(): Promise<LspClient> {
   const program = await invoke<string>("lua_analyzer_path");
   hostConnectionSeq += 1;
-  return LspClient.start(`dcs-lua:${hostConnectionSeq}`, program, []);
+  return LspClient.start(`dcs-lua:${HOST_SESSION}-${hostConnectionSeq}`, program, []);
 }
 
 export class LuaAnalyzerProvider implements LanguageProvider {
