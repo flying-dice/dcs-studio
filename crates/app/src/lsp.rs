@@ -9,8 +9,8 @@
 //! `lsp://exit/{id}` and removes the server, so the client can reject
 //! in-flight requests instead of hanging.
 //!
-//! First hosted server: `dcs-studio-cli lsp`. rust-analyzer follows
-//! (issue #6 R2).
+//! Hosted servers: `lua-analyzer` (the Lua LSP) and `rust-analyzer`, each a
+//! standalone stdio process the webview drives over these IPC events.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -234,7 +234,7 @@ fn pump_messages(stdout: impl Read, deliver: impl Fn(String)) {
 ///
 /// `pub` solely so the host-IPC integration test (`tests/host_ipc.rs`)
 /// can drive the host's own frame reader against a real spawned
-/// `dcs-studio-cli lsp`; production code reaches it via `pump_messages`.
+/// `lua-analyzer`; production code reaches it via `pump_messages`.
 pub fn read_frame(reader: &mut BufReader<impl Read>) -> Option<String> {
     let mut content_length: Option<usize> = None;
     loop {

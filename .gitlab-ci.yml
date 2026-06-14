@@ -78,11 +78,10 @@ app:
     # name or `cargo test`/`clippy` of the app fails before compiling. Build
     # both and stage them — debug is enough, the build script only checks they
     # exist (it does not run them).
-    - cargo build -p lua-analyzer -p dcs-studio-cli
+    - cargo build -p lua-analyzer
     - 'TRIPLE=$(rustc -vV | sed -n "s/^host: //p")'
     - mkdir -p crates/app/binaries
     - cp target/debug/lua-analyzer "crates/app/binaries/lua-analyzer-$TRIPLE"
-    - cp target/debug/dcs-studio-cli "crates/app/binaries/dcs-studio-cli-$TRIPLE"
     - cargo test -p dcs-studio --lib --tests
     - rustup component add clippy
     - cargo clippy -p dcs-studio --all-targets -- -D warnings

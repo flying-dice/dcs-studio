@@ -2,8 +2,9 @@
 // `tauri build` bundles them next to the app executable:
 //   - lua-analyzer    — the Lua language server the app spawns
 //                       (crates/app/src/lsp.rs `lua_analyzer_path`)
-//   - dcs-studio-cli  — the headless agent surface (MCP + init/check/build/…),
-//                       shipped beside the app so agents need no separate build
+//
+// (The MCP agent surface is hosted by the running app over loopback now, not a
+// bundled dcs-studio-cli sidecar — issue #33.)
 //
 // Tauri's `externalBin` looks for `<name>-<target-triple><ext>` next to the
 // configured path (tauri.conf.json `bundle.externalBin`), and installs it as
@@ -15,7 +16,7 @@ import { mkdirSync, copyFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SIDECARS = ["lua-analyzer", "dcs-studio-cli"];
+const SIDECARS = ["lua-analyzer"];
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ext = process.platform === "win32" ? ".exe" : "";
