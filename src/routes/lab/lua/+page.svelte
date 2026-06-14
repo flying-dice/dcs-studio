@@ -12,10 +12,13 @@
   import { lang } from "$lib/lang/intel.svelte";
   import type { LanguageProvider } from "$lib/lang/provider";
 
-  // Absolute so it round-trips through the hosted server's file:// URIs
-  // (a driveless relative path fails `Url::to_file_path` on Windows, and the
-  // server then never keys the buffer — positional queries would miss).
-  const PATH = "C:/dcs-studio-lab/main.lua";
+  // Absolute, with backslashes, so it both round-trips through the hosted
+  // server's file:// URIs (a driveless relative path fails `Url::to_file_path`
+  // on Windows) AND matches the path the server's published diagnostics carry
+  // back: `uriToPath` canonicalises to backslashes, and the Problems panel's
+  // per-file filter (`fileDiagnostics`) compares paths exactly — a forward-slash
+  // PATH would surface in the panel but never paint a squiggle.
+  const PATH = "C:\\dcs-studio-lab\\main.lua";
   // The multibyte comment line makes UTF-16 and byte offsets diverge
   // before `f` — the probe's indexOf offset (UTF-16) only resolves if
   // the provider converts to bytes at the engine boundary.
@@ -45,6 +48,11 @@
         provider = providerFor(PATH);
         if (!provider) throw new Error(`no provider for ${PATH}`);
         await provider.mount([{ path: PATH, text: INITIAL }], [], "lab");
+        // Observe the hosted server's late publishes so diagnostics that
+        // arrive after a lint pass repaint as squiggles + reach the Problems
+        // panel (mountWorkspace does this for the real app; this lab mounts
+        // the provider directly).
+        lang.observePush(provider);
         // Open the seed file so the engine holds the buffer — the wasm
         // session keeps mounted text, but the hosted lua-analyzer answers
         // positional queries (hover/symbols) only for didOpen-ed documents.

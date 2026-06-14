@@ -86,6 +86,7 @@ function helper() end
           [],
           "lab",
         );
+        lang.observePush(provider);
         // Open both Lua files so the hosted server holds the buffers — it
         // answers document-symbol queries only for didOpen-ed documents (the
         // wasm session kept mounted text; the hosted analyzer does not).

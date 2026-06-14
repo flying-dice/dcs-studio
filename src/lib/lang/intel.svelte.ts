@@ -150,27 +150,7 @@ export class LangIntel {
         );
         // Late-push surfacing: slow servers (rust-analyzer's first index)
         // publish findings after the lint pass timed out — re-pull then.
-        // Re-read provider status on push so a transitioning server
-        // (loading → ready) updates the status bar chip in real time.
-        if (provider.onDiagnostics && !this.pushWired.has(provider)) {
-          this.pushWired.add(provider);
-          provider.onDiagnostics(() => {
-            if (provider.status) {
-              this.providerStatuses = {
-                ...this.providerStatuses,
-                [provider.id]: provider.status,
-              };
-            }
-            // Refresh the aggregated store FIRST, then repaint: this publish
-            // landed after the lint pass returned, so the editor squiggles are
-            // stale until a forced re-lint — which reads the store, so the
-            // store must be fresh before the re-lint runs (model
-            // `LateDiagnosticsPaintWithoutEditing`).
-            void this.refreshProblems().then(() => {
-              for (const cb of this.repaintListeners) cb();
-            });
-          });
-        }
+        this.observePush(provider);
         // Background progress feedback: pulses the status-bar chip while
         // the server is indexing or running cargo check (model ProgressFeedback).
         if (provider.onProgress && !this.progressWired.has(provider)) {
@@ -308,6 +288,34 @@ export class LangIntel {
       console.error("language engine failed:", error);
       this.engineStatus = "failed";
     }
+  }
+
+  /**
+   * Wire a provider's late-publish push (idempotent): a hosted server
+   * (lua-analyzer, rust-analyzer) publishes findings AFTER the lint pass
+   * returned, so the editor squiggles and the Problems panel are stale until a
+   * forced re-pull + repaint. Re-read provider status on push so a
+   * transitioning server (loading → ready) updates the status chip in real
+   * time. The aggregated store is refreshed FIRST, then repaint fires: the
+   * forced re-lint reads the store, so it must be fresh first (model
+   * `LateDiagnosticsPaintWithoutEditing`). Public so the `/lab/*` surfaces,
+   * which mount a provider directly rather than through `mountWorkspace`, can
+   * still observe the hosted push.
+   */
+  observePush(provider: LanguageProvider): void {
+    if (!provider.onDiagnostics || this.pushWired.has(provider)) return;
+    this.pushWired.add(provider);
+    provider.onDiagnostics(() => {
+      if (provider.status) {
+        this.providerStatuses = {
+          ...this.providerStatuses,
+          [provider.id]: provider.status,
+        };
+      }
+      void this.refreshProblems().then(() => {
+        for (const cb of this.repaintListeners) cb();
+      });
+    });
   }
 
   /** Pull every provider's findings for the Problems panel and markers. */
