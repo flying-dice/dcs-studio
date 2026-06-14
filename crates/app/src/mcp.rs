@@ -180,16 +180,20 @@ mod tests {
         assert!(!is_valid_auth(&json!({"method": "tools/list"}), "secret"));
     }
 
-    /// Assert the server closed the connection: the next read is EOF (`Ok(0)`).
-    /// The caller must have armed a read timeout on the stream first — if a
-    /// regression leaves the socket OPEN, this read would otherwise block
-    /// forever (a test hang reads as a stall, not a failure). With the timeout,
-    /// the open-socket case fails fast and loud instead of pinning the
-    /// close-guard on a CI timeout.
+    /// Assert the server closed the connection: the next read sees the close.
+    /// A graceful close is `Ok(0)` (EOF after a FIN); under load the server can
+    /// instead drop its socket while our blocking read is already armed, which
+    /// surfaces as a TCP RST — `ConnectionReset`/`ConnectionAborted`. Both mean
+    /// "closed"; accept either. The caller must have armed a read timeout first,
+    /// so a genuine still-open socket fails fast with `WouldBlock`/`TimedOut`
+    /// rather than hanging the suite (a test hang reads as a stall, not a
+    /// failure).
     fn assert_connection_closed(reader: &mut impl BufRead) {
+        use std::io::ErrorKind::{ConnectionAborted, ConnectionReset};
         let mut tail = String::new();
         match reader.read_line(&mut tail) {
             Ok(0) => {}
+            Err(error) if matches!(error.kind(), ConnectionReset | ConnectionAborted) => {}
             other => panic!("expected the server to close the connection, got {other:?}"),
         }
     }

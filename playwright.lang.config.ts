@@ -4,7 +4,7 @@ import { defineConfig } from "@playwright/test";
 // CDP, so the specs exercise the hosted `lua-analyzer` engine the IDE ships —
 // not a wasm build of it in a plain browser. `scripts/e2e-app.mjs` launches
 // `tauri dev` with WebView2 remote debugging on :9222; the fixture
-// (`e2e-lang/_tauri.ts`, mode 'cdp') attaches Playwright to that endpoint.
+// (`e2e-lang/_tauri.ts`) attaches Playwright to that CDP endpoint.
 //
 // No DCS: nothing here touches the sim. Heavier than the old browser-only run
 // (a real app boot + lua-analyzer spawn), so one worker, generous timeouts.

@@ -243,7 +243,7 @@ test("editing a file the panel does not outline leaves the outline alone", async
 
   expect(await page.getByTestId("structure-entry").count()).toBe(0);
   await expect(page.getByTestId("outline-path")).toHaveText(
-    "outline-of: C:/dcs-studio-lab/structure/notes.txt",
+    "outline-of: C:\\dcs-studio-lab\\structure\\notes.txt",
   );
   await expect(panel).toContainText("No structure for this file type");
 });
@@ -349,7 +349,7 @@ test("hiding the panel clears the outline", async ({ page }) => {
     timeout: 15_000,
   });
   await expect(page.getByTestId("outline-path")).toHaveText(
-    "outline-of: C:/dcs-studio-lab/structure/main.lua",
+    "outline-of: C:\\dcs-studio-lab\\structure\\main.lua",
   );
 
   // Unmounting runs the $effect cleanup: a hidden panel must not keep the

@@ -1,8 +1,8 @@
 <script lang="ts">
-  // Browser test surface for the language engine (like /console for the
-  // bridge): a bare CodeMirror wired through the real provider stack —
-  // wasm engine, LanguageIntel store, Problems panel — with an in-memory
-  // workspace, so the Playwright suite needs neither Tauri nor DCS.
+  // Test surface for the language engine (like /console for the bridge): a
+  // bare CodeMirror wired through the real provider stack — the hosted
+  // lua-analyzer, the LanguageIntel store, the Problems panel. The e2e-lang
+  // suite drives this against the real app over WebView2 CDP.
   import { onMount } from "svelte";
   import { EditorView, basicSetup } from "codemirror";
   import { EditorState } from "@codemirror/state";
@@ -53,10 +53,9 @@
         // panel (mountWorkspace does this for the real app; this lab mounts
         // the provider directly).
         lang.observePush(provider);
-        // Open the seed file so the engine holds the buffer — the wasm
-        // session keeps mounted text, but the hosted lua-analyzer answers
-        // positional queries (hover/symbols) only for didOpen-ed documents.
-        // This mirrors the IDE opening a file after the project mounts.
+        // Open the seed file so the hosted lua-analyzer keys the buffer: it
+        // answers positional queries (hover/symbols) only for didOpen-ed
+        // documents. Mirrors the IDE opening a file after the project mounts.
         await provider.setSource(PATH, INITIAL);
         lang.engineStatus = "ready";
       } catch (error) {

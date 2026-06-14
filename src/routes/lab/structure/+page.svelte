@@ -12,16 +12,18 @@
   import { langIntelFor } from "$lib/lang/codemirror";
   import { lang } from "$lib/lang/intel.svelte";
 
-  // Absolute so the path round-trips through the hosted server's file:// URIs
-  // (a driveless relative path fails `Url::to_file_path` on Windows, so the
-  // server never keys the buffer and document-symbol queries return nothing).
-  const LUA_PATH = "C:/dcs-studio-lab/structure/main.lua";
+  // Absolute, with backslashes, so the path round-trips through the hosted
+  // server's file:// URIs (a driveless relative path fails `Url::to_file_path`
+  // on Windows) AND matches the backslash form `uriToPath` canonicalises a
+  // published diagnostic to — the same convention /lab/lua uses, so the two
+  // labs never disagree on a path's identity.
+  const LUA_PATH = "C:\\dcs-studio-lab\\structure\\main.lua";
   // A second claimed file — drives the stale-outline regression: switching
   // between two Lua files must never show the previous file's rows.
-  const OTHER_PATH = "C:/dcs-studio-lab/structure/other.lua";
+  const OTHER_PATH = "C:\\dcs-studio-lab\\structure\\other.lua";
   const OTHER = `function alpha() end\n`;
   // A file no provider claims — drives the "no structure" rendering.
-  const TEXT_PATH = "C:/dcs-studio-lab/structure/notes.txt";
+  const TEXT_PATH = "C:\\dcs-studio-lab\\structure\\notes.txt";
   // The multibyte comment makes UTF-16 and byte offsets diverge before
   // every declaration, so navigation only lands on names if the wasm
   // path's byte spans are converted at the provider boundary.
@@ -87,9 +89,8 @@ function helper() end
           "lab",
         );
         lang.observePush(provider);
-        // Open both Lua files so the hosted server holds the buffers — it
-        // answers document-symbol queries only for didOpen-ed documents (the
-        // wasm session kept mounted text; the hosted analyzer does not).
+        // Open both Lua files so the hosted server keys the buffers: it
+        // answers document-symbol queries only for didOpen-ed documents.
         await provider.setSource(LUA_PATH, INITIAL);
         await provider.setSource(OTHER_PATH, OTHER);
         lang.engineStatus = "ready";

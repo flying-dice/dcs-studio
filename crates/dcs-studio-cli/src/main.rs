@@ -18,7 +18,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "dcs-studio-cli",
     version,
-    about = "DCS Studio companion CLI: project scaffolding, workspace checking, and MCP over stdio"
+    about = "DCS Studio companion CLI: project scaffolding, checking, building, formatting, testing, bundling, and install deploys"
 )]
 struct Cli {
     #[command(subcommand)]
