@@ -51,7 +51,7 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | `model/studio/cli.pds` | `Cli` agent-surface binary (`crates/dcs-studio-cli`), `TestRunner` — out-of-DCS Lua test runner (`tools/lua-runner`), `Bundler` — single-file require-graph bundler (issue #9) |
 | `model/studio/installer.pds` | `Installer` — manifest-driven `[[install]]` deploy to SavedGames/GameInstall roots (issue #6 R1) |
 | `model/studio/mission.pds` | `MissionScripting` sanitization manager (`crates/studio-services/src/mission.rs`) |
-| `model/studio/mcp.pds` | `McpServer` — the headless agent tool surface of `dcs-studio-cli mcp` (issue #8; `crates/dcs-studio-cli/src/mcp.rs` + `crates/studio-services`) |
+| `model/studio/mcp.pds` | `McpServer` — the IDE-hosted agent tool surface over a loopback transport (issue #33; `crates/studio-mcp` handler, `crates/app/src/mcp.rs` server, `crates/studio-services`) |
 | `model/studio/todos.pds` | `TodoScanner` — workspace comment-tag scanner behind the Todos panel (`crates/dcs-studio-project/src/todos.rs`, `src/lib/todos.svelte.ts`) |
 | `model/studio/lang.pds` | `LanguageIntel` provider layer + `DcsLua` engine face + `LuaAnalyzer`/`RustAnalyzer` hosted-server faces (`src/lib/lang/`, `crates/lua-analyzer`) |
 | `model/studio/edit.pds` | `Formatting` — editor format (Document/Selection, format-on-save) over the shared `fmt::Fmt` engine (`crates/app/src/format.rs`, `src/lib/editor/format.ts`) |
@@ -95,24 +95,28 @@ two ways behind one `LanguageProvider` contract:
   in-page (`src/lib/dcs-lua-wasm/`, rebuild with `pnpm build:wasm` and
   commit). Same dual-path convention as `dcs-ws.ts`.
 
-**dcs-studio-cli is the agent surface**: `mcp` over stdio, plus direct
-`init` / `check` / `build` / `test` / `bundle` / `install` subcommands — an
-agent needs no Tauri app. (LSP is its own binary, `lua-analyzer`, which
-agents and editors spawn directly.) The MCP server
-(model/studio/mcp.pds, issue #8) exposes the IDE's services headless:
-project (`init_project`, `check`, `build`), workspace fs (`read_dir`,
-`read_text_file`, `write_text_file`, `path_exists`), the DCS link
-(`dcs_status`, `dcs_eval`, `dcs_call` — dialed lazily on first use;
-everything else works without DCS), injection (`detect_installs`,
-`injection_status`, `inject`, `eject`), mission scripting
-(`detect_mission_scripts`, `mission_script_status`,
-`mission_script_set`, `mission_script_restore`), and the real engine
-(`lua_diagnostics`, `lua_hover`; `lua_complete`/`lua_definition` answer
-a stable not-implemented error until the engine grows those queries).
-The service logic itself lives in the tauri-free
-**`crates/studio-services`** (fs, inject, mission, link); the app's
-Tauri commands are thin wrappers over it, so agents and the IDE always
-run the same code. `test` runs `tests/**/*.test.lua` outside DCS via
+**The IDE hosts the MCP agent surface** (issue #33): the running app runs a
+loopback JSON-RPC server (`crates/app/src/mcp.rs`) that dispatches through the
+shared **`crates/studio-mcp`** handler over the app's LIVE DCS link — one
+connection to the sim, no rival sidecar (single-instance enforced). It is
+token-gated (the surface includes `dcs_eval`): `{port, token}` is written to
+`<app-config>/mcp.json` for the agent to read, and the token must be presented
+before any tool call. The same handler is drivable headless over stdio. The
+surface (model/studio/mcp.pds): project (`init_project`, `check`, `build`),
+workspace fs (`read_dir`, `read_text_file`, `write_text_file`, `path_exists`),
+the DCS link (`dcs_status`, `dcs_eval`, `dcs_call`), injection
+(`detect_installs`, `injection_status`, `inject`, `eject`), mission scripting
+(`detect_mission_scripts`, `mission_script_status`, `mission_script_set`,
+`mission_script_restore`), and the real engine (`lua_diagnostics`,
+`lua_hover`; `lua_complete`/`lua_definition` answer a stable not-implemented
+error until the engine grows those queries). Tool logic lives in the
+tauri-free **`crates/studio-services`** (fs, inject, mission, link) and
+`crates/studio-mcp`, so agents and the IDE run the same code.
+
+**dcs-studio-cli is the stateless tooling binary**: `init` / `check` /
+`build` / `fmt` / `test` / `bundle` / `install` — no DCS, no IDE, useful in
+CI without a running app. (LSP is its own binary, `lua-analyzer`, which
+agents and editors spawn directly.) `test` runs `tests/**/*.test.lua` outside DCS via
 the sibling `dcs-lua-runner` binary (`tools/lua-runner`, its OWN cargo
 workspace: mlua `vendored` must never feature-unify with dcs-bridge's
 `module`; `DCS_LUA_RUNNER` overrides the path); `bundle` amalgamates
