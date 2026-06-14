@@ -1,7 +1,7 @@
-// The packaged-app Lua provider: the standalone `lua-analyzer` binary
-// hosted by the backend, spoken to over IPC (decisions/005) — hosted exactly
-// like rust-analyzer (it indexes the project from the rootUri). Implements
-// the same LanguageProvider contract as the wasm fallback.
+// The Lua provider: the standalone `lua-analyzer` binary hosted by the
+// backend, spoken to over IPC (decisions/005) — hosted exactly like
+// rust-analyzer (it indexes the project from the rootUri). The one
+// `LanguageProvider` the app uses for `.lua`.
 //
 // Wire shapes and position conversion live in lsp-wire.ts, shared with
 // the rust-analyzer provider.
@@ -44,6 +44,16 @@ const PUBLISH_TIMEOUT_MS = 3000;
 // idempotent guard and the new client would talk to a dying server. The
 // logical provider id stays "dcs-lua" (below); only the host connection id is
 // sequenced.
+//
+// The sequence is also salted with a per-page-load token: a full page
+// navigation (which the e2e-lang suite does between specs against the one
+// running app) resets module state to seq 0, so without the salt every load's
+// first connection would reuse id `dcs-lua:1` — and lsp_start, idempotent on
+// id, would hand back the PREVIOUS load's now-stale server (its old file still
+// open), starving every positional query. The salt makes each page load's ids
+// disjoint, so a reload always gets a fresh server. Tauri event names allow
+// alphanumerics and `-/:_`, so the token stays within that set.
+const HOST_CONNECTION_SALT = Math.random().toString(36).slice(2, 8);
 let hostConnectionSeq = 0;
 
 /** Production connection: ask the backend for the lua-analyzer binary, host
@@ -55,11 +65,11 @@ let hostConnectionSeq = 0;
 async function connectViaHost(): Promise<LspClient> {
   const program = await invoke<string>("lua_analyzer_path");
   hostConnectionSeq += 1;
-  return LspClient.start(`dcs-lua:${hostConnectionSeq}`, program, []);
+  return LspClient.start(`dcs-lua:${HOST_CONNECTION_SALT}-${hostConnectionSeq}`, program, []);
 }
 
 export class LuaAnalyzerProvider implements LanguageProvider {
-  // The LOGICAL provider id is shared with the wasm engine (dcs-lua.ts): the
+  // The LOGICAL provider id is shared via dcs-lua.ts: the
   // app sees one "dcs-lua" Lua provider whichever transport backs it. The
   // BINARY is lua-analyzer; only the host connection id (above) is sequenced.
   readonly id = "dcs-lua";
@@ -260,7 +270,7 @@ export class LuaAnalyzerProvider implements LanguageProvider {
   }
 
   // lua-analyzer advertises `inlayHintProvider` and answers from the same
-  // engine inlay-hint query as the wasm path. Defensive `[]` on any error so
+  // engine inlay-hint query. Defensive `[]` on any error so
   // a server that lacks it can never abort the editor's lint pass.
   async inlayHints(path: string): Promise<InlayHint[]> {
     if (!this.client) return [];

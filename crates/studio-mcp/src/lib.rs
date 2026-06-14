@@ -1,12 +1,14 @@
-//! `dcs-studio-cli mcp` — Model Context Protocol over stdio
-//! (newline-delimited JSON-RPC, protocol 2024-11-05), the headless agent
-//! surface (model/studio/mcp.pds, issue #8). Tool groups:
+//! studio-mcp — the IDE's MCP tool surface (model/studio/mcp.pds, issue #33),
+//! newline-delimited JSON-RPC (protocol 2024-11-05). Hosted by the running
+//! app over a loopback transport sharing the app's live DCS link; also
+//! drivable headless over stdio via [`serve`]. Tool groups:
 //!
 //! - project: `init_project`, `check`, `build`
 //! - workspace fs: `read_dir`, `read_text_file`, `write_text_file`,
 //!   `path_exists` (project creation is `init_project`)
-//! - DCS link: `dcs_status`, `dcs_eval`, `dcs_call` — dialed lazily on the
-//!   first DCS tool call; everything else works without DCS
+//! - DCS link: `dcs_status`, `dcs_eval`, `dcs_call` — over the session's link;
+//!   the app injects its already-open one ([`Session::with_link`]), a
+//!   standalone session dials lazily on the first DCS tool call
 //! - injection: `detect_installs`, `injection_status`, `inject`, `eject`
 //! - mission scripting: `detect_mission_scripts`, `mission_script_status`,
 //!   `mission_script_set`, `mission_script_restore`
@@ -14,18 +16,20 @@
 //!   `lua_complete` / `lua_definition` answer a stable not-implemented
 //!   error until the engine grows those queries.
 //!
-//! Stdout is the wire — nothing here may print to it except responses.
-//!
 //! Recorded decision (model/studio/mcp.pds): the workspace fs tools take
 //! absolute host paths with no sandbox root, like the IDE fs commands they
-//! delegate to — the server runs with the agent's own rights and the MCP
+//! delegate to — the server runs with the developer's own rights and the MCP
 //! host owns tool-permission policy.
+
+/// Workspace analysis shared by the `check` MCP tool and the CLI `check`
+/// subcommand — renders the engine's findings and counts errors.
+pub mod check;
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::io::{BufRead, Write};
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use serde_json::{Value, json};
 
@@ -40,15 +44,49 @@ fn bridge_ws_url() -> String {
     std::env::var("DCS_BRIDGE_WS").unwrap_or_else(|_| DCS_WS_URL.to_string())
 }
 
-/// Per-session state: the lazily dialed DCS link and the runtime that
-/// drives it. Sessions that never touch a DCS tool never build either.
-#[derive(Default)]
-struct Session {
-    link: LinkShared,
+/// Per-session state: the DCS link, the bridge URL its DCS tools dial, and the
+/// runtime that drives them. A `default` session dials `DCS_WS_URL`
+/// (overridable via `DCS_BRIDGE_WS`) and never builds a link or runtime it
+/// doesn't use; the app injects its already-open link via [`Session::with_link`]
+/// and a test pins a fake bridge via [`Session::with_bridge_url`].
+pub struct Session {
+    link: Arc<LinkShared>,
+    bridge_url: String,
     runtime: OnceLock<tokio::runtime::Runtime>,
 }
 
+impl Default for Session {
+    fn default() -> Self {
+        Session {
+            link: Arc::default(),
+            bridge_url: bridge_ws_url(),
+            runtime: OnceLock::new(),
+        }
+    }
+}
+
 impl Session {
+    /// Host the tools over `link` — the app passes its live, already-connected
+    /// `LinkShared` so the DCS tools run on the one open connection instead of
+    /// dialing a second one that would collide on the bridge (issue #33).
+    #[must_use]
+    pub fn with_link(link: Arc<LinkShared>) -> Self {
+        Session {
+            link,
+            ..Session::default()
+        }
+    }
+
+    /// Pin the bridge URL the DCS tools dial — for standalone/headless use and
+    /// tests that drive a deterministic fake bridge.
+    #[must_use]
+    pub fn with_bridge_url(bridge_url: String) -> Self {
+        Session {
+            bridge_url,
+            ..Session::default()
+        }
+    }
+
     fn block_on<T>(&self, future: impl Future<Output = T>) -> T {
         let runtime = self.runtime.get_or_init(|| {
             tokio::runtime::Builder::new_multi_thread()
@@ -84,6 +122,13 @@ impl ToolError {
     }
 }
 
+/// Drive the handler over stdio (newline-delimited JSON-RPC) until the input
+/// closes — the headless transport. The app hosts the surface differently,
+/// calling [`handle`] over its loopback transport with a live-link session.
+///
+/// # Errors
+/// Propagates an `io::Error` if reading a line from stdin or writing a
+/// response to stdout fails.
 pub fn serve() -> std::io::Result<()> {
     let session = Session::default();
     let stdin = std::io::stdin();
@@ -106,7 +151,7 @@ pub fn serve() -> std::io::Result<()> {
     Ok(())
 }
 
-fn handle(session: &Session, message: &Value) -> Option<Value> {
+pub fn handle(session: &Session, message: &Value) -> Option<Value> {
     let method = message.get("method")?.as_str()?;
     let params = message.get("params").cloned().unwrap_or(Value::Null);
     // Notifications (e.g. notifications/initialized) carry no id — and no
@@ -117,7 +162,7 @@ fn handle(session: &Session, message: &Value) -> Option<Value> {
             "protocolVersion": "2024-11-05",
             "capabilities": { "tools": {} },
             "serverInfo": {
-                "name": "dcs-studio-cli",
+                "name": "dcs-studio",
                 "version": env!("CARGO_PKG_VERSION"),
             },
         }),
@@ -215,6 +260,16 @@ fn tool_json(payload: &Value, is_error: bool) -> Value {
 /// Serialize a service DTO into a successful JSON tool result.
 fn tool_dto<T: serde::Serialize>(value: &T) -> Value {
     tool_json(&serde_json::to_value(value).unwrap_or(Value::Null), false)
+}
+
+/// A service `Result` rendered as a tool response: the status value as a DTO,
+/// or the error message as a tool error. Shared by the inject and mission tool
+/// groups, whose service calls both return `Result<impl Serialize, String>`.
+fn status_or_error<T: serde::Serialize>(result: Result<T, String>) -> Value {
+    match result {
+        Ok(status) => tool_dto(&status),
+        Err(message) => tool_text(&message, true),
+    }
 }
 
 // ---- project tools (init_project / check / build) ---------------------------
@@ -441,7 +496,7 @@ fn dcs_tools(session: &Session, name: &str, args: &Value) -> Option<Result<Value
 }
 
 fn dcs_status_tool(session: &Session) -> Value {
-    let url = bridge_ws_url();
+    let url = session.bridge_url.clone();
     let status = session.block_on(async {
         session.link.ensure_client(&url).await;
         session.link.status_live().await
@@ -463,7 +518,7 @@ fn dcs_call_tool(session: &Session, args: &Value) -> Result<Value, ToolError> {
 /// Dial the bridge lazily, then forward one call; link errors (the
 /// not-started guard, not-connected, RPC failures) come back as tool errors.
 fn forward_to_dcs(session: &Session, method: &str, params: Option<Value>) -> Value {
-    let url = bridge_ws_url();
+    let url = session.bridge_url.clone();
     let result = session.block_on(async {
         session.link.ensure_client(&url).await;
         session.link.call(method, params).await
@@ -509,11 +564,6 @@ fn inject_tool_specs() -> Vec<Value> {
 }
 
 fn inject_tools(name: &str, args: &Value) -> Option<Result<Value, ToolError>> {
-    let status_result = |result: Result<studio_services::inject::InjectionStatus, String>| match result
-    {
-        Ok(status) => tool_dto(&status),
-        Err(message) => tool_text(&message, true),
-    };
     match name {
         "detect_installs" => Some(Ok(tool_dto(&studio_services::inject::detect_installs()))),
         "injection_status" => Some(
@@ -522,11 +572,11 @@ fn inject_tools(name: &str, args: &Value) -> Option<Result<Value, ToolError>> {
         ),
         "inject" => Some(
             require_str(args, "write_dir", "inject")
-                .map(|dir| status_result(studio_services::inject::inject(dir))),
+                .map(|dir| status_or_error(studio_services::inject::inject(dir))),
         ),
         "eject" => Some(
             require_str(args, "write_dir", "eject")
-                .map(|dir| status_result(studio_services::inject::eject(dir))),
+                .map(|dir| status_or_error(studio_services::inject::eject(dir))),
         ),
         _ => None,
     }
@@ -578,12 +628,6 @@ fn mission_tool_specs() -> Vec<Value> {
 }
 
 fn mission_tools(name: &str, args: &Value) -> Option<Result<Value, ToolError>> {
-    let status_result = |result: Result<studio_services::mission::MissionScriptStatus, String>| {
-        match result {
-            Ok(status) => tool_dto(&status),
-            Err(message) => tool_text(&message, true),
-        }
-    };
     match name {
         "detect_mission_scripts" => Some(Ok(tool_dto(
             &studio_services::mission::detect_mission_scripts(),
@@ -595,7 +639,7 @@ fn mission_tools(name: &str, args: &Value) -> Option<Result<Value, ToolError>> {
         "mission_script_set" => Some(mission_script_set_tool(args)),
         "mission_script_restore" => Some(
             require_str(args, "path", "mission_script_restore")
-                .map(|path| status_result(studio_services::mission::restore(path))),
+                .map(|path| status_or_error(studio_services::mission::restore(path))),
         ),
         _ => None,
     }

@@ -4,8 +4,9 @@
 // span.rs); CodeMirror and JS strings index UTF-16 code units. Every
 // engine offset crossing into the editor converts here, so squiggles,
 // folds, and symbol ranges stay put on non-ASCII lines. The LSP transport
-// avoids this entirely (line + UTF-16 character on the wire); only the
-// wasm fallback needs the byte map.
+// avoids this entirely (line + UTF-16 character on the wire); the byte map
+// (`ByteOffsets`) is now used only by the editor's Format-Selection path
+// (editor/format.ts), which hands the engine byte offsets for the range.
 
 /** UTF-16 code-unit start index of each line. */
 export function lineStarts(text: string): number[] {

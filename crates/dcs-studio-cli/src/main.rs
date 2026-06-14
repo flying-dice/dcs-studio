@@ -1,14 +1,12 @@
 //! dcs-studio-cli — the agent-complete companion binary (decisions/005).
 //!
-//! Everything an agent needs without the Tauri app: `init` scaffolds a
-//! project, `check` analyses a workspace, `mcp` serves MCP tools over
-//! stdio. The Lua Language Server is its own binary, `lua-analyzer`
-//! (hosted like rust-analyzer); agents and the IDE spawn that directly.
+//! Everything an agent or CI needs without the Tauri app: `init` scaffolds a
+//! project; `check`/`build`/`fmt`/`bundle`/`test` analyse and produce. The
+//! MCP agent surface moved into the IDE (issue #33); the Lua Language Server
+//! is its own binary, `lua-analyzer`, which agents and the IDE spawn directly.
 
 mod bundle;
-mod check;
 mod fmt;
-mod mcp;
 mod test;
 
 use std::path::{Path, PathBuf};
@@ -20,7 +18,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "dcs-studio-cli",
     version,
-    about = "DCS Studio companion CLI: project scaffolding, workspace checking, and MCP over stdio"
+    about = "DCS Studio companion CLI: project scaffolding, checking, building, formatting, testing, bundling, and install deploys"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -29,8 +27,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Serve project tools over stdio (Model Context Protocol).
-    Mcp,
     /// Scaffold a new project from a template.
     Init {
         /// Project name; also the new folder's name under --parent.
@@ -110,17 +106,10 @@ enum Command {
 }
 
 fn main() -> ExitCode {
-    // Logs to stderr (stdout is reserved for `mcp`'s JSON-RPC and command
-    // output); quiet by default, raise with `DCS_LOG=debug`.
+    // Logs to stderr (stdout is reserved for command output); quiet by
+    // default, raise with `DCS_LOG=debug`.
     dcs_studio_project::logging::init("warn");
     match Cli::parse().command {
-        Command::Mcp => match mcp::serve() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("mcp: {error}");
-                ExitCode::FAILURE
-            }
-        },
         Command::Init {
             name,
             template,
@@ -149,7 +138,7 @@ fn main() -> ExitCode {
                 eprintln!("check: '{}' does not exist", root.display());
                 return ExitCode::FAILURE;
             }
-            let report = check::run(&root);
+            let report = studio_mcp::check::run(&root);
             print!("{}", report.rendered);
             // Exit codes above 100 are reserved for runner failures.
             ExitCode::from(u8::try_from(report.error_count.min(100)).unwrap_or(100))

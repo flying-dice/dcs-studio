@@ -1,7 +1,7 @@
 //! studio::lang — LSP-style language intelligence for Lua, served by the
-//! embedded dcs-lua engine (a separate Rust workspace compiled to wasm and
-//! loaded into the webview — never a spawned language-server process). The
-//! IDE owns all file I/O and feeds sources to the engine; the engine answers
+//! dcs-lua engine hosted as the native `lua-analyzer` language server the
+//! backend spawns (issue #32 retired the in-page wasm transport). The IDE
+//! owns all file I/O and feeds sources to the engine; the engine answers
 //! LSP-shaped queries: diagnostics, completion, hover, definition.
 
 /// A workspace source fed to the engine. The engine never touches the
@@ -39,18 +39,17 @@ public data FoldingRange { start: number, end: number }
 /// name, or the parameter list's closing `)`.
 public data InlayHint { offset: number, label: string, kind: string }
 
-/// The embedded engine failed to load or initialise (e.g. the wasm module
-/// could not be fetched or instantiated).
+/// The engine failed to load or initialise (e.g. the `lua-analyzer` binary
+/// is missing or its initialize handshake failed).
 public data EngineError { message: string }
 
 /// The dcs-lua language engine (the crates/dcs-lua-* workspace members —
-/// see dcslua.pds for its internals). Reached two ways behind one provider
-/// contract (decisions/005): compiled to wasm and embedded in the webview
-/// (browser/dev), or hosted as the native `lua-analyzer` binary that the
-/// backend spawns (packaged app — see studio::lang::LuaAnalyzer). These
-/// signatures are the contract both transports satisfy.
+/// see dcslua.pds for its internals). Reached behind one provider contract
+/// (decisions/005, revised by issue #32) as the native `lua-analyzer` binary
+/// the backend spawns (see studio::lang::LuaAnalyzer); the earlier in-page
+/// wasm transport was retired. These signatures are the contract it satisfies.
 public system DcsLua {
-  /// Instantiate the wasm module and seed the session with the workspace.
+  /// Hand the engine the workspace root so it can index the project.
   public Mount(files: studio::lang::SourceFile[], rules: studio::lang::ProfileRule[]): Result<void, studio::lang::EngineError>;
 
   /// Create or replace one source (editor edits, saves, generated files).
@@ -333,7 +332,7 @@ feature StatusBarCountsOpenProblems for studio::lang::LanguageIntel {
 
 /// Language intelligence is an enhancement, never a gate.
 feature EngineFailureIsNonFatal for studio::lang::LanguageIntel {
-  given "the wasm engine fails to load"
+  given "the lua-analyzer engine fails to load"
   when "a project is opened"
   then "the IDE works normally without language intelligence"
   and "the status bar reports the engine as unavailable"

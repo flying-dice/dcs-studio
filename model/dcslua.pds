@@ -1,9 +1,8 @@
-//! dcslua — the DCS-flavoured Lua 5.1 language engine. Modelled on the
-//! LSP; consumed two ways over one core (decisions/005): the genuine stdio
-//! LSP served by the `lua-analyzer` binary (the IDE's backend host relaying
-//! it over IPC), and the wasm IdeSession browser fallback. Pure analysis:
-//! the engine never executes Lua and never touches the filesystem — hosts
-//! feed sources in.
+//! dcslua — the DCS-flavoured Lua 5.1 language engine. Modelled on the LSP;
+//! consumed over one core (decisions/005, revised by issue #32) as the
+//! genuine stdio LSP served by the `lua-analyzer` binary (the IDE's backend
+//! host relaying it over IPC). Pure analysis: the engine never executes Lua
+//! and never touches the filesystem — hosts feed sources in.
 
 /// One source handed to the engine by whichever host owns the I/O.
 public data SourceUnit { path: string, text: string }

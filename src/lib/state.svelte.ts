@@ -14,7 +14,7 @@ import {
   dcsCall,
   dcsStatus,
 } from "./api";
-import { isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import { canonicalPath } from "./paths";
@@ -341,6 +341,18 @@ class AppState {
   }
 
   /**
+   * On boot, open the project the app was launched with (`--open <path>`;
+   * model `OpenStartupProject`). A no-op outside Tauri (no backend to ask) and
+   * when no `--open` was given. The e2e suite uses this to drive the real
+   * workbench against a fixture project on disk.
+   */
+  async openStartupProject(): Promise<void> {
+    if (!isTauri()) return;
+    const path = await invoke<string | null>("startup_open");
+    if (path) await this.openPath(path);
+  }
+
+  /**
    * Load a project by absolute path (from the picker or a recent entry).
    * Switching away while open tabs have unsaved edits asks ONE count-naming
    * confirmation (model `OpenProject`); declining aborts the switch with
@@ -521,6 +533,18 @@ class AppState {
    * answer is NO — never silently discard unsaved work.
    */
   private async confirmDiscard(message: string): Promise<boolean> {
+    // Test seam (issue #32): the e2e-lang suite drives the REAL app, where the
+    // confirm is a native Tauri dialog Playwright/CDP can neither read nor
+    // answer (it auto-cancels). An injected probe lets the suite see the prompt
+    // and decide. Production never sets it, so this is inert outside the test.
+    const probe = (
+      globalThis as {
+        __dcsConfirm__?: (m: string) => boolean | Promise<boolean>;
+      }
+    ).__dcsConfirm__;
+    if (probe) {
+      return probe(message);
+    }
     if (isTauri()) {
       return confirmDialog(message, { title: "Unsaved changes", kind: "warning" });
     }

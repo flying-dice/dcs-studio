@@ -3,7 +3,7 @@
   // severity-then-span ordering, the panel-local filter toggles, and the
   // status-bar count chips (model StatusBarCountsOpenProblems) — over
   // findings seeded straight into the real `lang` store. Seeded, not
-  // engine-produced: today's wasm engine emits errors only, so mixed
+  // engine-produced: the dcs-lua engine emits errors only, so mixed
   // severities (and a code_description URL) cannot come from real Lua.
   import { onMount } from "svelte";
   import Problems from "$lib/components/Problems.svelte";

@@ -1,18 +1,18 @@
 // E2E: the Todos panel — workspace comment tags grouped by file, in a
-// plain browser: no Tauri, no DCS (model/studio/todos.pds
+// the real app over CDP: no DCS (model/studio/todos.pds
 // SavedFileRefreshesItsTodos, TodoClickNavigatesEditor). The lab injects
 // an in-memory scanner into the REAL TodoScanner store, so the grouping,
 // the save-time per-file splice, and the open+jump mechanics under test
 // are the production ones.
 
-import { test, expect } from "@playwright/test";
+import { test, expect, labUrl } from "./_tauri";
 
 // Must match /lab/todos's seeded files.
 const ALPHA =
   '-- TODO: wire alpha gauge\nprint("alpha")\n-- цель — FIXME: refit alpha sensor\n';
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/lab/todos");
+  await page.goto(labUrl("todos"));
   await expect(page.getByTestId("lab-status")).toContainText("ready", {
     timeout: 30_000,
   });

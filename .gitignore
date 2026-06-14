@@ -28,3 +28,4 @@ vite.config.ts.timestamp-*
 # Tauri sidecar binaries staged by scripts/prepare-sidecar.mjs (built, not
 # source); the bundler picks them up during `tauri build`.
 /crates/app/binaries/
+/.playwright-mcp

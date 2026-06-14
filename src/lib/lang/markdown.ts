@@ -1,9 +1,8 @@
 // Render doc-comment markdown (hover bodies, and later completion docs) to
 // sanitized HTML. The provider layer hands us markdown text — LSP hover
-// MarkupContent is markdown by convention, and the wasm engine's doc runs are
-// authored as comment prose — which we inject via `innerHTML` into the
-// CodeMirror tooltip DOM. Sanitize because the source is the user's own files
-// and a doc-comment can carry raw HTML.
+// MarkupContent is markdown by convention — which we inject via `innerHTML`
+// into the CodeMirror tooltip DOM. Sanitize because the source is the user's
+// own files and a doc-comment can carry raw HTML.
 
 import { marked } from "marked";
 import DOMPurify from "dompurify";

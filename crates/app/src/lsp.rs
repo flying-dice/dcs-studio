@@ -9,8 +9,8 @@
 //! `lsp://exit/{id}` and removes the server, so the client can reject
 //! in-flight requests instead of hanging.
 //!
-//! First hosted server: `dcs-studio-cli lsp`. rust-analyzer follows
-//! (issue #6 R2).
+//! Hosted servers: `lua-analyzer` (the Lua LSP) and `rust-analyzer`, each a
+//! standalone stdio process the webview drives over these IPC events.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -85,6 +85,17 @@ pub fn lsp_start(
         }
     }
 
+    // One hosted server per language family. Ids are keyed
+    // `<family>:<session>-<seq>` (lua-analyzer.ts / rust-analyzer.ts) and only
+    // one project of a given language is ever active, so reap any prior server
+    // of this family before spawning. A project switch already stops the old
+    // client in the packaged app; this also reaps servers orphaned by a full
+    // webview navigation — the e2e-lang suite drives the one running app across
+    // many pages, and without this every navigation would leak an idle
+    // `lua-analyzer` until the machine chokes (the reader thread emits the
+    // `lsp://exit` for each reaped server as its stdout EOFs).
+    reap_family(&hosts, &server_id);
+
     let mut command = Command::new(&program);
     command
         .args(&args)
@@ -107,6 +118,20 @@ pub fn lsp_start(
     let stdout = child.stdout.take().ok_or("child stdout not piped")?;
     let stderr = child.stderr.take().ok_or("child stderr not piped")?;
 
+    // Register the handle BEFORE spawning the reader thread. The reader reaps
+    // (removes the handle + emits `lsp://exit`) when stdout EOFs; if a child
+    // died before the handle was in the map, the reader would find nothing and
+    // the dead handle would later be inserted and linger — violating this
+    // module's "process exit always removes the server" contract. Inserting
+    // first closes that window.
+    hosts.lock().map_err(|e| e.to_string())?.insert(
+        server_id.clone(),
+        ServerHandle {
+            child,
+            stdin: Some(stdin),
+        },
+    );
+
     {
         let message_app = app.clone();
         let message_id = server_id.clone();
@@ -126,7 +151,7 @@ pub fn lsp_start(
 
     {
         let stderr_app = app.clone();
-        let stderr_id = server_id.clone();
+        let stderr_id = server_id;
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 // Fold the child server's stderr into the app's own log so a
@@ -138,13 +163,6 @@ pub fn lsp_start(
         });
     }
 
-    hosts.lock().map_err(|e| e.to_string())?.insert(
-        server_id,
-        ServerHandle {
-            child,
-            stdin: Some(stdin),
-        },
-    );
     Ok(())
 }
 
@@ -211,6 +229,27 @@ pub fn stop_all(app: &AppHandle) {
     }
 }
 
+/// Reap every hosted server sharing `server_id`'s language family — the id
+/// prefix before the first `:` (`dcs-lua`, `rust-analyzer`). Keeps one server
+/// per language: a new connection replaces a prior one of the same family
+/// (project switch, or a page navigation that orphaned the old server) instead
+/// of leaking it. Other families (e.g. rust-analyzer when a Lua server starts)
+/// are untouched.
+fn reap_family(hosts: &Hosts, server_id: &str) {
+    let family = server_id.split(':').next().unwrap_or(server_id);
+    let stale: Vec<String> = match hosts.lock() {
+        Ok(map) => map
+            .keys()
+            .filter(|id| id.split(':').next() == Some(family))
+            .cloned()
+            .collect(),
+        Err(_) => return,
+    };
+    for id in stale {
+        reap(hosts, &id);
+    }
+}
+
 /// Remove `id` from the host map and wait the child out, returning its
 /// exit code. Safe to call whether or not the handle is still present.
 fn reap(hosts: &Hosts, id: &str) -> Option<i32> {
@@ -234,7 +273,7 @@ fn pump_messages(stdout: impl Read, deliver: impl Fn(String)) {
 ///
 /// `pub` solely so the host-IPC integration test (`tests/host_ipc.rs`)
 /// can drive the host's own frame reader against a real spawned
-/// `dcs-studio-cli lsp`; production code reaches it via `pump_messages`.
+/// `lua-analyzer`; production code reaches it via `pump_messages`.
 pub fn read_frame(reader: &mut BufReader<impl Read>) -> Option<String> {
     let mut content_length: Option<usize> = None;
     loop {
@@ -343,5 +382,36 @@ mod tests {
         let _ = code;
         // A second reap (e.g. racing stop) is a clean no-op.
         assert_eq!(reap(&hosts, "t"), None);
+    }
+
+    fn insert_throwaway(hosts: &Hosts, id: &str) {
+        let mut child = throwaway_child();
+        let stdin = child.stdin.take();
+        hosts
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), ServerHandle { child, stdin });
+    }
+
+    #[test]
+    fn reap_family_keeps_one_server_per_language_and_spares_others() {
+        let hosts: Hosts = Arc::default();
+        // Two prior Lua servers (a leaked one from a past navigation plus the
+        // current) and an unrelated rust-analyzer.
+        insert_throwaway(&hosts, "dcs-lua:aaaaaa-1");
+        insert_throwaway(&hosts, "dcs-lua:bbbbbb-1");
+        insert_throwaway(&hosts, "rust-analyzer:1");
+
+        // Starting a NEW Lua server reaps every prior `dcs-lua:*`…
+        reap_family(&hosts, "dcs-lua:cccccc-1");
+
+        let map = hosts.lock().unwrap();
+        assert!(
+            !map.keys().any(|id| id.starts_with("dcs-lua:")),
+            "all prior dcs-lua servers reaped, got {:?}",
+            map.keys().collect::<Vec<_>>()
+        );
+        // …but never touches another family.
+        assert!(map.contains_key("rust-analyzer:1"), "rust-analyzer spared");
     }
 }

@@ -32,8 +32,16 @@ pub fn serialize_lua_to_json(lua_value: &LuaValue) -> Option<Value> {
         LuaValue::Nil => Some(Value::Null),
         LuaValue::Boolean(b) => Some(Value::Bool(*b)),
         LuaValue::Integer(i) => Some(Value::Number((*i).into())),
-        LuaValue::Number(n) => Some(Value::Number(serde_json::Number::from_f64(*n).unwrap())),
-        LuaValue::String(s) => Some(Value::String(s.to_str().unwrap().to_string())),
+        // JSON has no NaN/Infinity, and `from_f64` returns None for them — a
+        // Lua `0/0` or `math.huge` reaching here must NOT `unwrap`-panic and
+        // crash the sim. Fall back to null.
+        LuaValue::Number(n) => {
+            Some(serde_json::Number::from_f64(*n).map_or(Value::Null, Value::Number))
+        }
+        // Lua strings are byte strings; a non-UTF-8 one must not panic the
+        // serializer (and the sim). Decode lossily — invalid bytes become the
+        // replacement char rather than aborting.
+        LuaValue::String(s) => Some(Value::String(s.to_string_lossy())),
         LuaValue::Table(table) => match is_lua_array(table) {
             Ok(true) => serialize_lua_array_to_json(table),
             Ok(false) => serialize_lua_table_to_json(table),

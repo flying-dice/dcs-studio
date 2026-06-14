@@ -31,10 +31,9 @@ the yml disagree, the yml wins (and fixing this table is part of the run).
 
 | Touched | Run (mirrors the job) |
 | --- | --- |
-| engine/CLI crates | with `DCS_PUC_LUAC` exported (CI installs lua5.1): `cargo test -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli -p studio-services` + the same `-p` set for `cargo clippy … --all-targets -- -D warnings` — the `rust` job enumerates exactly these seven; `--workspace` is NOT the job (it drags in `crates/app`, which needs the webkit stack, and `dcs-bridge*`, which CI never gates). The job FIRST builds+tests+clippies `tools/lua-runner` (`cargo build/test/clippy --manifest-path tools/lua-runner/Cargo.toml` — its own workspace, issue #9) and exports `DCS_LUA_RUNNER=tools/lua-runner/target/debug/dcs-lua-runner` so the CLI `test`-subcommand suites cannot self-skip; without the pin they are green-but-not-executed |
-| `crates/app` | replicate the `app` job verbatim: `mkdir -p build`; `cargo build -p dcs-studio-cli`; `DCS_STUDIO_CLI=target/debug/dcs-studio-cli cargo test -p dcs-studio --lib --tests`; `cargo clippy -p dcs-studio --all-targets -- -D warnings`. Without the `DCS_STUDIO_CLI` pin, `tests/host_ipc.rs` self-skips — green-but-not-executed |
-| frontend / `src/` | `pnpm check` + `pnpm test:lang` (first run on a fresh machine/worktree: `pnpm exec playwright install --with-deps chromium`, as the e2e job does) |
-| engine crates (wasm parity) | `pnpm build:wasm` then `git diff --exit-code -- src/lib/dcs-lua-wasm/dcs_lua_ide.js src/lib/dcs-lua-wasm/dcs_lua_ide.d.ts` — the two files the `wasm-sync` job diffs, exactly; the `.wasm` binary is excluded (wasm-opt output varies by version — a whole-dir diff fails trees CI passes) |
+| engine/CLI crates | with `DCS_PUC_LUAC` exported (CI installs lua5.1): `cargo test -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli -p studio-mcp -p lua-analyzer -p studio-services` + the same `-p` set for `cargo clippy … --all-targets -- -D warnings` — the `rust` job enumerates exactly these nine; `--workspace` is NOT the job (it drags in `crates/app`, which needs the webkit stack, and `dcs-bridge*`, which CI never gates). The job FIRST builds+tests+clippies `tools/lua-runner` (`cargo build/test/clippy --manifest-path tools/lua-runner/Cargo.toml` — its own workspace, issue #9) and exports `DCS_LUA_RUNNER=tools/lua-runner/target/debug/dcs-lua-runner` so the CLI `test`-subcommand suites cannot self-skip; without the pin they are green-but-not-executed |
+| `crates/app` | replicate the `app` job verbatim: `mkdir -p build`; `cargo build -p lua-analyzer` and stage it as `crates/app/binaries/lua-analyzer-$(rustc -vV \| sed -n 's/^host: //p')` (tauri-build validates `externalBin`); `DCS_LUA_ANALYZER=target/debug/lua-analyzer cargo test -p dcs-studio --lib --tests`; `cargo clippy -p dcs-studio --all-targets -- -D warnings`. Without the `DCS_LUA_ANALYZER` pin, `tests/host_ipc.rs` self-skips — green-but-not-executed |
+| frontend / `src/` | `pnpm check` (the `web` job — type-check only). NOTE: `pnpm test:lang` (e2e-lang) was retargeted to drive the REAL app over WebView2 CDP (issue #32) — Windows-only, and REMOVED from CI (no `e2e`/`wasm-sync` jobs). It cannot run on the Linux runners or in a Linux worktree; verify it on Windows and report the count, but it is not a CI-parity gate here |
 | templates / `dcs-studio-project` | both halves of the `template-compile` job: `DCS_TEMPLATE_COMPILE=1 cargo test -p dcs-studio-project --test template_compile` AND the scaffold probe — `cargo run -p dcs-studio-cli -- init "Lua Probe" --template lua-script --parent <tmp>`, assert `<tmp>/Lua Probe/Scripts/lua-probe/main.lua` exists, `cargo run -p dcs-studio-cli -- check "<tmp>/Lua Probe"` (the issue-#22 half: a moved entry script passes the env-gated test but breaks the scaffold) |
 
 Record counts (total/passed/failed/skipped) and durations. Any failure ends
@@ -111,7 +110,7 @@ is not evidence. Use the oracle:
   the in-house parser is tolerant by design and will bless output PUC
   rejects.
 - LSP wire behaviour against the **real `dcs-studio-cli lsp` binary** over
-  stdio, not just the wasm path.
+  stdio, not just the in-process call.
 - Scaffolded templates must **compile** (`DCS_TEMPLATE_COMPILE=1`).
 - File outputs: re-read what was written (atomicity, CRLF, BOM, trailing
   newline), don't trust the write call.

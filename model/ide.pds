@@ -1,4 +1,4 @@
-//! ide — THE edge: the wasm IdeSession dcs-studio embeds (crate
+//! ide — the wasm IdeSession edge over the engine, unwired from the app by #32 (crate
 //! `dcs-lua-ide`, decisions/002). Holds the workspace; every query
 //! delegates to lspcore. The boundary is typed (tsify DTOs → .d.ts);
 //! dcs-studio's `studio::lang::DcsLua` face mirrors these ports.
@@ -14,7 +14,7 @@ public data WireDiagnostic { path: string, severity: string, code: string, codeD
 /// byte offset it follows, and the LSP inlay-hint kind.
 public data WireInlayHint { offset: number, label: string, kind: string }
 
-/// The embedded language engine session. The host pushes sources in
+/// The wasm-bindgen language engine session. The host pushes sources in
 /// (mount/set/remove); the editor pulls answers out.
 /// #critical
 public container IdeSession for dcslua::DcsLuaLs {

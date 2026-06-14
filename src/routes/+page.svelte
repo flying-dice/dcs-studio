@@ -58,6 +58,12 @@
     LoaderCircle,
     type LucideIcon,
   } from "@lucide/svelte";
+  import { onMount } from "svelte";
+
+  // Open the project the app was launched with (`--open <path>`), if any.
+  onMount(() => {
+    void app.openStartupProject();
+  });
 
   const darkThemes = EDITOR_THEMES.filter((t) => t.dark);
   const lightThemes = EDITOR_THEMES.filter((t) => !t.dark);

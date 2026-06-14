@@ -2,11 +2,12 @@
 // discard every open tab; with unsaved edits the developer must confirm ONCE
 // (the prompt names how many files are affected), and declining aborts the
 // whole operation — tabs, buffers, dirty flags, and the current project all
-// stay as they were. Clean tabs never prompt. Runs in a plain browser against
-// /lab/project-switch: no Tauri, no DCS (model/studio/core.pds OpenProject,
+// stay as they were. Clean tabs never prompt. Runs against the real app over CDP at
+// /lab/project-switch: no DCS (model/studio/core.pds OpenProject,
 // CloseProject, DecliningProjectSwitchKeepsEverything).
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, labUrl, armConfirm, confirmPrompts } from "./_tauri";
+import type { Page } from "@playwright/test";
 
 const editor = (page: Page) =>
   page.getByTestId("lab-editor").locator(".cm-content");
@@ -14,24 +15,8 @@ const tab = (page: Page, path: string) =>
   page.locator(`[data-testid="editor-tab"][data-path="${path}"]`);
 const status = (page: Page) => page.getByTestId("lab-status");
 
-/**
- * Arm a dialog watcher BEFORE the action under test: records whether any
- * confirm fired (and its message) and declines/accepts it. The flag is how
- * the no-dialog specs prove the guard stayed silent — Playwright would
- * auto-dismiss an unexpected confirm invisibly otherwise.
- */
-function watchDialogs(page: Page, accept: boolean) {
-  const seen = { prompted: false, message: "" };
-  page.on("dialog", (dialog) => {
-    seen.prompted = true;
-    seen.message = dialog.message();
-    void (accept ? dialog.accept() : dialog.dismiss());
-  });
-  return seen;
-}
-
 test.beforeEach(async ({ page }) => {
-  await page.goto("/lab/project-switch");
+  await page.goto(labUrl("project-switch"));
   await expect(status(page)).toContainText("ready", { timeout: 30_000 });
   // The initial openPath ran with no tabs open — proj-a is the workspace.
   await expect(status(page)).toContainText("root: proj-a");
@@ -53,7 +38,7 @@ test("switching projects with dirty tabs prompts once with the count; declining 
   await editor(page).fill('print("edited b")\n');
   await expect(tab(page, "proj-a/b.lua")).toHaveAttribute("data-dirty", "true");
 
-  const seen = watchDialogs(page, /* accept */ false);
+  await armConfirm(page, /* accept */ false);
   await page.getByTestId("switch-project").click();
 
   // Declining aborts the switch entirely: same project, both tabs intact,
@@ -65,8 +50,9 @@ test("switching projects with dirty tabs prompts once with the count; declining 
   await expect(editor(page)).toContainText('print("edited b")');
   await tab(page, "proj-a/a.lua").click();
   await expect(editor(page)).toContainText('print("edited a")');
-  expect(seen.prompted).toBe(true);
-  expect(seen.message).toContain("2 files have unsaved changes");
+  const prompts = await confirmPrompts(page);
+  expect(prompts.length).toBeGreaterThan(0);
+  expect(prompts.join("\n")).toContain("2 files have unsaved changes");
 });
 
 test("declining re-arms the guard: a later switch still prompts and can proceed", async ({
@@ -81,34 +67,27 @@ test("declining re-arms the guard: a later switch still prompts and can proceed"
   await editor(page).fill('print("edited a")\n');
   await expect(status(page)).toContainText("dirty: true");
 
-  const first = { prompted: false };
-  page.once("dialog", (dialog) => {
-    first.prompted = true;
-    void dialog.dismiss();
-  });
+  await armConfirm(page, /* accept */ false);
   await page.getByTestId("switch-project").click();
   await expect(status(page)).toContainText("root: proj-a");
   await expect(status(page)).toContainText("tabs: 1");
-  expect(first.prompted).toBe(true);
+  expect((await confirmPrompts(page)).length).toBeGreaterThan(0);
 
   // Second attempt, accepted this time: must prompt again and proceed.
-  const second = { prompted: false };
-  page.once("dialog", (dialog) => {
-    second.prompted = true;
-    void dialog.accept();
-  });
+  await armConfirm(page, /* accept */ true);
   await page.getByTestId("switch-project").click();
   await expect(status(page)).toContainText("root: proj-b");
   await expect(status(page)).toContainText("tabs: 0");
-  expect(second.prompted).toBe(true);
+  expect((await confirmPrompts(page)).length).toBeGreaterThan(0);
 });
 
-test("with no confirm surface at all, a dirty switch is refused outright", async ({
+test("with no confirm probe, a dirty switch is still refused (never silently discards)", async ({
   page,
 }) => {
-  // model ConfirmDiscard: "with no confirm surface at all the answer is NO
-  // — unsaved work is never silently discarded". Strip window.confirm and
-  // prove the deny-by-default fallback aborts the switch.
+  // model ConfirmDiscard: unsaved work is never silently discarded. In the
+  // real app the discard confirm is a native Tauri dialog; with the test probe
+  // removed it resolves to cancel over CDP, so the guard denies — the switch
+  // aborts rather than throwing the edits away.
   await page.getByTestId("open-a").click();
   await expect(editor(page)).toContainText('print("alpha")');
   await editor(page).click();
@@ -116,9 +95,8 @@ test("with no confirm surface at all, a dirty switch is refused outright", async
   await expect(status(page)).toContainText("dirty: true");
 
   await page.evaluate(() => {
-    (window as { confirm?: unknown }).confirm = undefined;
+    (window as { __dcsConfirm__?: unknown }).__dcsConfirm__ = undefined;
   });
-  const seen = watchDialogs(page, /* accept */ true);
   await page.getByTestId("switch-project").click();
   // Force a later observable delta before asserting "nothing moved", so a
   // not-yet-settled abort can't satisfy the root assertion transiently.
@@ -129,7 +107,6 @@ test("with no confirm surface at all, a dirty switch is refused outright", async
   await expect(tab(page, "proj-a/a.lua")).toHaveAttribute("data-dirty", "true");
   await tab(page, "proj-a/a.lua").click();
   await expect(editor(page)).toContainText('print("edited a")');
-  expect(seen.prompted).toBe(false);
 });
 
 test("accepting the switch prompt proceeds and clears the tabs", async ({
@@ -141,14 +118,15 @@ test("accepting the switch prompt proceeds and clears the tabs", async ({
   await editor(page).fill('print("edited a")\n');
   await expect(status(page)).toContainText("dirty: true");
 
-  const seen = watchDialogs(page, /* accept */ true);
+  await armConfirm(page, /* accept */ true);
   await page.getByTestId("switch-project").click();
 
   await expect(status(page)).toContainText("root: proj-b");
   await expect(status(page)).toContainText("tabs: 0");
   await expect(page.locator('[data-testid="editor-tab"]')).toHaveCount(0);
-  expect(seen.prompted).toBe(true);
-  expect(seen.message).toContain("1 file has unsaved changes");
+  const prompts = await confirmPrompts(page);
+  expect(prompts.length).toBeGreaterThan(0);
+  expect(prompts.join("\n")).toContain("1 file has unsaved changes");
 });
 
 test("clean tabs switch projects without any prompt", async ({ page }) => {
@@ -158,14 +136,14 @@ test("clean tabs switch projects without any prompt", async ({ page }) => {
   await page.getByTestId("open-b").click();
   await expect(editor(page)).toContainText('print("beta")');
 
-  const seen = watchDialogs(page, /* accept */ false);
+  await armConfirm(page, /* accept */ false);
   await page.getByTestId("switch-project").click();
 
   // The switch proceeded — and the watcher (which would have DECLINED any
   // confirm) never fired, proving no dialog stood in the way.
   await expect(status(page)).toContainText("root: proj-b");
   await expect(status(page)).toContainText("tabs: 0");
-  expect(seen.prompted).toBe(false);
+  expect(await confirmPrompts(page)).toHaveLength(0);
 });
 
 test("closing the project with a dirty tab prompts; declining keeps everything", async ({
@@ -177,15 +155,16 @@ test("closing the project with a dirty tab prompts; declining keeps everything",
   await editor(page).fill('print("edited a")\n');
   await expect(status(page)).toContainText("dirty: true");
 
-  const seen = watchDialogs(page, /* accept */ false);
+  await armConfirm(page, /* accept */ false);
   await page.getByTestId("close-project").click();
 
   await expect(status(page)).toContainText("root: proj-a");
   await expect(status(page)).toContainText("tabs: 1");
   await expect(tab(page, "proj-a/a.lua")).toHaveAttribute("data-dirty", "true");
   await expect(editor(page)).toContainText('print("edited a")');
-  expect(seen.prompted).toBe(true);
-  expect(seen.message).toContain("1 file has unsaved changes");
+  const prompts = await confirmPrompts(page);
+  expect(prompts.length).toBeGreaterThan(0);
+  expect(prompts.join("\n")).toContain("1 file has unsaved changes");
 });
 
 test("accepting the close prompt returns to the welcome state", async ({
@@ -197,23 +176,23 @@ test("accepting the close prompt returns to the welcome state", async ({
   await editor(page).fill('print("edited a")\n');
   await expect(status(page)).toContainText("dirty: true");
 
-  const seen = watchDialogs(page, /* accept */ true);
+  await armConfirm(page, /* accept */ true);
   await page.getByTestId("close-project").click();
 
   await expect(status(page)).toContainText("root: (none)");
   await expect(status(page)).toContainText("tabs: 0");
   await expect(page.locator('[data-testid="editor-tab"]')).toHaveCount(0);
-  expect(seen.prompted).toBe(true);
+  expect((await confirmPrompts(page)).length).toBeGreaterThan(0);
 });
 
 test("clean tabs close the project without any prompt", async ({ page }) => {
   await page.getByTestId("open-a").click();
   await expect(editor(page)).toContainText('print("alpha")');
 
-  const seen = watchDialogs(page, /* accept */ false);
+  await armConfirm(page, /* accept */ false);
   await page.getByTestId("close-project").click();
 
   await expect(status(page)).toContainText("root: (none)");
   await expect(status(page)).toContainText("tabs: 0");
-  expect(seen.prompted).toBe(false);
+  expect(await confirmPrompts(page)).toHaveLength(0);
 });

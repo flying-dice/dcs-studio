@@ -65,6 +65,23 @@ public container Workbench for studio::core::Studio {
     self.Announce(opened)
   }
 
+  /// On boot, open the project the app was launched with (`--open <path>`),
+  /// if any: read the startup path the desktop shell parsed and run the normal
+  /// open flow. The initial open has no tabs, so it never prompts; absent the
+  /// argument (or outside the desktop shell) this does nothing. The e2e suite
+  /// uses it to drive the real workbench against a fixture project on disk.
+  #[manual]
+  public OpenStartupProject(): void {
+    requested = Option<string> from self.StartupOpenPath()
+    if (requested.isSome) {
+      self.OpenProject(requested.value)
+    }
+  }
+
+  /// The project path the app was launched with via `--open`, if any — the CLI
+  /// argument the desktop shell parsed at startup.
+  StartupOpenPath(): Option<string>;
+
   /// How many open tabs have unsaved edits — the blast radius a project
   /// switch or close would discard.
   CountDirtyTabs(): number;
