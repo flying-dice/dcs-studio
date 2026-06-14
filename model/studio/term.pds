@@ -1,0 +1,273 @@
+//! studio::term — the integrated terminal (issue #13): tabbed pseudo-terminal
+//! sessions with launch profiles. A profile is a built-in shell (the detected
+//! default — pwsh, else Windows PowerShell, else cmd), a built-in agentic
+//! harness (Claude Code, OpenCode), or a user-defined entry from settings.
+//!
+//! Sessions are real pseudo-terminals (wezterm's portable-pty, ConPTY-backed
+//! on Windows) so full-screen TUIs render. A session outlives the panel
+//! collapse that unmounts its view: the child and pty keep running Rust-side,
+//! and a bounded ring buffer of recent output replays into a freshly mounted
+//! terminal before live streaming resumes. Harness profiles start in the open
+//! project root and ensure the IDE-hosted MCP server (studio::mcp, issue #8)
+//! is reachable before launch.
+//!
+//! The terminal deliberately runs arbitrary commands as the user — the same
+//! trust level as any IDE terminal — and is NOT exposed over MCP: agents own
+//! their own shells, and the MCP surface stays the structured tools.
+
+/// Largest tail of output a session retains for replay. A long-lived session
+/// trims to this so its ring buffer can't grow without bound; a freshly
+/// mounted view replays at most this much before live output resumes.
+public constant BUFFER_REPLAY_BYTES = 204800
+
+/// Rows a session opens with before the view's first fit-to-panel resize.
+public constant DEFAULT_ROWS = 24
+
+/// Columns a session opens with before the view's first fit-to-panel resize.
+public constant DEFAULT_COLS = 80
+
+/// Pseudo-terminal dimensions in character cells. The view fits these to the
+/// panel and pushes a Resize whenever the panel or font changes.
+public data PtySize { rows: number, cols: number }
+
+/// One environment variable layered onto a profile's child process.
+public data EnvVar { key: string, value: string }
+
+/// A launch profile: how to start one kind of session. `command` + `args` are
+/// the program to run; `env` is layered onto the inherited environment;
+/// `harness` marks an agentic CLI (Claude Code, OpenCode) so the spawn flow
+/// pre-registers the IDE's MCP server. Built-ins ship with sane defaults;
+/// arbitrary user-defined profiles are supported — "any other CLI tool" is
+/// just a profile (or a typed command in a shell tab).
+public data Profile { id: string, label: string, command: string, args: string[], env: studio::term::EnvVar[], harness: bool }
+
+/// A live session in the tab strip: a stable id, the profile it was launched
+/// from, and the label shown on its tab.
+public data Session { id: string, profileId: string, label: string }
+
+/// Opaque handle to one running pseudo-terminal — its master reader/writer
+/// and the child-process killer. Black box: the portable-pty internals are
+/// not architecture.
+public data PtyHandle;
+
+/// A session could not be started — typically the profile's command is not on
+/// PATH. Carried back to the tab so the developer sees why, not a dead tab.
+public data SpawnError { message: string }
+
+/// Raised by the output pump when a session's stream ends — the child exited
+/// on its own (the developer typed `exit`) or crashed. `code` is the child's
+/// exit status when one is available.
+public data SessionExited { id: string, code: Option<number> }
+
+/// The integrated terminal: a registry of live pseudo-terminal sessions
+/// surfaced as tabs in the bottom tool stripe. Owns the spawn-profile flow,
+/// the per-session replay buffer, and session teardown; the actual pty is the
+/// PtySession adapter.
+public container Terminal for studio::core::Studio {
+  /// Start a new session from a launch profile. Resolve the profile (built-in
+  /// shell/harness or a user-defined entry), resolve its working directory to
+  /// the open project root, and — for an agentic harness profile — ensure the
+  /// IDE's MCP server is reachable before the harness launches. Then open a
+  /// pseudo-terminal of the requested size, spawn the profile's command in it,
+  /// register the live session (which starts its replay buffer), and pump its
+  /// output. A command that can't be spawned surfaces as an error and
+  /// registers nothing — no dead tab, no orphaned pty.
+  #[manual]
+  public Spawn(profileId: string, size: studio::term::PtySize): Result<studio::term::Session, studio::term::SpawnError> {
+    profile = studio::term::Profile from self.ResolveProfile(profileId)
+    cwd = string from self.ResolveCwd(profile)
+    harness = bool from profile.harness
+    if (harness) {
+      self.EnsureHarnessMcp(profile)
+    }
+    opened = Result<studio::term::PtyHandle, studio::term::SpawnError> from studio::term::PtySession.Open(profile, cwd, size)
+    if (opened.isErr) {
+      return Err(opened.error)
+    }
+    session = studio::term::Session from { profile }
+    self.Register(session, opened.value)
+    self.StartPump(session)
+    return Ok(session)
+  }
+
+  /// Forward the developer's keystrokes (already encoded as bytes) to a
+  /// session's pseudo-terminal input. Writing to a session that has already
+  /// exited is a no-op, never an error — the tab may be mid-teardown.
+  #[manual]
+  public Write(id: string, bytes: string): void {
+    handle = Option<studio::term::PtyHandle> from self.Find(id)
+    if (handle.isNone) {
+      return
+    }
+    studio::term::PtySession.Write(handle.value, bytes)
+  }
+
+  /// Resize a session's pseudo-terminal so the child redraws to the new cell
+  /// dimensions (the view pushes this whenever the panel or font changes).
+  /// Resizing a gone session is a no-op.
+  #[manual]
+  public Resize(id: string, size: studio::term::PtySize): void {
+    handle = Option<studio::term::PtyHandle> from self.Find(id)
+    if (handle.isNone) {
+      return
+    }
+    studio::term::PtySession.Resize(handle.value, size)
+  }
+
+  /// Terminate a session and clean up everything it owns: kill the child
+  /// process and close the pseudo-terminal (PtySession.Kill), drop its replay
+  /// buffer, and remove it from the registry — all three, so nothing lingers
+  /// after the developer closes the tab. Killing an already-gone session is a
+  /// no-op.
+  #[manual]
+  public Kill(id: string): void {
+    handle = Option<studio::term::PtyHandle> from self.Find(id)
+    if (handle.isNone) {
+      return
+    }
+    studio::term::PtySession.Kill(handle.value)
+    self.DropBuffer(id)
+    self.Deregister(id)
+  }
+
+  /// The output pump saw a session's stream end. Clean up exactly as Kill
+  /// does its non-process steps — drop the replay buffer and deregister (which
+  /// closes the pty) — so a self-exited session never lingers in the registry.
+  /// The view is told via the same event so it can mark or close the tab.
+  #[onevent(studio::term::SessionExited)]
+  OnExit(exit: studio::term::SessionExited): void {
+    self.DropBuffer(exit.id)
+    self.Deregister(exit.id)
+  }
+
+  /// The recent output a freshly mounted terminal view replays before live
+  /// streaming resumes: the session's ring buffer, never more than
+  /// BUFFER_REPLAY_BYTES. Empty for an unknown session.
+  Replay(id: string): string;
+
+  /// The sessions still running in the registry — used to rebuild the tab strip
+  /// after a webview reload (which resets the view's own tab state but leaves
+  /// the sessions alive; only closing the window kills them).
+  List(): studio::term::Session[];
+
+  /// Resolve a profile id to its definition: a built-in (the detected default
+  /// shell — prefer pwsh, then Windows PowerShell, then cmd on Windows; the
+  /// login shell elsewhere; or a named harness like Claude Code / OpenCode) or
+  /// a user-defined entry persisted in settings.
+  ResolveProfile(profileId: string): studio::term::Profile;
+
+  /// The working directory a new session starts in — the open project root, so
+  /// shells and harnesses both begin where the developer is working.
+  ResolveCwd(profile: studio::term::Profile): string;
+
+  /// Help an agentic harness reach the IDE-hosted MCP server (studio::mcp,
+  /// issue #8): expose the server's loopback discovery file to the child's
+  /// environment before launch. Best-effort — the harness-side consumer of the
+  /// hint lands with #8, so this sets the path, it does not verify the server
+  /// is up. A no-op for non-harness shells.
+  EnsureHarnessMcp(profile: studio::term::Profile): void;
+
+  /// Record a freshly spawned session and its pseudo-terminal handle in the
+  /// live registry and open its (initially empty) replay buffer. A duplicate id
+  /// is rejected rather than displacing a live session — the spawn fails.
+  Register(session: studio::term::Session, handle: studio::term::PtyHandle): void;
+
+  /// Pump the session's pseudo-terminal output: append every chunk to its ring
+  /// buffer (trimming the head past BUFFER_REPLAY_BYTES) and stream the chunk
+  /// to the terminal view; when the stream ends, raise SessionExited.
+  StartPump(session: studio::term::Session): void;
+
+  /// The live pseudo-terminal handle for a session id, if it is still running.
+  Find(id: string): Option<studio::term::PtyHandle>;
+
+  /// Drop a session's replay buffer.
+  DropBuffer(id: string): void;
+
+  /// Remove a session from the live registry, closing its pseudo-terminal.
+  Deregister(id: string): void;
+}
+
+/// The portable-pty adapter (wezterm's crate; ConPTY-backed on Windows): one
+/// real pseudo-terminal and the child process running inside it. Black box —
+/// allocating the pty pair, spawning into the slave, and the master
+/// reader/writer/killer are carried I/O, not architecture.
+component PtySession for studio::term::Terminal {
+  /// Allocate a pseudo-terminal of `size`, spawn `profile.command` (with its
+  /// args and layered environment) in it with `cwd` as the working directory,
+  /// and return the live handle — or a SpawnError if the command can't start.
+  Open(profile: studio::term::Profile, cwd: string, size: studio::term::PtySize): Result<studio::term::PtyHandle, studio::term::SpawnError>;
+
+  /// Write bytes to the pseudo-terminal input (the child's stdin).
+  Write(handle: studio::term::PtyHandle, bytes: string): void;
+
+  /// Resize the pseudo-terminal master to the new cell dimensions.
+  Resize(handle: studio::term::PtyHandle, size: studio::term::PtySize): void;
+
+  /// Kill the child process and close the pseudo-terminal.
+  Kill(handle: studio::term::PtyHandle): void;
+}
+
+/// A harness profile launches its CLI in the open project root with the IDE's
+/// MCP discovery file exposed to it.
+feature SpawnHarnessProfileInProjectRoot for studio::term::Terminal {
+  given "a project is open and a harness profile (e.g. Claude Code) is chosen"
+  when "the developer spawns a new session from that profile"
+  then "the working directory is resolved to the open project root"
+  and "the IDE's MCP discovery path is exposed to the harness's environment"
+  and "the session appears as a live tab streaming the harness output"
+}
+
+/// The default shell profile follows the detected shell, preferring pwsh.
+feature ShellProfileDetection for studio::term::Terminal {
+  given "the host has pwsh, Windows PowerShell, and cmd available"
+  when "the developer opens the default shell profile"
+  then "pwsh is chosen"
+  but "with pwsh absent it falls back to Windows PowerShell, then to cmd"
+}
+
+/// Collapsing the panel unmounts the view but never the session: the child
+/// and pty keep running, and remounting replays the buffered tail.
+feature PanelCollapseKeepsSessionAlive for studio::term::Terminal {
+  given "a session is running and producing output"
+  when "the developer collapses the bottom panel, unmounting the terminal view"
+  then "the child process and its pseudo-terminal keep running Rust-side"
+  and "output produced while collapsed is still appended to the ring buffer"
+  and "reopening the panel replays the buffered tail, then live output resumes"
+}
+
+/// A remounted view shows continuity, not a blank screen: the replay precedes
+/// any new live chunk.
+feature ReplayThenLiveOnRemount for studio::term::Terminal {
+  given "a session accumulated output while its view was unmounted"
+  when "the terminal view mounts again"
+  then "it first writes the session's replay buffer (capped at BUFFER_REPLAY_BYTES)"
+  and "then resumes streaming live output without dropping or duplicating it"
+}
+
+/// Killing a session cleans up all three things it owns.
+feature KillSessionCleansUp for studio::term::Terminal {
+  given "a session is running"
+  when "the developer closes its tab"
+  then "the child process is killed and its pseudo-terminal is closed"
+  and "its replay buffer is dropped"
+  and "it is removed from the live registry"
+  and "killing an already-gone session does nothing"
+}
+
+/// A child that exits on its own is reaped the same way a kill would, so the
+/// registry never accumulates dead sessions.
+feature SpontaneousExitCleansUp for studio::term::Terminal {
+  given "a session whose child process exits on its own (the developer typed `exit`)"
+  when "the output pump observes the stream end"
+  then "a SessionExited signal carries the exit code to the view"
+  and "the session's replay buffer is dropped and it is deregistered"
+}
+
+/// Concurrent sessions are isolated: input and output route by session id,
+/// never bleeding between tabs.
+feature ConcurrentSessionsAreIsolated for studio::term::Terminal {
+  given "two sessions run in two tabs"
+  when "the developer types into the active tab"
+  then "only that session's child receives the keystrokes"
+  and "each session's output streams to and replays into only its own tab"
+}

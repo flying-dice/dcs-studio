@@ -12,3 +12,4 @@ pub mod fs;
 pub mod inject;
 pub mod link;
 pub mod mission;
+pub mod term;
