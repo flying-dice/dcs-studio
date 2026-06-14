@@ -11,6 +11,8 @@ import {
   pickFolder,
   writeTextFile,
   createProjectFromTemplate,
+  renamePath,
+  deleteToTrash,
   dcsCall,
   dcsStatus,
 } from "./api";
@@ -451,19 +453,41 @@ class AppState {
   }
 
   /**
+   * Buffer-eviction signal (model studio::edit `ApplyWorkspaceEdit`): a
+   * cross-file rename rewrites open-but-inactive tabs on disk; their parked
+   * editor state is now stale, so the editor drops it and the tab reloads
+   * from disk on reactivation. The tick makes each emission a distinct value
+   * so the editor's effect re-runs even for the same paths.
+   */
+  evicted = $state<{ tick: number; paths: string[] }>({ tick: 0, paths: [] });
+
+  /** Mark `paths`' parked editor buffers stale so they reload from disk. */
+  evictBuffers(paths: string[]) {
+    this.evicted = { tick: this.evicted.tick + 1, paths };
+  }
+
+  /**
    * Where the editor should land once the next file finishes loading
    * (1-based line/column, UTF-16 columns) — set when a Problems entry is
    * opened, consumed by the editor, then cleared.
    */
-  pendingJump = $state<{ line: number; col: number } | null>(null);
+  pendingJump = $state<
+    { line: number; col: number } | { offset: number } | null
+  >(null);
 
   /**
    * Open a file (model `OpenFile`): an already-open tab is re-activated
    * as-is — pending edits and undo history intact; otherwise a fresh tab is
    * appended and activated. The editor loads its text from disk on first
-   * activation and reports it via `onDocLoaded`.
+   * activation and reports it via `onDocLoaded`. `jumpTo` lands the caret on
+   * a 1-based line/column (Problems navigation) or a document offset
+   * (go-to-definition, find-usages — model studio::edit RevealLocation).
    */
-  openFile(path: string, name: string, jumpTo?: { line: number; col: number }) {
+  openFile(
+    path: string,
+    name: string,
+    jumpTo?: { line: number; col: number } | { offset: number },
+  ) {
     // One identity per file no matter the source: the file tree gives an
     // upper-case Windows drive letter, a Problems-click's path comes round-
     // trip through a language server's file:// URI (lower-cased). Canonicalise
@@ -492,6 +516,97 @@ class AppState {
   /** Make an already-open tab the active one (model `ActivateTab`). */
   activateFile(path: string) {
     if (this.openFiles.some((f) => f.path === path)) this.activePath = path;
+  }
+
+  /**
+   * Open `path` and land the caret at a document offset — the shared
+   * navigation behind go-to-definition and the Usages panel (model
+   * studio::edit `Refactoring.RevealLocation`).
+   */
+  openFileAt(path: string, offset: number) {
+    const name = path.split(/[\\/]/).pop() || path;
+    this.openFile(path, name, { offset });
+  }
+
+  /**
+   * File-tree refresh signal (issue #17): a tree mutation (create, rename,
+   * duplicate, delete) bumps this so every expanded TreeNode re-reads its
+   * children and the FileTree re-reads its roots.
+   */
+  treeVersion = $state(0);
+
+  /** Bump the tree-refresh signal after a filesystem mutation. */
+  refreshTree() {
+    this.treeVersion += 1;
+  }
+
+  /** Whether `path` is at or under `dir` (descendant test for tab coordination). */
+  private isUnder(path: string, dir: string): boolean {
+    return (
+      path === dir || path.startsWith(`${dir}\\`) || path.startsWith(`${dir}/`)
+    );
+  }
+
+  /**
+   * Rename a workspace path from the file tree, following any open tab to the
+   * new path (model `RenameWorkspacePath`). A rename moves the file but not
+   * its content, so a clean tab reopens at the new path losing nothing; a tab
+   * with unsaved edits is refused (its edits live only in the buffer a path
+   * change would strand). Rejects with a message the tree surfaces.
+   */
+  async renameWorkspacePath(
+    root: string,
+    src: string,
+    dst: string,
+  ): Promise<void> {
+    const from = canonicalPath(src);
+    const affected = this.openFiles.filter((f) => this.isUnder(f.path, from));
+    const dirty = affected.filter((f) => f.docText !== f.savedText);
+    if (dirty.length > 0) {
+      const names = dirty.map((f) => f.name).join(", ");
+      throw new Error(`Save ${names} before renaming.`);
+    }
+    await renamePath(root, src, dst); // rejects on collision / escape
+    const to = canonicalPath(dst);
+    // Where focus must end up (model `RetargetTabs`: the previously active tab
+    // stays active). If the active tab was itself renamed, follow it to its new
+    // path; otherwise it is untouched and must keep focus — the per-tab
+    // `openFile` calls below each grab `activePath`, so we restore it after.
+    const previousActive = this.activePath;
+    const refocus =
+      previousActive && this.isUnder(previousActive, from)
+        ? to + previousActive.slice(from.length)
+        : previousActive;
+    // Close each affected tab and reopen it at its new path (content unchanged
+    // by the rename, so the reload loses nothing — model `RetargetTabs`).
+    for (const tab of affected) {
+      const next = to + tab.path.slice(from.length);
+      this.openFiles = this.openFiles.filter((f) => f !== tab);
+      this.openFile(next, next.split(/[\\/]/).pop() || next);
+    }
+    this.activePath = refocus;
+    this.refreshTree();
+  }
+
+  /**
+   * Delete a workspace path to the Recycle Bin and close any open tab for it
+   * (model `DeleteWorkspacePath`): the file is gone, so its tab — and tabs for
+   * descendants of a deleted folder — close without a discard prompt.
+   */
+  async deleteWorkspacePath(root: string, path: string): Promise<void> {
+    await deleteToTrash(root, path); // rejects on escape / io error
+    const target = canonicalPath(path);
+    const affected = this.openFiles.filter((f) => this.isUnder(f.path, target));
+    for (const tab of affected) {
+      const idx = this.openFiles.findIndex((f) => f === tab);
+      if (idx < 0) continue;
+      this.openFiles.splice(idx, 1);
+      if (this.activePath === tab.path) {
+        const neighbour = this.openFiles[idx] ?? this.openFiles[idx - 1];
+        this.activePath = neighbour?.path ?? null;
+      }
+    }
+    this.refreshTree();
   }
 
   /**
@@ -548,6 +663,25 @@ class AppState {
     if (isTauri()) {
       return confirmDialog(message, { title: "Unsaved changes", kind: "warning" });
     }
+    if (typeof window !== "undefined" && typeof window.confirm === "function") {
+      return window.confirm(message);
+    }
+    return false;
+  }
+
+  /**
+   * Public confirm for destructive tree actions (delete to Recycle Bin),
+   * over the same dual-path seam as the unsaved-edits prompt. The title is
+   * "Confirm" rather than "Unsaved changes".
+   */
+  async confirm(message: string): Promise<boolean> {
+    const probe = (
+      globalThis as {
+        __dcsConfirm__?: (m: string) => boolean | Promise<boolean>;
+      }
+    ).__dcsConfirm__;
+    if (probe) return probe(message);
+    if (isTauri()) return confirmDialog(message, { title: "Confirm" });
     if (typeof window !== "undefined" && typeof window.confirm === "function") {
       return window.confirm(message);
     }

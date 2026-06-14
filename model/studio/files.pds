@@ -77,4 +77,130 @@ public container WorkspaceFs for studio::core::Studio {
 
   /// Whether a path currently exists — flags stale recent projects.
   public PathExists(path: string): bool;
+
+  /// Whether `path` stays inside `root`: its normalised form is `root` or a
+  /// descendant, with no `..`/absolute/drive segment escaping it. Every
+  /// mutating command guards on this — the IDE can open arbitrary folders to
+  /// browse, but a destructive op may only touch the open workspace root.
+  /// Same component-walk guard family as the installer's `stays_under`.
+  StaysUnderRoot(root: string, path: string): bool;
+
+  /// Rename (move) `src` to `dst`, both inside `root`. Refuses when `dst`
+  /// already exists — a rename never clobbers an existing file or folder.
+  public RenamePath(root: string, src: string, dst: string): Result<void, studio::files::IoError> {
+    if (!self.StaysUnderRoot(root, src)) {
+      srcOutside = studio::files::IoError from { src }
+      return Err(srcOutside)
+    }
+    if (!self.StaysUnderRoot(root, dst)) {
+      dstOutside = studio::files::IoError from { dst }
+      return Err(dstOutside)
+    }
+    taken = bool from self.PathExists(dst)
+    if (taken) {
+      collision = studio::files::IoError from { dst }
+      return Err(collision)
+    }
+    return self.MovePath(src, dst)
+  }
+
+  /// Move a file or folder — the adapter's `std::fs::rename`.
+  MovePath(src: string, dst: string): Result<void, studio::files::IoError>;
+
+  /// Duplicate `path` (inside `root`) beside itself under a derived,
+  /// non-colliding name; returns the new path.
+  public DuplicatePath(root: string, path: string): Result<string, studio::files::IoError> {
+    if (!self.StaysUnderRoot(root, path)) {
+      outside = studio::files::IoError from { path }
+      return Err(outside)
+    }
+    return self.CopyToSibling(path)
+  }
+
+  /// Copy a file (or folder tree) to a derived sibling that does not yet
+  /// exist (`name copy`, `name copy 2`, …); returns the new path.
+  CopyToSibling(path: string): Result<string, studio::files::IoError>;
+
+  /// Create an empty file `<parent>/<name>` inside `root`; returns its path.
+  /// The guard is on the JOINED TARGET, not just `parent` — a `name` carrying
+  /// `..` or an absolute path could otherwise escape the workspace. Refuses
+  /// when the target already exists.
+  public CreateFile(root: string, parent: string, name: string): Result<string, studio::files::IoError> {
+    target = string from self.JoinPath(parent, name)
+    if (!self.StaysUnderRoot(root, target)) {
+      outside = studio::files::IoError from { target }
+      return Err(outside)
+    }
+    taken = bool from self.PathExists(target)
+    if (taken) {
+      collision = studio::files::IoError from { target }
+      return Err(collision)
+    }
+    created = Result<void, studio::files::IoError> from self.TouchFile(target)
+    if (created.isErr) {
+      return Err(created.error)
+    }
+    return Ok(target)
+  }
+
+  /// Join a parent directory and a child name into a path.
+  JoinPath(parent: string, name: string): string;
+
+  /// Create an empty file at `path`.
+  TouchFile(path: string): Result<void, studio::files::IoError>;
+
+  /// Create a directory `<parent>/<name>` inside `root`; returns its path.
+  /// The guard is on the JOINED TARGET, not just `parent` — a `name` carrying
+  /// `..` or an absolute path could otherwise escape the workspace. Refuses
+  /// when the target already exists.
+  public CreateDir(root: string, parent: string, name: string): Result<string, studio::files::IoError> {
+    target = string from self.JoinPath(parent, name)
+    if (!self.StaysUnderRoot(root, target)) {
+      outside = studio::files::IoError from { target }
+      return Err(outside)
+    }
+    taken = bool from self.PathExists(target)
+    if (taken) {
+      collision = studio::files::IoError from { target }
+      return Err(collision)
+    }
+    created = Result<void, studio::files::IoError> from self.MakeDir(target)
+    if (created.isErr) {
+      return Err(created.error)
+    }
+    return Ok(target)
+  }
+
+  /// Create a directory at `path`.
+  MakeDir(path: string): Result<void, studio::files::IoError>;
+
+  /// Delete `path` (inside `root`) to the OS Recycle Bin — never a hard
+  /// delete, so a misclick is always recoverable.
+  public DeleteToTrash(root: string, path: string): Result<void, studio::files::IoError> {
+    if (!self.StaysUnderRoot(root, path)) {
+      outside = studio::files::IoError from { path }
+      return Err(outside)
+    }
+    return self.TrashPath(path)
+  }
+
+  /// Send a file or folder to the OS Recycle Bin (the `trash` crate).
+  TrashPath(path: string): Result<void, studio::files::IoError>;
+}
+
+/// A rename never clobbers: renaming onto an existing path is refused.
+feature RenameCollisionRefused for studio::files::WorkspaceFs {
+  given "a workspace has files a.lua and b.lua"
+  when "the developer renames a.lua onto the existing b.lua"
+  then "the rename is refused with an error"
+  and "both files keep their original contents"
+}
+
+/// Deletes are recoverable: a deleted file goes to the OS Recycle Bin,
+/// never a hard unlink.
+feature DeleteGoesToRecycleBin for studio::files::WorkspaceFs {
+  given "a workspace file"
+  when "the developer deletes it from the file tree"
+  then "the file is gone from the workspace"
+  and "it is recoverable from the OS Recycle Bin"
 }

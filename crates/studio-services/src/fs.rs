@@ -78,6 +78,173 @@ pub fn create_project_from_template(
         .map(|root| root.to_string_lossy().into_owned())
 }
 
+/// Lexically split a path into its meaningful components, resolving `.` and
+/// `..` without touching the filesystem (so it works for targets that do not
+/// exist yet). Splits on BOTH separators — DCS paths are Windows paths, but
+/// this runs on the Linux CI box too where `Path` does not treat `\` as a
+/// separator. A leading drive (`C:`) stays as the first component.
+fn normalize_components(path: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for segment in path.split(['/', '\\']) {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            seg => out.push(seg.to_string()),
+        }
+    }
+    out
+}
+
+/// Whether `path` stays inside `root`: its normalised form is `root` or a
+/// descendant, with no `..`/absolute/drive segment escaping it (model
+/// `WorkspaceFs.StaysUnderRoot`). Comparison is case-insensitive — Windows
+/// paths are. A `..` that climbs above the root collapses to a non-prefixed
+/// path and is rejected.
+pub fn stays_under_root(root: &str, path: &str) -> bool {
+    let root = normalize_components(root);
+    let path = normalize_components(path);
+    !root.is_empty()
+        && path.len() >= root.len()
+        && root
+            .iter()
+            .zip(&path)
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+}
+
+/// Guarded `std::fs::rename` of `src` to `dst`, both inside `root`. Refuses
+/// when `dst` already exists — a rename never clobbers (model
+/// `WorkspaceFs.RenamePath`).
+pub fn rename_path(root: &str, src: &str, dst: &str) -> Result<(), String> {
+    if !stays_under_root(root, src) {
+        return Err(format!("'{src}' is outside the workspace"));
+    }
+    if !stays_under_root(root, dst) {
+        return Err(format!("'{dst}' is outside the workspace"));
+    }
+    if path_exists(dst) {
+        return Err(format!("'{dst}' already exists"));
+    }
+    std::fs::rename(src, dst).map_err(|e| format!("Failed to rename '{src}': {e}"))
+}
+
+/// Duplicate `path` (inside `root`) beside itself under a derived,
+/// non-colliding name; returns the new path (model
+/// `WorkspaceFs.DuplicatePath`).
+pub fn duplicate_path(root: &str, path: &str) -> Result<String, String> {
+    if !stays_under_root(root, path) {
+        return Err(format!("'{path}' is outside the workspace"));
+    }
+    let dest = sibling_copy_name(path)?;
+    let src = Path::new(path);
+    if src.is_dir() {
+        copy_dir_recursive(src, Path::new(&dest))?;
+    } else {
+        std::fs::copy(src, &dest).map_err(|e| format!("Failed to copy '{path}': {e}"))?;
+    }
+    Ok(dest)
+}
+
+/// Create an empty file `<parent>/<name>` inside `root`; returns its path.
+/// Refuses when the target already exists (model `WorkspaceFs.CreateFile`).
+pub fn create_file(root: &str, parent: &str, name: &str) -> Result<String, String> {
+    let target = guarded_target(root, parent, name)?;
+    if path_exists(&target) {
+        return Err(format!("'{target}' already exists"));
+    }
+    std::fs::write(&target, "").map_err(|e| format!("Failed to create '{target}': {e}"))?;
+    Ok(target)
+}
+
+/// `<parent>/<name>` joined and guarded to stay inside `root` — guards the
+/// JOINED TARGET, not just `parent`, so a `name` carrying `..` or an absolute
+/// path (which `Path::join` lets replace the whole path) cannot escape the
+/// workspace. The single guard for both create operations.
+fn guarded_target(root: &str, parent: &str, name: &str) -> Result<String, String> {
+    let target = Path::new(parent).join(name);
+    let target = target.to_string_lossy().into_owned();
+    if !stays_under_root(root, &target) {
+        return Err(format!("'{target}' is outside the workspace"));
+    }
+    Ok(target)
+}
+
+/// Create a directory `<parent>/<name>` inside `root`; returns its path.
+/// Refuses when the target already exists (model `WorkspaceFs.CreateDir`).
+pub fn create_dir(root: &str, parent: &str, name: &str) -> Result<String, String> {
+    let target = guarded_target(root, parent, name)?;
+    if path_exists(&target) {
+        return Err(format!("'{target}' already exists"));
+    }
+    std::fs::create_dir(&target).map_err(|e| format!("Failed to create '{target}': {e}"))?;
+    Ok(target)
+}
+
+/// Delete `path` (inside `root`) to the OS Recycle Bin — never a hard delete,
+/// so a misclick is always recoverable (model `WorkspaceFs.DeleteToTrash`).
+pub fn delete_to_trash(root: &str, path: &str) -> Result<(), String> {
+    if !stays_under_root(root, path) {
+        return Err(format!("'{path}' is outside the workspace"));
+    }
+    trash::delete(path).map_err(|e| format!("Failed to delete '{path}': {e}"))
+}
+
+/// The first non-colliding `<stem> copy[.ext]`, `<stem> copy 2`, … beside
+/// `path`. Preserves the extension; folders get the suffix on the whole name.
+fn sibling_copy_name(path: &str) -> Result<String, String> {
+    let p = Path::new(path);
+    let parent = p.parent().unwrap_or_else(|| Path::new(""));
+    let (stem, ext) = if p.is_dir() {
+        (
+            p.file_name().map(|s| s.to_string_lossy().into_owned()),
+            None,
+        )
+    } else {
+        (
+            p.file_stem().map(|s| s.to_string_lossy().into_owned()),
+            p.extension().map(|s| s.to_string_lossy().into_owned()),
+        )
+    };
+    let stem = stem.ok_or_else(|| format!("'{path}' has no file name"))?;
+    for n in 1..10_000 {
+        let base = if n == 1 {
+            format!("{stem} copy")
+        } else {
+            format!("{stem} copy {n}")
+        };
+        let name = match &ext {
+            Some(ext) => format!("{base}.{ext}"),
+            None => base,
+        };
+        let candidate = parent.join(&name);
+        if !candidate.exists() {
+            return Ok(candidate.to_string_lossy().into_owned());
+        }
+    }
+    Err(format!("could not derive a free copy name for '{path}'"))
+}
+
+/// Recursively copy `src` dir to `dst`.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst)
+        .map_err(|e| format!("Failed to create '{}': {e}", dst.display()))?;
+    for entry in
+        std::fs::read_dir(src).map_err(|e| format!("Failed to read '{}': {e}", src.display()))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read entry: {e}"))?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)
+                .map_err(|e| format!("Failed to copy '{}': {e}", from.display()))?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +317,161 @@ mod tests {
     fn basename_takes_the_final_component_or_echoes_the_input() {
         assert_eq!(basename(r"C:\projects\My Mod"), "My Mod");
         assert_eq!(basename(""), "");
+    }
+
+    #[test]
+    fn stays_under_root_accepts_descendants_and_rejects_escapes() {
+        let root = r"C:\proj";
+        assert!(stays_under_root(root, r"C:\proj"));
+        assert!(stays_under_root(root, r"C:\proj\sub\a.lua"));
+        // Case-insensitive (Windows paths are).
+        assert!(stays_under_root(root, r"c:\PROJ\a.lua"));
+        // A `..` that climbs above the root collapses to a non-prefixed path.
+        assert!(!stays_under_root(root, r"C:\proj\..\other\a.lua"));
+        // A sibling directory sharing a name prefix is not inside the root.
+        assert!(!stays_under_root(root, r"C:\proj-evil\a.lua"));
+        // A wholly different root.
+        assert!(!stays_under_root(root, r"D:\elsewhere\a.lua"));
+        // Forward slashes normalise the same way (CI is Linux).
+        assert!(stays_under_root("/home/proj", "/home/proj/sub/a.lua"));
+        assert!(!stays_under_root("/home/proj", "/home/proj/../etc"));
+    }
+
+    #[test]
+    fn rename_refuses_a_collision_and_leaves_both_files() {
+        let root = temp_dir("rename-collision");
+        let a = root.join("a.lua");
+        let b = root.join("b.lua");
+        std::fs::write(&a, "aaa").expect("a");
+        std::fs::write(&b, "bbb").expect("b");
+        let root_s = root.to_string_lossy();
+        let err = rename_path(&root_s, &a.to_string_lossy(), &b.to_string_lossy())
+            .expect_err("renaming onto an existing file must be refused");
+        assert!(err.contains("already exists"), "err was: {err}");
+        // Both files keep their original contents.
+        assert_eq!(read_text_file(&a.to_string_lossy()).expect("a"), "aaa");
+        assert_eq!(read_text_file(&b.to_string_lossy()).expect("b"), "bbb");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rename_moves_when_the_target_is_free() {
+        let root = temp_dir("rename-move");
+        let a = root.join("a.lua");
+        let c = root.join("c.lua");
+        std::fs::write(&a, "aaa").expect("a");
+        let root_s = root.to_string_lossy();
+        rename_path(&root_s, &a.to_string_lossy(), &c.to_string_lossy()).expect("rename");
+        assert!(!path_exists(&a.to_string_lossy()));
+        assert_eq!(read_text_file(&c.to_string_lossy()).expect("c"), "aaa");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rename_refuses_a_destination_outside_the_root() {
+        let root = temp_dir("rename-escape");
+        let a = root.join("a.lua");
+        std::fs::write(&a, "aaa").expect("a");
+        let root_s = root.to_string_lossy();
+        let escape = root.join("..").join("escaped.lua");
+        let err = rename_path(&root_s, &a.to_string_lossy(), &escape.to_string_lossy())
+            .expect_err("an escaping destination must be refused");
+        assert!(err.contains("outside the workspace"), "err was: {err}");
+        assert!(path_exists(&a.to_string_lossy()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn create_file_and_dir_refuse_existing_targets() {
+        let root = temp_dir("create");
+        let root_s = root.to_string_lossy().into_owned();
+        let path = create_file(&root_s, &root_s, "new.lua").expect("create file");
+        assert_eq!(read_text_file(&path).expect("read"), "");
+        let err = create_file(&root_s, &root_s, "new.lua").expect_err("must refuse a collision");
+        assert!(err.contains("already exists"), "err was: {err}");
+
+        create_dir(&root_s, &root_s, "pkg").expect("create dir");
+        let err = create_dir(&root_s, &root_s, "pkg").expect_err("must refuse a collision");
+        // Discriminate the GUARD's refusal from the OS error: `std::fs::create_dir`
+        // on an existing dir also fails, but with a "Failed to create" prefix.
+        // Asserting the guard form (no prefix) keeps the test able to fail if the
+        // guard is removed — without this, the OS message ("already exists") would
+        // pass the check and the guard would be unpinned.
+        assert!(
+            err.contains("already exists") && !err.contains("Failed to create"),
+            "expected the guard's refusal, got: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn delete_to_trash_removes_the_file_from_the_workspace() {
+        let root = temp_dir("trash-delete");
+        let file = root.join("doomed.lua");
+        std::fs::write(&file, "x").expect("seed");
+        let path = file.to_string_lossy().into_owned();
+        match delete_to_trash(&root.to_string_lossy(), &path) {
+            // The file is gone from the workspace (recoverable from the OS
+            // Recycle Bin — that recovery half is a documented manual check).
+            Ok(()) => assert!(!path_exists(&path), "the deleted file must be gone"),
+            // No OS recycle-bin backend (e.g. a headless container with no XDG
+            // trash): the happy path is unverifiable here — skip, don't fail.
+            Err(e) => eprintln!("skipping recycle-bin assertion (no trash backend): {e}"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn create_refuses_a_name_that_escapes_the_root() {
+        // The guard must check the JOINED target, not just `parent`: a `name`
+        // with `..` or an absolute path escapes the workspace otherwise
+        // (`Path::join` lets an absolute `name` replace the whole path).
+        let root = temp_dir("create-escape");
+        let root_s = root.to_string_lossy().into_owned();
+        // Seed an out-of-root victim and prove neither create touches it.
+        let outside = root.join("..").join("create-escape-victim.lua");
+        let _ = std::fs::remove_file(&outside);
+
+        for name in ["..\\create-escape-victim.lua", "../create-escape-victim.lua"] {
+            let err = create_file(&root_s, &root_s, name)
+                .expect_err("a `..` name must be refused");
+            assert!(err.contains("outside the workspace"), "file: {err}");
+            let err = create_dir(&root_s, &root_s, name)
+                .expect_err("a `..` name must be refused");
+            assert!(err.contains("outside the workspace"), "dir: {err}");
+        }
+        // An absolute `name` replaces the join — also outside the root.
+        let abs = root.join("..").join("abs-victim").to_string_lossy().into_owned();
+        let err = create_file(&root_s, &root_s, &abs).expect_err("absolute name refused");
+        assert!(err.contains("outside the workspace"), "abs: {err}");
+
+        assert!(!path_exists(&outside.to_string_lossy()), "nothing escaped the root");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn duplicate_derives_a_non_colliding_copy_name() {
+        let root = temp_dir("duplicate");
+        let a = root.join("note.lua");
+        std::fs::write(&a, "body").expect("a");
+        let root_s = root.to_string_lossy().into_owned();
+        let first = duplicate_path(&root_s, &a.to_string_lossy()).expect("dup 1");
+        assert!(first.ends_with("note copy.lua"), "first was: {first}");
+        assert_eq!(read_text_file(&first).expect("copy"), "body");
+        // A second duplicate of the original must not collide with the first.
+        let second = duplicate_path(&root_s, &a.to_string_lossy()).expect("dup 2");
+        assert!(second.ends_with("note copy 2.lua"), "second was: {second}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn delete_to_trash_refuses_a_path_outside_the_root() {
+        let root = temp_dir("trash-escape");
+        let root_s = root.to_string_lossy();
+        let outside = root.join("..").join("victim.lua");
+        let err = delete_to_trash(&root_s, &outside.to_string_lossy())
+            .expect_err("a path outside the workspace must be refused");
+        assert!(err.contains("outside the workspace"), "err was: {err}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

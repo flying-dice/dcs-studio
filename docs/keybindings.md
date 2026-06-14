@@ -33,6 +33,22 @@ findings show in the Problems panel). **Format on save** (Quick settings, off by
 default) reformats the buffer before each write; a syntax error never blocks the
 save.
 
+## Code intelligence (issue #18)
+
+Owned by `src/lib/editor/refactor.ts`; backed by the language engine (the
+`lua-analyzer` server for `.lua`, rust-analyzer for `.rs`) through the shared
+`LanguageProvider` seam. Exercised by `e2e-lang/refactor.spec.ts`.
+
+| Action             | Keybinding              | Notes                                                                 |
+| ------------------ | ----------------------- | --------------------------------------------------------------------- |
+| Go to Definition   | `F12` or `Mod-Click`    | Jumps to the declaration of the symbol under the caret (cross-file).  |
+| Find Usages        | `Shift-F12`             | Lists every occurrence in the **Usages** panel; each row navigates.   |
+| Rename Symbol      | `F2`                    | Inline widget; rewrites every occurrence across files. Refused for an invalid name, or when an affected file has unsaved edits (save first). |
+
+These actions, plus **Run Selection in Lua Console** and Cut/Copy/Paste/Format,
+are also on the editor's right-click context menu (issue #17). The language
+entries are disabled until the engine is ready.
+
 ## Navigation / editing from the base setup
 
 These come from CodeMirror's `basicSetup` and are listed here for completeness;

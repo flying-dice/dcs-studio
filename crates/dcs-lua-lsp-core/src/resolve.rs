@@ -51,6 +51,9 @@ pub enum Decl<'a> {
         name: String,
         value: Option<ExprId>,
         stat_start: u32,
+        /// Span of the assignment target naming the global — the rename/
+        /// definition anchor a `GlobalAssign` would otherwise lack.
+        name_span: Span,
     },
     GlobalFunction {
         name: &'a FuncName,
@@ -73,6 +76,34 @@ impl Decl<'_> {
             | Decl::GlobalFunction { stat_start, .. } => *stat_start,
         }
     }
+
+    /// The span of the declaration's own name — where go-to-definition lands
+    /// the caret, and (by its start) the declaration's stable identity for
+    /// find-references and rename. For a dotted/method `GlobalFunction` this
+    /// is the final segment or the method name (the part a rename rewrites),
+    /// so two `lib.f`/`other.f` declarations stay distinct identities.
+    #[must_use]
+    pub fn name_span(&self) -> Span {
+        match self {
+            Decl::Local { name, .. }
+            | Decl::LocalFunction { name, .. }
+            | Decl::Param { name }
+            | Decl::NumericFor { name, .. }
+            | Decl::GenericFor { name, .. } => name.span,
+            Decl::GlobalAssign { name_span, .. } => *name_span,
+            Decl::GlobalFunction { name, .. } => func_name_span(name),
+        }
+    }
+}
+
+/// The span a `FunctionDecl` name renames at: the method name if any, else
+/// the final dotted segment, else (a recovery parse with no segments) empty.
+fn func_name_span(name: &FuncName) -> Span {
+    name.method
+        .as_ref()
+        .map(|m| m.span)
+        .or_else(|| name.segments.last().map(|s| s.span))
+        .unwrap_or(Span::new(0, 0))
 }
 
 /// `[start, end)` containment — the cursor is on the identifier.
@@ -174,6 +205,16 @@ fn param_at(func: &FuncBody, offset: u32) -> Option<Decl<'_>> {
         .iter()
         .find(|param| on(param.span, offset))
         .map(|name| Decl::Param { name })
+}
+
+/// The span naming the global an assignment target binds: the final field
+/// name for a dotted target (`a.b.c` → `c`), else the whole target (a plain
+/// `NameRef`). The rename/definition anchor for a `GlobalAssign`.
+fn target_name_span(ast: &Ast, target: ExprId) -> Span {
+    match &ast.expr(target).kind {
+        ExprKind::Field { name, .. } => name.span,
+        _ => ast.expr(target).span,
+    }
 }
 
 /// `a.b.c` for a pure `NameRef`/`Field` chain; `None` once anything else
@@ -469,6 +510,7 @@ fn global_match<'a>(
                     name: target_name.clone(),
                     value: values.get(position).copied(),
                     stat_start: stat.span.start,
+                    name_span: target_name_span(ast, target),
                 })
             })
         }
@@ -502,6 +544,7 @@ fn dotted_match<'a>(
                         name: dotted.to_string(),
                         value: values.get(position).copied(),
                         stat_start: stat.span.start,
+                        name_span: target_name_span(ast, target),
                     }
                 })
             })

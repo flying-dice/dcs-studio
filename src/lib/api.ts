@@ -93,6 +93,48 @@ export function createProjectFromTemplate(
   });
 }
 
+// ── workspace-scoped mutations (model studio::files, issue #17) ──────────────
+// Every mutation is guarded to the open workspace `root` in Rust; the
+// open-tab coordination (rename-follow, delete-closes-tab) lives on the
+// Workbench (state.svelte.ts), not here.
+
+/** Rename (move) `src` to `dst`, both inside `root`. Rejects a collision. */
+export function renamePath(
+  root: string,
+  src: string,
+  dst: string,
+): Promise<void> {
+  return invoke<void>("rename_path", { root, src, dst });
+}
+
+/** Duplicate `path` beside itself under a derived name; returns the new path. */
+export function duplicatePath(root: string, path: string): Promise<string> {
+  return invoke<string>("duplicate_path", { root, path });
+}
+
+/** Create an empty file `<parent>/<name>` inside `root`; returns its path. */
+export function createFile(
+  root: string,
+  parent: string,
+  name: string,
+): Promise<string> {
+  return invoke<string>("create_file", { root, parent, name });
+}
+
+/** Create a directory `<parent>/<name>` inside `root`; returns its path. */
+export function createDir(
+  root: string,
+  parent: string,
+  name: string,
+): Promise<string> {
+  return invoke<string>("create_dir", { root, parent, name });
+}
+
+/** Delete `path` (inside `root`) to the OS Recycle Bin — never a hard delete. */
+export function deleteToTrash(root: string, path: string): Promise<void> {
+  return invoke<void>("delete_to_trash", { root, path });
+}
+
 /** Detected Rust toolchain; null = the tool is not on PATH. */
 export interface ToolchainStatus {
   cargo: string | null;

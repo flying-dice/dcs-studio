@@ -8,12 +8,17 @@
   let roots = $state<DirEntry[]>([]);
   let error = $state<string | null>(null);
 
-  // Reload the top level whenever the workspace root changes.
+  // Reload the top level when the workspace root changes, or when a tree
+  // mutation bumps the refresh signal (model studio::files — create/rename/
+  // duplicate/delete at the root).
   $effect(() => {
     const path = app.rootPath;
+    app.treeVersion; // re-read on mutations
     error = null;
-    roots = [];
-    if (!path) return;
+    if (!path) {
+      roots = [];
+      return;
+    }
     readDir(path)
       .then((entries) => (roots = entries))
       .catch((e) => (error = String(e)));

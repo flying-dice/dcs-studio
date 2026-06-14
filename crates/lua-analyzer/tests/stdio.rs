@@ -163,6 +163,105 @@ fn initialize_walk_publishes_parse_and_type_diagnostics() {
 }
 
 #[test]
+fn definition_references_and_rename_round_trip() {
+    let root = temp_dir("nav");
+    // A global function declared in one file and called from another.
+    std::fs::write(root.join("lib.lua"), "function shared()\nend\n").expect("seed lib");
+    std::fs::write(root.join("main.lua"), "shared()\nshared()\n").expect("seed main");
+
+    let mut child = lua_analyzer()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn lua-analyzer");
+    let mut reader = BufReader::new(child.stdout.take().expect("stdout piped"));
+
+    let root_uri = format!("file:///{}", root.display().to_string().replace('\\', "/"));
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"processId": null, "rootUri": root_uri, "capabilities": {}}}),
+    );
+    let init = lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(1)));
+    assert_eq!(init["result"]["capabilities"]["definitionProvider"], json!(true));
+    assert_eq!(init["result"]["capabilities"]["referencesProvider"], json!(true));
+    assert_eq!(init["result"]["capabilities"]["renameProvider"], json!(true));
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
+    );
+
+    let main_uri = format!("{root_uri}/main.lua");
+
+    // Go-to-definition on the `shared()` use jumps to lib.lua's declaration.
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 21, "method": "textDocument/definition",
+                "params": {"textDocument": {"uri": main_uri},
+                           "position": {"line": 0, "character": 0}}}),
+    );
+    let def = lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(21)));
+    assert!(
+        def["result"]["uri"].as_str().unwrap().ends_with("lib.lua"),
+        "definition was: {}",
+        def["result"]
+    );
+    // Lands on the function name `shared` (line 0, char 9), not the keyword.
+    assert_eq!(def["result"]["range"]["start"]["character"], json!(9));
+
+    // Find-references returns the declaration plus both call sites (3 total).
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 22, "method": "textDocument/references",
+                "params": {"textDocument": {"uri": main_uri},
+                           "position": {"line": 0, "character": 0},
+                           "context": {"includeDeclaration": true}}}),
+    );
+    let refs = lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(22)));
+    let locations = refs["result"].as_array().expect("references array");
+    assert_eq!(locations.len(), 3, "references were: {locations:?}");
+    assert!(
+        locations.iter().any(|l| l["uri"].as_str().unwrap().ends_with("lib.lua")),
+        "declaration file missing from references"
+    );
+
+    // Rename rewrites every occurrence across both files.
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 23, "method": "textDocument/rename",
+                "params": {"textDocument": {"uri": main_uri},
+                           "position": {"line": 0, "character": 0},
+                           "newName": "renamed"}}),
+    );
+    let rename = lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(23)));
+    let changes = rename["result"]["changes"].as_object().expect("changes map");
+    assert_eq!(changes.len(), 2, "expected edits in two files: {changes:?}");
+    let total_edits: usize = changes.values().map(|v| v.as_array().unwrap().len()).sum();
+    assert_eq!(total_edits, 3, "expected three edits total");
+
+    // An invalid new name is refused with an error, not a silent no-op.
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 24, "method": "textDocument/rename",
+                "params": {"textDocument": {"uri": main_uri},
+                           "position": {"line": 0, "character": 0},
+                           "newName": "1bad"}}),
+    );
+    let refused = lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(24)));
+    assert!(refused.get("error").is_some(), "expected an error: {refused}");
+
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 99, "method": "shutdown"}),
+    );
+    lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(99)));
+    lsp_send(&mut child, &json!({"jsonrpc": "2.0", "method": "exit"}));
+    assert!(child.wait().expect("exit").success());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn inlay_hints_carry_inferred_signature_types() {
     let root = temp_dir("inlay");
     // An unannotated function whose parameter and return type the body implies.

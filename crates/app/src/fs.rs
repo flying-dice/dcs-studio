@@ -88,6 +88,41 @@ pub fn create_project_from_template(
     studio_services::fs::create_project_from_template(&parent, &name, &template)
 }
 
+// ── workspace-scoped mutations (model studio::files, issue #17) ──────────────
+// Every mutation is guarded to the open workspace `root`; the open-tab
+// coordination (rename-follow, delete-closes-tab) lives on the frontend
+// Workbench (model studio::core), not here.
+
+/// Rename (move) `src` to `dst`, both inside `root`. Refuses a collision.
+#[tauri::command]
+pub fn rename_path(root: String, src: String, dst: String) -> Result<(), String> {
+    studio_services::fs::rename_path(&root, &src, &dst)
+}
+
+/// Duplicate `path` beside itself under a derived non-colliding name.
+#[tauri::command]
+pub fn duplicate_path(root: String, path: String) -> Result<String, String> {
+    studio_services::fs::duplicate_path(&root, &path)
+}
+
+/// Create an empty file `<parent>/<name>` inside `root`; refuses a collision.
+#[tauri::command]
+pub fn create_file(root: String, parent: String, name: String) -> Result<String, String> {
+    studio_services::fs::create_file(&root, &parent, &name)
+}
+
+/// Create a directory `<parent>/<name>` inside `root`; refuses a collision.
+#[tauri::command]
+pub fn create_dir(root: String, parent: String, name: String) -> Result<String, String> {
+    studio_services::fs::create_dir(&root, &parent, &name)
+}
+
+/// Delete `path` (inside `root`) to the OS Recycle Bin — never a hard delete.
+#[tauri::command]
+pub fn delete_to_trash(root: String, path: String) -> Result<(), String> {
+    studio_services::fs::delete_to_trash(&root, &path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{classify, FileLoad};

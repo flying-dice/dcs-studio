@@ -6,6 +6,8 @@
   import { cn } from "$lib/utils.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
+  import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
+  import { copyPath } from "$lib/tree-actions";
 
   import {
     Boxes,
@@ -352,6 +354,8 @@
           {#each app.recents as r, i (r.path)}
             {@const gone = missing.has(r.path)}
             <li>
+              <ContextMenu.Root>
+              <ContextMenu.Trigger class="block">
               <div
                 class={cn(
                   "recent group relative flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors",
@@ -385,6 +389,17 @@
                   <X class="size-3.5" />
                 </button>
               </div>
+              </ContextMenu.Trigger>
+              <ContextMenu.Content class="w-48" data-testid="recent-context-menu">
+                <ContextMenu.Item disabled={gone} onSelect={() => openRecent(r.path)}>
+                  Open
+                </ContextMenu.Item>
+                <ContextMenu.Item onSelect={() => app.removeRecent(r.path)}>
+                  Remove from recents
+                </ContextMenu.Item>
+                <ContextMenu.Item onSelect={() => copyPath(r.path)}>Copy Path</ContextMenu.Item>
+              </ContextMenu.Content>
+              </ContextMenu.Root>
             </li>
           {/each}
         </ul>

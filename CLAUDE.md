@@ -54,7 +54,7 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | `model/studio/mcp.pds` | `McpServer` — the IDE-hosted agent tool surface over a loopback transport (issue #33; `crates/studio-mcp` handler, `crates/app/src/mcp.rs` server, `crates/studio-services`) |
 | `model/studio/todos.pds` | `TodoScanner` — workspace comment-tag scanner behind the Todos panel (`crates/dcs-studio-project/src/todos.rs`, `src/lib/todos.svelte.ts`) |
 | `model/studio/lang.pds` | `LanguageIntel` provider layer + `DcsLua` engine face + `LuaAnalyzer`/`RustAnalyzer` hosted-server faces (`src/lib/lang/`, `crates/lua-analyzer`) |
-| `model/studio/edit.pds` | `Formatting` — editor format (Document/Selection, format-on-save) over the shared `fmt::Fmt` engine (`crates/app/src/format.rs`, `src/lib/editor/format.ts`) |
+| `model/studio/edit.pds` | `Formatting` — editor format (Document/Selection, format-on-save) over the shared `fmt::Fmt` engine; `Refactoring` — go-to-definition, find-usages, rename-symbol (`src/lib/editor/format.ts`, `src/lib/editor/refactor.ts`, `crates/dcs-lua-lsp-core/src/{definition,references,rename}.rs`) |
 | `model/dcslua.pds` | `DcsLuaLs` engine system root |
 | `model/syntax.pds` | Lexer/parser/AST contract (`crates/dcs-lua-syntax`) |
 | `model/lspcore.pds` | Workspace + query layer (`crates/dcs-lua-lsp-core`) |

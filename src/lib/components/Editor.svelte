@@ -13,11 +13,22 @@
   import { langIntelFor } from "$lib/lang/codemirror";
   import { editorCommands } from "$lib/editor/commands";
   import {
+    refactorExtensions,
+    renameRequestFacet,
+    renameSymbol,
+    goToDefinition,
+    findUsages,
+    hasRefactorProvider,
+    type RenameRequest,
+  } from "$lib/editor/refactor";
+  import {
     formatKeymap,
     formatterFacet,
     makeTauriFormatter,
     runFormat,
   } from "$lib/editor/format";
+  import { luaConsole } from "$lib/lua-console.svelte";
+  import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import BinaryPlaceholder from "$lib/components/BinaryPlaceholder.svelte";
 
   // Injectable file reader so /lab/buffers can drive the real per-tab buffer
@@ -81,6 +92,10 @@
         // engine, reached through the Tauri command for this tab's file.
         formatKeymap,
         formatterFacet.of(makeTauriFormatter(path)),
+        // Engine refactorings: F12 go-to-def, Shift-F12 find-usages, F2 rename
+        // (model studio::edit Refactoring); the rename widget renders here.
+        refactorExtensions(path),
+        renameRequestFacet.of((request) => openRename(path, request)),
         themeComp.of(app.cm),
         langComp.of(languageFor(name)),
         langIntelComp.of(langIntelFor(path)),
@@ -106,16 +121,22 @@
     parkedScroll.set(shownPath, view.scrollDOM.scrollTop);
   }
 
-  /** Land the caret on a Problems-click location, once, and focus. */
+  /** Land the caret on a pending jump (Problems line/col or a go-to-def /
+   * usages offset), once, and focus. */
   function applyPendingJump() {
     if (!view) return;
     const jump = app.pendingJump;
     if (!jump) return;
     app.pendingJump = null;
-    const line = view.state.doc.line(
-      Math.min(Math.max(jump.line, 1), view.state.doc.lines),
-    );
-    const offset = Math.min(line.from + Math.max(jump.col - 1, 0), line.to);
+    let offset: number;
+    if ("offset" in jump) {
+      offset = Math.min(Math.max(jump.offset, 0), view.state.doc.length);
+    } else {
+      const line = view.state.doc.line(
+        Math.min(Math.max(jump.line, 1), view.state.doc.lines),
+      );
+      offset = Math.min(line.from + Math.max(jump.col - 1, 0), line.to);
+    }
     view.dispatch({
       selection: { anchor: offset },
       effects: EditorView.scrollIntoView(offset, { y: "center" }),
@@ -241,6 +262,17 @@
     if (jump && view && app.activePath === shownPath) applyPendingJump();
   });
 
+  // A cross-file rename rewrote some inactive tabs on disk: drop their parked
+  // state so reactivation reloads the renamed text (model `ApplyWorkspaceEdit`).
+  $effect(() => {
+    const { paths } = app.evicted;
+    for (const p of paths) {
+      if (p === shownPath) continue; // the active editor already has the edit
+      parkedStates.delete(p);
+      parkedScroll.delete(p);
+    }
+  });
+
   // Live theme swap (affects the shown state; parked states re-sync on swap).
   $effect(() => {
     const cm = app.cm;
@@ -252,13 +284,214 @@
   const binaryDoc = $derived(
     app.activeDoc?.kind === "binary" ? app.activeDoc : null,
   );
+
+  // Inline rename widget (model studio::edit Refactoring.RenameSymbol): a small
+  // floating input over the caret, prefilled with the symbol. Positioned in
+  // host-relative pixels from the caret's screen coords.
+  let renameBox = $state<{
+    path: string;
+    offset: number;
+    value: string;
+    x: number;
+    y: number;
+    error: string | null;
+    busy: boolean;
+  } | null>(null);
+  let renameInput = $state<HTMLInputElement | undefined>();
+
+  function openRename(path: string, request: RenameRequest) {
+    if (!view) return;
+    const coords = view.coordsAtPos(request.offset);
+    const rect = host.getBoundingClientRect();
+    renameBox = {
+      path,
+      offset: request.offset,
+      value: request.name,
+      x: coords ? coords.left - rect.left : 8,
+      y: coords ? coords.bottom - rect.top + 4 : 8,
+      error: null,
+      busy: false,
+    };
+    // Focus + select so typing replaces the name (VS Code rename UX).
+    queueMicrotask(() => {
+      renameInput?.focus();
+      renameInput?.select();
+    });
+  }
+
+  async function submitRename() {
+    if (!renameBox || renameBox.busy) return;
+    const { path, offset, value } = renameBox;
+    renameBox = { ...renameBox, busy: true, error: null };
+    try {
+      await renameSymbol(path, offset, value.trim());
+      renameBox = null;
+      view?.focus();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Keep the box open showing why, so the developer can fix the name.
+      if (renameBox) renameBox = { ...renameBox, busy: false, error: message };
+    }
+  }
+
+  function cancelRename() {
+    renameBox = null;
+    view?.focus();
+  }
+
+  // ---- editor context menu (issue #17) ------------------------------------
+  // Whether the active file has a ready language provider — gates the
+  // go-to-definition / find-usages entries and the Lua-only Run Selection.
+  const langReady = $derived(hasRefactorProvider(app.filePath));
+  const isLua = $derived(!!app.filePath?.toLowerCase().endsWith(".lua"));
+
+  function hasSelection(): boolean {
+    if (!view) return false;
+    const { from, to } = view.state.selection.main;
+    return from !== to;
+  }
+
+  function copySelection() {
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    const text = view.state.sliceDoc(from, to);
+    if (text) void navigator.clipboard?.writeText(text);
+  }
+
+  function cutSelection() {
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    if (from === to) return;
+    void navigator.clipboard?.writeText(view.state.sliceDoc(from, to));
+    view.dispatch({ changes: { from, to, insert: "" } });
+    view.focus();
+  }
+
+  async function pasteClipboard() {
+    if (!view) return;
+    const text = await navigator.clipboard?.readText();
+    if (!text) return;
+    const { from, to } = view.state.selection.main;
+    view.dispatch({
+      changes: { from, to, insert: text },
+      selection: { anchor: from + text.length },
+    });
+    view.focus();
+  }
+
+  function formatDocument() {
+    if (view) void runFormat(view, null);
+  }
+
+  function formatSelection() {
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    if (from !== to) void runFormat(view, { from, to });
+  }
+
+  function ctxGoToDefinition() {
+    if (view && app.filePath)
+      void goToDefinition(app.filePath, view.state.selection.main.head);
+  }
+
+  function ctxFindUsages() {
+    if (!view || !app.filePath) return;
+    const head = view.state.selection.main.head;
+    const word = view.state.wordAt(head);
+    const symbol = word ? view.state.sliceDoc(word.from, word.to) : "";
+    void findUsages(app.filePath, head, symbol);
+    app.bottomTool = "usages";
+  }
+
+  // Run the selection (or the caret's line if nothing is selected) in the Lua
+  // console — a DCS-native touch (model RunLua).
+  function runSelectionInConsole() {
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    const code =
+      from === to ? view.state.doc.lineAt(from).text : view.state.sliceDoc(from, to);
+    void luaConsole.run(code);
+    app.bottomTool = "lua";
+  }
 </script>
 
 <div class="relative h-full w-full">
-  <div class="h-full w-full overflow-hidden [&_.cm-editor]:h-full" bind:this={host}></div>
+  <ContextMenu.Root>
+    <ContextMenu.Trigger class="block h-full w-full">
+      <div class="h-full w-full overflow-hidden [&_.cm-editor]:h-full" bind:this={host}></div>
+    </ContextMenu.Trigger>
+    <ContextMenu.Content class="w-60" data-testid="editor-context-menu">
+      <ContextMenu.Item disabled={!hasSelection()} onSelect={cutSelection}>Cut</ContextMenu.Item>
+      <ContextMenu.Item disabled={!hasSelection()} onSelect={copySelection}>Copy</ContextMenu.Item>
+      <ContextMenu.Item onSelect={() => void pasteClipboard()}>Paste</ContextMenu.Item>
+      <ContextMenu.Separator />
+      <ContextMenu.Item onSelect={formatDocument}>Format Document</ContextMenu.Item>
+      <ContextMenu.Item disabled={!hasSelection()} onSelect={formatSelection}>
+        Format Selection
+      </ContextMenu.Item>
+      {#if app.filePath}
+        <ContextMenu.Separator />
+        <ContextMenu.Item
+          disabled={!langReady}
+          onSelect={ctxGoToDefinition}
+          data-testid="ctx-go-to-definition"
+        >
+          Go to Definition
+        </ContextMenu.Item>
+        <ContextMenu.Item
+          disabled={!langReady}
+          onSelect={ctxFindUsages}
+          data-testid="ctx-find-usages"
+        >
+          Find Usages
+        </ContextMenu.Item>
+        {#if isLua}
+          <ContextMenu.Separator />
+          <ContextMenu.Item onSelect={runSelectionInConsole} data-testid="ctx-run-selection">
+            Run Selection in Lua Console
+          </ContextMenu.Item>
+        {/if}
+      {/if}
+    </ContextMenu.Content>
+  </ContextMenu.Root>
   {#if binaryDoc}
     <!-- Opaque placeholder over the blank editor view, JetBrains-Fleet style
          (model BinaryFileShowsPlaceholder). The blank CodeMirror view sits behind. -->
     <BinaryPlaceholder path={binaryDoc.path} size={binaryDoc.binarySize ?? 0} />
+  {/if}
+  {#if renameBox}
+    <!-- Inline rename widget (model studio::edit RenameSymbol). Enter applies,
+         Escape cancels; a refusal (invalid name, unsaved affected file) keeps
+         it open with the message. -->
+    <div
+      class="absolute z-20 flex flex-col gap-1"
+      style="left: {Math.max(renameBox.x, 4)}px; top: {renameBox.y}px"
+      data-testid="rename-widget"
+    >
+      <input
+        bind:this={renameInput}
+        bind:value={renameBox.value}
+        class="w-48 rounded border border-border bg-popover px-2 py-1 font-mono text-xs shadow-md outline-none ring-1 ring-primary/40"
+        data-testid="rename-input"
+        onkeydown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void submitRename();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            cancelRename();
+          }
+        }}
+        onblur={() => cancelRename()}
+      />
+      {#if renameBox.error}
+        <div
+          class="w-48 rounded bg-destructive/10 px-2 py-1 text-[11px] text-destructive"
+          data-testid="rename-error"
+        >
+          {renameBox.error}
+        </div>
+      {/if}
+    </div>
   {/if}
 </div>
