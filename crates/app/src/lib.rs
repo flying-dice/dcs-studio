@@ -8,6 +8,7 @@ mod install_cmd;
 mod lsp;
 // Exposed for the host-IPC integration test - exactly one item wide.
 pub use lsp::read_frame;
+mod mcp;
 mod mission;
 mod todos_cmd;
 
@@ -21,6 +22,16 @@ pub fn run() {
     dcs_studio_project::logging::init_to_file("info", &log_path);
     tracing::info!(log = %log_path.display(), "dcs-studio app starting");
     tauri::Builder::default()
+        // Single instance first (Tauri requires it before other plugins): a
+        // second launch focuses the running window instead of starting a rival
+        // that would collide on the one DCS link and the MCP loopback (#33).
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            use tauri::Manager as _;
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
@@ -29,6 +40,9 @@ pub fn run() {
         .manage(build::BuildState::default())
         .setup(|app| {
             dcs::start(app.handle().clone());
+            // Host the agent MCP surface over loopback, sharing the live DCS
+            // link (issue #33) — replaces the dcs-studio-cli sidecar.
+            mcp::start(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {

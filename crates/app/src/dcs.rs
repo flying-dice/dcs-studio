@@ -34,6 +34,15 @@ pub struct DcsState {
     link: Arc<LinkShared>,
 }
 
+impl DcsState {
+    /// The shared, already-connected link — handed to the app-hosted MCP
+    /// server (issue #33) so its DCS tools run on this one open connection.
+    #[must_use]
+    pub fn link(&self) -> Arc<LinkShared> {
+        self.link.clone()
+    }
+}
+
 /// Connect the client and spawn the connection watcher + heartbeat tasks.
 /// Called once from the Tauri `.setup` hook.
 pub fn start(app: AppHandle) {
