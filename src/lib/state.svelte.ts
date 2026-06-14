@@ -14,7 +14,7 @@ import {
   dcsCall,
   dcsStatus,
 } from "./api";
-import { isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import { canonicalPath } from "./paths";
@@ -338,6 +338,18 @@ class AppState {
     const path = await pickFolder();
     if (!path) return;
     await this.openPath(path);
+  }
+
+  /**
+   * On boot, open the project the app was launched with (`--open <path>`;
+   * model `OpenStartupProject`). A no-op outside Tauri (no backend to ask) and
+   * when no `--open` was given. The e2e suite uses this to drive the real
+   * workbench against a fixture project on disk.
+   */
+  async openStartupProject(): Promise<void> {
+    if (!isTauri()) return;
+    const path = await invoke<string | null>("startup_open");
+    if (path) await this.openPath(path);
   }
 
   /**

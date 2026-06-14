@@ -10,6 +10,7 @@ mod lsp;
 pub use lsp::read_frame;
 mod mcp;
 mod mission;
+mod startup;
 mod todos_cmd;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -21,6 +22,10 @@ pub fn run() {
     let log_path = dcs_studio_project::logging::default_log_path();
     dcs_studio_project::logging::init_to_file("info", &log_path);
     tracing::info!(log = %log_path.display(), "dcs-studio app starting");
+    // `--open <path>` launches with a project already open (the frontend reads
+    // it on boot via `startup_open`). The e2e suite uses it to point the real
+    // app at a fixture project on disk.
+    let startup_args = startup::StartupArgs::parse(std::env::args());
     tauri::Builder::default()
         // Single instance first (Tauri requires it before other plugins): a
         // second launch focuses the running window instead of starting a rival
@@ -38,6 +43,7 @@ pub fn run() {
         .manage(dcs::DcsState::default())
         .manage(lsp::LspHosts::default())
         .manage(build::BuildState::default())
+        .manage(startup_args)
         .setup(|app| {
             dcs::start(app.handle().clone());
             // Host the agent MCP surface over loopback, sharing the live DCS
@@ -83,6 +89,7 @@ pub fn run() {
             mission::dcs_mission_script_status,
             mission::dcs_mission_script_set,
             mission::dcs_mission_script_restore,
+            startup::startup_open,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
