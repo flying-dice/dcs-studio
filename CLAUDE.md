@@ -81,19 +81,20 @@ back to `src/lib/dcs-ws.ts`, speaking the same wire protocol directly.
 ### Language intelligence (decisions/005)
 
 Lua diagnostics/outline/folding come from the **dcs-lua engine**
-(`crates/dcs-lua-{syntax,lsp-core,ide}` + `crates/lua-analyzer`), reached
-two ways behind one `LanguageProvider` contract:
+(`crates/dcs-lua-{syntax,lsp-core,ide}` + `crates/lua-analyzer`) behind the
+one `LanguageProvider` contract. The backend host (`crates/app/src/lsp.rs`)
+spawns **`lua-analyzer`** — a standalone tower-lsp stdio server
+(`crates/lua-analyzer`), hosted exactly like rust-analyzer — and pumps framed
+JSON-RPC over IPC events; `src/lib/lang/lsp-client.ts` + `lua-analyzer.ts` own
+the protocol. `lua-analyzer` indexes the project itself from the `initialize`
+rootUri. The binary must sit next to the app exe (`cargo build -p
+lua-analyzer`; `DCS_LUA_ANALYZER` overrides).
 
-- **Packaged app:** the backend host (`crates/app/src/lsp.rs`) spawns
-  **`lua-analyzer`** — a standalone tower-lsp stdio server (`crates/lua-analyzer`),
-  hosted exactly like rust-analyzer — and pumps framed JSON-RPC over IPC
-  events; `src/lib/lang/lsp-client.ts` + `lua-analyzer.ts` own the protocol.
-  `lua-analyzer` indexes the project itself from the `initialize` rootUri.
-  The binary must sit next to the app exe (`cargo build -p lua-analyzer`;
-  `DCS_LUA_ANALYZER` overrides).
-- **Plain browser (vite dev, Playwright):** the same engine as wasm
-  in-page (`src/lib/dcs-lua-wasm/`, rebuild with `pnpm build:wasm` and
-  commit). Same dual-path convention as `dcs-ws.ts`.
+There is no longer an in-page wasm fallback (issue #32 retired it;
+decisions/005 revised): the engine is reached only through the hosted server,
+so the `/lab/*` surfaces and the `e2e-lang/` suite run against the **real app**
+over WebView2 CDP — Windows-only (`pnpm test:lang`, see below), unlike the
+`dcs-ws.ts` browser fallback the console still keeps.
 
 **The IDE hosts the MCP agent surface** (issue #33): the running app runs a
 loopback JSON-RPC server (`crates/app/src/mcp.rs`) that dispatches through the
@@ -133,7 +134,9 @@ Cargo.toml is non-fatal — Lua intelligence stays intact. Shared LSP
 wire conversion lives in `src/lib/lang/lsp-wire.ts`; the client answers
 server→client requests (`workspace/configuration`,
 `client/registerCapability`, …) or rust-analyzer stalls. `/lab/rust` +
-`e2e-lang/rust-provider.spec.ts` cover the path browser-only.
+`e2e-lang/rust-provider.spec.ts` cover the path with an injected fake
+transport (no real rust-analyzer), so it runs under the real-app CDP suite
+like the rest.
 
 Project tooling lives in **`crates/dcs-studio-project`** (the shared kit
 both the CLI and the app consume): templates — `blank`, `lua-script`,
@@ -156,14 +159,17 @@ workspace lints; the parser is total — any input yields a tree plus
 diagnostics, never a panic. The IDE side:
 
 - `src/lib/lang/provider.ts` — the LSP-shaped `LanguageProvider` extension
-  point; DTO types re-exported from the wasm's generated `.d.ts`.
-- `src/lib/lang/dcs-lua.ts` — the wasm-backed provider (`IdeSession`).
+  point and its DTO types.
+- `src/lib/lang/dcs-lua.ts` — names the one Lua provider: the hosted
+  `LuaAnalyzerProvider` (`lua-analyzer.ts`).
 - `src/lib/lang/intel.svelte.ts` — `lang` singleton: mounts the workspace on
   project open, holds the findings store + engine status.
 - `src/lib/lang/codemirror.ts` — lint/fold/hover wiring; the lint debounce
-  doubles as the didChange pump into the session.
-- `/lab/lua` route — browser test surface (like `/console`), driven by the
-  `e2e-lang/` Playwright suite: no Tauri, no DCS.
+  doubles as the didChange pump into the server.
+- `/lab/lua` route — test surface (like `/console`), driven by the
+  `e2e-lang/` Playwright suite against the real app over CDP (Windows-only).
+  Engine-backed lab pages seed an absolute file path and didOpen it so the
+  hosted server keys the buffer for positional queries.
 
 ## Commands
 
@@ -176,8 +182,11 @@ diagnostics, never a panic. The IDE side:
 - `pnpm test:e2e` — Playwright suite (`e2e/`); drives the real UI against a real
   DCS instance, launching DCS if the bridge isn't already up. One worker, ~1 min
   cold start. Don't run it casually; report with `pnpm test:report`.
-- `pnpm test:lang` — language-engine Playwright suite (`e2e-lang/`), browser
-  only: no Tauri, no DCS. Cheap to run.
+- `pnpm test:lang` — language-engine Playwright suite (`e2e-lang/`). Issue #32
+  drives the REAL app over WebView2 CDP (`scripts/e2e-app.mjs` launches
+  `tauri dev` with `--remote-debugging-port=9222`; `e2e-lang/_tauri.ts`
+  attaches), so it exercises the hosted `lua-analyzer` — **Windows-only**
+  (WebView2 CDP) and not in the Linux CI. No DCS.
 - `cargo test -p dcs-lua-syntax -p dcs-lua-lsp-core -p dcs-lua-ide` — engine
   suites (units, conformance goldens, totality properties, corpus gate).
 - `cargo test -p lua-analyzer` — the standalone Lua LSP server's real-stdio
@@ -200,7 +209,6 @@ diagnostics, never a panic. The IDE side:
   `template-compile` job sets it.
 - `cargo test -p dcs-studio --tests` — host↔real-server IPC integration
   (needs `cargo build -p lua-analyzer` first; auto-skips without the binary).
-- `pnpm build:wasm` — rebuild `src/lib/dcs-lua-wasm/` after engine changes.
 
 For live work against DCS (deploy the DLL, launch/control the sim, eval Lua),
 use the `dcs-dev` skill.

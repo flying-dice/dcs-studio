@@ -1,8 +1,13 @@
 # CI gates for dcs-studio (issue #7). Mirrors the local gates the MRs
-# quote: engine + CLI Rust suites with pedantic clippy, svelte-check, the
-# browser e2e suite, a wasm-bindings sync check, and the Tauri app crate
-# (compile + unit/integration suites, incl. the host<->real-server IPC
-# seam) in the `app` job.
+# quote: engine + CLI Rust suites with pedantic clippy, svelte-check, and
+# the Tauri app crate (compile + unit/integration suites, incl. the
+# host<->real-server IPC seam) in the `app` job.
+#
+# The language e2e suite (`pnpm test:lang`) is NOT gated here: issue #32
+# moved it to drive the REAL app over WebView2 CDP (the only transport that
+# works against Tauri's webview on Windows), so it is Windows-only and these
+# Linux runners cannot host it. It runs locally / on a Windows runner. The
+# wasm bindings and their sync check are gone with the in-page engine.
 
 stages:
   - test
@@ -54,8 +59,8 @@ rust:
 # the webkit2gtk stack and runs its suites, including tests/host_ipc.rs —
 # the host's framing pump driven against a real `lua-analyzer` process
 # (built first; DCS_LUA_ANALYZER pins the path so the test cannot skip).
-# Webview-layer e2e stays /lab-based (decisions/005); tauri-driver judged
-# unnecessary for now.
+# Webview-layer e2e now drives the real app over CDP (decisions/005,
+# revised by issue #32) — Windows-only, so it runs outside this Linux CI.
 app:
   stage: test
   image: rust:1.92
@@ -125,29 +130,9 @@ web:
     - pnpm install --frozen-lockfile
     - pnpm check
 
-e2e:
-  stage: test
-  image: node:22
-  script:
-    - npm i -g pnpm@9
-    - pnpm install --frozen-lockfile
-    - pnpm exec playwright install --with-deps chromium
-    - pnpm test:lang
-  artifacts:
-    when: on_failure
-    paths:
-      - playwright-report
-    expire_in: 7 days
-
-# The committed wasm bindings must match the crates that claim to produce
-# them. The .wasm binary itself is excluded (wasm-opt versions vary); the
-# generated .js/.d.ts contract is the drift that bites.
-wasm-sync:
-  stage: test
-  image: rust:1.92
-  cache: *rust-cache
-  script:
-    - rustup target add wasm32-unknown-unknown
-    - curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
-    - wasm-pack build crates/dcs-lua-ide --release --target web --out-dir ../../src/lib/dcs-lua-wasm
-    - git diff --exit-code -- src/lib/dcs-lua-wasm/dcs_lua_ide.js src/lib/dcs-lua-wasm/dcs_lua_ide.d.ts
+# NOTE: there is no `e2e` job here any more. The language e2e suite
+# (`pnpm test:lang`, e2e-lang/) was retargeted by issue #32 to drive the
+# real packaged app over WebView2 CDP — Windows-only — so it cannot run on
+# these Linux runners. Run it locally or on a Windows runner. The old
+# browser-wasm `e2e` job and the `wasm-sync` bindings check were removed
+# with the in-page wasm engine.

@@ -3,6 +3,21 @@
 Supersedes [002](002-wasm-only-edge.md). Affects: `crates/dcs-studio-cli`,
 `crates/app` (LSP process host), `src/lib/lang/`, `SPEC.md §1`.
 
+> **Revision (issue #32, 2026-06):** the wasm `IdeSession` browser-mode
+> fallback described below is **removed**. `src/lib/lang/dcs-lua.ts` now
+> always uses the hosted `lua-analyzer` (`LuaAnalyzerProvider`); there is no
+> in-page engine. With no wasm edge, the `/lab/*` surfaces and the
+> `e2e-lang/` suite can no longer run in a plain browser — they drive the
+> **real packaged app** over WebView2 CDP (`scripts/e2e-app.mjs` +
+> `e2e-lang/_tauri.ts`, `pnpm test:lang`). CDP against Tauri's webview is
+> **Windows-only**, so that suite left the (Linux) CI; the `e2e` and
+> `wasm-sync` jobs and `pnpm build:wasm` are gone. The `LanguageProvider`
+> seam and the single-core promise are unchanged — only the second
+> (browser) transport retired. This reverses "tauri-driver judged
+> unnecessary for now": the cost of a stale wasm copy of the engine and a
+> test surface that never met the real LSP host outweighed the Windows-only
+> constraint. Everything below stands except that wasm bullet.
+
 ## Context
 
 Three requirements arrived together: the IDE gains Rust-toolchain support
