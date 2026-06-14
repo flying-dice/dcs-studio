@@ -59,7 +59,7 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | `model/syntax.pds` | Lexer/parser/AST contract (`crates/dcs-lua-syntax`) |
 | `model/lspcore.pds` | Workspace + query layer (`crates/dcs-lua-lsp-core`) |
 | `model/fmt.pds` | Deterministic Lua formatter face (`crates/dcs-lua-fmt`, SPEC.md §7, decisions/006) |
-| `model/ide.pds` | Wasm `IdeSession` edge (`crates/dcs-lua-ide`) |
+| `model/ide.pds` | Wasm `IdeSession` edge (`crates/dcs-lua-ide`) — unwired from the app by #32; the engine's wasm-bindgen surface |
 | `model/dcs/bridge.pds` | `Dcs` system: GameGUI hook, JSON-RPC server/router (`crates/dcs-bridge`) |
 
 ## Architecture

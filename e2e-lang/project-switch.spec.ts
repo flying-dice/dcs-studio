@@ -2,8 +2,8 @@
 // discard every open tab; with unsaved edits the developer must confirm ONCE
 // (the prompt names how many files are affected), and declining aborts the
 // whole operation — tabs, buffers, dirty flags, and the current project all
-// stay as they were. Clean tabs never prompt. Runs in a plain browser against
-// /lab/project-switch: no Tauri, no DCS (model/studio/core.pds OpenProject,
+// stay as they were. Clean tabs never prompt. Runs against the real app over CDP at
+// /lab/project-switch: no DCS (model/studio/core.pds OpenProject,
 // CloseProject, DecliningProjectSwitchKeepsEverything).
 
 import { test, expect, labUrl, armConfirm, confirmPrompts } from "./_tauri";

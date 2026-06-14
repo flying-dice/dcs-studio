@@ -1,6 +1,6 @@
 // E2E: the workspace-mount path — the race guard on rapid project
 // switching, the unreadable-file skip, and reset — via the /lab/mount
-// surface's fake filesystem. No Tauri, no DCS.
+// surface's fake filesystem. No DCS.
 
 import { test, expect, labUrl } from "./_tauri";
 

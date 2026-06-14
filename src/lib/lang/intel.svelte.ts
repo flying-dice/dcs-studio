@@ -43,7 +43,7 @@ export class LangIntel {
   ) {}
   /** Workspace-wide findings, sorted by path then offset. */
   diagnostics = $state<Diagnostic[]>([]);
-  /** The embedded engine's lifecycle, surfaced in the status bar. */
+  /** The hosted engine's lifecycle, surfaced in the status bar. */
   engineStatus = $state<EngineStatus>("off");
   /** Per-provider lifecycle states keyed by provider id. */
   providerStatuses = $state<Record<string, ProviderStatus>>({});

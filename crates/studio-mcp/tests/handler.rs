@@ -70,7 +70,7 @@ impl Mcp {
         mcp.send(&json!({"jsonrpc": "2.0", "id": 0, "method": "initialize",
                 "params": {"protocolVersion": "2024-11-05", "capabilities": {}}}));
         let init = mcp.read();
-        assert_eq!(init["result"]["serverInfo"]["name"], json!("dcs-studio-cli"));
+        assert_eq!(init["result"]["serverInfo"]["name"], json!("dcs-studio"));
         mcp.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
         mcp
     }

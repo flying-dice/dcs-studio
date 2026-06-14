@@ -10,7 +10,8 @@ Supersedes [002](002-wasm-only-edge.md). Affects: `crates/dcs-studio-cli`,
 > `e2e-lang/` suite can no longer run in a plain browser — they drive the
 > **real packaged app** over WebView2 CDP (`scripts/e2e-app.mjs` +
 > `e2e-lang/_tauri.ts`, `pnpm test:lang`). CDP against Tauri's webview is
-> **Windows-only**, so that suite left the (Linux) CI; the `e2e` and
+> **Windows-only**, so that suite left the (Linux) CI (re-gating it with a
+> Windows runner is tracked in issue #35); the `e2e` and
 > `wasm-sync` jobs and `pnpm build:wasm` are gone. The `LanguageProvider`
 > seam and the single-core promise are unchanged — only the second
 > (browser) transport retired. This reverses "tauri-driver judged
@@ -45,9 +46,11 @@ agent-complete:
   LSP process host in `crates/app` spawns `dcs-studio-cli lsp` and pumps
   framed JSON-RPC over Tauri IPC events; rust-analyzer is the second
   hosted server (issue #6 R2).
-- The wasm `IdeSession` edge remains **only** as the browser-mode fallback
+- ~~The wasm `IdeSession` edge remains **only** as the browser-mode fallback
   (vite dev, Playwright) where no Tauri IPC exists — the same dual-path
-  convention as `dcs-ws.ts`.
+  convention as `dcs-ws.ts`.~~ **Superseded by the issue-#32 revision at the
+  top of this file: the wasm edge is removed; the engine is reached only
+  through the hosted `lua-analyzer`.**
 
 ## Consequences
 

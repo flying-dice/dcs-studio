@@ -1,7 +1,7 @@
 //! lspcore — transport-neutral language queries (crate `dcs-lua-lsp-core`).
 //!
 //! Pure functions over the mounted workspace; session state lives at the
-//! wasm edge. One lex per edit: the workspace caches the parse and the
+//! host edge (the lua-analyzer server). One lex per edit: the workspace caches the parse and the
 //! trivia so no query re-scans source.
 
 /// One mounted file: text, cached parse, and cached trivia.

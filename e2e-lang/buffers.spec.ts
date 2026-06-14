@@ -1,7 +1,7 @@
 // E2E: per-open-file editor buffers (issue #21). Each tab owns its own
 // EditorState — doc, undo history, selection — so undo in one file can never
 // resurrect another file's content, and unsaved edits survive tab switches.
-// Runs in a plain browser against /lab/buffers: no Tauri, no DCS
+// Runs against the real app over CDP at /lab/buffers: no DCS
 // (model/studio/core.pds UndoNeverCrossesFiles, TabSwitchKeepsUnsavedEdits,
 // CloseActiveTabActivatesNeighbour, RetriggeredLoadDiscardsStaleRead,
 // CloseDirtyTabPrompts).

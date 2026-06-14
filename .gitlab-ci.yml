@@ -135,4 +135,5 @@ web:
 # real packaged app over WebView2 CDP — Windows-only — so it cannot run on
 # these Linux runners. Run it locally or on a Windows runner. The old
 # browser-wasm `e2e` job and the `wasm-sync` bindings check were removed
-# with the in-page wasm engine.
+# with the in-page wasm engine. Re-gating it (a Windows runner) is tracked
+# in issue #35 — until then the language-frontend wiring is CI-ungated.

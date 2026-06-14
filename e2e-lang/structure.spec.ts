@@ -1,5 +1,5 @@
 // E2E: the Structure panel — the active file's symbol outline from the
-// embedded wasm engine, in a plain browser: no Tauri, no DCS
+// hosted lua-analyzer, driving the real app over CDP: no DCS
 // (model/studio/lang.pds ClickSymbolNavigatesEditor and
 // OutlineNeverGoesStale).
 

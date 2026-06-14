@@ -1,6 +1,6 @@
 // E2E: broken Lua typed into the editor surfaces a diagnostic — inline and
-// in the Problems panel — via the embedded wasm engine. Runs in a plain
-// browser: no Tauri, no DCS (model/studio/lang.pds BrokenLuaShowsDiagnostic).
+// in the Problems panel — via the hosted lua-analyzer. Runs in a plain
+// browser: no DCS (model/studio/lang.pds BrokenLuaShowsDiagnostic).
 
 import { test, expect, labUrl } from "./_tauri";
 import type { Page } from "@playwright/test";

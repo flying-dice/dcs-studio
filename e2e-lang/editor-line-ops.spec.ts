@@ -1,5 +1,5 @@
-// E2E: the editor-function keymap — line ops (issue #18), in a plain browser:
-// no Tauri, no engine. Reads the document back after driving keystrokes; toggle
+// E2E: the editor-function keymap — line ops (issue #18), driving the real app over CDP:
+// no engine (keymap only). Reads the document back after driving keystrokes; toggle
 // comment, move line, and duplicate line need no syntax tree, so the assertions
 // are exact.
 //

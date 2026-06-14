@@ -1,5 +1,5 @@
 // E2E: Format Document / Selection + format-on-save (issue #18, model
-// studio::edit::Formatting), in a plain browser. The real formatter runs in
+// studio::edit::Formatting), driving the real app over CDP. The real formatter runs in
 // Rust behind the `format_source` Tauri command — unreachable here — so
 // /lab/editor injects a deterministic stub Formatter (collapses runs of spaces;
 // records the range it was handed). These specs guard the editor WIRING:

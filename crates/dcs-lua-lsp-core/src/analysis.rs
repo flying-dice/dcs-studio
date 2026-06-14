@@ -1,14 +1,14 @@
 //! Workspace findings — **the single source of the finding set**.
 //!
-//! Every edge (CLI `check`, MCP `check`, the hosted LSP server, the wasm
-//! `IdeSession` Problems panel) decides "what is a finding for this file" by
+//! Every edge (CLI `check`, MCP `check`, the hosted `lua-analyzer` server,
+//! the `dcs-lua-ide` wasm surface) decides "what is a finding for this file" by
 //! calling [`findings_by_file`] (or its derivations [`all_findings`] /
 //! [`file_findings`]) and then mapping the result to its own wire shape. No
 //! edge re-implements the aggregation, so a new finding category — type
 //! checks today, resolution/lints tomorrow — is added here once and every
 //! transport inherits it. (This module exists because the aggregation used
 //! to be copy-pasted per edge and silently drifted: the LSP path published
-//! parse errors only while the wasm path also published type errors.)
+//! parse errors only while the in-page wasm path also published type errors.)
 
 use std::collections::HashMap;
 

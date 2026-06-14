@@ -25,8 +25,8 @@
   // A file no provider claims — drives the "no structure" rendering.
   const TEXT_PATH = "C:\\dcs-studio-lab\\structure\\notes.txt";
   // The multibyte comment makes UTF-16 and byte offsets diverge before
-  // every declaration, so navigation only lands on names if the wasm
-  // path's byte spans are converted at the provider boundary.
+  // every declaration, so navigation only lands on names if the engine's
+  // byte spans are converted at the provider boundary.
   const INITIAL = `-- наводка °
 local top = 1
 
@@ -50,7 +50,7 @@ function helper() end
   // Outline fault injection for the e2e suite: LUA_PATH symbol queries can
   // be delayed ("slow"), failed ("fail"), or failed late ("fail-slow") so
   // the suite can pin the supersession discard and the engine-failure arm
-  // of refreshOutline — the wasm engine never misbehaves on its own.
+  // of refreshOutline — the engine never misbehaves on its own.
   type OutlineMode = "normal" | "slow" | "fail" | "fail-slow";
   let outlineMode: OutlineMode = "normal";
   const OUTLINE_DELAY_MS = 600;

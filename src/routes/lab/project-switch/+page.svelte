@@ -40,7 +40,7 @@
         mountWorkspace: async () => {},
         resetWorkspace: () => lang.reset(),
       };
-      // Mount the lab files into the real wasm engine so the editor's
+      // Mount the lab files into the hosted lua-analyzer so the editor's
       // lang-intel pump has a live session (same setup as /lab/lua).
       lang.engineStatus = "loading";
       try {

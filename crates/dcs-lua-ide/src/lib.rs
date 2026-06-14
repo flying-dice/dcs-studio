@@ -1,4 +1,6 @@
-//! dcs-lua-ide — THE edge: the wasm `IdeSession` dcs-studio embeds.
+//! dcs-lua-ide — the wasm `IdeSession` edge over the engine. Its generated
+//! bindings were the IDE's browser-mode language path until issue #32 retired
+//! that path; the crate remains the engine's wasm-bindgen surface.
 //!
 //! One crate, one wasm artifact, one surface. The session holds the
 //! workspace (the host pushes sources in through `mount` / `set_source` /
@@ -120,7 +122,7 @@ pub struct Location {
 // The session.
 // ===========================================================================
 
-/// The embedded language engine. JavaScript drives it through two ports:
+/// The wasm-bindgen language engine session. JavaScript drives it through two ports:
 /// the file system pushes sources in, the editor pulls answers out.
 #[wasm_bindgen]
 #[derive(Default)]

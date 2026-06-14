@@ -1,5 +1,5 @@
 // E2E: inferred-type inlay hints (ghost text) and call-site type checking
-// through the real wasm engine in a plain browser — no Tauri, no DCS
+// through the hosted lua-analyzer driving the real app over CDP — no DCS
 // (model/lspcore.pds InferredTypesShowAsInlayHints, ArgumentTypeIsChecked).
 
 import { test, expect, labUrl } from "./_tauri";

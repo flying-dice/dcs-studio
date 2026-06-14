@@ -162,7 +162,7 @@ pub fn handle(session: &Session, message: &Value) -> Option<Value> {
             "protocolVersion": "2024-11-05",
             "capabilities": { "tools": {} },
             "serverInfo": {
-                "name": "dcs-studio-cli",
+                "name": "dcs-studio",
                 "version": env!("CARGO_PKG_VERSION"),
             },
         }),

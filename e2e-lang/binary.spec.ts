@@ -1,5 +1,5 @@
 // E2E: binary files open a Fleet-style placeholder instead of closing their
-// own tab (issue #30). Runs in a plain browser against /lab/buffers: no Tauri,
+// own tab (issue #30). Runs against the real app over CDP at /lab/buffers:
 // no DCS. The lab's in-memory store is FileLoad-shaped, so the real classify
 // path drives the placeholder; reveal-in-explorer / open-with-app are isTauri()
 // no-ops here (model/studio/core.pds BinaryFileShowsPlaceholder).

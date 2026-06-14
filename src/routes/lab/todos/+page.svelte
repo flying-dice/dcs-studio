@@ -92,7 +92,7 @@
 
   onMount(() => {
     void (async () => {
-      // Mount the lab files into the real wasm engine so the editor's
+      // Mount the lab files into the hosted lua-analyzer so the editor's
       // lang-intel pump (and its caret readout) has a live session.
       lang.engineStatus = "loading";
       try {
