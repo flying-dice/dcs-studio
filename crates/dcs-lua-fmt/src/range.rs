@@ -71,8 +71,13 @@ pub(crate) fn format_range(
         let before = (last, splice_end);
         while last + 1 < stats.len() {
             let next = parsed.ast.stat(stats[last + 1]).span.start;
-            // TODO: clean-code - 0.4 - PANIC: src[splice_end..next] reverses (lo>hi) if the next statement's span.start precedes splice_end — possible with overlapping recovery spans on a warning-only parse that cleared format_range's error gate; guard `splice_end <= next` (or `.get()`) before the slice.
-            if src[splice_end as usize..next as usize].contains('\n') {
+            // A reversed/out-of-bounds range (overlapping recovery spans on a
+            // warning-only parse) must not panic — `.get` None ends the
+            // coalescing early, which is safe.
+            let Some(between) = src.get(splice_end as usize..next as usize) else {
+                break;
+            };
+            if between.contains('\n') {
                 break;
             }
             last += 1;
