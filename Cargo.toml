@@ -12,6 +12,7 @@ members = [
     "crates/dcs-studio-project",
     "crates/lua-analyzer",
     "crates/studio-services",
+    "crates/studio-mcp",
 ]
 
 [workspace.package]

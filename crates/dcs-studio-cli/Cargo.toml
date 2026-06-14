@@ -16,14 +16,9 @@ dcs-lua-lsp-core = { path = "../dcs-lua-lsp-core" }
 dcs-lua-syntax = { path = "../dcs-lua-syntax" }
 dcs-studio-project = { path = "../dcs-studio-project" }
 studio-services = { path = "../studio-services" }
+studio-mcp = { path = "../studio-mcp" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
 walkdir = "2"
-
-[dev-dependencies]
-# Fake in-DCS bridge for the MCP stdio suite: a synchronous WS JSON-RPC
-# server the dcs_* tools dial via DCS_BRIDGE_WS (tests/stdio.rs). Already
-# in the lockfile transitively via dcs-bridge-client's tokio-tungstenite.
-tungstenite = "0.26"

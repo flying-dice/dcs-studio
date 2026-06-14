@@ -1,0 +1,29 @@
+# Shared MCP handler (model/studio/mcp.pds, issue #33). The IDE's tool surface
+# — workspace fs, project kit, injection/mission managers, the DCS link, and
+# the dcs-lua engine — as newline-delimited JSON-RPC, hosted by the running
+# app over a loopback transport (it shares the app's live link) and reusable
+# headless. Tauri-free; the same logic as the IDE's own commands.
+[package]
+name = "studio-mcp"
+edition = "2024"
+version.workspace = true
+
+# The handler moved from dcs-studio-cli, which opts into the pedantic
+# workspace lints — keep that bar.
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+dcs-lua-syntax = { path = "../dcs-lua-syntax" }
+dcs-lua-lsp-core = { path = "../dcs-lua-lsp-core" }
+dcs-studio-project = { path = "../dcs-studio-project" }
+studio-services = { path = "../studio-services" }
+
+[dev-dependencies]
+# Fake in-DCS bridge for the dcs_* wire test (tests/handler.rs): a synchronous
+# WS JSON-RPC server the tools dial via Session::with_bridge_url. Already in
+# the lockfile via dcs-bridge-client's tokio-tungstenite.
+tungstenite = "0.26"
