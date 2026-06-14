@@ -135,6 +135,59 @@ export function deleteToTrash(root: string, path: string): Promise<void> {
   return invoke<void>("delete_to_trash", { root, path });
 }
 
+// ── signed packages (model studio::package, issue #37) ──────────────────────
+
+/** A discovered or installed `.dcspkg`. */
+export interface PackageEntry {
+  id: string;
+  name: string;
+  author: string;
+  signed_at: string;
+  path: string;
+}
+
+/** What an install run linked into the DCS roots. */
+export interface PackageInstallReport {
+  linked: number;
+  files: string[];
+}
+
+/** An installed package whose author has since been revoked. */
+export interface StalePackage {
+  id: string;
+  author: string;
+}
+
+/** Pack the project at `root` into a signed `.dcspkg`; returns its path. */
+export function packProject(root: string): Promise<string> {
+  return invoke<string>("pack_project", { root });
+}
+
+/** Every `.dcspkg` in the auto-discovery watch folder. */
+export function discoverPackages(): Promise<PackageEntry[]> {
+  return invoke<PackageEntry[]>("discover_packages");
+}
+
+/** Every installed package in the content store. */
+export function installedPackageList(): Promise<PackageEntry[]> {
+  return invoke<PackageEntry[]>("installed_package_list");
+}
+
+/** Install a discovered package (hash-check, server-validate, link in). */
+export function installPackage(artifact: string): Promise<PackageInstallReport> {
+  return invoke<PackageInstallReport>("install_package", { artifact });
+}
+
+/** Uninstall an installed package by id. */
+export function uninstallPackage(id: string): Promise<void> {
+  return invoke<void>("uninstall_package", { id });
+}
+
+/** Re-validate installed packages; returns those whose author is now revoked. */
+export function revalidatePackages(): Promise<StalePackage[]> {
+  return invoke<StalePackage[]>("revalidate_packages");
+}
+
 /** Detected Rust toolchain; null = the tool is not on PATH. */
 export interface ToolchainStatus {
   cargo: string | null;

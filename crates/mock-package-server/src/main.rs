@@ -30,6 +30,12 @@ fn main() {
             .with_header(
                 tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
                     .expect("header"),
+            )
+            // Permissive CORS so the e2e lab page (a different webview origin)
+            // can hit `/revoke` directly. It's a mock — never production.
+            .with_header(
+                tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..])
+                    .expect("header"),
             );
         let _ = request.respond(response);
     }

@@ -241,6 +241,31 @@ pub fn uninstall(id: &str, store_dir: &Path) -> Result<(), String> {
     std::fs::remove_dir_all(&store).map_err(|e| format!("removing {}: {e}", store.display()))
 }
 
+/// Every installed package in the content store (one per subdir holding a
+/// persisted manifest). Unreadable stores are skipped.
+#[must_use]
+pub fn installed_packages(store_dir: &Path) -> Vec<PackageEntry> {
+    let Ok(read) = std::fs::read_dir(store_dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PackageEntry> = read
+        .filter_map(Result::ok)
+        .filter_map(|e| {
+            let store = e.path();
+            let (manifest, signature) = read_header(&store).ok()?;
+            Some(PackageEntry {
+                id: package_id(&manifest.name, &manifest.content_hash),
+                name: manifest.name,
+                author: manifest.author,
+                signed_at: signature.signed_at,
+                path: store.to_string_lossy().into_owned(),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out
+}
+
 /// Re-validate every installed package against the signing server; report those
 /// the server now rejects (author revoked). Transport errors are skipped (a
 /// package isn't declared stale just because the server is briefly unreachable).

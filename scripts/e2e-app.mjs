@@ -13,6 +13,9 @@
 // `reuseExistingServer` attaches to a stale instance and every spec times out.
 // So we tree-kill by pid (`taskkill /T /F`) on every exit path.
 import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222";
 
@@ -26,6 +29,32 @@ const build = spawnSync("cargo", ["build", "-p", "lua-analyzer"], {
 });
 if (build.status !== 0) process.exit(build.status ?? 1);
 
+// The packages e2e (issue #37) needs the mock SIGNING server running and the
+// app pointed at it. Best-effort: build + spawn it on a fixed loopback port,
+// and pin the signing env + a fresh temp "Saved Games" roots dir so the
+// package install path works without a real DCS. A failure here only fails the
+// packages spec, never the rest of the suite.
+const SIGNING_PORT = 8799;
+const mockExe = `target/debug/mock-package-server${process.platform === "win32" ? ".exe" : ""}`;
+const mockBuild = spawnSync("cargo", ["build", "-p", "mock-package-server"], {
+  stdio: "inherit",
+  shell: true,
+});
+let mock;
+if (mockBuild.status === 0) {
+  mock = spawn(mockExe, [String(SIGNING_PORT)], { stdio: "ignore" });
+  // An unhandled 'error' (bad path, EACCES) would crash this launcher and take
+  // the whole suite down — swallow it; the packages spec self-skips instead.
+  mock.on("error", () => {});
+  process.env.DCS_SIGNING_URL = `http://127.0.0.1:${SIGNING_PORT}`;
+  process.env.DCS_SIGNING_USER = "e2e-user";
+  process.env.DCS_SIGNING_TOKEN = "dev";
+  const roots = join(tmpdir(), "dcs-studio-e2e-roots");
+  rmSync(roots, { recursive: true, force: true });
+  mkdirSync(roots, { recursive: true });
+  process.env.DCS_SAVED_GAMES = roots;
+}
+
 const child = spawn("pnpm", ["tauri", "dev"], {
   stdio: "inherit",
   shell: true,
@@ -36,6 +65,11 @@ let killed = false;
 function killTree() {
   if (killed || !child.pid) return;
   killed = true;
+  try {
+    mock?.kill();
+  } catch {
+    /* best effort */
+  }
   try {
     spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
       stdio: "ignore",

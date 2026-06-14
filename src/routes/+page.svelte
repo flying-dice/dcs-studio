@@ -8,6 +8,7 @@
   import FileTree from "$lib/components/FileTree.svelte";
   import BuildOutput from "$lib/components/BuildOutput.svelte";
   import InjectionManager from "$lib/components/InjectionManager.svelte";
+  import PackagesManager from "$lib/components/PackagesManager.svelte";
   import LuaConsole from "$lib/components/LuaConsole.svelte";
   import MissionScriptingManager from "$lib/components/MissionScriptingManager.svelte";
   import Problems from "$lib/components/Problems.svelte";
@@ -81,6 +82,7 @@
   const rightTools: Tool[] = [
     { id: "structure", label: "Structure", icon: ListTree },
     { id: "inject", label: "Inject", icon: Syringe },
+    { id: "packages", label: "Packages", icon: Boxes },
     { id: "mission", label: "Mission", icon: ShieldOff },
     { id: "database", label: "Database", icon: Database },
     { id: "notifications", label: "Notifications", icon: Bell },
@@ -514,6 +516,8 @@
             <div class="min-h-0 flex-1">
               {#if app.rightTool === "inject"}
                 <InjectionManager />
+              {:else if app.rightTool === "packages"}
+                <PackagesManager />
               {:else if app.rightTool === "mission"}
                 <MissionScriptingManager />
               {:else if app.rightTool === "structure"}

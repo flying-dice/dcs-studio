@@ -1,0 +1,79 @@
+// Packages panel store (model studio::package PackageLibrary, issue #37): the
+// discovered (incoming) + installed lists, the live stale set from
+// revalidation, and the pack/install/uninstall actions. Mirrors
+// install.svelte.ts.
+
+import {
+  discoverPackages,
+  installedPackageList,
+  installPackage,
+  packProject,
+  revalidatePackages,
+  uninstallPackage,
+  type PackageEntry,
+} from "./api";
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+class PackagesStore {
+  /** Discovered `.dcspkg` files in the watch folder. */
+  discovered = $state<PackageEntry[]>([]);
+  /** Installed packages. */
+  installed = $state<PackageEntry[]>([]);
+  /** Ids of installed packages whose author has been revoked. */
+  staleIds = $state<string[]>([]);
+  busy = $state(false);
+  error = $state<string | null>(null);
+
+  /** Whether an installed package is stale (author revoked). */
+  isStale(id: string): boolean {
+    return this.staleIds.includes(id);
+  }
+
+  /** Refresh discovered + installed lists and the stale set (revalidates
+   * against the signing server, so a revoked author surfaces immediately). */
+  async refresh(): Promise<void> {
+    this.error = null;
+    try {
+      this.discovered = await discoverPackages();
+      this.installed = await installedPackageList();
+      const stale = await revalidatePackages();
+      this.staleIds = stale.map((s) => s.id);
+    } catch (error) {
+      this.error = message(error);
+    }
+  }
+
+  /** Pack the open project into the incoming folder, then refresh. */
+  async pack(root: string): Promise<void> {
+    await this.run(() => packProject(root));
+  }
+
+  /** Install a discovered package, then refresh. */
+  async install(artifact: string): Promise<void> {
+    await this.run(() => installPackage(artifact));
+  }
+
+  /** Uninstall an installed package, then refresh. */
+  async uninstall(id: string): Promise<void> {
+    await this.run(() => uninstallPackage(id));
+  }
+
+  private async run(action: () => Promise<unknown>): Promise<void> {
+    if (this.busy) return;
+    this.busy = true;
+    this.error = null;
+    try {
+      await action();
+      await this.refresh();
+    } catch (error) {
+      this.error = message(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+}
+
+export const packages = new PackagesStore();

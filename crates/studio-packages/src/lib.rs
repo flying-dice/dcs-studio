@@ -22,8 +22,8 @@ mod fsutil;
 pub use build::build_package;
 pub use identity::{Identity, IdentityProvider, StaticIdentity};
 pub use install::{
-    discover, entry_for, install, revalidate_installed, uninstall, PackageEntry,
-    PackageInstallReport, StalePackage,
+    discover, entry_for, install, installed_packages, revalidate_installed, uninstall,
+    PackageEntry, PackageInstallReport, StalePackage,
 };
 pub use manifest::{PackageManifest, Rule};
 pub use signing::{HttpSigningClient, MockSigningClient, Signature, SigningClient, Validity};
