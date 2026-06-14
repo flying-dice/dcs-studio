@@ -31,6 +31,7 @@ dcs-bridge-client = { path = "../dcs-bridge-client" }
 dcs-studio-project = { path = "../dcs-studio-project" }
 dcs-lua-fmt = { path = "../dcs-lua-fmt" }
 studio-services = { path = "../studio-services" }
+studio-packages = { path = "../studio-packages" }
 studio-mcp = { path = "../studio-mcp" }
 getrandom = "0.2"
 

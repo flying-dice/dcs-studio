@@ -145,7 +145,9 @@ pub fn format_config_for(path: &Path) -> dcs_lua_fmt::FormatConfig {
 /// identically.
 #[must_use]
 pub fn lua_lint_levels(root: &Path) -> std::collections::HashMap<String, String> {
-    load(root).map(|manifest| manifest.lints.lua).unwrap_or_default()
+    load(root)
+        .map(|manifest| manifest.lints.lua)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -233,8 +235,22 @@ mod tests {
             "[project]\nname = \"x\"\n\n[lints.lua]\noperator-type-mismatch = \"allow\"\nparam-usage-mismatch = \"deny\"\n",
         )
         .expect("parse");
-        assert_eq!(manifest.lints.lua.get("operator-type-mismatch").map(String::as_str), Some("allow"));
-        assert_eq!(manifest.lints.lua.get("param-usage-mismatch").map(String::as_str), Some("deny"));
+        assert_eq!(
+            manifest
+                .lints
+                .lua
+                .get("operator-type-mismatch")
+                .map(String::as_str),
+            Some("allow")
+        );
+        assert_eq!(
+            manifest
+                .lints
+                .lua
+                .get("param-usage-mismatch")
+                .map(String::as_str),
+            Some("deny")
+        );
     }
 
     #[test]

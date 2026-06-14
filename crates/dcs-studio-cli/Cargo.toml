@@ -16,6 +16,7 @@ dcs-lua-lsp-core = { path = "../dcs-lua-lsp-core" }
 dcs-lua-syntax = { path = "../dcs-lua-syntax" }
 dcs-studio-project = { path = "../dcs-studio-project" }
 studio-services = { path = "../studio-services" }
+studio-packages = { path = "../studio-packages" }
 studio-mcp = { path = "../studio-mcp" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

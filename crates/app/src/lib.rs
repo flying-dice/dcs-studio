@@ -10,6 +10,7 @@ mod lsp;
 pub use lsp::read_frame;
 mod mcp;
 mod mission;
+mod packages_cmd;
 mod startup;
 mod todos_cmd;
 
@@ -78,6 +79,12 @@ pub fn run() {
             format::format_source,
             install_cmd::install_status,
             install_cmd::uninstall_project,
+            packages_cmd::pack_project,
+            packages_cmd::discover_packages,
+            packages_cmd::installed_package_list,
+            packages_cmd::install_package,
+            packages_cmd::uninstall_package,
+            packages_cmd::revalidate_packages,
             dcs::dcs_call,
             dcs::dcs_status,
             inject::dcs_detect_installs,

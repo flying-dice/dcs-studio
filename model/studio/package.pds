@@ -1,0 +1,225 @@
+//! studio::package — shipping a mod as a signed, revocable artifact (issue #37).
+//!
+//! A package bundles the project's `[[install]]` rules + their source files into
+//! a compressed `.dcspkg`. The signing server (keys stay server-side) signs the
+//! manifest at PACKAGE time and validates the signature at INSTALL time, so
+//! revoking an author makes every package they ever signed uninstallable no
+//! matter who reshared it. The client holds no keys — it only ferries the
+//! manifest and the signature, and hashes the payload. Manual file placement
+//! (studio::installer) stays the unsigned, unrevocable escape hatch.
+
+/// The logged-in author requesting a signature. The IDP is polymorphic
+/// (studio::package::IdentityProvider) — a single static user stands in until
+/// GitHub device-flow login (issue #11) implements it.
+public data Identity { login: string }
+
+/// A server-issued signature over a package manifest. `keyId` names the author's
+/// server-side key so validation can find it (and check revocation); the client
+/// never sees the key material.
+public data Signature { value: string, keyId: string, signedAt: string }
+
+/// The signing server's install-time verdict: whether the signature is authentic
+/// AND the author has not been revoked.
+public data Validity { valid: bool, reason: string }
+
+/// The signed description of a package: identity, author, a content hash binding
+/// the payload bytes, and the `[[install]]` rules to replay on install. The
+/// signature covers this whole manifest, and `contentHash` covers the artifact's
+/// file tree, so tampering with the files breaks the signature too.
+public data PackageManifest { name: string, version: string, author: string, createdAt: string, contentHash: string, rules: studio::installer::InstallRule[] }
+
+/// One discovered `.dcspkg` in the watch folder (header read only).
+public data PackageEntry { id: string, name: string, author: string, signedAt: string, path: string }
+
+/// What an install run linked into the DCS roots.
+public data PackageInstallReport { linked: number, files: string[] }
+
+/// An installed package that is no longer known-good: `status` is "revoked"
+/// (the server says invalid) or "unverified" (the server was unreachable, so
+/// trust cannot be confirmed — fail-closed, never silently cleared to trusted).
+public data StalePackage { id: string, author: string, status: string }
+
+/// A packaging or install failure.
+public data PackageError { message: string }
+
+/// The signing server's published face — keys never leave it. Mock-implemented
+/// for now (crates/mock-package-server); the real server is out of scope.
+public system SigningService {
+  /// Sign `manifest` for `identity`; the server holds the signing key.
+  public Sign(identity: studio::package::Identity, manifest: studio::package::PackageManifest): Result<studio::package::Signature, studio::package::PackageError>;
+
+  /// Validate a manifest+signature at install time: signature authentic AND
+  /// the author not revoked.
+  public Validate(manifest: studio::package::PackageManifest, signature: studio::package::Signature): Result<studio::package::Validity, studio::package::PackageError>;
+}
+
+/// The logged-in identity source — a polymorphic seam (a static user now, GitHub
+/// device-flow #11 later).
+public system IdentityProvider {
+  /// The current logged-in author, if any.
+  public CurrentIdentity(): Option<studio::package::Identity>;
+}
+
+/// Builds a shippable, signed artifact from the open project.
+public container Packager for studio::core::Studio {
+  /// Bundle the project at `root` into a signed `.dcspkg`: signing is gated on a
+  /// logged-in identity, the project must declare `[[install]]` rules, then the
+  /// rule sources are gathered and hashed, the SigningService signs the
+  /// manifest, and the artifact is written. Returns the artifact path.
+  #[manual]
+  public BuildPackage(root: string): Result<string, studio::package::PackageError> {
+    who = Option<studio::package::Identity> from studio::package::IdentityProvider.CurrentIdentity()
+    if (who.isNone) {
+      notLoggedIn = studio::package::PackageError from { root }
+      return Err(notLoggedIn)
+    }
+    rules = studio::installer::InstallRule[] from self.ReadRules(root)
+    declared = bool from self.HasRules(rules)
+    if (!declared) {
+      noRules = studio::package::PackageError from { root }
+      return Err(noRules)
+    }
+    manifest = studio::package::PackageManifest from self.AssembleManifest(root, who.value, rules)
+    signed = Result<studio::package::Signature, studio::package::PackageError> from studio::package::SigningService.Sign(who.value, manifest)
+    if (signed.isErr) {
+      return Err(signed.error)
+    }
+    return self.WriteArtifact(root, manifest, signed.value)
+  }
+
+  /// The project's `[[install]]` rules from its dcs-studio.toml.
+  ReadRules(root: string): studio::installer::InstallRule[];
+
+  /// Whether the project declares at least one install rule.
+  HasRules(rules: studio::installer::InstallRule[]): bool;
+
+  /// Assemble the manifest: gather the rule sources, hash them into
+  /// `contentHash`, stamp name/version/author/createdAt.
+  AssembleManifest(root: string, author: studio::package::Identity, rules: studio::installer::InstallRule[]): studio::package::PackageManifest;
+
+  /// Zip the manifest + signature + source files into a `.dcspkg`; returns its
+  /// path.
+  WriteArtifact(root: string, manifest: studio::package::PackageManifest, signature: studio::package::Signature): Result<string, studio::package::PackageError>;
+}
+
+/// Discovers, installs, and revalidates downloaded packages.
+public container PackageLibrary for studio::core::Studio {
+  /// Every `.dcspkg` in the watch folder, read header-only.
+  public DiscoverPackages(folder: string): studio::package::PackageEntry[];
+
+  /// Install a discovered package: unzip to staging and read its manifest;
+  /// recompute the payload hash and refuse if it differs from the manifest's
+  /// (the files were tampered); ask the SigningService to validate the
+  /// signature and refuse if it is invalid or the author is revoked; then move
+  /// the payload into the content store and link each install rule's dest into
+  /// it, recording a ledger for uninstall.
+  #[manual]
+  public InstallPackage(entry: studio::package::PackageEntry): Result<studio::package::PackageInstallReport, studio::package::PackageError> {
+    staged = Result<studio::package::PackageManifest, studio::package::PackageError> from self.Unstage(entry)
+    if (staged.isErr) {
+      return Err(staged.error)
+    }
+    intact = bool from self.PayloadMatchesHash(entry, staged.value)
+    if (!intact) {
+      tampered = studio::package::PackageError from { entry }
+      return Err(tampered)
+    }
+    sig = studio::package::Signature from self.SignatureOf(entry)
+    checked = Result<studio::package::Validity, studio::package::PackageError> from studio::package::SigningService.Validate(staged.value, sig)
+    if (checked.isErr) {
+      return Err(checked.error)
+    }
+    if (!checked.value.valid) {
+      rejected = studio::package::PackageError from { checked.value }
+      return Err(rejected)
+    }
+    return self.PlaceLinks(entry, staged.value)
+  }
+
+  /// Unzip the artifact to a staging dir and read its manifest.
+  Unstage(entry: studio::package::PackageEntry): Result<studio::package::PackageManifest, studio::package::PackageError>;
+
+  /// Whether the staged payload's recomputed content hash equals the manifest's.
+  PayloadMatchesHash(entry: studio::package::PackageEntry, manifest: studio::package::PackageManifest): bool;
+
+  /// The signature embedded in the artifact.
+  SignatureOf(entry: studio::package::PackageEntry): studio::package::Signature;
+
+  /// Move the payload into the content store and link each rule's dest into it —
+  /// directory junction / file symlink, copy fallback — recording a ledger of
+  /// what was placed.
+  PlaceLinks(entry: studio::package::PackageEntry, manifest: studio::package::PackageManifest): Result<studio::package::PackageInstallReport, studio::package::PackageError>;
+
+  /// Remove an installed package: unlink everything its ledger recorded and drop
+  /// its content store.
+  public UninstallPackage(id: string): Result<void, studio::package::PackageError>;
+
+  /// Re-validate every installed package against the SigningService and report
+  /// those no longer known-good: a revoked author, or one the server could not
+  /// be reached to confirm (unverified). Stale regardless of where the package
+  /// came from; a server outage never silently clears a revoked package.
+  #[manual]
+  public RevalidateInstalled(): studio::package::StalePackage[] {
+    installed = studio::package::PackageEntry[] from self.InstalledPackages()
+    stale = studio::package::StalePackage[] from self.CollectStale(installed)
+    return stale
+  }
+
+  /// Every currently-installed package.
+  InstalledPackages(): studio::package::PackageEntry[];
+
+  /// Validate each installed package, keeping the ones the server rejects
+  /// ("revoked") and the ones it could not confirm ("unverified"); only a
+  /// server `valid` clears a package.
+  CollectStale(installed: studio::package::PackageEntry[]): studio::package::StalePackage[];
+}
+
+/// Packaging is gated on being logged in — only an identified author can sign.
+feature BuildRequiresLogin for studio::package::Packager {
+  given "no user is logged in"
+  when "the developer tries to package the open project"
+  then "packaging is refused"
+  but "with a logged-in identity the manifest is signed and the artifact written"
+}
+
+/// A package whose files were altered after signing will not install.
+feature TamperedPayloadRefused for studio::package::PackageLibrary {
+  given "a signed package whose payload files were modified after signing"
+  when "the developer installs it"
+  then "the recomputed payload hash no longer matches the signed manifest"
+  and "the install is refused before any file is linked"
+}
+
+/// Only a valid, server-blessed signature installs.
+feature UnsignedOrInvalidRefused for studio::package::PackageLibrary {
+  given "a package whose signature the server does not accept"
+  when "the developer installs it"
+  then "the SigningService validation fails"
+  and "the install is refused"
+}
+
+/// Revocation is global and retroactive — the heart of the feature.
+/// #critical
+feature RevokedAuthorBecomesStale for studio::package::PackageLibrary {
+  given "an installed package whose author is later revoked on the server"
+  when "installed packages are revalidated"
+  then "that package is reported stale"
+  and "re-installing it (or any other package by that author) is refused"
+  but "packages by non-revoked authors stay installable regardless of who shared them"
+}
+
+/// Installing links the payload into the DCS roots from a content store.
+feature InstallPlacesLinks for studio::package::PackageLibrary {
+  given "a valid signed package"
+  when "the developer installs it"
+  then "its payload lands in the content store"
+  and "each install rule's destination links into the store (junction/symlink, copy fallback)"
+  and "uninstall removes exactly what the ledger recorded"
+}
+
+/// Packages dropped in the watch folder are found without configuration.
+feature DiscoveryFindsArtifacts for studio::package::PackageLibrary {
+  given "one or more `.dcspkg` files in the watch folder"
+  when "the developer opens the Packages panel"
+  then "each package is listed with its name and author"
+}

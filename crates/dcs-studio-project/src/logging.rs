@@ -47,7 +47,9 @@ pub fn init_to_file(default: &str, path: &Path) -> Option<std::path::PathBuf> {
     Some(path.to_path_buf())
 }
 
-fn base(default: &str) -> tracing_subscriber::fmt::SubscriberBuilder<
+fn base(
+    default: &str,
+) -> tracing_subscriber::fmt::SubscriberBuilder<
     tracing_subscriber::fmt::format::DefaultFields,
     tracing_subscriber::fmt::format::Format,
     EnvFilter,

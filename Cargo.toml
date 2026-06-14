@@ -13,6 +13,8 @@ members = [
     "crates/lua-analyzer",
     "crates/studio-services",
     "crates/studio-mcp",
+    "crates/studio-packages",
+    "crates/mock-package-server",
 ]
 
 [workspace.package]

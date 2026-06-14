@@ -154,9 +154,7 @@ fn missing_build_entry_is_an_error_never_a_guess() {
     let output = run_bundle(&root);
 
     assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("no [build] entry"),
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no [build] entry"),);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -289,7 +287,11 @@ fn bundle_executes_under_the_runner_with_require_semantics_intact() {
     let output = run_bundle(&root);
     assert!(output.status.success());
 
-    let bundle_path = root.join("dist/bundle.lua").display().to_string().replace('\\', "/");
+    let bundle_path = root
+        .join("dist/bundle.lua")
+        .display()
+        .to_string()
+        .replace('\\', "/");
     std::fs::create_dir_all(root.join("tests")).expect("tests dir");
     std::fs::write(
         root.join("tests/exec.test.lua"),

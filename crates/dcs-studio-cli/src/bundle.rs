@@ -170,7 +170,9 @@ impl Walk<'_> {
         let relative = name.replace('.', "/");
         let root_canon = std::fs::canonicalize(self.root).ok()?;
         for base in [self.entry_dir.as_path(), self.root] {
-            let base_canon = std::fs::canonicalize(base).ok().unwrap_or_else(|| base.to_path_buf());
+            let base_canon = std::fs::canonicalize(base)
+                .ok()
+                .unwrap_or_else(|| base.to_path_buf());
             for candidate in [
                 base.join(format!("{relative}.lua")),
                 base.join(relative.as_str()).join("init.lua"),

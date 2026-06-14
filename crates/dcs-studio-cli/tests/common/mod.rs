@@ -25,8 +25,7 @@ pub fn runner_binary() -> Option<PathBuf> {
 /// extra files. `tag` distinguishes directories so parallel tests do not
 /// collide. The caller is responsible for cleanup (`remove_dir_all`).
 pub fn temp_project(prefix: &str, tag: &str, manifest: &str, files: &[(&str, &str)]) -> PathBuf {
-    let root =
-        std::env::temp_dir().join(format!("{prefix}-{tag}-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("{prefix}-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("temp root");
     std::fs::write(root.join("dcs-studio.toml"), manifest).expect("manifest");

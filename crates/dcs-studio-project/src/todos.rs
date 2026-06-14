@@ -219,7 +219,11 @@ mod tests {
 
         let entries = scan(&root, DEFAULT_TAGS);
 
-        assert_eq!(entries.len(), 1, "the oversized file is skipped: {entries:?}");
+        assert_eq!(
+            entries.len(),
+            1,
+            "the oversized file is skipped: {entries:?}"
+        );
         assert!(entries[0].path.ends_with("small.lua"));
         let _ = fs::remove_dir_all(&root);
     }
@@ -231,7 +235,10 @@ mod tests {
 
         let entries = scan(&root, DEFAULT_TAGS);
 
-        assert!(entries.is_empty(), "binary contributes nothing: {entries:?}");
+        assert!(
+            entries.is_empty(),
+            "binary contributes nothing: {entries:?}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

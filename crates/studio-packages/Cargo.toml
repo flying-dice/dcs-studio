@@ -1,0 +1,15 @@
+# Signed, revocable mod packages — Tauri-free core shared by the app and CLI
+# (model/studio/package.pds, issue #37). The client holds NO keys: the signing
+# server signs the manifest at build time and validates it at install time.
+[package]
+name = "studio-packages"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+dcs-studio-project = { path = "../dcs-studio-project" }
+zip = "2"
+sha2 = "0.10"
+ureq = { version = "2", features = ["json"] }

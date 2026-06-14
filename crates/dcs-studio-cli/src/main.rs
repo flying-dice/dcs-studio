@@ -7,6 +7,7 @@
 
 mod bundle;
 mod fmt;
+mod pkg;
 mod test;
 
 use std::path::{Path, PathBuf};
@@ -103,6 +104,31 @@ enum Command {
         #[arg(long)]
         game_install: Option<PathBuf>,
     },
+    /// Build a signed, shippable package (.dcspkg) from the project's
+    /// [[install]] rules (issue #37): the signing server signs the manifest,
+    /// and install-time validation enforces revocation.
+    Pack {
+        /// Project root.
+        #[arg(default_value = ".")]
+        root: PathBuf,
+        /// Directory to write the .dcspkg into.
+        #[arg(long, default_value = "dist")]
+        out: PathBuf,
+        /// Signing-server base URL.
+        #[arg(long, default_value = "http://127.0.0.1:8787")]
+        signing_url: String,
+        /// Signing identity (login). Until GitHub login (#11), pass it.
+        #[arg(long)]
+        user: String,
+        /// Auth token presented to the signing server.
+        #[arg(long, default_value = "dev")]
+        token: String,
+    },
+    /// Manage downloaded packages: list, install, uninstall.
+    Pkg {
+        #[command(subcommand)]
+        action: pkg::PkgAction,
+    },
 }
 
 fn main() -> ExitCode {
@@ -156,6 +182,14 @@ fn main() -> ExitCode {
             saved_games,
             game_install,
         } => install(&root, saved_games, game_install),
+        Command::Pack {
+            root,
+            out,
+            signing_url,
+            user,
+            token,
+        } => pkg::pack(&root, &out, &signing_url, &user, &token),
+        Command::Pkg { action } => pkg::run(action),
     }
 }
 

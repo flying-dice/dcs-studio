@@ -50,6 +50,7 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | `model/studio/build.pds` | `Builder` — toolchain detection + cargo build with streamed output (issue #6 R1) |
 | `model/studio/cli.pds` | `Cli` agent-surface binary (`crates/dcs-studio-cli`), `TestRunner` — out-of-DCS Lua test runner (`tools/lua-runner`), `Bundler` — single-file require-graph bundler (issue #9) |
 | `model/studio/installer.pds` | `Installer` — manifest-driven `[[install]]` deploy to SavedGames/GameInstall roots (issue #6 R1) |
+| `model/studio/package.pds` | `Packager`/`PackageLibrary` + `SigningService`/`IdentityProvider` faces — signed, revocable `.dcspkg` packages (issue #37; `crates/studio-packages`, mock signing server `crates/mock-package-server`, CLI `pack`/`pkg`) |
 | `model/studio/mission.pds` | `MissionScripting` sanitization manager (`crates/studio-services/src/mission.rs`) |
 | `model/studio/mcp.pds` | `McpServer` — the IDE-hosted agent tool surface over a loopback transport (issue #33; `crates/studio-mcp` handler, `crates/app/src/mcp.rs` server, `crates/studio-services`) |
 | `model/studio/todos.pds` | `TodoScanner` — workspace comment-tag scanner behind the Todos panel (`crates/dcs-studio-project/src/todos.rs`, `src/lib/todos.svelte.ts`) |
