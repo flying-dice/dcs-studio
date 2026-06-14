@@ -134,12 +134,16 @@ public container Refactoring for studio::core::Studio {
   /// The refusal message naming the dirty affected files.
   DirtyRenameMessage(edit: studio::lang::WorkspaceEdit): string;
 
-  /// Apply a multi-file edit: the active editor's buffer takes its edits as
-  /// one undoable transaction (keeping undo history), and every other affected
-  /// file is rewritten on disk (the engine kept in sync) — a file open in a
-  /// background tab has its stale buffer dropped so it reloads the new text on
-  /// reactivation. Per-file edits apply back-to-front so earlier spans stay
-  /// valid.
+  /// Apply a multi-file edit in two phases so a failure is contained. Phase one
+  /// reads every affected closed file and computes its new content (per-file
+  /// edits applied back-to-front so earlier spans stay valid); a read failure
+  /// aborts here, before any write — a failed rename never half-applies. Phase
+  /// two writes: each closed file is rewritten on disk and the engine re-synced,
+  /// then the active editor's buffer takes its edits as one undoable transaction
+  /// (keeping undo history). A file open in a background tab has its stale buffer
+  /// dropped so it reloads the new text on reactivation. Multi-file disk writes
+  /// are not atomic, so a rare mid-write I/O failure can leave earlier files
+  /// written — recoverable by re-running the rename.
   ApplyWorkspaceEdit(edit: studio::lang::WorkspaceEdit): void;
 }
 

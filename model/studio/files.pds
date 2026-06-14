@@ -122,13 +122,15 @@ public container WorkspaceFs for studio::core::Studio {
   CopyToSibling(path: string): Result<string, studio::files::IoError>;
 
   /// Create an empty file `<parent>/<name>` inside `root`; returns its path.
-  /// Refuses when the target already exists.
+  /// The guard is on the JOINED TARGET, not just `parent` — a `name` carrying
+  /// `..` or an absolute path could otherwise escape the workspace. Refuses
+  /// when the target already exists.
   public CreateFile(root: string, parent: string, name: string): Result<string, studio::files::IoError> {
-    if (!self.StaysUnderRoot(root, parent)) {
-      outside = studio::files::IoError from { parent }
+    target = string from self.JoinPath(parent, name)
+    if (!self.StaysUnderRoot(root, target)) {
+      outside = studio::files::IoError from { target }
       return Err(outside)
     }
-    target = string from self.JoinPath(parent, name)
     taken = bool from self.PathExists(target)
     if (taken) {
       collision = studio::files::IoError from { target }
@@ -148,13 +150,15 @@ public container WorkspaceFs for studio::core::Studio {
   TouchFile(path: string): Result<void, studio::files::IoError>;
 
   /// Create a directory `<parent>/<name>` inside `root`; returns its path.
-  /// Refuses when the target already exists.
+  /// The guard is on the JOINED TARGET, not just `parent` — a `name` carrying
+  /// `..` or an absolute path could otherwise escape the workspace. Refuses
+  /// when the target already exists.
   public CreateDir(root: string, parent: string, name: string): Result<string, studio::files::IoError> {
-    if (!self.StaysUnderRoot(root, parent)) {
-      outside = studio::files::IoError from { parent }
+    target = string from self.JoinPath(parent, name)
+    if (!self.StaysUnderRoot(root, target)) {
+      outside = studio::files::IoError from { target }
       return Err(outside)
     }
-    target = string from self.JoinPath(parent, name)
     taken = bool from self.PathExists(target)
     if (taken) {
       collision = studio::files::IoError from { target }

@@ -149,11 +149,7 @@ pub fn duplicate_path(root: &str, path: &str) -> Result<String, String> {
 /// Create an empty file `<parent>/<name>` inside `root`; returns its path.
 /// Refuses when the target already exists (model `WorkspaceFs.CreateFile`).
 pub fn create_file(root: &str, parent: &str, name: &str) -> Result<String, String> {
-    if !stays_under_root(root, parent) {
-        return Err(format!("'{parent}' is outside the workspace"));
-    }
-    let target = Path::new(parent).join(name);
-    let target = target.to_string_lossy().into_owned();
+    let target = guarded_target(root, parent, name)?;
     if path_exists(&target) {
         return Err(format!("'{target}' already exists"));
     }
@@ -161,14 +157,23 @@ pub fn create_file(root: &str, parent: &str, name: &str) -> Result<String, Strin
     Ok(target)
 }
 
+/// `<parent>/<name>` joined and guarded to stay inside `root` — guards the
+/// JOINED TARGET, not just `parent`, so a `name` carrying `..` or an absolute
+/// path (which `Path::join` lets replace the whole path) cannot escape the
+/// workspace. The single guard for both create operations.
+fn guarded_target(root: &str, parent: &str, name: &str) -> Result<String, String> {
+    let target = Path::new(parent).join(name);
+    let target = target.to_string_lossy().into_owned();
+    if !stays_under_root(root, &target) {
+        return Err(format!("'{target}' is outside the workspace"));
+    }
+    Ok(target)
+}
+
 /// Create a directory `<parent>/<name>` inside `root`; returns its path.
 /// Refuses when the target already exists (model `WorkspaceFs.CreateDir`).
 pub fn create_dir(root: &str, parent: &str, name: &str) -> Result<String, String> {
-    if !stays_under_root(root, parent) {
-        return Err(format!("'{parent}' is outside the workspace"));
-    }
-    let target = Path::new(parent).join(name);
-    let target = target.to_string_lossy().into_owned();
+    let target = guarded_target(root, parent, name)?;
     if path_exists(&target) {
         return Err(format!("'{target}' already exists"));
     }
@@ -413,6 +418,34 @@ mod tests {
             // trash): the happy path is unverifiable here — skip, don't fail.
             Err(e) => eprintln!("skipping recycle-bin assertion (no trash backend): {e}"),
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn create_refuses_a_name_that_escapes_the_root() {
+        // The guard must check the JOINED target, not just `parent`: a `name`
+        // with `..` or an absolute path escapes the workspace otherwise
+        // (`Path::join` lets an absolute `name` replace the whole path).
+        let root = temp_dir("create-escape");
+        let root_s = root.to_string_lossy().into_owned();
+        // Seed an out-of-root victim and prove neither create touches it.
+        let outside = root.join("..").join("create-escape-victim.lua");
+        let _ = std::fs::remove_file(&outside);
+
+        for name in ["..\\create-escape-victim.lua", "../create-escape-victim.lua"] {
+            let err = create_file(&root_s, &root_s, name)
+                .expect_err("a `..` name must be refused");
+            assert!(err.contains("outside the workspace"), "file: {err}");
+            let err = create_dir(&root_s, &root_s, name)
+                .expect_err("a `..` name must be refused");
+            assert!(err.contains("outside the workspace"), "dir: {err}");
+        }
+        // An absolute `name` replaces the join — also outside the root.
+        let abs = root.join("..").join("abs-victim").to_string_lossy().into_owned();
+        let err = create_file(&root_s, &root_s, &abs).expect_err("absolute name refused");
+        assert!(err.contains("outside the workspace"), "abs: {err}");
+
+        assert!(!path_exists(&outside.to_string_lossy()), "nothing escaped the root");
         let _ = std::fs::remove_dir_all(&root);
     }
 

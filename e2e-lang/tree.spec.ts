@@ -43,6 +43,16 @@ test("renaming a file with unsaved edits is refused until it is saved", async ({
   await expect(page.getByTestId("open-files")).toHaveText("a.lua");
 });
 
+test("renaming a background file keeps focus on the active tab", async ({ page }) => {
+  // model RetargetTabs: the previously active tab stays active. a.lua is
+  // active; renaming background b.lua → c.lua must not steal focus.
+  await page.getByTestId("rename-background").click();
+  await expect.poll(() => openFiles(page)).toContain("c.lua");
+  // Focus stayed on a.lua, NOT yanked to the renamed background tab.
+  await expect(page.getByTestId("active-file")).toHaveText("a.lua");
+  await expect(page.getByTestId("error")).toHaveText("");
+});
+
 test("deleting an open file closes its tab", async ({ page }) => {
   await page.getByTestId("delete-open").click();
   // The deleted file's tab is gone (no tabs left).

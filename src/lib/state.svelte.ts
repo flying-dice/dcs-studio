@@ -568,18 +568,23 @@ class AppState {
     }
     await renamePath(root, src, dst); // rejects on collision / escape
     const to = canonicalPath(dst);
-    const reactivate =
-      this.activePath && this.isUnder(this.activePath, from)
-        ? to + this.activePath.slice(from.length)
-        : null;
+    // Where focus must end up (model `RetargetTabs`: the previously active tab
+    // stays active). If the active tab was itself renamed, follow it to its new
+    // path; otherwise it is untouched and must keep focus — the per-tab
+    // `openFile` calls below each grab `activePath`, so we restore it after.
+    const previousActive = this.activePath;
+    const refocus =
+      previousActive && this.isUnder(previousActive, from)
+        ? to + previousActive.slice(from.length)
+        : previousActive;
     // Close each affected tab and reopen it at its new path (content unchanged
-    // by the rename, so the reload loses nothing — model `RetargetTab`).
+    // by the rename, so the reload loses nothing — model `RetargetTabs`).
     for (const tab of affected) {
       const next = to + tab.path.slice(from.length);
       this.openFiles = this.openFiles.filter((f) => f !== tab);
       this.openFile(next, next.split(/[\\/]/).pop() || next);
     }
-    if (reactivate) this.activePath = reactivate;
+    this.activePath = refocus;
     this.refreshTree();
   }
 

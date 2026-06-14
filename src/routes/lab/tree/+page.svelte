@@ -96,6 +96,20 @@
     </button>
     <button
       class="rounded border px-2 py-0.5"
+      data-testid="rename-background"
+      onclick={() =>
+        act(async () => {
+          // a.lua active, b.lua a background tab: renaming the background file
+          // must NOT steal focus from a.lua (model RetargetTabs).
+          app.openFile(bPath, "b.lua");
+          app.activateFile(aPath);
+          await app.renameWorkspacePath(root, bPath, cPath);
+        })}
+    >
+      rename background b→c (a active)
+    </button>
+    <button
+      class="rounded border px-2 py-0.5"
       data-testid="delete-open"
       onclick={() => act(() => app.deleteWorkspacePath(root, aPath))}
     >
