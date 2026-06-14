@@ -180,11 +180,30 @@ mod tests {
         assert!(!is_valid_auth(&json!({"method": "tools/list"}), "secret"));
     }
 
+    /// Assert the server closed the connection: the next read is EOF (`Ok(0)`).
+    /// The caller must have armed a read timeout on the stream first — if a
+    /// regression leaves the socket OPEN, this read would otherwise block
+    /// forever (a test hang reads as a stall, not a failure). With the timeout,
+    /// the open-socket case fails fast and loud instead of pinning the
+    /// close-guard on a CI timeout.
+    fn assert_connection_closed(reader: &mut impl BufRead) {
+        let mut tail = String::new();
+        match reader.read_line(&mut tail) {
+            Ok(0) => {}
+            other => panic!("expected the server to close the connection, got {other:?}"),
+        }
+    }
+
     #[test]
     fn a_bad_token_is_rejected_and_the_connection_closes() {
         let (client, server) = loopback_pair();
         let handle = serve(server);
         let mut writer = client.try_clone().expect("clone");
+        // Arm a read timeout on the stream the reader wraps, so a non-closing
+        // regression fails this test in 2s rather than hanging the suite.
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .expect("set read timeout");
         let mut reader = BufReader::new(client);
 
         writeln!(
@@ -196,8 +215,7 @@ mod tests {
         assert_eq!(resp["error"]["code"], json!(-32001));
 
         // The server closed the connection — the next read is EOF.
-        let mut tail = String::new();
-        assert_eq!(reader.read_line(&mut tail).expect("eof"), 0);
+        assert_connection_closed(&mut reader);
         handle.join().expect("server thread");
     }
 
@@ -206,12 +224,18 @@ mod tests {
         let (client, server) = loopback_pair();
         let handle = serve(server);
         let mut writer = client.try_clone().expect("clone");
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .expect("set read timeout");
         let mut reader = BufReader::new(client);
 
         // Skipping auth and going straight for a tool is refused, not served.
         writeln!(writer, r#"{{"jsonrpc":"2.0","id":1,"method":"tools/list"}}"#).expect("write");
         let resp = read_json(&mut reader);
         assert_eq!(resp["error"]["code"], json!(-32001));
+        // And, like any failed auth, the server then closes the connection —
+        // it never loops back to read a second (now-"authed") line.
+        assert_connection_closed(&mut reader);
         handle.join().expect("server thread");
     }
 

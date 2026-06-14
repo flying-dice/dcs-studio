@@ -240,6 +240,208 @@ fn dcs_tools_against_a_fake_bridge_follow_the_wire_rules() {
     assert_eq!(echoed["params"], json!({"text": "hi", "delay": 3}));
 }
 
+#[test]
+fn lang_tools_answer_from_the_real_engine() {
+    let root = temp_dir("lang");
+    std::fs::write(root.join("broken.lua"), "if x then\n").expect("seed broken");
+    let documented = root.join("doc.lua");
+    std::fs::write(
+        &documented,
+        "--- Greets the pilot.\nlocal greet = \"hello\"\nprint(greet)\n",
+    )
+    .expect("seed documented");
+    let mcp = Mcp::new();
+
+    // lua_diagnostics: the broken file's parse finding surfaces with a stable
+    // LUA-Exxx code and a 1-based position — the real engine, not a stub.
+    let diagnostics = mcp.call(1, "lua_diagnostics", &json!({"root": root.to_string_lossy()}));
+    assert_eq!(diagnostics["result"]["isError"], json!(false));
+    let report: Value = serde_json::from_str(tool_text(&diagnostics)).expect("report json");
+    assert_eq!(report["files_checked"], json!(2));
+    let broken = report["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .find(|f| f["path"].as_str().unwrap().ends_with("broken.lua"))
+        .expect("a finding for broken.lua");
+    assert!(
+        broken["code"].as_str().unwrap().starts_with("LUA-E"),
+        "stable code expected, got {}",
+        broken["code"]
+    );
+    assert!(broken["line"].as_u64().unwrap() >= 1);
+
+    // lua_hover on the documented local (line 3 `print(greet)`, column 8 is
+    // inside `greet`) answers the engine's card: headline + doc text.
+    let hover = mcp.call(
+        2,
+        "lua_hover",
+        &json!({"root": root.to_string_lossy(),
+               "path": documented.to_string_lossy(),
+               "line": 3, "character": 8}),
+    );
+    assert_eq!(hover["result"]["isError"], json!(false));
+    let card: Value = serde_json::from_str(tool_text(&hover)).expect("hover json");
+    assert!(
+        card["title"].as_str().unwrap().contains("local greet: string"),
+        "card was: {card}"
+    );
+    assert!(
+        card["body"].as_str().unwrap().contains("Greets the pilot."),
+        "card was: {card}"
+    );
+
+    // lua_complete / lua_definition: stable not-implemented JSON-RPC errors,
+    // not a guess — the model's pending-query contract (mcp.pds).
+    for (id, tool) in [(3u64, "lua_complete"), (4u64, "lua_definition")] {
+        let pending = mcp.call(
+            id,
+            tool,
+            &json!({"root": root.to_string_lossy(),
+                   "path": documented.to_string_lossy(),
+                   "line": 1, "character": 1}),
+        );
+        assert_eq!(pending["error"]["code"], json!(-32601), "tool: {tool}");
+        assert!(
+            pending["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("not implemented in the engine yet"),
+            "tool {tool} answered: {}",
+            pending["error"]["message"]
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn lua_hover_edges_answer_errors_not_guesses() {
+    let root = temp_dir("hover-edges");
+    let documented = root.join("doc.lua");
+    std::fs::write(
+        &documented,
+        "--- Greets the pilot.\nlocal greet = \"hello\"\nprint(greet)\n",
+    )
+    .expect("seed documented");
+    let mcp = Mcp::new();
+
+    // lua_hover without a usable position is invalid-params, naming the arg.
+    let no_line = mcp.call(
+        1,
+        "lua_hover",
+        &json!({"root": root.to_string_lossy(),
+               "path": documented.to_string_lossy(),
+               "character": 8}),
+    );
+    assert_eq!(no_line["error"]["code"], json!(-32602));
+    assert!(
+        no_line["error"]["message"].as_str().unwrap().contains("'line'"),
+        "message was: {}",
+        no_line["error"]["message"]
+    );
+
+    // lua_hover on a file the root does not contain is a tool error.
+    let stray = mcp.call(
+        2,
+        "lua_hover",
+        &json!({"root": root.to_string_lossy(),
+               "path": "Z:/nowhere/else.lua",
+               "line": 1, "character": 1}),
+    );
+    assert_eq!(stray["result"]["isError"], json!(true));
+    assert!(tool_text(&stray).contains("is not a Lua source under"));
+
+    // Hover over empty space answers the no-information text, cleanly.
+    let miss = mcp.call(
+        3,
+        "lua_hover",
+        &json!({"root": root.to_string_lossy(),
+               "path": documented.to_string_lossy(),
+               "line": 1, "character": 1}),
+    );
+    assert_eq!(miss["result"]["isError"], json!(false));
+    assert!(tool_text(&miss).contains("no hover information"));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A stock MissionScripting.lua, as DCS ships it.
+const STOCK_MISSION_SCRIPT: &str = "do\n\tsanitizeModule('os')\n\tsanitizeModule('io')\n\
+                                    \tsanitizeModule('lfs')\n\t_G['require'] = nil\n\
+                                    \t_G['loadlib'] = nil\n\t_G['package'] = nil\nend\n";
+
+#[test]
+fn mission_and_injection_tools_drive_the_real_services() {
+    let root = temp_dir("mission");
+    let script = root.join("MissionScripting.lua");
+    std::fs::write(&script, STOCK_MISSION_SCRIPT).expect("seed script");
+    let script_arg = script.to_string_lossy().into_owned();
+    let mcp = Mcp::new();
+
+    // mission_script_status: the stock file reads fully sanitized.
+    let status = mcp.call(1, "mission_script_status", &json!({"path": script_arg}));
+    assert_eq!(status["result"]["isError"], json!(false));
+    let snapshot: Value = serde_json::from_str(tool_text(&status)).expect("status json");
+    assert_eq!(snapshot["backup_exists"], json!(false));
+    let lfs = snapshot["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|i| i["name"] == json!("lfs"))
+        .expect("lfs item")
+        .clone();
+    assert_eq!(lfs["sanitized"], json!(true));
+
+    // mission_script_set desanitizes lfs and snapshots the pristine backup.
+    let set = mcp.call(
+        2,
+        "mission_script_set",
+        &json!({"path": script_arg, "items": {"lfs": false}}),
+    );
+    assert_eq!(set["result"]["isError"], json!(false));
+    let after: Value = serde_json::from_str(tool_text(&set)).expect("set json");
+    assert_eq!(after["backup_exists"], json!(true));
+    let edited = std::fs::read_to_string(&script).expect("edited");
+    assert!(edited.contains("-- sanitizeModule('lfs')"));
+
+    // Items that aren't an item -> bool object are invalid params.
+    let bad = mcp.call(
+        3,
+        "mission_script_set",
+        &json!({"path": script_arg, "items": {"lfs": "nope"}}),
+    );
+    assert_eq!(bad["error"]["code"], json!(-32602));
+    assert!(bad["error"]["message"].as_str().unwrap().contains("item -> bool"));
+
+    // mission_script_restore copies the pristine backup back.
+    let restored = mcp.call(4, "mission_script_restore", &json!({"path": script_arg}));
+    assert_eq!(restored["result"]["isError"], json!(false));
+    assert_eq!(
+        std::fs::read_to_string(&script).expect("restored"),
+        STOCK_MISSION_SCRIPT
+    );
+
+    // injection_status on a write dir with nothing installed says so — and
+    // never errors; eject on the same empty dir is a clean no-op.
+    let empty = root.join("EmptyWriteDir");
+    std::fs::create_dir(&empty).expect("dir");
+    let inject_status = mcp.call(
+        5,
+        "injection_status",
+        &json!({"write_dir": empty.to_string_lossy()}),
+    );
+    assert_eq!(inject_status["result"]["isError"], json!(false));
+    let report: Value = serde_json::from_str(tool_text(&inject_status)).expect("status json");
+    assert_eq!(report["dll_installed"], json!(false));
+    assert_eq!(report["hook_installed"], json!(false));
+
+    let ejected = mcp.call(6, "eject", &json!({"write_dir": empty.to_string_lossy()}));
+    assert_eq!(ejected["result"]["isError"], json!(false));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A synchronous WS JSON-RPC server standing in for the in-DCS bridge: `ping`
 /// pongs the shared `dcs_time`, anything else echoes method + params so the
 /// forwarding tools can be asserted against a real socket.
