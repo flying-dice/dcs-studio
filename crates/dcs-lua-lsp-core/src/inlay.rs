@@ -143,6 +143,12 @@ fn locate_close_paren(source: &str, trivia: &[SpannedTrivia], func: &FuncBody) -
     let lo = func.params.last().map_or(func.span.start, |param| param.span.end) as usize;
     let bytes = source.as_bytes();
     let hi = bytes.len().min(func.span.end as usize);
+    // The parser is total — it must never panic, even on a degenerate span.
+    // A last-parameter end past the (clamped) body start would make `lo > hi`
+    // and panic the slice; treat it as "no paren found" and omit the hint.
+    if lo > hi {
+        return None;
+    }
     bytes[lo..hi]
         .iter()
         .enumerate()
@@ -293,5 +299,20 @@ mod tests {
     #[test]
     fn annotated_field_assignment_gets_no_hint() {
         assert!(labels("--- @type number\nM.n = some_call()\n").is_empty());
+    }
+
+    #[test]
+    fn multibyte_text_before_a_function_stays_total() {
+        // Regression (issue #32): a leading multibyte comment shifts byte
+        // offsets so the close-paren scan's `lo` (last-param / body start)
+        // could run past `hi` (the clamped body end) and panic the slice
+        // (`slice index starts at 12 but ends at 11`). The hosted lua-analyzer
+        // crashed on exactly this, killing the server mid-session. The engine
+        // is total — these must return, never panic.
+        let _ = labels("-- наводка °\nfunction helper() end\n");
+        let _ = labels("-- наводка по цели…\nfunction f(\n");
+        let _ = labels(
+            "-- наводка °\nlocal top = 1\n\nfunction outer()\n  local inner = function() end\n  return inner\nend\n\nfunction helper() end\n",
+        );
     }
 }
