@@ -58,10 +58,7 @@ fn failing_test_fails_the_build_passing_suite_passes() {
     // with file and line.
     let mixed = temp_project("mixed", MINIMAL_MANIFEST, MIXED_SPECS);
     let output = run_test_subcommand(&mixed, &runner, &[]);
-    assert!(
-        !output.status.success(),
-        "a failing test must fail the run"
-    );
+    assert!(!output.status.success(), "a failing test must fail the run");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("PASS math > adds"), "stdout: {stdout}");
     assert!(
@@ -94,7 +91,12 @@ fn junit_reporter_writes_wellformed_escaped_xml_and_still_gates() {
     let output = run_test_subcommand(
         &root,
         &runner,
-        &["--reporter", "junit", "--junit-out", junit_path.to_str().expect("utf8")],
+        &[
+            "--reporter",
+            "junit",
+            "--junit-out",
+            junit_path.to_str().expect("utf8"),
+        ],
     );
 
     assert!(!output.status.success(), "junit reporter must still gate");
@@ -164,10 +166,7 @@ fn missing_runner_is_a_clear_error_never_a_silent_pass() {
         .output()
         .expect("spawn dcs-studio-cli test");
 
-    assert!(
-        !output.status.success(),
-        "a missing runner must not exit 0"
-    );
+    assert!(!output.status.success(), "a missing runner must not exit 0");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("DCS_LUA_RUNNER points at") && stderr.contains("does not exist"),
@@ -201,9 +200,7 @@ fn malformed_manifest_is_an_error_not_a_discovery_fallback() {
         !output.status.success(),
         "a malformed manifest must not fall back to default discovery"
     );
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("dcs-studio.toml"),
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("dcs-studio.toml"),);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -220,9 +217,7 @@ fn nonexistent_root_is_an_error() {
         .expect("spawn dcs-studio-cli test");
 
     assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("does not exist"),
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("does not exist"),);
 }
 
 /// The executable half of `ScaffoldedProjectPassesCi`: a fresh
@@ -290,9 +285,7 @@ fn no_spec_files_is_clean_but_says_so() {
     let output = run_test_subcommand(&root, &runner, &[]);
 
     assert!(output.status.success(), "no tests is clean, not failing");
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("no test files found under tests/"),
-    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("no test files found under tests/"),);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -320,7 +313,12 @@ fn junit_escapes_newlines_in_failure_message() {
     let output = run_test_subcommand(
         &root,
         &runner,
-        &["--reporter", "junit", "--junit-out", junit_path.to_str().expect("utf8")],
+        &[
+            "--reporter",
+            "junit",
+            "--junit-out",
+            junit_path.to_str().expect("utf8"),
+        ],
     );
 
     assert!(!output.status.success(), "failing test must gate");

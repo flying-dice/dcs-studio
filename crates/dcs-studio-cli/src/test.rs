@@ -127,8 +127,7 @@ fn discover(root: &Path, dir: &str, suffix: &str) -> Vec<String> {
         .into_iter()
         .filter_map(Result::ok)
         .filter(|entry| {
-            entry.file_type().is_file()
-                && entry.file_name().to_string_lossy().ends_with(suffix)
+            entry.file_type().is_file() && entry.file_name().to_string_lossy().ends_with(suffix)
         })
         .filter_map(|entry| {
             let relative = entry.path().strip_prefix(root).ok()?;
@@ -198,8 +197,7 @@ fn spawn_runner(runner: &Path, root: &Path, specs: &[String]) -> Result<RunnerOu
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("parsing runner results: {e}"))
+    serde_json::from_slice(&output.stdout).map_err(|e| format!("parsing runner results: {e}"))
 }
 
 fn tally(output: &RunnerOutput) -> (usize, usize) {
@@ -281,8 +279,7 @@ fn write_junit(output: &RunnerOutput, junit_out: &Path) -> Result<(), String> {
     }
     let _ = writeln!(xml, "</testsuites>");
 
-    std::fs::write(junit_out, xml)
-        .map_err(|e| format!("writing {}: {e}", junit_out.display()))
+    std::fs::write(junit_out, xml).map_err(|e| format!("writing {}: {e}", junit_out.display()))
 }
 
 fn escape(text: &str) -> String {

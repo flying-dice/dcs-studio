@@ -52,8 +52,8 @@ rust:
     - cargo test --manifest-path tools/lua-runner/Cargo.toml
     - cargo clippy --manifest-path tools/lua-runner/Cargo.toml --all-targets -- -D warnings
     - export DCS_LUA_RUNNER=$CI_PROJECT_DIR/tools/lua-runner/target/debug/dcs-lua-runner
-    - cargo test -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli -p studio-mcp -p lua-analyzer -p studio-services
-    - cargo clippy -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli -p studio-mcp -p lua-analyzer -p studio-services --all-targets -- -D warnings
+    - cargo test -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli -p studio-mcp -p lua-analyzer -p studio-services -p studio-packages -p mock-package-server
+    - cargo clippy -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli -p studio-mcp -p lua-analyzer -p studio-services -p studio-packages -p mock-package-server --all-targets -- -D warnings
 
 # App-compile + host<->real-server gate: builds the Tauri crate against
 # the webkit2gtk stack and runs its suites, including tests/host_ipc.rs —

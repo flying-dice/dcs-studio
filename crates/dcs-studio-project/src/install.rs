@@ -87,8 +87,10 @@ pub fn install(root: &Path, roots: &RootMap) -> Result<InstallReport, String> {
 
 /// Every component is a plain name — no `..`, no `.`, no absolute or
 /// drive-prefixed segments — so joining `path` under a root cannot escape
-/// it. Mirrors the scaffold guard (`scaffold::init`).
-fn stays_under(path: &str) -> bool {
+/// it. Mirrors the scaffold guard (`scaffold::init`). Public so the package
+/// installer (`studio-packages`) reuses the exact same escape guard.
+#[must_use]
+pub fn stays_under(path: &str) -> bool {
     Path::new(path)
         .components()
         .all(|component| matches!(component, Component::Normal(_)))
@@ -105,8 +107,14 @@ fn contained_rest<'a>(dest: &str, rest: &'a str) -> Result<&'a str, String> {
     }
 }
 
-/// Swap the leading named root for its per-machine path.
-fn resolve_dest(dest: &str, roots: &RootMap) -> Result<PathBuf, String> {
+/// Swap the leading named root (`{SavedGames}`/`{GameInstall}`) for its
+/// per-machine path, rejecting a remainder that escapes the root. Public so the
+/// package installer resolves rule dests identically to the project installer.
+///
+/// # Errors
+/// Returns `Err` when `dest` has no named-root prefix, references an
+/// unconfigured `{GameInstall}`, or its remainder escapes the root.
+pub fn resolve_dest(dest: &str, roots: &RootMap) -> Result<PathBuf, String> {
     if let Some(rest) = dest.strip_prefix("{SavedGames}") {
         Ok(roots.saved_games.join(contained_rest(dest, rest)?))
     } else if let Some(rest) = dest.strip_prefix("{GameInstall}") {
@@ -136,7 +144,10 @@ fn resolve_dest(dest: &str, roots: &RootMap) -> Result<PathBuf, String> {
 pub fn status(root: &Path, roots: &RootMap) -> Result<InstallStatus, String> {
     let manifest = crate::manifest::load(root)?;
     if manifest.install.is_empty() {
-        return Ok(InstallStatus { installed: false, up_to_date: false });
+        return Ok(InstallStatus {
+            installed: false,
+            up_to_date: false,
+        });
     }
     let mut any_installed = false;
     let mut all_ok = true;
@@ -158,7 +169,10 @@ pub fn status(root: &Path, roots: &RootMap) -> Result<InstallStatus, String> {
                 all_ok = false;
             }
         } else if source.is_dir() {
-            for entry in WalkDir::new(&source).into_iter().filter_map(std::result::Result::ok) {
+            for entry in WalkDir::new(&source)
+                .into_iter()
+                .filter_map(std::result::Result::ok)
+            {
                 if !entry.file_type().is_file() {
                     continue;
                 }
@@ -178,11 +192,11 @@ pub fn status(root: &Path, roots: &RootMap) -> Result<InstallStatus, String> {
             }
         } else {
             // Source missing — check dest by filename only; can't compare content.
-            if let Some(name) =
-                Path::new(rule.source.trim_end_matches(['/', '\\'])).file_name()
-                && dest_dir.join(name).is_file() {
-                    any_installed = true;
-                }
+            if let Some(name) = Path::new(rule.source.trim_end_matches(['/', '\\'])).file_name()
+                && dest_dir.join(name).is_file()
+            {
+                any_installed = true;
+            }
             all_ok = false;
         }
     }
@@ -212,7 +226,10 @@ pub fn uninstall(root: &Path, roots: &RootMap) -> Result<UninstallReport, String
         let dest_dir = resolve_dest(&rule.dest, roots)?;
         let source = root.join(rule.source.trim_end_matches(['/', '\\']));
         if source.is_dir() {
-            for entry in WalkDir::new(&source).into_iter().filter_map(std::result::Result::ok) {
+            for entry in WalkDir::new(&source)
+                .into_iter()
+                .filter_map(std::result::Result::ok)
+            {
                 if !entry.file_type().is_file() {
                     continue;
                 }
@@ -227,13 +244,10 @@ pub fn uninstall(root: &Path, roots: &RootMap) -> Result<UninstallReport, String
         } else {
             let file_name = Path::new(rule.source.trim_end_matches(['/', '\\']))
                 .file_name()
-                .ok_or_else(|| {
-                    format!("install rule source '{}' has no file name", rule.source)
-                })?;
+                .ok_or_else(|| format!("install rule source '{}' has no file name", rule.source))?;
             let dest = dest_dir.join(file_name);
             if dest.is_file() {
-                fs::remove_file(&dest)
-                    .map_err(|e| format!("removing {}: {e}", dest.display()))?;
+                fs::remove_file(&dest).map_err(|e| format!("removing {}: {e}", dest.display()))?;
                 files.push(dest.to_string_lossy().into_owned());
             }
         }

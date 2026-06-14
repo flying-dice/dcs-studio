@@ -1,0 +1,126 @@
+//! The `.dcspkg` artifact — a zip of `package.json` (the signed manifest),
+//! `signature.json`, and the payload tree under `files/`.
+
+use std::io::{Read, Write};
+use std::path::Path;
+
+use crate::manifest::PackageManifest;
+use crate::signing::Signature;
+
+const MANIFEST_NAME: &str = "package.json";
+const SIGNATURE_NAME: &str = "signature.json";
+const FILES_PREFIX: &str = "files/";
+
+/// Write a `.dcspkg` to `out_path`: the manifest, the signature, and every file
+/// under `payload_root` placed at `files/<rel>`.
+///
+/// # Errors
+/// Returns `Err` on any I/O or zip failure.
+pub fn write(
+    out_path: &Path,
+    manifest: &PackageManifest,
+    signature: &Signature,
+    payload_root: &Path,
+) -> Result<(), String> {
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+    }
+    let file = std::fs::File::create(out_path)
+        .map_err(|e| format!("creating {}: {e}", out_path.display()))?;
+    let mut zip = zip::ZipWriter::new(file);
+    let opts = zip::write::SimpleFileOptions::default();
+
+    write_entry(&mut zip, opts, MANIFEST_NAME, &to_pretty(manifest)?)?;
+    write_entry(&mut zip, opts, SIGNATURE_NAME, &to_pretty(signature)?)?;
+
+    let mut files = crate::fsutil::walk(payload_root)?;
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    for (rel, path) in files {
+        let bytes = std::fs::read(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+        write_entry(&mut zip, opts, &format!("{FILES_PREFIX}{rel}"), &bytes)?;
+    }
+    zip.finish().map_err(|e| format!("finishing zip: {e}"))?;
+    Ok(())
+}
+
+/// Read just the header (manifest + signature) — for discovery and install.
+///
+/// # Errors
+/// Returns `Err` when the artifact is unreadable or missing its header entries.
+pub fn read_header(artifact: &Path) -> Result<(PackageManifest, Signature), String> {
+    let file = std::fs::File::open(artifact)
+        .map_err(|e| format!("opening {}: {e}", artifact.display()))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("reading zip: {e}"))?;
+    let manifest: PackageManifest = read_json(&mut zip, MANIFEST_NAME)?;
+    let signature: Signature = read_json(&mut zip, SIGNATURE_NAME)?;
+    Ok((manifest, signature))
+}
+
+/// Extract the `files/` payload tree to `dest_dir` (created fresh).
+///
+/// # Errors
+/// Returns `Err` on any I/O or zip failure.
+pub fn extract_payload(artifact: &Path, dest_dir: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(artifact)
+        .map_err(|e| format!("opening {}: {e}", artifact.display()))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("reading zip: {e}"))?;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| format!("zip entry {i}: {e}"))?;
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().to_string();
+        let Some(rel) = name.strip_prefix(FILES_PREFIX) else {
+            continue;
+        };
+        // A zip entry name is attacker-controlled — reject any `..`/absolute
+        // path so extraction cannot escape `dest_dir`.
+        if !dcs_studio_project::install::stays_under(
+            &rel.replace('/', std::path::MAIN_SEPARATOR_STR),
+        ) {
+            return Err(format!("package entry '{name}' escapes the payload root"));
+        }
+        let out = dest_dir.join(rel);
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+        }
+        let mut bytes = Vec::with_capacity(entry.size() as usize);
+        entry
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("reading entry {name}: {e}"))?;
+        std::fs::write(&out, &bytes).map_err(|e| format!("writing {}: {e}", out.display()))?;
+    }
+    Ok(())
+}
+
+fn write_entry<W: Write + std::io::Seek>(
+    zip: &mut zip::ZipWriter<W>,
+    opts: zip::write::SimpleFileOptions,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    zip.start_file(name, opts)
+        .map_err(|e| format!("zip start {name}: {e}"))?;
+    zip.write_all(bytes)
+        .map_err(|e| format!("zip write {name}: {e}"))
+}
+
+fn read_json<T: serde::de::DeserializeOwned, R: Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+    name: &str,
+) -> Result<T, String> {
+    let mut entry = zip
+        .by_name(name)
+        .map_err(|e| format!("package is missing {name}: {e}"))?;
+    let mut text = String::new();
+    entry
+        .read_to_string(&mut text)
+        .map_err(|e| format!("reading {name}: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("parsing {name}: {e}"))
+}
+
+fn to_pretty<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, String> {
+    serde_json::to_vec_pretty(value).map_err(|e| format!("serialising: {e}"))
+}

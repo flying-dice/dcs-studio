@@ -1,0 +1,27 @@
+# A SMALL mock of the package signing server (issue #37): signs manifests and
+# validates signatures with a revocation list, over ed25519. Keys are minted
+# per user and never leave the process. The REAL server is out of scope — this
+# exists to drive the package flow (and its tests) end to end.
+[package]
+name = "mock-package-server"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "mock-package-server"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+studio-packages = { path = "../studio-packages" }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+base64 = "0.22"
+tiny_http = "0.12"
+
+[dev-dependencies]
+ureq = { version = "2", features = ["json"] }
