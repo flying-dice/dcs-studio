@@ -1,7 +1,7 @@
-// The packaged-app Lua provider: the standalone `lua-analyzer` binary
-// hosted by the backend, spoken to over IPC (decisions/005) — hosted exactly
-// like rust-analyzer (it indexes the project from the rootUri). Implements
-// the same LanguageProvider contract as the wasm fallback.
+// The Lua provider: the standalone `lua-analyzer` binary hosted by the
+// backend, spoken to over IPC (decisions/005) — hosted exactly like
+// rust-analyzer (it indexes the project from the rootUri). The one
+// `LanguageProvider` the app uses for `.lua`.
 //
 // Wire shapes and position conversion live in lsp-wire.ts, shared with
 // the rust-analyzer provider.
@@ -69,7 +69,7 @@ async function connectViaHost(): Promise<LspClient> {
 }
 
 export class LuaAnalyzerProvider implements LanguageProvider {
-  // The LOGICAL provider id is shared with the wasm engine (dcs-lua.ts): the
+  // The LOGICAL provider id is shared via dcs-lua.ts: the
   // app sees one "dcs-lua" Lua provider whichever transport backs it. The
   // BINARY is lua-analyzer; only the host connection id (above) is sequenced.
   readonly id = "dcs-lua";
@@ -270,7 +270,7 @@ export class LuaAnalyzerProvider implements LanguageProvider {
   }
 
   // lua-analyzer advertises `inlayHintProvider` and answers from the same
-  // engine inlay-hint query as the wasm path. Defensive `[]` on any error so
+  // engine inlay-hint query. Defensive `[]` on any error so
   // a server that lacks it can never abort the editor's lint pass.
   async inlayHints(path: string): Promise<InlayHint[]> {
     if (!this.client) return [];

@@ -1,14 +1,12 @@
 // The language-intelligence extension point (model/studio/lang.pds).
 //
-// LSP-shaped and transport-free: engines run embedded (wasm in this
-// webview), so providers expose synchronous queries over a mounted
-// workspace — no process, no JSON-RPC.
+// LSP-shaped: every engine is a hosted language server reached over IPC, so
+// the queries are async over a mounted workspace.
 //
 // The DTO shapes below are the ENGINE-AGNOSTIC contract: hand-declared so
-// a second engine can implement `LanguageProvider` without depending on
-// any one engine's generated types. The dcs-lua wasm engine's tsify
-// output is structurally identical, so it satisfies these by assignment —
-// TypeScript's structural typing is the conformance check.
+// each engine (dcs-lua's `lua-analyzer`, rust-analyzer) can implement
+// `LanguageProvider` without the consumer depending on any one engine's
+// wire types — TypeScript's structural typing is the conformance check.
 
 /** One workspace source — the file-system port's unit. */
 export interface SourceFile {
@@ -127,9 +125,8 @@ export interface ProviderNotice {
 }
 
 /**
- * Every method is async so one contract spans both transports: the
- * backend-hosted LSP over IPC (packaged app) and the in-page wasm engine
- * (browser fallback) — decisions/005.
+ * Every method is async: each engine is a backend-hosted language server
+ * reached over IPC (decisions/005, revised by issue #32).
  */
 export interface LanguageProvider {
   /** Stable identifier, e.g. `"dcs-lua"`. */
@@ -141,9 +138,9 @@ export interface LanguageProvider {
 
   /**
    * Load the engine and seed it with the workspace. `root` is the
-   * workspace root path: providers whose servers index the project
-   * themselves (rust-analyzer) pass it on as `rootUri`; embedded engines
-   * fed file-by-file ignore it. Resolves once queries are live; rejects
+   * workspace root path: hosted servers that index the project themselves
+   * (lua-analyzer, rust-analyzer) pass it on as `rootUri`. Resolves once
+   * queries are live; rejects
    * when the engine cannot load (the IDE stays usable —
    * model/studio/lang.pds `EngineFailureIsNonFatal`).
    */

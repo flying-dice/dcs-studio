@@ -264,7 +264,7 @@ export class LangIntel {
       // `UpdateSource` → `RefreshOutline`).
       if (path === this.outlinePath) await this.refreshOutline(path);
     } catch (error) {
-      // Engine death (server crash, wasm trap) surfaces in the status
+      // Engine death (the hosted server crashing) surfaces in the status
       // bar; the IDE keeps working without intelligence.
       console.error("language engine failed:", error);
       this.engineStatus = "failed";

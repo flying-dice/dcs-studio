@@ -1,7 +1,7 @@
 // CodeMirror wiring for the provider layer: lint (diagnostics + session
-// sync), folding, and hover. Providers are async (LSP over IPC, or wasm
-// in-page); CodeMirror's lint and hover sources accept promises, and the
-// synchronous fold service reads ranges cached during each lint pass.
+// sync), folding, and hover. Providers are async (a hosted LSP over IPC);
+// CodeMirror's lint and hover sources accept promises, and the synchronous
+// fold service reads ranges cached during each lint pass.
 
 import { foldService } from "@codemirror/language";
 import {

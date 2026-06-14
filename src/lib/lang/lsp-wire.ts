@@ -155,9 +155,8 @@ function hoverMarkdown(contents: LspWireHoverContents): string {
  * hosted server wraps the signature in a fenced code block (lua-analyzer's
  * ```lua, rust-analyzer's ```rust) followed by prose. We render that markdown
  * verbatim as the card body — the renderer turns the fences into styled code
- * blocks — so there is no title line to reconstruct downstream. (The two-tier
- * `title`/`body` card is the wasm engine's own structured path; it never
- * passes through here.)
+ * blocks — so there is no title line to reconstruct downstream. The card's
+ * `title` stays empty for LSP hovers; only the body is rendered.
  */
 export function convertHover(wire: LspWireHover | null): Hover | null {
   if (!wire) return null;
