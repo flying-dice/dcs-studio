@@ -14,8 +14,8 @@ actually executed.
 
 ## How it runs
 
-- Barricade is executed by a **dedicated Fable-model subagent** (Agent tool,
-  `model: "fable"`), never inline in the orchestrator's own context and
+- Barricade is executed by a **dedicated subagent** (Agent tool,
+  `model: "opus"`), never inline in the orchestrator's own context and
   never by the agent that wrote the change — the author reviewing the
   author proves nothing.
 - The subagent works in the branch's worktree and reports the full verdict

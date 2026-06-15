@@ -20,8 +20,10 @@
   import Editor from "$lib/components/Editor.svelte";
   import EditorTabs from "$lib/components/EditorTabs.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
+  import McpHelpModal from "$lib/components/McpHelpModal.svelte";
   import PanelResizeHandle from "$lib/components/PanelResizeHandle.svelte";
   import { lang } from "$lib/lang/intel.svelte";
+  import { mcp } from "$lib/mcp.svelte";
   import { cn } from "$lib/utils.js";
 
   import { Button } from "$lib/components/ui/button/index.js";
@@ -62,6 +64,9 @@
     type LucideIcon,
   } from "@lucide/svelte";
   import { onMount } from "svelte";
+
+  // Setup-help modal for the IDE-hosted MCP server (issue #39).
+  let mcpHelpOpen = $state(false);
 
   // Open the project the app was launched with (`--open <path>`), if any.
   onMount(() => {
@@ -645,11 +650,39 @@
         {/if}
       </span>
       <Separator orientation="vertical" class="!h-3" />
+      <!-- MCP server: click opens setup help for wiring an editor (issue #39).
+           dot = green serving, red bind error, grey not started yet. -->
+      <button
+        class="flex shrink-0 items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground hover:text-foreground"
+        data-testid="mcp-status"
+        title={mcp.running
+          ? `MCP server: ${mcp.url} — click for editor setup`
+          : (mcp.error ?? "MCP server not started") + " — click for setup"}
+        onclick={() => (mcpHelpOpen = true)}
+      >
+        <span
+          class={cn(
+            "size-1.5 rounded-full",
+            mcp.running && "bg-emerald-500",
+            !mcp.running && mcp.error && "bg-red-500",
+            !mcp.running && !mcp.error && "bg-muted-foreground/40",
+          )}
+        ></span>
+        {#if mcp.running}
+          MCP :{mcp.port}
+        {:else if mcp.error}
+          MCP: error
+        {:else}
+          MCP: off
+        {/if}
+      </button>
+      <Separator orientation="vertical" class="!h-3" />
       <span class="flex items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground">
         {#if app.dark}<Moon class="size-3" />{:else}<Sun class="size-3" />{/if}
         {editorThemeLabel}
       </span>
     </footer>
   </div>
+  <McpHelpModal open={mcpHelpOpen} onClose={() => (mcpHelpOpen = false)} />
 </Tooltip.Provider>
 {/if}

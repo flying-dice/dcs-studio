@@ -25,14 +25,17 @@ tauri-plugin-window-state = "2"
 tauri-plugin-single-instance = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
 tracing = { workspace = true }
+# Standard MCP server transport (issue #39): the IDE hosts its agent tool
+# surface over MCP Streamable HTTP via the official SDK, no hand-rolled wire.
+rmcp = { version = "0.9", features = ["server", "transport-streamable-http-server"] }
+axum = "0.8"
 dcs-bridge-client = { path = "../dcs-bridge-client" }
 dcs-studio-project = { path = "../dcs-studio-project" }
 dcs-lua-fmt = { path = "../dcs-lua-fmt" }
 studio-services = { path = "../studio-services" }
 studio-packages = { path = "../studio-packages" }
 studio-mcp = { path = "../studio-mcp" }
-getrandom = "0.2"
 base64 = "0.22"
 

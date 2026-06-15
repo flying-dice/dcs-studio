@@ -320,6 +320,17 @@ feature ScaffoldTeachesNextSteps for studio::cli::Cli {
   and "rust-dll names build and install, lua-script names check or open"
 }
 
+/// A scaffolded project is agent-ready: it carries a .mcp.json that points an
+/// MCP editor at the IDE's hosted tool surface (studio::mcp, issue #39) over
+/// HTTP on the fixed loopback port — unauthenticated, so the config is just a
+/// URL and an editor opened in the project reaches the surface as-is.
+feature ScaffoldBootstrapsMcpConfig for studio::cli::Cli {
+  given "a fresh init of any registered template"
+  when "scaffolding succeeds"
+  then "the project root carries a .mcp.json naming the IDE's MCP server over HTTP on the fixed loopback port"
+  and "an MCP editor opened in the project can reach the surface with no extra configuration"
+}
+
 /// An agent builds and deploys a mod without the app or the IDE.
 feature AgentBuildsAndInstallsHeadless for studio::cli::Cli {
   given "a rust-dll project and only the dcs-studio-cli binary"

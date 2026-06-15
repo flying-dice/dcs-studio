@@ -10,6 +10,8 @@
 //! - [`install`] — apply the manifest's `[[install]]` rules to the local
 //!   machine's named roots (`{SavedGames}`, `{GameInstall}`).
 //! - [`detect`] — find the local DCS Saved Games write dir.
+//! - [`mcp`] — the IDE's MCP endpoint (issue #39), shared so the scaffolded
+//!   `.mcp.json` and the app's server can't drift.
 //! - [`toolchain`] — detect the Rust toolchain for `rust-dll` builds.
 //! - [`process`] — spawn child processes without console-window flashes.
 //! - [`todos`] — workspace comment-tag scanner (Todos panel, issue #16).
@@ -18,6 +20,7 @@ pub mod detect;
 pub mod install;
 pub mod logging;
 pub mod manifest;
+pub mod mcp;
 pub mod process;
 pub mod scaffold;
 pub mod sources;

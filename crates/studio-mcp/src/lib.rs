@@ -1,7 +1,7 @@
 //! studio-mcp — the IDE's MCP tool surface (model/studio/mcp.pds, issue #33),
-//! newline-delimited JSON-RPC (protocol 2024-11-05). Hosted by the running
-//! app over a loopback transport sharing the app's live DCS link; also
-//! drivable headless over stdio via [`serve`]. Tool groups:
+//! JSON-RPC (protocol 2024-11-05). The dispatch ([`handle`]) is
+//! transport-agnostic; the running app hosts it over standard MCP Streamable
+//! HTTP (issue #39), sharing the app's live DCS link. Tool groups:
 //!
 //! - project: `init_project`, `check`, `build`
 //! - workspace fs: `read_dir`, `read_text_file`, `write_text_file`,
@@ -27,7 +27,6 @@ pub mod check;
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::io::{BufRead, Write};
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
@@ -122,35 +121,11 @@ impl ToolError {
     }
 }
 
-/// Drive the handler over stdio (newline-delimited JSON-RPC) until the input
-/// closes — the headless transport. The app hosts the surface differently,
-/// calling [`handle`] over its loopback transport with a live-link session.
-///
-/// # Errors
-/// Propagates an `io::Error` if reading a line from stdin or writing a
-/// response to stdout fails.
-pub fn serve() -> std::io::Result<()> {
-    let session = Session::default();
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout().lock();
-    for line in stdin.lock().lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(message) = serde_json::from_str::<Value>(&line) else {
-            continue; // unparseable frames are ignored, the session lives on
-        };
-        let Some(response) = handle(&session, &message) else {
-            continue; // notification — nothing to answer
-        };
-        serde_json::to_writer(&mut stdout, &response)?;
-        stdout.write_all(b"\n")?;
-        stdout.flush()?;
-    }
-    Ok(())
-}
-
+/// Dispatch one JSON-RPC message against `session`, returning the response (or
+/// `None` for a notification). Transport-agnostic: the app feeds it framed
+/// messages over its loopback HTTP transport with a live-link session, and the
+/// `handler` test drives it in-process; there is no bespoke stdio loop (#39
+/// retired it once the surface moved into the IDE host).
 pub fn handle(session: &Session, message: &Value) -> Option<Value> {
     let method = message.get("method")?.as_str()?;
     let params = message.get("params").cloned().unwrap_or(Value::Null);
@@ -185,6 +160,30 @@ pub fn handle(session: &Session, message: &Value) -> Option<Value> {
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
 }
 
+/// A tool call's failure for a host that frames the MCP protocol itself (the
+/// app's rmcp Streamable HTTP server, issue #39): the JSON-RPC error code and
+/// message the host maps onto an MCP error.
+pub struct ToolCallError {
+    pub code: i64,
+    pub message: String,
+}
+
+/// Invoke one tool by name with its arguments object — the entry point for
+/// hosts that own the protocol framing (the app's rmcp HTTP server). The stdio
+/// host drives the same surface through [`handle`]; both share `tools_call`
+/// underneath, so every transport runs identical tool logic.
+///
+/// # Errors
+/// Invalid params (-32602), or a capability the engine does not have yet
+/// (-32601).
+pub fn call_tool(session: &Session, name: &str, arguments: &Value) -> Result<Value, ToolCallError> {
+    let params = json!({ "name": name, "arguments": arguments });
+    tools_call(session, &params).map_err(|error| ToolCallError {
+        code: error.code,
+        message: error.message,
+    })
+}
+
 fn error_response(id: &Value, code: i64, message: &str) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -195,7 +194,11 @@ fn error_response(id: &Value, code: i64, message: &str) -> Value {
 
 // ---- tool registry ----------------------------------------------------------
 
-fn tools_list() -> Value {
+/// The advertised tool surface as MCP wire JSON (`{ "tools": [ … ] }`). Public
+/// so the app's rmcp host can hand the same specs to the SDK's `list_tools`
+/// (issue #39); the stdio host reaches it through [`handle`]'s `tools/list`.
+#[must_use]
+pub fn tools_list() -> Value {
     let mut tools = project_tool_specs();
     tools.extend(workspace_tool_specs());
     tools.extend(dcs_tool_specs());

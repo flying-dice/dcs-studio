@@ -2,13 +2,16 @@
 	import './layout.css';
 	import { onMount } from "svelte";
 	import { app } from "$lib/state.svelte";
+	import { mcp } from "$lib/mcp.svelte";
 	import { editorThemeById, chromeVars } from "$lib/themes";
 
 	let { children } = $props();
 
-	// Start listening for the Rust-side DCS link events (status bar feed).
+	// Start listening for the Rust-side DCS link events (status bar feed), and
+	// snapshot the IDE-hosted MCP server status (issue #39) for the status bar.
 	onMount(() => {
 		app.initDcs();
+		void mcp.refresh();
 	});
 
 	// The selected editor theme drives the whole UI. We (a) toggle `.dark` so

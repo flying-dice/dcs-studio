@@ -103,7 +103,10 @@ pub enum TermEvent {
 struct Session {
     profile_id: String,
     label: String,
-    master: Box<dyn MasterPty + Send>,
+    /// The pty master, for resize. `None` once the reaper has dropped it to
+    /// force the pump's reader to EOF on child exit (the session stays
+    /// registered until the pump finishes draining, so no output is lost).
+    master: Option<Box<dyn MasterPty + Send>>,
     /// The child's stdin, behind its own lock so a blocking write — a child not
     /// draining its input — stalls only this session, never the registry map:
     /// other tabs' commands and every output pump keep running (model
@@ -149,7 +152,7 @@ impl TermRegistry {
         &self,
         id: String,
         spec: SpawnSpec,
-        sink: impl Fn(TermEvent) + Send + 'static,
+        sink: impl Fn(TermEvent) + Send + Sync + 'static,
     ) -> Result<(), String> {
         // Reject a duplicate id before opening a pseudo-terminal, so a caller
         // bug never spawns a child we'd immediately discard. The authoritative
@@ -204,7 +207,7 @@ impl TermRegistry {
                 Session {
                     profile_id: spec.profile_id,
                     label: spec.label,
-                    master: pty.master,
+                    master: Some(pty.master),
                     writer: Arc::new(Mutex::new(writer)),
                     killer,
                     buffer: VecDeque::new(),
@@ -213,8 +216,41 @@ impl TermRegistry {
             );
         }
 
-        let sessions = self.sessions.clone();
-        std::thread::spawn(move || pump(reader, &mut *child, &id, &sessions, &sink));
+        // Pump output on one thread, reap the child on another.
+        let sink = Arc::new(sink);
+        let pump_sessions = self.sessions.clone();
+        let pump_id = id.clone();
+        let pump_sink = Arc::clone(&sink);
+        let pump = std::thread::spawn(move || pump(reader, &pump_id, &pump_sessions, &*pump_sink));
+
+        // The reaper waits on the child, then makes the pump finish and delivers
+        // the exit. The ordering matters for correctness:
+        //   1. On child exit, DROP ONLY THE MASTER (not the whole session) so
+        //      the pump's reader EOFs. Unix EOFs on its own when the child's
+        //      slave closes; the Windows ConPTY reader does not until the
+        //      pseudoconsole (master) handle is gone. Leaving the session
+        //      registered means the pump keeps appending the last bytes it
+        //      already read instead of hitting `None => break` and dropping them.
+        //   2. JOIN the pump so every byte is emitted before...
+        //   3. ...the session is deregistered (buffer dropped) and Exit is
+        //      delivered — exactly once, after the full output
+        //      (model SpontaneousExitCleansUp). `kill` may have removed the
+        //      session already; both steps are then no-ops.
+        let reap_sessions = self.sessions.clone();
+        std::thread::spawn(move || {
+            let mut child = child;
+            let code = child.wait().ok().map(|status| status.exit_code() as i32);
+            if let Ok(mut map) = reap_sessions.lock() {
+                if let Some(session) = map.get_mut(&id) {
+                    session.master = None;
+                }
+            }
+            let _ = pump.join();
+            if let Ok(mut map) = reap_sessions.lock() {
+                map.remove(&id);
+            }
+            (*sink)(TermEvent::Exit(code));
+        });
         Ok(())
     }
 
@@ -241,14 +277,14 @@ impl TermRegistry {
     }
 
     /// Resize a session's pseudo-terminal so the child redraws (model
-    /// `Terminal.Resize`). A gone session is a no-op.
+    /// `Terminal.Resize`). A gone session — or one whose child has exited and
+    /// whose master is already dropped — is a no-op.
     pub fn resize(&self, id: &str, rows: u16, cols: u16) -> Result<(), String> {
         let sessions = self.sessions.lock().map_err(|e| e.to_string())?;
-        let Some(session) = sessions.get(id) else {
+        let Some(master) = sessions.get(id).and_then(|session| session.master.as_ref()) else {
             return Ok(());
         };
-        session
-            .master
+        master
             .resize(PtySize {
                 rows,
                 cols,
@@ -330,12 +366,12 @@ impl TermRegistry {
 /// Pump one session's pseudo-terminal output until its stream ends: append
 /// every chunk to the session's ring buffer (trimming past
 /// [`BUFFER_REPLAY_BYTES`]), advance its byte counter, and hand the chunk and
-/// the new offset to `sink`; when the stream ends (the child exited or was
-/// killed), deregister the session and deliver its exit code. Deregistering
-/// here is harmless if `kill` already removed the entry.
+/// the new offset to `sink`. The stream ends when the reader EOFs — the child
+/// exited (unix) or the reaper dropped the master to force it (Windows), or
+/// `kill` removed the session. Delivering the exit is the reaper's job, not
+/// this thread's, so it fires exactly once regardless of which side ended first.
 fn pump(
     mut reader: Box<dyn Read + Send>,
-    child: &mut (dyn portable_pty::Child + Send + Sync),
     id: &str,
     sessions: &Arc<Mutex<HashMap<String, Session>>>,
     sink: &(impl Fn(TermEvent) + Send + 'static),
@@ -353,7 +389,7 @@ fn pump(
                             session.produced += n;
                             session.produced
                         }
-                        // Killed: the entry is gone — stop pumping.
+                        // Killed/reaped: the entry is gone — stop pumping.
                         None => break,
                     },
                     Err(_) => break,
@@ -365,12 +401,6 @@ fn pump(
             }
         }
     }
-
-    let code = child.wait().ok().map(|status| status.exit_code() as i32);
-    if let Ok(mut map) = sessions.lock() {
-        map.remove(id);
-    }
-    sink(TermEvent::Exit(code));
 }
 
 /// The command for the built-in default shell profile (model `ResolveProfile`'s
@@ -423,6 +453,39 @@ mod tests {
             },
             rx,
         )
+    }
+
+    /// Read events until `want` appears AND the stream then goes quiet (a short
+    /// window with no further Data), returning all bytes and the final seq.
+    /// Unlike [`drain`], this waits for output to settle: a pty delivers a write
+    /// back as the line-discipline echo plus the child's own output, in one or
+    /// two chunks, so the seq of whichever chunk first contained `want` is not
+    /// the live stream's final offset. Settling makes the captured seq
+    /// deterministic so it can be compared against the replay buffer's offset.
+    fn drain_settled(rx: &mpsc::Receiver<TermEvent>, want: &str) -> (Vec<u8>, usize) {
+        let mut out = Vec::new();
+        let mut last_seq = 0;
+        let mut seen = false;
+        loop {
+            // Wait generously for the first/awaited bytes, then only briefly for
+            // the echo's tail — when that brief window elapses, the stream is
+            // quiescent and the seq is final.
+            let timeout = if seen {
+                Duration::from_millis(300)
+            } else {
+                Duration::from_secs(5)
+            };
+            match rx.recv_timeout(timeout) {
+                Ok(TermEvent::Data { bytes, seq }) => {
+                    out.extend_from_slice(&bytes);
+                    last_seq = seq;
+                    if String::from_utf8_lossy(&out).contains(want) {
+                        seen = true;
+                    }
+                }
+                Ok(TermEvent::Exit(_)) | Err(_) => return (out, last_seq),
+            }
+        }
     }
 
     /// Read events until the wanted text shows in the output or the stream
@@ -510,6 +573,52 @@ mod tests {
         );
     }
 
+    /// The Windows regression this reaper fixes: a child that exits on its own
+    /// (typing `exit` in PowerShell) does NOT EOF the ConPTY reader, so before
+    /// the reaper the pump blocked forever and no exit ever reached the tab. The
+    /// reaper waits on the child and drops the master to unblock the reader.
+    #[test]
+    #[cfg(windows)]
+    fn windows_spontaneous_exit_is_delivered_and_deregisters() {
+        let registry = TermRegistry::default();
+        let (sink, rx) = collector();
+        registry
+            .spawn(
+                "w".into(),
+                SpawnSpec {
+                    profile_id: "test".into(),
+                    label: "test".into(),
+                    command: "cmd.exe".into(),
+                    args: vec!["/c".into(), "echo hello".into()],
+                    cwd: None,
+                    env: Vec::new(),
+                    rows: 24,
+                    cols: 80,
+                },
+                sink,
+            )
+            .expect("spawn");
+
+        loop {
+            match rx.recv_timeout(Duration::from_secs(10)) {
+                Ok(TermEvent::Exit(_)) => break,
+                Ok(TermEvent::Data { bytes, .. }) => {
+                    // ConPTY emits a cursor-position query (`ESC[6n`) on startup
+                    // and stalls the child until the terminal answers — xterm.js
+                    // does this in the app; here the test must, or `cmd` never
+                    // runs `echo` and never exits.
+                    if bytes.windows(4).any(|w| w == b"\x1b[6n") {
+                        let _ = registry.write("w", b"\x1b[1;1R");
+                    }
+                }
+                Err(_) => panic!("no exit delivered — ConPTY reader never unblocked"),
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(registry.list().is_empty(), "exited session deregistered");
+        assert!(registry.replay("w").bytes.is_empty(), "buffer dropped on exit");
+    }
+
     #[test]
     #[cfg_attr(not(unix), ignore = "uses /bin/cat")]
     fn write_reaches_the_child_and_kill_cleans_up() {
@@ -529,13 +638,16 @@ mod tests {
             .expect("spawn");
 
         registry.write("c", b"ping\n").expect("write");
-        let (out, seq, _) = drain(&rx, "ping");
+        // Settle the echo so `seq` is the live stream's final offset, not the
+        // first chunk that happened to contain "ping" (a pty splits the echo +
+        // cat's output across one or two chunks).
+        let (out, seq) = drain_settled(&rx, "ping");
         assert!(
             String::from_utf8_lossy(&out).contains("ping"),
             "saw {out:?}"
         );
-        // Replay carries the same byte offset the live chunk did — the splice
-        // point a remounting view dedups against.
+        // Replay carries the same byte offset the live stream ended at — the
+        // splice point a remounting view dedups against.
         assert_eq!(registry.replay("c").seq, seq, "replay seq matches live seq");
 
         assert_eq!(registry.list().len(), 1, "session live before kill");
@@ -586,6 +698,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(unix), ignore = "uses /bin/sh")]
     fn duplicate_id_is_rejected() {
         let registry = TermRegistry::default();
         let (sink_a, _rx_a) = collector();
