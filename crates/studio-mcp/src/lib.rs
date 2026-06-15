@@ -1,7 +1,7 @@
 //! studio-mcp — the IDE's MCP tool surface (model/studio/mcp.pds, issue #33),
-//! newline-delimited JSON-RPC (protocol 2024-11-05). Hosted by the running
-//! app over a loopback transport sharing the app's live DCS link; also
-//! drivable headless over stdio via [`serve`]. Tool groups:
+//! JSON-RPC (protocol 2024-11-05). The dispatch ([`handle`]) is
+//! transport-agnostic; the running app hosts it over standard MCP Streamable
+//! HTTP (issue #39), sharing the app's live DCS link. Tool groups:
 //!
 //! - project: `init_project`, `check`, `build`
 //! - workspace fs: `read_dir`, `read_text_file`, `write_text_file`,
@@ -27,7 +27,6 @@ pub mod check;
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::io::{BufRead, Write};
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
@@ -122,35 +121,11 @@ impl ToolError {
     }
 }
 
-/// Drive the handler over stdio (newline-delimited JSON-RPC) until the input
-/// closes — the headless transport. The app hosts the surface differently,
-/// calling [`handle`] over its loopback transport with a live-link session.
-///
-/// # Errors
-/// Propagates an `io::Error` if reading a line from stdin or writing a
-/// response to stdout fails.
-pub fn serve() -> std::io::Result<()> {
-    let session = Session::default();
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout().lock();
-    for line in stdin.lock().lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(message) = serde_json::from_str::<Value>(&line) else {
-            continue; // unparseable frames are ignored, the session lives on
-        };
-        let Some(response) = handle(&session, &message) else {
-            continue; // notification — nothing to answer
-        };
-        serde_json::to_writer(&mut stdout, &response)?;
-        stdout.write_all(b"\n")?;
-        stdout.flush()?;
-    }
-    Ok(())
-}
-
+/// Dispatch one JSON-RPC message against `session`, returning the response (or
+/// `None` for a notification). Transport-agnostic: the app feeds it framed
+/// messages over its loopback HTTP transport with a live-link session, and the
+/// `handler` test drives it in-process; there is no bespoke stdio loop (#39
+/// retired it once the surface moved into the IDE host).
 pub fn handle(session: &Session, message: &Value) -> Option<Value> {
     let method = message.get("method")?.as_str()?;
     let params = message.get("params").cloned().unwrap_or(Value::Null);

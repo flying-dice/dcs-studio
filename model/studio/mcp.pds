@@ -294,6 +294,17 @@ feature FailsClosedOnPortClash for studio::mcp::McpServer {
   but "the rest of the IDE runs normally"
 }
 
+/// Unauthenticated but not reachable from the web (issue #39): the surface
+/// trusts the loopback bind, so it rejects any request whose Origin or Host is
+/// not loopback — a website that rebinds its hostname to 127.0.0.1 cannot drive
+/// dcs_eval. Local tools (no Origin, loopback Host) are unaffected.
+feature RejectsNonLoopbackOrigin for studio::mcp::McpServer {
+  given "the unauthenticated MCP server serving on the fixed loopback port"
+  when "a request arrives with a non-loopback Origin or Host header"
+  then "the server rejects it before any tool runs"
+  but "a local tool with no Origin and a loopback Host is served normally"
+}
+
 /// Lang tools answer from the real engine, not stubs.
 feature AgentSeesRealDiagnostics for studio::mcp::McpServer {
   given "a workspace with a syntactically broken Lua file"

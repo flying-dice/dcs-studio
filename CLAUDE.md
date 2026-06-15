@@ -107,12 +107,15 @@ machine, so it binds a **fixed loopback port (25570) or fails closed** — never
 random fallback nothing could discover; a bind clash surfaces in the status bar
 and the IDE runs on. It is **unauthenticated**, trusting the loopback-only bind
 to keep it to this machine (the accepted trade: any local process can reach
-`dcs_eval`, in exchange for a config with no secret). The status-bar indicator
+`dcs_eval`, in exchange for a config with no secret) — but an axum middleware
+rejects any request with a non-loopback `Origin`/`Host` so a website can't drive
+it via DNS rebinding. The status-bar indicator
 (bottom right) opens a setup-help modal with copy blocks (`claude mcp add`, raw
 JSON, bare URL); new projects scaffold a `.mcp.json` that is just the HTTP URL.
 The blocking tool dispatch runs on a dedicated OS thread (not a tokio worker) so
-the per-session `studio_mcp::Session` drives its own runtime exactly as the stdio
-host does. The same handler is drivable headless over stdio. The
+the per-session `studio_mcp::Session` can drive its own runtime. The `studio_mcp`
+handler is transport-agnostic (`handle` dispatches one JSON-RPC message); the IDE
+feeds it over HTTP — there is no separate stdio host. The
 surface (model/studio/mcp.pds): project (`init_project`, `check`, `build`),
 workspace fs (`read_dir`, `read_text_file`, `write_text_file`, `path_exists`),
 the DCS link (`dcs_status`, `dcs_eval`, `dcs_call`), injection

@@ -195,11 +195,64 @@ fn serve(listener: std::net::TcpListener, session: Arc<Session>) {
             Arc::new(LocalSessionManager::default()),
             StreamableHttpServerConfig::default(),
         );
-        let router = axum::Router::new().nest_service(MCP_PATH, http);
+        let router = axum::Router::new()
+            .nest_service(MCP_PATH, http)
+            // Block the DNS-rebinding vector: the surface is unauthenticated and
+            // trusts only local tools, so reject anything that isn't.
+            .layer(axum::middleware::from_fn(guard_loopback));
         if let Err(error) = axum::serve(listener, router).await {
             tracing::error!(%error, "mcp: server exited");
         }
     });
+}
+
+/// Reject any request that is not from a local tool, closing the DNS-rebinding
+/// hole: the surface is unauthenticated (it trusts the loopback bind), so a
+/// website that rebinds its hostname to `127.0.0.1` must not be able to reach it
+/// and drive `dcs_eval`. A browser always sends an `Origin`; a rebound request
+/// carries the attacker's host in `Origin`/`Host`. Local CLIs/editors send no
+/// `Origin` and a loopback `Host`. So: any `Origin` present must be loopback,
+/// and the `Host` must be loopback. (The MCP spec requires this for local
+/// Streamable HTTP servers; `rmcp` does not enforce it.)
+async fn guard_loopback(request: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    use axum::http::{header, StatusCode};
+    use axum::response::IntoResponse;
+
+    let headers = request.headers();
+    let origin_ok = headers
+        .get(header::ORIGIN)
+        .is_none_or(|value| value.to_str().is_ok_and(is_loopback_origin));
+    let host_ok = headers
+        .get(header::HOST)
+        .is_some_and(|value| value.to_str().is_ok_and(is_loopback_host));
+    if origin_ok && host_ok {
+        next.run(request).await
+    } else {
+        StatusCode::FORBIDDEN.into_response()
+    }
+}
+
+/// The host portion of an authority (`host`, `host:port`, or a bracketed IPv6
+/// `[::1]` / `[::1]:port`), with any port stripped.
+fn host_only(authority: &str) -> &str {
+    if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next().unwrap_or(rest)
+    } else {
+        authority.split(':').next().unwrap_or(authority)
+    }
+}
+
+/// Whether an authority names the loopback interface.
+fn is_loopback_host(authority: &str) -> bool {
+    matches!(host_only(authority), "127.0.0.1" | "localhost" | "::1")
+}
+
+/// Whether an `Origin` (`scheme://authority`) is loopback. A non-URL origin
+/// (e.g. `null` from a sandboxed page) is not.
+fn is_loopback_origin(origin: &str) -> bool {
+    origin
+        .split_once("://")
+        .is_some_and(|(_, authority)| is_loopback_host(authority))
 }
 
 /// The `rmcp` server handler: a thin `ServerHandler` whose tool methods delegate
@@ -377,6 +430,28 @@ mod tests {
             dcs_studio_project::mcp::url(),
             "still reports the intended endpoint for the modal"
         );
+    }
+
+    #[test]
+    fn loopback_guard_allows_local_tools_and_blocks_rebinding() {
+        // Local CLIs/editors: loopback Host, often no Origin.
+        assert!(is_loopback_host("127.0.0.1:25570"));
+        assert!(is_loopback_host("localhost:25570"));
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("[::1]:25570"));
+        // A browser making a same-origin request to the surface.
+        assert!(is_loopback_origin("http://127.0.0.1:25570"));
+        assert!(is_loopback_origin("http://localhost:25570"));
+
+        // DNS-rebinding: the attacker's hostname (resolved to 127.0.0.1) shows
+        // up in Host/Origin — must be rejected.
+        assert!(!is_loopback_host("evil.example.com:25570"));
+        assert!(!is_loopback_origin("https://evil.example.com"));
+        // A sandboxed page sends `Origin: null`.
+        assert!(!is_loopback_origin("null"));
+        // Lookalikes must not pass.
+        assert!(!is_loopback_host("127.0.0.1.evil.com"));
+        assert!(!is_loopback_host("localhostx"));
     }
 
     #[test]
