@@ -272,6 +272,24 @@ export function dcsStatus(): Promise<DcsStatus> {
   return invoke<DcsStatus>("dcs_status");
 }
 
+/**
+ * The IDE-hosted MCP server's status (model studio::mcp, issue #39): standard
+ * MCP Streamable HTTP on a fixed loopback port, unauthenticated (loopback-only).
+ * `running` is false with an `error` when the fixed port was taken (fail-closed,
+ * never a random fallback). The setup-help modal turns this into editor configs.
+ */
+export interface McpStatus {
+  running: boolean;
+  port: number;
+  url: string;
+  error: string | null;
+}
+
+/** Snapshot the IDE's MCP server status (server starts at app boot). */
+export function mcpStatus(): Promise<McpStatus> {
+  return invoke<McpStatus>("mcp_status");
+}
+
 /** A detected DCS write dir under `%USERPROFILE%\Saved Games`. */
 export interface DcsInstall {
   name: string;

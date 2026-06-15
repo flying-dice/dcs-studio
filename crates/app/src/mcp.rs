@@ -1,337 +1,395 @@
-//! App-hosted MCP server (issue #33): the IDE exposes its tool surface to
-//! local agents over a loopback TCP socket, dispatching through
-//! `studio_mcp::handle` with the app's LIVE DCS link — so an agent and the IDE
-//! share the one open connection to the sim instead of a sidecar dialing a
-//! second (which would collide on the bridge).
+//! App-hosted MCP server (issues #33, #39): the IDE exposes its tool surface to
+//! local agents over **standard MCP Streamable HTTP**, served by the official
+//! `rmcp` SDK — no hand-rolled wire. Tools dispatch through `studio_mcp` with
+//! the app's LIVE DCS link, so an agent and the IDE share the one open
+//! connection to the sim instead of a sidecar dialing a second (which would
+//! collide on the bridge).
 //!
-//! Two guards, because the surface includes `dcs_eval` (arbitrary Lua into the
-//! running sim): the listener binds loopback only, and a per-launch random
-//! token must be presented on the first line before any tool call. The token
-//! and port are written to `<app-config>/mcp.json`, readable by the agent the
-//! developer runs — never put on the wire by us.
+//! One IDE per machine, so the server binds a FIXED loopback port ([`MCP_PORT`])
+//! and **fails closed** if it is taken — never a random fallback that no editor
+//! could have been configured for. The surface is **unauthenticated**: it
+//! trusts the loopback-only bind to keep it reachable from this machine alone,
+//! so any editor's config is just a URL. (Note: the surface includes `dcs_eval`,
+//! so any local process can run Lua in the sim — that is the accepted trade for
+//! a config with no secret to manage.)
+//!
+//! The blocking tool dispatch runs on a dedicated OS thread (not a tokio worker)
+//! so the per-session `studio_mcp::Session` can drive its own runtime exactly as
+//! the stdio host does — see [`DcsStudioServer::call_tool`].
 
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
-use serde_json::{Value, json};
-use studio_mcp::{Session, handle};
-use studio_services::link::LinkShared;
+use rmcp::handler::server::ServerHandler;
+use rmcp::model::{
+    CallToolRequestParam, CallToolResult, Content, ErrorCode, ErrorData, Implementation,
+    ListToolsResult, PaginatedRequestParam, ServerCapabilities, ServerInfo, Tool,
+};
+use rmcp::service::{RequestContext, RoleServer};
+use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
+use serde_json::Value;
+use studio_mcp::Session;
 use tauri::{AppHandle, Manager};
 
-/// Where the agent reads `{ port, token }` from — beside the app's other
+// The fixed loopback port and endpoint path are owned by the shared project kit
+// (`dcs_studio_project::mcp`) — the one source the scaffolded `.mcp.json` and
+// this server both read, so they can never drift. Re-exported so existing
+// references to `crate::mcp::MCP_PORT` keep resolving.
+pub use dcs_studio_project::mcp::MCP_PORT;
+use dcs_studio_project::mcp::MCP_PATH;
+
+/// Where `{ port, url }` is persisted for discovery — beside the app's other
 /// config, in the per-user config dir. `pub(crate)` so the terminal's harness
-/// profiles point the same file at their child's environment (`term.rs`).
+/// profiles can point the same file at their child's environment (`term.rs`).
 pub(crate) const SESSION_FILE: &str = "mcp.json";
 
-/// Start the loopback MCP server. Non-fatal on any failure (no RNG, port in
-/// use, unwritable config dir): the IDE works on, agents just can't attach.
-pub fn start(app: &AppHandle) {
-    let link = app.state::<crate::dcs::DcsState>().link();
-    let Some(token) = generate_token() else {
-        tracing::warn!("mcp: no OS randomness — loopback server not started");
-        return;
-    };
-    let listener = match TcpListener::bind(("127.0.0.1", 0)) {
-        Ok(listener) => listener,
-        Err(error) => {
-            tracing::warn!(%error, "mcp: loopback bind failed — server not started");
-            return;
-        }
-    };
-    let port = match listener.local_addr() {
-        Ok(addr) => addr.port(),
-        Err(error) => {
-            tracing::warn!(%error, "mcp: no local addr — server not started");
-            return;
-        }
-    };
-    if let Err(error) = write_session_file(app, port, &token) {
-        // The server still serves; agents just won't discover it automatically.
-        tracing::warn!(%error, "mcp: could not write session file");
+/// The MCP server's runtime status, surfaced to the status-bar indicator and
+/// the setup-help modal (`mcp_status` command).
+#[derive(Clone, serde::Serialize)]
+pub struct McpStatus {
+    /// Whether the server bound the fixed port and is serving.
+    pub running: bool,
+    /// The fixed port ([`MCP_PORT`]) — reported even on failure so the modal can
+    /// still show the intended endpoint.
+    pub port: u16,
+    /// The full Streamable HTTP endpoint, e.g. `http://127.0.0.1:25570/mcp`.
+    pub url: String,
+    /// Why the server is not running (a port clash, …); `None` when it is
+    /// serving.
+    pub error: Option<String>,
+}
+
+impl McpStatus {
+    fn url_for(port: u16) -> String {
+        dcs_studio_project::mcp::url_for(port)
     }
-    tracing::info!(port, "mcp: loopback server listening");
-    std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let link = link.clone();
-            let token = token.clone();
-            std::thread::spawn(move || {
-                if let Err(error) = serve_conn(&stream, link, &token) {
-                    tracing::debug!(%error, "mcp: connection ended");
-                }
-            });
+
+    fn running(port: u16) -> Self {
+        McpStatus {
+            running: true,
+            port,
+            url: Self::url_for(port),
+            error: None,
+        }
+    }
+
+    fn failed(message: String) -> Self {
+        McpStatus {
+            running: false,
+            port: MCP_PORT,
+            url: Self::url_for(MCP_PORT),
+            error: Some(message),
+        }
+    }
+}
+
+impl Default for McpStatus {
+    /// Before `start` runs: not serving, no error yet.
+    fn default() -> Self {
+        McpStatus {
+            running: false,
+            port: MCP_PORT,
+            url: Self::url_for(MCP_PORT),
+            error: None,
+        }
+    }
+}
+
+/// Managed Tauri state holding the live MCP status (read by `mcp_status`).
+#[derive(Default)]
+pub struct McpServerState(Mutex<McpStatus>);
+
+impl McpServerState {
+    fn set(&self, status: McpStatus) {
+        if let Ok(mut guard) = self.0.lock() {
+            *guard = status;
+        }
+    }
+
+    fn snapshot(&self) -> McpStatus {
+        self.0
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| McpStatus::failed("status lock poisoned".to_string()))
+    }
+}
+
+/// The current MCP status — the status-bar indicator and setup-help modal read
+/// this once on mount (the server starts at app boot, so it is settled by then).
+#[tauri::command]
+pub fn mcp_status(state: tauri::State<'_, McpServerState>) -> McpStatus {
+    state.snapshot()
+}
+
+/// Start the MCP server. The fixed port is bound synchronously so a clash fails
+/// closed here — visible in the status bar — rather than falling back to a port
+/// nothing could discover. The IDE itself runs on regardless.
+pub fn start(app: &AppHandle) {
+    app.manage(McpServerState::default());
+    let state = app.state::<McpServerState>();
+
+    let link = app.state::<crate::dcs::DcsState>().link();
+
+    // Fixed port or fail closed: one IDE per machine, so a clash is an error, not
+    // a cue to pick another port (issue #39).
+    let listener = match bind_loopback(MCP_PORT) {
+        Ok(listener) => listener,
+        Err(message) => {
+            tracing::error!(port = MCP_PORT, %message, "mcp: fixed port unavailable — server not started");
+            state.set(McpStatus::failed(message));
+            return;
+        }
+    };
+
+    // Best-effort discovery file for the harness env (`term.rs`); the surface is
+    // reachable without it (fixed port, no token), so a write failure is fine.
+    if let Err(error) = write_discovery_file(app) {
+        tracing::warn!(%error, "mcp: could not write the discovery file");
+    }
+
+    state.set(McpStatus::running(MCP_PORT));
+    tracing::info!(port = MCP_PORT, "mcp: Streamable HTTP server listening");
+
+    let session = Arc::new(Session::with_link(link));
+    std::thread::spawn(move || serve(listener, session));
+}
+
+/// Bind the loopback MCP listener (non-blocking), returning the failure message
+/// on a clash so `start` can fail closed — never a random fallback (issue #39,
+/// model `FailsClosedOnPortClash`). Parameterised by port purely so the
+/// fail-closed path is testable without contending for the fixed port.
+fn bind_loopback(port: u16) -> Result<std::net::TcpListener, String> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port))
+        .map_err(|error| format!("port {port} unavailable: {error}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("listener setup: {error}"))?;
+    Ok(listener)
+}
+
+/// Run the axum/`rmcp` server on its own tokio runtime (this thread is not a
+/// tokio worker, so the per-session `Session` can still drive its own runtime in
+/// the blocking dispatch). Returns only when the server stops.
+fn serve(listener: std::net::TcpListener, session: Arc<Session>) {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            tracing::error!(%error, "mcp: could not build the server runtime");
+            return;
+        }
+    };
+    runtime.block_on(async move {
+        let listener = match tokio::net::TcpListener::from_std(listener) {
+            Ok(listener) => listener,
+            Err(error) => {
+                tracing::error!(%error, "mcp: could not adopt the listener");
+                return;
+            }
+        };
+        let http = StreamableHttpService::new(
+            move || Ok(DcsStudioServer::new(session.clone())),
+            Arc::new(LocalSessionManager::default()),
+            StreamableHttpServerConfig::default(),
+        );
+        let router = axum::Router::new().nest_service(MCP_PATH, http);
+        if let Err(error) = axum::serve(listener, router).await {
+            tracing::error!(%error, "mcp: server exited");
         }
     });
 }
 
-/// Serve one connection: the first line must authenticate, then every
-/// newline-framed JSON-RPC message dispatches through the shared handler over
-/// the app's live link. The `Session` is per-connection; the link is shared.
-fn serve_conn(stream: &TcpStream, link: Arc<LinkShared>, token: &str) -> std::io::Result<()> {
-    let session = Session::with_link(link);
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut writer = stream.try_clone()?;
-    let mut authed = false;
-    let mut line = String::new();
-    loop {
-        line.clear();
-        if reader.read_line(&mut line)? == 0 {
-            return Ok(()); // peer closed
+/// The `rmcp` server handler: a thin `ServerHandler` whose tool methods delegate
+/// to the shared `studio_mcp` dispatch over the app's live DCS link. One per HTTP
+/// session, all sharing the one `Session` (and thus the one link).
+#[derive(Clone)]
+struct DcsStudioServer {
+    session: Arc<Session>,
+}
+
+impl DcsStudioServer {
+    fn new(session: Arc<Session>) -> Self {
+        DcsStudioServer { session }
+    }
+}
+
+impl ServerHandler for DcsStudioServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            server_info: Implementation::from_build_env(),
+            instructions: Some(
+                "DCS Studio IDE tool surface: project, workspace fs, the live DCS link, \
+                 injection, mission scripting, and the dcs-lua engine."
+                    .to_string(),
+            ),
+            ..ServerInfo::default()
         }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(message) = serde_json::from_str::<Value>(trimmed) else {
-            continue; // unparseable frame — the connection lives on
-        };
-        if !authed {
-            let id = message.get("id").cloned().unwrap_or(Value::Null);
-            if is_valid_auth(&message, token) {
-                authed = true;
-                let ok = json!({ "jsonrpc": "2.0", "id": id, "result": { "authenticated": true } });
-                writeln!(writer, "{ok}")?;
-                continue;
-            }
-            // One chance: a bad or missing token closes the connection.
-            let err = json!({
-                "jsonrpc": "2.0", "id": id,
-                "error": { "code": -32001, "message": "authentication required: send { method: authenticate, params: { token } } first" },
-            });
-            writeln!(writer, "{err}")?;
-            return Ok(());
-        }
-        if let Some(response) = handle(&session, &message) {
-            writeln!(writer, "{response}")?;
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        let specs = studio_mcp::tools_list();
+        let tools: Vec<Tool> = serde_json::from_value(
+            specs.get("tools").cloned().unwrap_or(Value::Null),
+        )
+        .map_err(|error| {
+            ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("tool specs: {error}"),
+                None,
+            )
+        })?;
+        Ok(ListToolsResult {
+            tools,
+            next_cursor: None,
+        })
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = self.session.clone();
+        let name = request.name.to_string();
+        let arguments = Value::Object(request.arguments.unwrap_or_default());
+
+        // The dispatch is synchronous and drives the `Session`'s own runtime; run
+        // it on a fresh OS thread (no ambient tokio runtime) so that inner
+        // `block_on` cannot panic, exactly as the stdio host runs it.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(studio_mcp::call_tool(&session, &name, &arguments));
+        });
+
+        match rx.await {
+            Ok(Ok(value)) => Ok(tool_result(&value)),
+            Ok(Err(error)) => Err(ErrorData::new(
+                ErrorCode(error.code as i32),
+                error.message,
+                None,
+            )),
+            Err(_) => Err(ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                "mcp dispatch thread vanished".to_string(),
+                None,
+            )),
         }
     }
 }
 
-/// The first message must be `{ "method": "authenticate", "params": { "token": <session token> } }`.
-fn is_valid_auth(message: &Value, token: &str) -> bool {
-    if message.get("method").and_then(Value::as_str) != Some("authenticate") {
-        return false;
+/// Map `studio_mcp`'s tool result JSON (`{ content: [{ type: "text", text }], isError }`)
+/// onto an `rmcp` `CallToolResult`. The dispatch always emits text content.
+fn tool_result(value: &Value) -> CallToolResult {
+    let is_error = value
+        .get("isError")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let text = value
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    let content = vec![Content::text(text)];
+    if is_error {
+        CallToolResult::error(content)
+    } else {
+        CallToolResult::success(content)
     }
-    message
-        .get("params")
-        .and_then(|params| params.get("token"))
-        .and_then(Value::as_str)
-        .is_some_and(|presented| constant_time_eq(presented.as_bytes(), token.as_bytes()))
 }
 
-/// Constant-time byte equality, so timing the per-connection comparison can't
-/// recover the secret that gates `dcs_eval`. Length is not secret here — the
-/// token is a fixed 32 hex chars.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
-
-/// 32 hex chars of OS randomness; `None` if the OS has no entropy source.
-fn generate_token() -> Option<String> {
-    let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).ok()?;
-    Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
-}
-
-/// Write `{ port, token }` to `<app-config>/mcp.json` for the agent to read.
-fn write_session_file(app: &AppHandle, port: u16, token: &str) -> std::io::Result<()> {
+/// Write `<app-config>/mcp.json` = `{ port, url }` for the harness env discovery
+/// path (`term.rs`). No secret — the surface is unauthenticated.
+fn write_discovery_file(app: &AppHandle) -> std::io::Result<()> {
     let dir = app
         .path()
         .app_config_dir()
         .map_err(|error| std::io::Error::other(error.to_string()))?;
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join(SESSION_FILE);
-    let payload = json!({ "port": port, "token": token });
-    std::fs::write(&path, payload.to_string())?;
-    // The file carries the `dcs_eval` token. On *nix a default 0644 in a
-    // traversable config dir lets a sibling local user read it; lock it to the
-    // owner. (Windows `%APPDATA%` is already per-user ACL'd.)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
+    write_discovery_file_at(&dir)
+}
+
+/// The body of [`write_discovery_file`], over an explicit config dir so it is
+/// testable without a Tauri handle.
+fn write_discovery_file_at(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let payload = serde_json::json!({
+        "port": MCP_PORT,
+        "url": McpStatus::url_for(MCP_PORT),
+    });
+    std::fs::write(dir.join(SESSION_FILE), payload.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::BufRead;
 
-    /// A connected loopback socket pair: (client, accepted server side).
-    fn loopback_pair() -> (TcpStream, TcpStream) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        let client = TcpStream::connect(addr).expect("connect");
-        let (server, _) = listener.accept().expect("accept");
-        (client, server)
-    }
-
-    fn read_json(reader: &mut impl BufRead) -> Value {
-        let mut line = String::new();
-        reader.read_line(&mut line).expect("read");
-        serde_json::from_str(line.trim()).expect("json")
-    }
-
-    /// Serve `server` on a thread with token "secret" over a fresh (unused)
-    /// link, returning the join handle so the test can await a clean close.
-    fn serve(server: TcpStream) -> std::thread::JoinHandle<()> {
-        std::thread::spawn(move || {
-            let _ = serve_conn(&server, Arc::new(LinkShared::default()), "secret");
-        })
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("dcs-mcp-test-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
     }
 
     #[test]
-    fn generate_token_is_32_hex_chars_and_unpredictable() {
-        let a = generate_token().expect("os randomness");
-        let b = generate_token().expect("os randomness");
-        assert_eq!(a.len(), 32);
-        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
-        assert_ne!(a, b, "two tokens must differ");
+    fn discovery_file_carries_the_fixed_port_and_url() {
+        let dir = temp_dir("discovery");
+        write_discovery_file_at(&dir).expect("write");
+        let persisted: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(SESSION_FILE)).expect("read"))
+                .expect("json");
+        assert_eq!(persisted["port"], serde_json::json!(MCP_PORT));
+        assert_eq!(persisted["url"], "http://127.0.0.1:25570/mcp");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn is_valid_auth_demands_the_exact_token() {
-        let good = json!({"method": "authenticate", "params": {"token": "secret"}});
-        assert!(is_valid_auth(&good, "secret"));
-        assert!(!is_valid_auth(&good, "other"));
-        assert!(!is_valid_auth(&json!({"method": "authenticate", "params": {}}), "secret"));
-        assert!(!is_valid_auth(&json!({"method": "tools/list"}), "secret"));
-    }
+    fn a_taken_port_fails_closed() {
+        // model FailsClosedOnPortClash (issue #39): when the port is already
+        // held, the bind errs — never a random fallback — and maps to a
+        // not-running status that still reports the intended fixed endpoint so
+        // the setup modal can show it. An ephemeral port keeps the test from
+        // racing a real IDE already bound to MCP_PORT.
+        let held = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("hold a port");
+        let port = held.local_addr().expect("addr").port();
 
-    /// Assert the server closed the connection: the next read sees the close.
-    /// A graceful close is `Ok(0)` (EOF after a FIN); under load the server can
-    /// instead drop its socket while our blocking read is already armed, which
-    /// surfaces as a TCP RST — `ConnectionReset`/`ConnectionAborted`. Both mean
-    /// "closed"; accept either. The caller must have armed a read timeout first,
-    /// so a genuine still-open socket fails fast with `WouldBlock`/`TimedOut`
-    /// rather than hanging the suite (a test hang reads as a stall, not a
-    /// failure).
-    fn assert_connection_closed(reader: &mut impl BufRead) {
-        use std::io::ErrorKind::{ConnectionAborted, ConnectionReset};
-        let mut tail = String::new();
-        match reader.read_line(&mut tail) {
-            Ok(0) => {}
-            Err(error) if matches!(error.kind(), ConnectionReset | ConnectionAborted) => {}
-            other => panic!("expected the server to close the connection, got {other:?}"),
-        }
-    }
+        let message = bind_loopback(port).expect_err("a held port must fail closed");
+        assert!(message.contains(&port.to_string()), "got {message}");
 
-    #[test]
-    fn a_bad_token_is_rejected_and_the_connection_closes() {
-        let (client, server) = loopback_pair();
-        let handle = serve(server);
-        let mut writer = client.try_clone().expect("clone");
-        // Arm a read timeout on the stream the reader wraps, so a non-closing
-        // regression fails this test in 2s rather than hanging the suite.
-        client
-            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
-            .expect("set read timeout");
-        let mut reader = BufReader::new(client);
-
-        writeln!(
-            writer,
-            r#"{{"jsonrpc":"2.0","id":1,"method":"authenticate","params":{{"token":"wrong"}}}}"#
-        )
-        .expect("write");
-        let resp = read_json(&mut reader);
-        assert_eq!(resp["error"]["code"], json!(-32001));
-
-        // The server closed the connection — the next read is EOF.
-        assert_connection_closed(&mut reader);
-        handle.join().expect("server thread");
-    }
-
-    #[test]
-    fn an_unauthenticated_tool_call_never_reaches_the_handler() {
-        let (client, server) = loopback_pair();
-        let handle = serve(server);
-        let mut writer = client.try_clone().expect("clone");
-        client
-            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
-            .expect("set read timeout");
-        let mut reader = BufReader::new(client);
-
-        // Skipping auth and going straight for a tool is refused, not served.
-        writeln!(writer, r#"{{"jsonrpc":"2.0","id":1,"method":"tools/list"}}"#).expect("write");
-        let resp = read_json(&mut reader);
-        assert_eq!(resp["error"]["code"], json!(-32001));
-        // And, like any failed auth, the server then closes the connection —
-        // it never loops back to read a second (now-"authed") line.
-        assert_connection_closed(&mut reader);
-        handle.join().expect("server thread");
-    }
-
-    /// A `BufRead` whose read always fails with `kind` — stands in for a socket
-    /// that reports a close (or a still-open timeout) without a live peer.
-    struct FailingReader(std::io::ErrorKind);
-    impl std::io::Read for FailingReader {
-        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-            Err(self.0.into())
-        }
-    }
-    impl BufRead for FailingReader {
-        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
-            Err(self.0.into())
-        }
-        fn consume(&mut self, _: usize) {}
-    }
-
-    #[test]
-    fn assert_connection_closed_accepts_an_abortive_reset() {
-        // An abortive close (RST) surfaces as ConnectionReset/Aborted, not EOF —
-        // under load the server can drop its socket while our read is armed.
-        // Both are "closed"; neither must panic.
-        assert_connection_closed(&mut FailingReader(std::io::ErrorKind::ConnectionReset));
-        assert_connection_closed(&mut FailingReader(std::io::ErrorKind::ConnectionAborted));
-    }
-
-    #[test]
-    #[should_panic(expected = "expected the server to close the connection")]
-    fn assert_connection_closed_still_rejects_a_live_socket() {
-        // The pin that keeps the reset-acceptance from going vacuous: a genuinely
-        // open socket times out (WouldBlock/TimedOut under the armed read
-        // timeout) and MUST still fail loudly, not be mistaken for a close.
-        assert_connection_closed(&mut FailingReader(std::io::ErrorKind::WouldBlock));
-    }
-
-    #[test]
-    fn a_valid_token_unlocks_the_full_tool_surface() {
-        let (client, server) = loopback_pair();
-        let handle = serve(server);
-        let mut writer = client.try_clone().expect("clone");
-        let mut reader = BufReader::new(client);
-
-        writeln!(
-            writer,
-            r#"{{"jsonrpc":"2.0","id":1,"method":"authenticate","params":{{"token":"secret"}}}}"#
-        )
-        .expect("write");
-        let auth = read_json(&mut reader);
-        assert_eq!(auth["result"]["authenticated"], json!(true));
-
-        writeln!(writer, r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list"}}"#).expect("write");
-        let tools = read_json(&mut reader);
+        let status = McpStatus::failed(message);
+        assert!(!status.running, "a clash leaves the server not running");
+        assert_eq!(status.port, MCP_PORT, "still reports the fixed port");
+        assert!(status.error.is_some(), "carries the failure reason");
         assert_eq!(
-            tools["result"]["tools"].as_array().expect("tools").len(),
-            22,
-            "the full issue-#8 surface stays reachable through the app server"
+            status.url,
+            dcs_studio_project::mcp::url(),
+            "still reports the intended endpoint for the modal"
         );
+    }
 
-        // Closing the socket ends the server's read loop. Dropping one clone
-        // is not enough — the reader clone still holds the connection open, so
-        // shut the whole socket down explicitly.
-        writer
-            .shutdown(std::net::Shutdown::Both)
-            .expect("shutdown");
-        handle.join().expect("server thread");
+    #[test]
+    fn tool_result_maps_text_and_error_flag() {
+        let ok = tool_result(&serde_json::json!({
+            "content": [{ "type": "text", "text": "hello" }],
+            "isError": false,
+        }));
+        assert_eq!(ok.is_error, Some(false));
+        let err = tool_result(&serde_json::json!({
+            "content": [{ "type": "text", "text": "boom" }],
+            "isError": true,
+        }));
+        assert_eq!(err.is_error, Some(true));
     }
 }

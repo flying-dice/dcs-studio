@@ -52,7 +52,7 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | `model/studio/installer.pds` | `Installer` — manifest-driven `[[install]]` deploy to SavedGames/GameInstall roots (issue #6 R1) |
 | `model/studio/package.pds` | `Packager`/`PackageLibrary` + `SigningService`/`IdentityProvider` faces — signed, revocable `.dcspkg` packages (issue #37; `crates/studio-packages`, mock signing server `crates/mock-package-server`, CLI `pack`/`pkg`) |
 | `model/studio/mission.pds` | `MissionScripting` sanitization manager (`crates/studio-services/src/mission.rs`) |
-| `model/studio/mcp.pds` | `McpServer` — the IDE-hosted agent tool surface over a loopback transport (issue #33; `crates/studio-mcp` handler, `crates/app/src/mcp.rs` server, `crates/studio-services`) |
+| `model/studio/mcp.pds` | `McpServer` — the IDE-hosted agent tool surface over standard MCP Streamable HTTP (rmcp), fixed port, unauthenticated/loopback-only (issues #33, #39; `crates/studio-mcp` handler, `crates/app/src/mcp.rs` rmcp server, `crates/studio-services`) |
 | `model/studio/term.pds` | `Terminal` — integrated terminal: tabbed PTY sessions + launch/harness profiles, collapse-survival replay buffer (`crates/studio-services/src/term.rs` registry, `crates/app/src/term.rs` bridge, `src/lib/terminal.svelte.ts` + `src/lib/components/Terminal.svelte`; issue #13) |
 | `model/studio/todos.pds` | `TodoScanner` — workspace comment-tag scanner behind the Todos panel (`crates/dcs-studio-project/src/todos.rs`, `src/lib/todos.svelte.ts`) |
 | `model/studio/lang.pds` | `LanguageIntel` provider layer + `DcsLua` engine face + `LuaAnalyzer`/`RustAnalyzer` hosted-server faces (`src/lib/lang/`, `crates/lua-analyzer`) |
@@ -98,13 +98,21 @@ so the `/lab/*` surfaces and the `e2e-lang/` suite run against the **real app**
 over WebView2 CDP — Windows-only (`pnpm test:lang`, see below), unlike the
 `dcs-ws.ts` browser fallback the console still keeps.
 
-**The IDE hosts the MCP agent surface** (issue #33): the running app runs a
-loopback JSON-RPC server (`crates/app/src/mcp.rs`) that dispatches through the
-shared **`crates/studio-mcp`** handler over the app's LIVE DCS link — one
-connection to the sim, no rival sidecar (single-instance enforced). It is
-token-gated (the surface includes `dcs_eval`): `{port, token}` is written to
-`<app-config>/mcp.json` for the agent to read, and the token must be presented
-before any tool call. The same handler is drivable headless over stdio. The
+**The IDE hosts the MCP agent surface** (issues #33, #39): the running app
+serves **standard MCP Streamable HTTP** via the official `rmcp` SDK
+(`crates/app/src/mcp.rs`) — no hand-rolled wire — dispatching through the
+shared **`crates/studio-mcp`** handler over the app's LIVE DCS link, one
+connection to the sim, no rival sidecar (single-instance enforced). One IDE per
+machine, so it binds a **fixed loopback port (25570) or fails closed** — never a
+random fallback nothing could discover; a bind clash surfaces in the status bar
+and the IDE runs on. It is **unauthenticated**, trusting the loopback-only bind
+to keep it to this machine (the accepted trade: any local process can reach
+`dcs_eval`, in exchange for a config with no secret). The status-bar indicator
+(bottom right) opens a setup-help modal with copy blocks (`claude mcp add`, raw
+JSON, bare URL); new projects scaffold a `.mcp.json` that is just the HTTP URL.
+The blocking tool dispatch runs on a dedicated OS thread (not a tokio worker) so
+the per-session `studio_mcp::Session` drives its own runtime exactly as the stdio
+host does. The same handler is drivable headless over stdio. The
 surface (model/studio/mcp.pds): project (`init_project`, `check`, `build`),
 workspace fs (`read_dir`, `read_text_file`, `write_text_file`, `path_exists`),
 the DCS link (`dcs_status`, `dcs_eval`, `dcs_call`), injection

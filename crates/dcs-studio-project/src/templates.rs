@@ -108,6 +108,29 @@ fn manifest_header(name: &str) -> String {
     )
 }
 
+/// A project's `.mcp.json` (model: `studio::cli::ScaffoldBootstrapsMcpConfig`,
+/// issue #39): points an MCP editor at the IDE's hosted tool surface over
+/// standard Streamable HTTP on the fixed loopback port. Unauthenticated (the
+/// IDE trusts the loopback-only bind), so the config is just a URL — no secret
+/// to manage. The endpoint comes from [`crate::mcp`], the one source the app's
+/// server binds too, so the scaffold and the server can't drift.
+fn mcp_config_file() -> TemplateFile {
+    TemplateFile::text(
+        ".mcp.json",
+        format!(
+            "{{\n\
+             \x20 \"mcpServers\": {{\n\
+             \x20   \"dcs-studio\": {{\n\
+             \x20     \"type\": \"http\",\n\
+             \x20     \"url\": \"{}\"\n\
+             \x20   }}\n\
+             \x20 }}\n\
+             }}\n",
+            crate::mcp::url(),
+        ),
+    )
+}
+
 fn project_block(name: &str, template: &str) -> String {
     format!(
         "\n[project]\nname = \"{}\"\nversion = \"0.1.0\"\nauthor = \"\"\ndescription = \"\"\ntemplate = \"{template}\"\ndcs_min_version = \"2.9.0\"\n",
@@ -155,28 +178,31 @@ pub fn render(template: &str, name: &str) -> Option<Vec<TemplateFile>> {
 
 fn blank(name: &str) -> Vec<TemplateFile> {
     let slug = slugify(name);
-    vec![TemplateFile::text(
-        "dcs-studio.toml",
-        format!(
-            "{}{}\n\
-             # Required modules / other mods. Uncomment and edit as needed.\n\
-             # [[dependencies]]\n\
-             # id = \"F-16C_50\"\n\
-             # name = \"F-16C Viper\"\n\
-             # version = \"*\"\n\
-             # optional = false\n\n\
-             # Install rules: copy matching sources to a destination under a named root.\n\
-             # [[install]]\n\
-             # source = \".\"\n\
-             # dest = \"{{SavedGames}}/Mods/{slug}\"\n\n\
-             # File manifest — tracked project files and their role.\n\
-             # [[files]]\n\
-             # path = \"main.lua\"\n\
-             # role = \"script\"\n",
-            manifest_header(name),
-            project_block(name, "blank")
+    vec![
+        TemplateFile::text(
+            "dcs-studio.toml",
+            format!(
+                "{}{}\n\
+                 # Required modules / other mods. Uncomment and edit as needed.\n\
+                 # [[dependencies]]\n\
+                 # id = \"F-16C_50\"\n\
+                 # name = \"F-16C Viper\"\n\
+                 # version = \"*\"\n\
+                 # optional = false\n\n\
+                 # Install rules: copy matching sources to a destination under a named root.\n\
+                 # [[install]]\n\
+                 # source = \".\"\n\
+                 # dest = \"{{SavedGames}}/Mods/{slug}\"\n\n\
+                 # File manifest — tracked project files and their role.\n\
+                 # [[files]]\n\
+                 # path = \"main.lua\"\n\
+                 # role = \"script\"\n",
+                manifest_header(name),
+                project_block(name, "blank")
+            ),
         ),
-    )]
+        mcp_config_file(),
+    ]
 }
 
 fn lua_script(name: &str) -> Vec<TemplateFile> {
@@ -213,6 +239,7 @@ fn lua_script(name: &str) -> Vec<TemplateFile> {
         lua_script_sample_test(name, &slug, &ident),
         lua_script_workflow(),
         lua_script_readme(name, &slug),
+        mcp_config_file(),
     ]
 }
 
@@ -454,6 +481,7 @@ fn rust_dll(name: &str) -> Vec<TemplateFile> {
         rust_dll_lib_rs(name, &ident),
         rust_dll_hook(name, &slug, &ident),
         rust_dll_readme(name, &slug, &ident),
+        mcp_config_file(),
     ]
 }
 
@@ -666,9 +694,36 @@ mod tests {
     }
 
     #[test]
+    fn every_template_bootstraps_a_discoverable_mcp_config() {
+        // model: studio::cli::ScaffoldBootstrapsMcpConfig (issue #39) — every
+        // template carries a .mcp.json over HTTP on the fixed loopback port.
+        // Unauthenticated: the config is just a URL, no secret to commit.
+        for template in ["blank", "lua-script", "rust-dll"] {
+            let files = render(template, "My Mod").expect("known template");
+            let config = text_of(&files, ".mcp.json");
+            // Valid JSON.
+            let parsed: serde_json::Value =
+                serde_json::from_str(config).expect("`.mcp.json` is valid JSON");
+            let server = &parsed["mcpServers"]["dcs-studio"];
+            assert_eq!(server["type"], "http", "{template}: HTTP transport");
+            // Derived from the shared endpoint, not a re-typed literal, so the
+            // scaffold tracks `crate::mcp` (and thus the app's server).
+            assert_eq!(
+                server["url"],
+                serde_json::Value::String(crate::mcp::url()),
+                "{template}: fixed loopback endpoint"
+            );
+            assert!(
+                server.get("headers").is_none(),
+                "{template}: unauthenticated — no Authorization header"
+            );
+        }
+    }
+
+    #[test]
     fn lua_script_template_scaffolds_valid_lua() {
         let files = render("lua-script", "My Script Mod").expect("known template");
-        assert_eq!(files.len(), 5);
+        assert_eq!(files.len(), 6);
         let main = files
             .iter()
             .find(|f| f.path.ends_with("main.lua"))

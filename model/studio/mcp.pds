@@ -1,15 +1,24 @@
 //! studio::mcp — the MCP server hosted by the running IDE (issue #33): the
-//! IDE's services exposed to LLM agents over a loopback JSON-RPC transport
-//! (newline-delimited, protocol 2024-11-05). Every tool delegates to the
-//! owning container — workspace fs, the project kit, the injection and
-//! mission scripting managers, the DCS link, and the dcs-lua engine — so an
-//! agent and the IDE always run the same logic (crates/studio-services).
-//! Calls into the sim target the dcs::bridge::Dcs published face only.
+//! IDE's services exposed to LLM agents over standard MCP Streamable HTTP
+//! (issue #39, the official rmcp SDK — no hand-rolled wire). Every tool
+//! delegates to the owning container — workspace fs, the project kit, the
+//! injection and mission scripting managers, the DCS link, and the dcs-lua
+//! engine — so an agent and the IDE always run the same logic
+//! (crates/studio-services). Calls into the sim target the dcs::bridge::Dcs
+//! published face only.
 //!
 //! Moved off the standalone `dcs-studio-cli mcp` stdio binary (issue #33): a
 //! second headless process dialed its own DCS link and collided with the one
 //! open IDE on the shared bridge. The surface now lives in the app and shares
 //! the IDE's already-open link, so there is one DCS connection, not two.
+//!
+//! Reachability (issue #39): one IDE per machine, so the server binds a fixed
+//! loopback port (25570) and fails closed if it is taken — never a random
+//! fallback that nothing could discover. The surface is unauthenticated: it
+//! trusts the loopback-only bind to keep it reachable from this machine alone,
+//! so any editor's config is just a URL. The IDE shows the server's status,
+//! port, and setup help; scaffolded projects carry a `.mcp.json` that points an
+//! MCP editor at it (see studio::cli::Cli).
 
 /// LLM agent attaching to the running IDE's loopback MCP server, sharing the
 /// IDE's live DCS link — there is no separate headless process.
@@ -24,12 +33,12 @@ public data DcsStatus { connected: bool, simRunning: bool, latencyMs: Option<num
 /// reserved and the error is stable, so agent contracts don't churn.
 public data NotImplemented { message: string }
 
-/// MCP server hosted by the IDE: newline-delimited JSON-RPC over a loopback
-/// transport (127.0.0.1, gated by a session token the agent reads from a
-/// known file). Tools are thin delegates; the DCS tools run over the app's
-/// already-open link (the shared `studio::link` state), not a link this
-/// server dials — so the agent and the IDE share one DCS connection rather
-/// than colliding on the bridge.
+/// MCP server hosted by the IDE: standard MCP Streamable HTTP on a fixed
+/// loopback port (127.0.0.1:25570); unauthenticated, trusting the loopback-only
+/// bind to limit reach to this machine. Tools are thin delegates; the DCS tools
+/// run over the app's already-open link (the shared `studio::link` state), not
+/// a link this server dials — so the agent and the IDE share one DCS connection
+/// rather than colliding on the bridge.
 ///
 /// Recorded decision: the workspace fs tools take absolute host paths with
 /// no sandbox root, exactly like the IDE's own fs commands they delegate to
@@ -264,14 +273,25 @@ feature AgentEditsWorkspaceFile for studio::mcp::McpServer {
   and "read_dir lists the new file and path_exists confirms it"
 }
 
-/// The surface serves from the running IDE over the loopback transport,
-/// sharing the IDE's one DCS link (issue #33).
+/// The surface serves from the running IDE over standard MCP Streamable HTTP
+/// on the fixed loopback port, sharing the IDE's one DCS link (issue #33/#39).
 feature ServesFromTheRunningIde for studio::mcp::McpServer {
-  given "the IDE running with its MCP server bound on loopback"
-  when "an agent attaches with the session token and lists tools"
+  given "the IDE running with its MCP server bound on the fixed loopback port"
+  when "an agent attaches and lists tools"
   then "the full tool surface is advertised"
   and "the DCS tools run over the IDE's already-open link, not a second one"
   but "with no DCS listening dcs_status answers connected:false, never erroring"
+}
+
+/// Fixed port or fail closed (issue #39): one IDE per machine, so the server
+/// never falls back to a random port an editor could not have been configured
+/// for — a clash is a visible error, and the IDE itself keeps running.
+feature FailsClosedOnPortClash for studio::mcp::McpServer {
+  given "the fixed loopback port is already taken"
+  when "the IDE starts its MCP server"
+  then "the server does not start and surfaces the bind error"
+  and "it never falls back to a different port"
+  but "the rest of the IDE runs normally"
 }
 
 /// Lang tools answer from the real engine, not stubs.

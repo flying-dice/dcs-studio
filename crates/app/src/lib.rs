@@ -91,6 +91,7 @@ pub fn run() {
             packages_cmd::revalidate_packages,
             dcs::dcs_call,
             dcs::dcs_status,
+            mcp::mcp_status,
             inject::dcs_detect_installs,
             inject::dcs_injection_status,
             inject::dcs_inject,
