@@ -289,12 +289,14 @@
     }
   });
 
-  // Re-fit a session once its backend pty is registered. The constructor's fit
+  // Re-fit once a session's backend pty is registered. The constructor's fit
   // races ahead of `termSpawn` and its resize is dropped (the session isn't
-  // live yet), so the child stays at the 80-col spawn default until now.
+  // live yet), so the child stays at the 80-col spawn default until now. Fit
+  // every live session, not just the latest: two spawns can share one flush,
+  // and fit is idempotent — hidden tabs (size 0) no-op.
   $effect(() => {
-    const id = terminal.lastSpawnedId;
-    if (id) controls.get(id)?.fit();
+    terminal.spawnGeneration;
+    for (const session of controls.values()) session.fit();
   });
 
   function openProfile(id: string): void {

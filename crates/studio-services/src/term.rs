@@ -103,7 +103,10 @@ pub enum TermEvent {
 struct Session {
     profile_id: String,
     label: String,
-    master: Box<dyn MasterPty + Send>,
+    /// The pty master, for resize. `None` once the reaper has dropped it to
+    /// force the pump's reader to EOF on child exit (the session stays
+    /// registered until the pump finishes draining, so no output is lost).
+    master: Option<Box<dyn MasterPty + Send>>,
     /// The child's stdin, behind its own lock so a blocking write — a child not
     /// draining its input — stalls only this session, never the registry map:
     /// other tabs' commands and every output pump keep running (model
@@ -204,7 +207,7 @@ impl TermRegistry {
                 Session {
                     profile_id: spec.profile_id,
                     label: spec.label,
-                    master: pty.master,
+                    master: Some(pty.master),
                     writer: Arc::new(Mutex::new(writer)),
                     killer,
                     buffer: VecDeque::new(),
@@ -213,26 +216,36 @@ impl TermRegistry {
             );
         }
 
-        // Pump output on one thread, reap the child on another. On unix the
-        // reader EOFs when the child exits (its slave closes); on Windows the
-        // ConPTY reader does NOT — it stays blocked until the master
-        // (pseudoconsole) handle is dropped, even after the child is gone. So
-        // the reaper waits on the child, removes the session to DROP THE MASTER
-        // (unblocking the reader), then delivers the exit. `kill` already drops
-        // the master itself, so this is the only path that lacked an exit signal
-        // for a self-exited child (model SpontaneousExitCleansUp).
+        // Pump output on one thread, reap the child on another.
         let sink = Arc::new(sink);
         let pump_sessions = self.sessions.clone();
         let pump_id = id.clone();
         let pump_sink = Arc::clone(&sink);
-        std::thread::spawn(move || pump(reader, &pump_id, &pump_sessions, &*pump_sink));
+        let pump = std::thread::spawn(move || pump(reader, &pump_id, &pump_sessions, &*pump_sink));
 
+        // The reaper waits on the child, then makes the pump finish and delivers
+        // the exit. The ordering matters for correctness:
+        //   1. On child exit, DROP ONLY THE MASTER (not the whole session) so
+        //      the pump's reader EOFs. Unix EOFs on its own when the child's
+        //      slave closes; the Windows ConPTY reader does not until the
+        //      pseudoconsole (master) handle is gone. Leaving the session
+        //      registered means the pump keeps appending the last bytes it
+        //      already read instead of hitting `None => break` and dropping them.
+        //   2. JOIN the pump so every byte is emitted before...
+        //   3. ...the session is deregistered (buffer dropped) and Exit is
+        //      delivered — exactly once, after the full output
+        //      (model SpontaneousExitCleansUp). `kill` may have removed the
+        //      session already; both steps are then no-ops.
         let reap_sessions = self.sessions.clone();
         std::thread::spawn(move || {
             let mut child = child;
             let code = child.wait().ok().map(|status| status.exit_code() as i32);
-            // Drop the session — and with it the master pty — so a still-blocked
-            // ConPTY reader EOFs. Harmless if `kill` already removed the entry.
+            if let Ok(mut map) = reap_sessions.lock() {
+                if let Some(session) = map.get_mut(&id) {
+                    session.master = None;
+                }
+            }
+            let _ = pump.join();
             if let Ok(mut map) = reap_sessions.lock() {
                 map.remove(&id);
             }
@@ -264,14 +277,14 @@ impl TermRegistry {
     }
 
     /// Resize a session's pseudo-terminal so the child redraws (model
-    /// `Terminal.Resize`). A gone session is a no-op.
+    /// `Terminal.Resize`). A gone session — or one whose child has exited and
+    /// whose master is already dropped — is a no-op.
     pub fn resize(&self, id: &str, rows: u16, cols: u16) -> Result<(), String> {
         let sessions = self.sessions.lock().map_err(|e| e.to_string())?;
-        let Some(session) = sessions.get(id) else {
+        let Some(master) = sessions.get(id).and_then(|session| session.master.as_ref()) else {
             return Ok(());
         };
-        session
-            .master
+        master
             .resize(PtySize {
                 rows,
                 cols,
