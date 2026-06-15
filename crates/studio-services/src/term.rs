@@ -442,6 +442,39 @@ mod tests {
         )
     }
 
+    /// Read events until `want` appears AND the stream then goes quiet (a short
+    /// window with no further Data), returning all bytes and the final seq.
+    /// Unlike [`drain`], this waits for output to settle: a pty delivers a write
+    /// back as the line-discipline echo plus the child's own output, in one or
+    /// two chunks, so the seq of whichever chunk first contained `want` is not
+    /// the live stream's final offset. Settling makes the captured seq
+    /// deterministic so it can be compared against the replay buffer's offset.
+    fn drain_settled(rx: &mpsc::Receiver<TermEvent>, want: &str) -> (Vec<u8>, usize) {
+        let mut out = Vec::new();
+        let mut last_seq = 0;
+        let mut seen = false;
+        loop {
+            // Wait generously for the first/awaited bytes, then only briefly for
+            // the echo's tail — when that brief window elapses, the stream is
+            // quiescent and the seq is final.
+            let timeout = if seen {
+                Duration::from_millis(300)
+            } else {
+                Duration::from_secs(5)
+            };
+            match rx.recv_timeout(timeout) {
+                Ok(TermEvent::Data { bytes, seq }) => {
+                    out.extend_from_slice(&bytes);
+                    last_seq = seq;
+                    if String::from_utf8_lossy(&out).contains(want) {
+                        seen = true;
+                    }
+                }
+                Ok(TermEvent::Exit(_)) | Err(_) => return (out, last_seq),
+            }
+        }
+    }
+
     /// Read events until the wanted text shows in the output or the stream
     /// exits — returns all output bytes seen, the last seq, and whether an exit
     /// arrived.
@@ -592,13 +625,16 @@ mod tests {
             .expect("spawn");
 
         registry.write("c", b"ping\n").expect("write");
-        let (out, seq, _) = drain(&rx, "ping");
+        // Settle the echo so `seq` is the live stream's final offset, not the
+        // first chunk that happened to contain "ping" (a pty splits the echo +
+        // cat's output across one or two chunks).
+        let (out, seq) = drain_settled(&rx, "ping");
         assert!(
             String::from_utf8_lossy(&out).contains("ping"),
             "saw {out:?}"
         );
-        // Replay carries the same byte offset the live chunk did — the splice
-        // point a remounting view dedups against.
+        // Replay carries the same byte offset the live stream ended at — the
+        // splice point a remounting view dedups against.
         assert_eq!(registry.replay("c").seq, seq, "replay seq matches live seq");
 
         assert_eq!(registry.list().len(), 1, "session live before kill");
