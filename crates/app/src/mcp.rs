@@ -20,8 +20,9 @@ use studio_services::link::LinkShared;
 use tauri::{AppHandle, Manager};
 
 /// Where the agent reads `{ port, token }` from — beside the app's other
-/// config, in the per-user config dir.
-const SESSION_FILE: &str = "mcp.json";
+/// config, in the per-user config dir. `pub(crate)` so the terminal's harness
+/// profiles point the same file at their child's environment (`term.rs`).
+pub(crate) const SESSION_FILE: &str = "mcp.json";
 
 /// Start the loopback MCP server. Non-fatal on any failure (no RNG, port in
 /// use, unwritable config dir): the IDE works on, agents just can't attach.

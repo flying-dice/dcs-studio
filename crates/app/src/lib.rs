@@ -12,6 +12,7 @@ mod mcp;
 mod mission;
 mod packages_cmd;
 mod startup;
+mod term;
 mod todos_cmd;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -44,6 +45,7 @@ pub fn run() {
         .manage(dcs::DcsState::default())
         .manage(lsp::LspHosts::default())
         .manage(build::BuildState::default())
+        .manage(term::TermRegistry::default())
         .manage(startup_args)
         .setup(|app| {
             dcs::start(app.handle().clone());
@@ -57,6 +59,8 @@ pub fn run() {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 use tauri::Manager as _;
                 lsp::stop_all(window.app_handle());
+                // Same reason: no orphan terminal children outlive the window.
+                term::kill_all(window.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -95,6 +99,13 @@ pub fn run() {
             lsp::lsp_start,
             lsp::lsp_send,
             lsp::lsp_stop,
+            term::term_spawn,
+            term::term_write,
+            term::term_resize,
+            term::term_kill,
+            term::term_replay,
+            term::term_list,
+            term::term_default_shell,
             todos_cmd::scan_todos,
             todos_cmd::scan_file_todos,
             mission::dcs_detect_mission_scripts,

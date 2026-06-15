@@ -13,6 +13,7 @@
   import MissionScriptingManager from "$lib/components/MissionScriptingManager.svelte";
   import Problems from "$lib/components/Problems.svelte";
   import ProblemChips from "$lib/components/ProblemChips.svelte";
+  import Terminal from "$lib/components/Terminal.svelte";
   import Structure from "$lib/components/Structure.svelte";
   import Todos from "$lib/components/Todos.svelte";
   import Usages from "$lib/components/Usages.svelte";
@@ -550,6 +551,8 @@
                 <Todos />
               {:else if app.bottomTool === "output"}
                 <BuildOutput />
+              {:else if app.bottomTool === "terminal"}
+                <Terminal />
               {:else}
                 {@render placeholder(labelFor(bottomTools, app.bottomTool))}
               {/if}

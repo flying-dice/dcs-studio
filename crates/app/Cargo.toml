@@ -34,4 +34,5 @@ studio-services = { path = "../studio-services" }
 studio-packages = { path = "../studio-packages" }
 studio-mcp = { path = "../studio-mcp" }
 getrandom = "0.2"
+base64 = "0.22"
 

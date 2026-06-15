@@ -361,6 +361,104 @@ export function dcsMissionScriptRestore(
   return invoke<MissionScriptStatus>("dcs_mission_script_restore", { path });
 }
 
+// ── Integrated terminal (model/studio/term.pds, issue #13) ──
+// Thin wrappers over the term_* commands. Output arrives as `term://data/{id}`
+// events and the stream's end as `term://exit/{id}`; both are subscribed in
+// Terminal.svelte / terminal.svelte.ts, not here.
+
+/** One environment variable layered onto a terminal profile's child. */
+export interface TermEnvVar {
+  key: string;
+  value: string;
+}
+
+/** A resolved terminal launch spec (model `Profile`, already resolved by the
+ *  frontend to a concrete command, cwd, and size). */
+export interface TermSpawnSpec {
+  profileId: string;
+  label: string;
+  command: string;
+  args: string[];
+  cwd: string | null;
+  env: TermEnvVar[];
+  rows: number;
+  cols: number;
+}
+
+/** A live terminal session (model `Session`). */
+export interface TermSession {
+  id: string;
+  profileId: string;
+  label: string;
+}
+
+/** A session's replay tail (base64) + the byte offset of its end (model
+ *  `Terminal.Replay`): a remounting view writes the decoded bytes, then ignores
+ *  any live chunk whose `seq` is `<= seq` here — so replay and live never gap or
+ *  repeat. */
+export interface TermReplay {
+  data: string;
+  seq: number;
+}
+
+/** `term://data/{id}` payload — a chunk of output (base64-encoded, to cross the
+ *  IPC as a compact string rather than a JSON array of per-byte numbers) and its
+ *  running byte offset. */
+export interface TermData {
+  data: string;
+  seq: number;
+}
+
+/** `term://exit/{id}` payload — the child's exit status when one is available. */
+export interface TermExit {
+  code: number | null;
+}
+
+/** The detected default shell for the built-in shell profile. */
+export interface TermShell {
+  command: string;
+  args: string[];
+}
+
+/** Spawn a session from a resolved spec; `harness` injects the MCP discovery path. */
+export function termSpawn(
+  id: string,
+  spec: TermSpawnSpec,
+  harness: boolean,
+): Promise<void> {
+  return invoke<void>("term_spawn", { id, spec, harness });
+}
+
+/** Send xterm's `onData` (keystrokes / escape sequences) to a session. */
+export function termWrite(id: string, data: string): Promise<void> {
+  return invoke<void>("term_write", { id, data });
+}
+
+/** Resize a session's pseudo-terminal to fitted cell dimensions. */
+export function termResize(id: string, rows: number, cols: number): Promise<void> {
+  return invoke<void>("term_resize", { id, rows, cols });
+}
+
+/** Kill a session and clean up its child, pty, and replay buffer. */
+export function termKill(id: string): Promise<void> {
+  return invoke<void>("term_kill", { id });
+}
+
+/** Fetch a session's replay buffer + splice point (for a freshly mounted view). */
+export function termReplay(id: string): Promise<TermReplay> {
+  return invoke<TermReplay>("term_replay", { id });
+}
+
+/** The live sessions, for rebuilding the tab strip. */
+export function termList(): Promise<TermSession[]> {
+  return invoke<TermSession[]>("term_list");
+}
+
+/** The detected default shell (prefer pwsh, then PowerShell, then cmd). */
+export function termDefaultShell(): Promise<TermShell> {
+  return invoke<TermShell>("term_default_shell");
+}
+
 /** Open the native folder picker; returns the chosen path or null if cancelled. */
 export async function pickFolder(): Promise<string | null> {
   const selected = await open({ directory: true, multiple: false });
