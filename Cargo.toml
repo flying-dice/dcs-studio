@@ -8,7 +8,6 @@ members = [
     "crates/dcs-lua-fmt",
     "crates/dcs-lua-lsp-core",
     "crates/dcs-lua-ide",
-    "crates/dcs-studio-cli",
     "crates/dcs-studio-project",
     "crates/lua-analyzer",
     "crates/studio-services",

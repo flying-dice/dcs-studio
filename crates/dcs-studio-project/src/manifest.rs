@@ -41,7 +41,7 @@ pub struct LintsConfig {
     pub lua: std::collections::HashMap<String, String>,
 }
 
-/// `[test]` — where `dcs-studio-cli test` discovers spec files.
+/// `[test]` — spec discovery config (directory + filename suffix).
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct TestConfig {
@@ -60,7 +60,7 @@ impl Default for TestConfig {
     }
 }
 
-/// `[build]` — what `dcs-studio-cli bundle` amalgamates.
+/// `[build]` — single-file bundle config (require-graph entry + output name).
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct BuildConfig {

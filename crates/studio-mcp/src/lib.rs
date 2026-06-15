@@ -203,6 +203,7 @@ pub fn tools_list() -> Value {
     tools.extend(workspace_tool_specs());
     tools.extend(dcs_tool_specs());
     tools.extend(inject_tool_specs());
+    tools.extend(launcher_tool_specs());
     tools.extend(mission_tool_specs());
     tools.extend(lang_tool_specs());
     json!({ "tools": tools })
@@ -218,6 +219,7 @@ fn tools_call(session: &Session, params: &Value) -> Result<Value, ToolError> {
         project_tools,
         workspace_tools,
         inject_tools,
+        launcher_tools,
         mission_tools,
         lang_tools,
     ];
@@ -580,6 +582,50 @@ fn inject_tools(name: &str, args: &Value) -> Option<Result<Value, ToolError>> {
         "eject" => Some(
             require_str(args, "write_dir", "eject")
                 .map(|dir| status_or_error(studio_services::inject::eject(dir))),
+        ),
+        _ => None,
+    }
+}
+
+// ---- launcher tools (managed DCS launch) -------------------------------------
+
+fn launcher_tool_specs() -> Vec<Value> {
+    let write_dir_only = json!({
+        "type": "object",
+        "properties": {
+            "write_dir": { "type": "string", "description": "DCS Saved Games write dir (from detect_installs)" }
+        },
+        "required": ["write_dir"]
+    });
+    vec![
+        json!({
+            "name": "launch_dcs",
+            "description": "Managed DCS launch: assert the bridge is injected, back up Config/options.lua, write a low-spec windowed graphics profile, and start DCS.exe. On exit the bridge is auto-ejected and options.lua restored. Fails when DCS is already running (the bridge DLL is locked).",
+            "inputSchema": write_dir_only.clone()
+        }),
+        json!({
+            "name": "launch_status",
+            "description": "Whether a DCS launched by launch_dcs is still running and whether the low-spec config is currently in place.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "stop_dcs",
+            "description": "Stop the DCS launched by launch_dcs, eject the bridge, and restore the user's options.lua. A clean no-op when nothing is running.",
+            "inputSchema": write_dir_only
+        }),
+    ]
+}
+
+fn launcher_tools(name: &str, args: &Value) -> Option<Result<Value, ToolError>> {
+    match name {
+        "launch_dcs" => Some(
+            require_str(args, "write_dir", "launch_dcs")
+                .map(|dir| status_or_error(studio_services::launcher::launch(dir))),
+        ),
+        "launch_status" => Some(Ok(tool_dto(&studio_services::launcher::launch_status()))),
+        "stop_dcs" => Some(
+            require_str(args, "write_dir", "stop_dcs")
+                .map(|dir| status_or_error(studio_services::launcher::stop(dir))),
         ),
         _ => None,
     }

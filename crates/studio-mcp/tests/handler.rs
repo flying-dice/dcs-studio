@@ -16,7 +16,7 @@ use studio_mcp::{Session, handle};
 
 /// Every tool the surface advertises, in registry order — an accidental drop
 /// or rename of any tool fails the `tools/list` assertion below.
-const FULL_TOOL_SURFACE: [&str; 22] = [
+const FULL_TOOL_SURFACE: [&str; 25] = [
     "init_project",
     "check",
     "build",
@@ -31,6 +31,9 @@ const FULL_TOOL_SURFACE: [&str; 22] = [
     "injection_status",
     "inject",
     "eject",
+    "launch_dcs",
+    "launch_status",
+    "stop_dcs",
     "detect_mission_scripts",
     "mission_script_status",
     "mission_script_set",
@@ -440,6 +443,33 @@ fn mission_and_injection_tools_drive_the_real_services() {
     assert_eq!(ejected["result"]["isError"], json!(false));
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn launcher_tools_guard_without_a_running_dcs() {
+    let mcp = Mcp::new();
+
+    // launch_status with nothing launched: clean, running=false.
+    let status = mcp.call(1, "launch_status", &json!({}));
+    assert_eq!(status["result"]["isError"], json!(false));
+    let snap: Value = serde_json::from_str(tool_text(&status)).expect("status json");
+    assert_eq!(snap["running"], json!(false));
+    assert_eq!(snap["config_patched"], json!(false));
+
+    // stop_dcs with nothing running is a clean no-op (eject + restore on an
+    // empty dir both no-op), never a hang.
+    let empty = temp_dir("launcher-stop");
+    let stopped = mcp.call(2, "stop_dcs", &json!({"write_dir": empty.to_string_lossy()}));
+    assert_eq!(stopped["result"]["isError"], json!(false));
+    let snap: Value = serde_json::from_str(tool_text(&stopped)).expect("stop json");
+    assert_eq!(snap["running"], json!(false));
+
+    // launch_dcs against a dir with no bridge source / no DCS config is a clean
+    // tool error (no DLL, or no Config/options.lua), never a panic.
+    let launched = mcp.call(3, "launch_dcs", &json!({"write_dir": empty.to_string_lossy()}));
+    assert_eq!(launched["result"]["isError"], json!(true));
+
+    let _ = std::fs::remove_dir_all(&empty);
 }
 
 /// A synchronous WS JSON-RPC server standing in for the in-DCS bridge: `ping`

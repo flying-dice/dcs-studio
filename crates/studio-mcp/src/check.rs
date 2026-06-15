@@ -1,5 +1,5 @@
-//! `dcs-studio-cli check` — analyse a workspace, print findings, gate on
-//! the exit code (model: `studio::cli::Cli.Check`).
+//! The `check` tool — analyse a workspace, render findings, count the
+//! error-severity ones the caller gates on (model: `studio::mcp::McpServer.Check`).
 
 use std::path::Path;
 

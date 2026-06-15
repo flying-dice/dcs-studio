@@ -20,10 +20,6 @@ variables:
   paths:
     - .cargo/registry
     - target
-    # tools/lua-runner is its own cargo workspace with its own target dir
-    # (issue #9) — cached alongside or its mlua vendored build recompiles
-    # every run.
-    - tools/lua-runner/target
   policy: pull-push
 
 rust:
@@ -41,19 +37,8 @@ rust:
     - apt-get update -qq
     - apt-get install -y -qq lua5.1
     - export DCS_PUC_LUAC=$(command -v luac5.1)
-    # issue #9: tools/lua-runner lives in its OWN cargo workspace (mlua
-    # `vendored` must never feature-unify with dcs-bridge's `module`), so
-    # the workspace-level cargo invocations below never touch it — it
-    # needs its own build/test/clippy. Built FIRST and pinned via
-    # DCS_LUA_RUNNER so the CLI `test`-subcommand integration tests run
-    # against the real runner instead of self-skipping (the host_ipc
-    # pattern: green-but-not-executed is the failure mode this prevents).
-    - cargo build --manifest-path tools/lua-runner/Cargo.toml
-    - cargo test --manifest-path tools/lua-runner/Cargo.toml
-    - cargo clippy --manifest-path tools/lua-runner/Cargo.toml --all-targets -- -D warnings
-    - export DCS_LUA_RUNNER=$CI_PROJECT_DIR/tools/lua-runner/target/debug/dcs-lua-runner
-    - cargo test -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli -p studio-mcp -p lua-analyzer -p studio-services -p studio-packages -p mock-package-server
-    - cargo clippy -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p dcs-studio-cli -p studio-mcp -p lua-analyzer -p studio-services -p studio-packages -p mock-package-server --all-targets -- -D warnings
+    - cargo test -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p studio-mcp -p lua-analyzer -p studio-services -p studio-packages -p mock-package-server
+    - cargo clippy -p dcs-lua-syntax -p dcs-lua-fmt -p dcs-lua-lsp-core -p dcs-lua-ide -p dcs-studio-project -p studio-mcp -p lua-analyzer -p studio-services -p studio-packages -p mock-package-server --all-targets -- -D warnings
 
 # App-compile + host<->real-server gate: builds the Tauri crate against
 # the webkit2gtk stack and runs its suites, including tests/host_ipc.rs —
@@ -97,11 +82,7 @@ app:
 # dir, then `cargo check` it — type-level proof only. `cargo check` never
 # links, so DCS's Windows-only lua import library is not needed here; a
 # full `cargo build` would have to link a real liblua and stays out of
-# scope. The lua-script probe goes through the real CLI: init, then
-# `check` (exit code = error-finding count; a nonexistent root is an
-# error, not a clean workspace) must come back clean. The `test -f`
-# between them asserts init emitted the entry script where the template
-# says, so the clean check is proven to have analysed real files.
+# scope.
 template-compile:
   stage: test
   image: rust:1.92
@@ -116,11 +97,6 @@ template-compile:
     DCS_TEMPLATE_COMPILE: "1"
   script:
     - cargo test -p dcs-studio-project --test template_compile
-    - cargo run -p dcs-studio-cli -- init "Lua Probe" --template lua-script --parent /tmp/probe
-    # slugify("Lua Probe") = "lua-probe" (templates.rs); a moved entry
-    # script would otherwise leave the check below with nothing to analyse.
-    - test -f "/tmp/probe/Lua Probe/Scripts/lua-probe/main.lua"
-    - cargo run -p dcs-studio-cli -- check "/tmp/probe/Lua Probe"
 
 web:
   stage: test

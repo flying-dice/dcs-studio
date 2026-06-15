@@ -5,6 +5,7 @@ mod format;
 mod fs;
 mod inject;
 mod install_cmd;
+mod launch;
 mod lsp;
 // Exposed for the host-IPC integration test - exactly one item wide.
 pub use lsp::read_frame;
@@ -50,7 +51,7 @@ pub fn run() {
         .setup(|app| {
             dcs::start(app.handle().clone());
             // Host the agent MCP surface over loopback, sharing the live DCS
-            // link (issue #33) — replaces the dcs-studio-cli sidecar.
+            // link (issue #33) — hosted in-process, not a separate sidecar.
             mcp::start(app.handle());
             Ok(())
         })
@@ -96,6 +97,9 @@ pub fn run() {
             inject::dcs_injection_status,
             inject::dcs_inject,
             inject::dcs_eject,
+            launch::dcs_launch,
+            launch::dcs_launch_status,
+            launch::dcs_stop,
             lsp::lua_analyzer_path,
             lsp::lsp_start,
             lsp::lsp_send,

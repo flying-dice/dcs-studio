@@ -329,6 +329,38 @@ export function dcsEject(writeDir: string): Promise<InjectionStatus> {
   return invoke<InjectionStatus>("dcs_eject", { writeDir });
 }
 
+/** The result of starting a managed DCS launch. */
+export interface LaunchOutcome {
+  running: boolean;
+  exe_path: string;
+  config_backed_up: boolean;
+}
+
+/** Whether a launched DCS is still running and the config is still patched. */
+export interface LaunchStatus {
+  running: boolean;
+  config_patched: boolean;
+}
+
+/**
+ * Managed launch: assert the bridge is injected, back up + low-spec
+ * Config/options.lua, and start DCS.exe. On exit the bridge is auto-ejected and
+ * the config restored. `launch://done` fires once DCS exits.
+ */
+export function dcsLaunch(writeDir: string): Promise<LaunchOutcome> {
+  return invoke<LaunchOutcome>("dcs_launch", { writeDir });
+}
+
+/** Whether a launched DCS is still running and the config still patched. */
+export function dcsLaunchStatus(): Promise<LaunchStatus> {
+  return invoke<LaunchStatus>("dcs_launch_status");
+}
+
+/** Stop the launched DCS, eject the bridge, and restore options.lua. */
+export function dcsStop(writeDir: string): Promise<LaunchStatus> {
+  return invoke<LaunchStatus>("dcs_stop", { writeDir });
+}
+
 /** A detected `<install>\Scripts\MissionScripting.lua` candidate. */
 export interface MissionScriptFile {
   variant: string;

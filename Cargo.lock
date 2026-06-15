@@ -1494,24 +1494,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dcs-studio-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "dcs-lua-fmt",
- "dcs-lua-lsp-core",
- "dcs-lua-syntax",
- "dcs-studio-project",
- "serde",
- "serde_json",
- "studio-mcp",
- "studio-packages",
- "studio-services",
- "tokio",
- "walkdir",
-]
-
-[[package]]
 name = "dcs-studio-project"
 version = "0.1.0"
 dependencies = [
