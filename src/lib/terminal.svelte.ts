@@ -102,6 +102,13 @@ export class TerminalStore {
   activeId = $state<string | null>(null);
   /** Launch profiles: detected shell first, the harnesses, then user-defined. */
   profiles = $state<TermProfile[]>([...BUILTIN_HARNESSES]);
+  /** The id of the most recently registered session, bumped once the backend
+   *  has it. The view's initial fit runs on tab mount — BEFORE `termSpawn`
+   *  registers the session — so that resize hits a not-yet-live session and is
+   *  dropped, leaving the PTY at its 80-col default (a narrow terminal). The
+   *  view re-fits this session once it lands here so the real width reaches the
+   *  child. */
+  lastSpawnedId = $state<string | null>(null);
 
   private exitUnlisten = new Map<string, UnlistenFn>();
   private initialised = false;
@@ -182,6 +189,10 @@ export class TerminalStore {
     };
     try {
       await termSpawn(id, spec, profile.harness);
+      // The session is now live backend-side — let the view re-fit it so the
+      // fitted size (the initial fit raced ahead of this spawn and was dropped)
+      // reaches the child.
+      this.lastSpawnedId = id;
     } catch (error) {
       const tab = this.tabs.find((t) => t.id === id);
       if (tab) tab.error = String(error);

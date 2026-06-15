@@ -13,14 +13,19 @@
   import { SvelteMap } from "svelte/reactivity";
   import { Terminal as Xterm, type ITheme } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
+  import { WebglAddon } from "@xterm/addon-webgl";
+  import { WebLinksAddon } from "@xterm/addon-web-links";
+  import { Unicode11Addon } from "@xterm/addon-unicode11";
+  import { SearchAddon } from "@xterm/addon-search";
   import "@xterm/xterm/css/xterm.css";
   import { app } from "$lib/state.svelte";
+  import { openExternal } from "$lib/external";
   import { terminal } from "$lib/terminal.svelte";
   import { editorThemeById, type EditorTheme } from "$lib/themes";
   import { termWrite, termResize, termReplay, type TermData } from "$lib/api";
   import { OutputSplicer, decodeBase64 } from "$lib/terminalSplice";
   import { cn } from "$lib/utils.js";
-  import { Plus, X, SquareTerminal } from "@lucide/svelte";
+  import { Plus, X, SquareTerminal, ArrowUp, ArrowDown } from "@lucide/svelte";
   import { onMount } from "svelte";
 
   // Resolve the detected-shell profile the first time the panel opens.
@@ -45,6 +50,15 @@
     private id: string;
     private term: Xterm;
     private fitAddon = new FitAddon();
+    // GPU renderer. Without a non-DOM renderer xterm falls back to its DOM
+    // renderer, where `customGlyphs` does NOT apply — box-drawing/block glyphs
+    // are drawn from the font and tile into broken "dashes" (issue: TUIs like
+    // Claude Code). WebGL (customGlyphs default true) draws them as continuous
+    // lines. Null if the context can't be created/was lost — xterm then degrades
+    // to the DOM renderer, still functional.
+    private webgl: WebglAddon | null = null;
+    // Find-in-buffer over the scrollback; driven by the find overlay.
+    private searchAddon = new SearchAddon();
     private observer: ResizeObserver;
     private unlistenData: UnlistenFn | null = null;
     private disposed = false;
@@ -64,15 +78,83 @@
         fontSize: 12,
         cursorBlink: true,
         scrollback: 5000,
+        // Required by Unicode11Addon (term.unicode.activeVersion) and the search
+        // addon's match decorations — both use xterm's proposed API.
+        allowProposedApi: true,
         theme: xtermTheme(theme),
       });
       this.term.loadAddon(this.fitAddon);
+      this.term.loadAddon(this.searchAddon);
+      // URLs in output (agent links, dev servers, docs) become clickable and
+      // open in the OS browser rather than navigating the webview out of the app.
+      this.term.loadAddon(new WebLinksAddon((_event, uri) => void openExternal(uri)));
+      // Unicode 11 grapheme widths — correct columns for emoji and wide/CJK
+      // glyphs that modern TUIs (Claude Code) emit; the default Unicode 6 tables
+      // mis-measure them and drift the cursor.
+      this.term.loadAddon(new Unicode11Addon());
+      this.term.unicode.activeVersion = "11";
       this.term.open(node);
+      this.loadWebgl();
       this.term.onData((data) => void termWrite(this.id, data));
+      // Ctrl/Cmd+F opens the find overlay instead of reaching the shell; Esc
+      // closes it. Returning false keeps the key out of the PTY.
+      this.term.attachCustomKeyEventHandler((e) => {
+        if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && e.key === "f") {
+          openFind();
+          return false;
+        }
+        if (e.type === "keydown" && e.key === "Escape" && findOpen) {
+          closeFind();
+          return false;
+        }
+        return true;
+      });
       this.observer = new ResizeObserver(() => this.fit());
       this.observer.observe(node);
       void this.start();
       this.fit();
+    }
+
+    /** Mount the WebGL renderer (must run after `term.open`, which attaches the
+     *  element it needs). On context loss, dispose it so xterm falls back to its
+     *  DOM renderer rather than rendering against a dead context; if construction
+     *  fails outright, the DOM renderer stays — degraded glyphs, still usable. */
+    private loadWebgl(): void {
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => {
+          webgl.dispose();
+          if (this.webgl === webgl) this.webgl = null;
+        });
+        this.term.loadAddon(webgl);
+        this.webgl = webgl;
+      } catch {
+        this.webgl = null;
+      }
+    }
+
+    /** Find `query` in the scrollback, moving to the next (or previous) match and
+     *  highlighting hits. An empty query clears the highlight. */
+    search(query: string, forward: boolean): void {
+      if (this.disposed) return;
+      if (!query) {
+        this.searchAddon.clearDecorations();
+        return;
+      }
+      const opts = {
+        decorations: {
+          matchBackground: "#5f5f00",
+          matchOverviewRuler: "#5f5f00",
+          activeMatchBackground: "#af8700",
+          activeMatchColorOverviewRuler: "#af8700",
+        },
+      };
+      if (forward) this.searchAddon.findNext(query, opts);
+      else this.searchAddon.findPrevious(query, opts);
+    }
+
+    clearSearch(): void {
+      if (!this.disposed) this.searchAddon.clearDecorations();
     }
 
     /** Subscribe to live output, then replay the buffer and flush anything that
@@ -133,6 +215,7 @@
       this.disposed = true;
       this.observer.disconnect();
       this.unlistenData?.();
+      this.webgl?.dispose();
       this.term.dispose();
     }
   }
@@ -142,6 +225,38 @@
   // action (the effect would otherwise miss the freshly opened tab's focus).
   const controls = new SvelteMap<string, XtermSession>();
   let pickerOpen = $state(false);
+
+  // Find-in-buffer overlay, driving the active session's search addon.
+  let findOpen = $state(false);
+  let findQuery = $state("");
+
+  /** The currently visible session, or null when there are no tabs. */
+  function activeSession(): XtermSession | undefined {
+    return terminal.activeId ? controls.get(terminal.activeId) : undefined;
+  }
+
+  /** Focus + select the find input the moment it mounts (the overlay only
+   *  renders while open, so mounting coincides with opening). */
+  function focusFind(node: HTMLInputElement) {
+    node.focus();
+    node.select();
+  }
+
+  function openFind(): void {
+    findOpen = true;
+    if (findQuery) activeSession()?.search(findQuery, true);
+  }
+
+  function closeFind(): void {
+    findOpen = false;
+    activeSession()?.clearSearch();
+    activeSession()?.focus();
+  }
+
+  /** Re-run the search against the active session; `forward` steps match order. */
+  function runFind(forward: boolean): void {
+    activeSession()?.search(findQuery, forward);
+  }
 
   /** Svelte action: stand up an xterm for `id` on this host div, tear it down
    *  when the div unmounts. */
@@ -172,6 +287,14 @@
       session.fit();
       session.focus();
     }
+  });
+
+  // Re-fit a session once its backend pty is registered. The constructor's fit
+  // races ahead of `termSpawn` and its resize is dropped (the session isn't
+  // live yet), so the child stays at the 80-col spawn default until now.
+  $effect(() => {
+    const id = terminal.lastSpawnedId;
+    if (id) controls.get(id)?.fit();
   });
 
   function openProfile(id: string): void {
@@ -264,6 +387,59 @@
 
     <!-- Session area: one stacked host per tab, only the active one shown. -->
     <div class="relative min-h-0 flex-1">
+      {#if findOpen && terminal.tabs.length > 0}
+        <!-- Find-in-buffer overlay (Ctrl/Cmd+F). Enter = next, Shift+Enter =
+             previous, Esc = close. -->
+        <div
+          class="absolute right-3 top-2 z-20 flex items-center gap-1 rounded-md border border-border bg-popover px-1.5 py-1 shadow-md"
+          data-testid="terminal-find"
+        >
+          <input
+            use:focusFind
+            bind:value={findQuery}
+            type="text"
+            placeholder="Find"
+            class="h-6 w-40 bg-transparent px-1 text-[11px] text-popover-foreground outline-none placeholder:text-muted-foreground"
+            oninput={() => runFind(true)}
+            onkeydown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                runFind(!e.shiftKey);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                closeFind();
+              }
+            }}
+          />
+          <button
+            type="button"
+            class="rounded p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+            title="Previous match (Shift+Enter)"
+            aria-label="Previous match"
+            onclick={() => runFind(false)}
+          >
+            <ArrowUp class="size-3.5" />
+          </button>
+          <button
+            type="button"
+            class="rounded p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+            title="Next match (Enter)"
+            aria-label="Next match"
+            onclick={() => runFind(true)}
+          >
+            <ArrowDown class="size-3.5" />
+          </button>
+          <button
+            type="button"
+            class="rounded p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+            title="Close (Esc)"
+            aria-label="Close find"
+            onclick={closeFind}
+          >
+            <X class="size-3.5" />
+          </button>
+        </div>
+      {/if}
       {#if terminal.tabs.length === 0}
         <div class="flex h-full items-center justify-center px-4 text-center">
           <p class="text-[11px] tracking-wide text-muted-foreground">

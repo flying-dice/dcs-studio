@@ -149,7 +149,7 @@ impl TermRegistry {
         &self,
         id: String,
         spec: SpawnSpec,
-        sink: impl Fn(TermEvent) + Send + 'static,
+        sink: impl Fn(TermEvent) + Send + Sync + 'static,
     ) -> Result<(), String> {
         // Reject a duplicate id before opening a pseudo-terminal, so a caller
         // bug never spawns a child we'd immediately discard. The authoritative
@@ -213,8 +213,31 @@ impl TermRegistry {
             );
         }
 
-        let sessions = self.sessions.clone();
-        std::thread::spawn(move || pump(reader, &mut *child, &id, &sessions, &sink));
+        // Pump output on one thread, reap the child on another. On unix the
+        // reader EOFs when the child exits (its slave closes); on Windows the
+        // ConPTY reader does NOT — it stays blocked until the master
+        // (pseudoconsole) handle is dropped, even after the child is gone. So
+        // the reaper waits on the child, removes the session to DROP THE MASTER
+        // (unblocking the reader), then delivers the exit. `kill` already drops
+        // the master itself, so this is the only path that lacked an exit signal
+        // for a self-exited child (model SpontaneousExitCleansUp).
+        let sink = Arc::new(sink);
+        let pump_sessions = self.sessions.clone();
+        let pump_id = id.clone();
+        let pump_sink = Arc::clone(&sink);
+        std::thread::spawn(move || pump(reader, &pump_id, &pump_sessions, &*pump_sink));
+
+        let reap_sessions = self.sessions.clone();
+        std::thread::spawn(move || {
+            let mut child = child;
+            let code = child.wait().ok().map(|status| status.exit_code() as i32);
+            // Drop the session — and with it the master pty — so a still-blocked
+            // ConPTY reader EOFs. Harmless if `kill` already removed the entry.
+            if let Ok(mut map) = reap_sessions.lock() {
+                map.remove(&id);
+            }
+            (*sink)(TermEvent::Exit(code));
+        });
         Ok(())
     }
 
@@ -330,12 +353,12 @@ impl TermRegistry {
 /// Pump one session's pseudo-terminal output until its stream ends: append
 /// every chunk to the session's ring buffer (trimming past
 /// [`BUFFER_REPLAY_BYTES`]), advance its byte counter, and hand the chunk and
-/// the new offset to `sink`; when the stream ends (the child exited or was
-/// killed), deregister the session and deliver its exit code. Deregistering
-/// here is harmless if `kill` already removed the entry.
+/// the new offset to `sink`. The stream ends when the reader EOFs — the child
+/// exited (unix) or the reaper dropped the master to force it (Windows), or
+/// `kill` removed the session. Delivering the exit is the reaper's job, not
+/// this thread's, so it fires exactly once regardless of which side ended first.
 fn pump(
     mut reader: Box<dyn Read + Send>,
-    child: &mut (dyn portable_pty::Child + Send + Sync),
     id: &str,
     sessions: &Arc<Mutex<HashMap<String, Session>>>,
     sink: &(impl Fn(TermEvent) + Send + 'static),
@@ -353,7 +376,7 @@ fn pump(
                             session.produced += n;
                             session.produced
                         }
-                        // Killed: the entry is gone — stop pumping.
+                        // Killed/reaped: the entry is gone — stop pumping.
                         None => break,
                     },
                     Err(_) => break,
@@ -365,12 +388,6 @@ fn pump(
             }
         }
     }
-
-    let code = child.wait().ok().map(|status| status.exit_code() as i32);
-    if let Ok(mut map) = sessions.lock() {
-        map.remove(id);
-    }
-    sink(TermEvent::Exit(code));
 }
 
 /// The command for the built-in default shell profile (model `ResolveProfile`'s
@@ -510,6 +527,52 @@ mod tests {
         );
     }
 
+    /// The Windows regression this reaper fixes: a child that exits on its own
+    /// (typing `exit` in PowerShell) does NOT EOF the ConPTY reader, so before
+    /// the reaper the pump blocked forever and no exit ever reached the tab. The
+    /// reaper waits on the child and drops the master to unblock the reader.
+    #[test]
+    #[cfg(windows)]
+    fn windows_spontaneous_exit_is_delivered_and_deregisters() {
+        let registry = TermRegistry::default();
+        let (sink, rx) = collector();
+        registry
+            .spawn(
+                "w".into(),
+                SpawnSpec {
+                    profile_id: "test".into(),
+                    label: "test".into(),
+                    command: "cmd.exe".into(),
+                    args: vec!["/c".into(), "echo hello".into()],
+                    cwd: None,
+                    env: Vec::new(),
+                    rows: 24,
+                    cols: 80,
+                },
+                sink,
+            )
+            .expect("spawn");
+
+        loop {
+            match rx.recv_timeout(Duration::from_secs(10)) {
+                Ok(TermEvent::Exit(_)) => break,
+                Ok(TermEvent::Data { bytes, .. }) => {
+                    // ConPTY emits a cursor-position query (`ESC[6n`) on startup
+                    // and stalls the child until the terminal answers — xterm.js
+                    // does this in the app; here the test must, or `cmd` never
+                    // runs `echo` and never exits.
+                    if bytes.windows(4).any(|w| w == b"\x1b[6n") {
+                        let _ = registry.write("w", b"\x1b[1;1R");
+                    }
+                }
+                Err(_) => panic!("no exit delivered — ConPTY reader never unblocked"),
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(registry.list().is_empty(), "exited session deregistered");
+        assert!(registry.replay("w").bytes.is_empty(), "buffer dropped on exit");
+    }
+
     #[test]
     #[cfg_attr(not(unix), ignore = "uses /bin/cat")]
     fn write_reaches_the_child_and_kill_cleans_up() {
@@ -586,6 +649,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(unix), ignore = "uses /bin/sh")]
     fn duplicate_id_is_rejected() {
         let registry = TermRegistry::default();
         let (sink_a, _rx_a) = collector();
