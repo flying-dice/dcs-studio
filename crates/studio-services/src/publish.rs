@@ -102,38 +102,71 @@ pub fn plan_repo(root: &Path) -> Result<RepoPlan, String> {
 
 // --- GitHub write REST (model GitHubWrite) ----------------------------------
 
+#[derive(Deserialize)]
+struct RepoResp {
+    full_name: String,
+    html_url: String,
+    name: String,
+    owner: RepoOwner,
+}
+#[derive(Deserialize)]
+struct RepoOwner {
+    login: String,
+}
+
+impl From<RepoResp> for RepoInfo {
+    fn from(r: RepoResp) -> Self {
+        RepoInfo {
+            full_name: r.full_name,
+            html_url: r.html_url,
+            owner: r.owner.login,
+            name: r.name,
+        }
+    }
+}
+
+/// Create the repo, or — when it already exists for this user (422) — resolve and
+/// return the existing one, so `share` is idempotent: a retry after a partial
+/// failure re-tags/commits/pushes instead of dying on "name already exists".
 fn create_repo(name: &str, description: &str, token: &str) -> Result<RepoInfo, String> {
-    #[derive(Deserialize)]
-    struct Resp {
-        full_name: String,
-        html_url: String,
-        name: String,
-        owner: Owner,
-    }
-    #[derive(Deserialize)]
-    struct Owner {
-        login: String,
-    }
     let body = serde_json::json!({
         "name": name,
         "description": description,
         "private": false,
         "auto_init": false,
     });
-    let resp: Resp = ureq::post(&format!("{API_BASE}/user/repos"))
+    match ureq::post(&format!("{API_BASE}/user/repos"))
         .set("Accept", "application/vnd.github+json")
         .set("User-Agent", USER_AGENT)
         .set("Authorization", &format!("Bearer {token}"))
         .send_json(body)
-        .map_err(|e| rest_error("create repo", e))?
-        .into_json()
-        .map_err(|e| format!("create-repo response: {e}"))?;
-    Ok(RepoInfo {
-        full_name: resp.full_name,
-        html_url: resp.html_url,
-        owner: resp.owner.login,
-        name: resp.name,
-    })
+    {
+        Ok(resp) => Ok(resp
+            .into_json::<RepoResp>()
+            .map_err(|e| format!("create-repo response: {e}"))?
+            .into()),
+        // Already exists for this user — continue with the existing repo.
+        Err(ureq::Error::Status(422, _)) => {
+            let login = crate::github::current_session()
+                .map(|s| s.login)
+                .ok_or_else(|| "repo exists but no session to resolve it".to_string())?;
+            fetch_repo(&login, name, token)
+        }
+        Err(e) => Err(rest_error("create repo", e)),
+    }
+}
+
+/// Resolve an existing repo (`GET /repos/{owner}/{name}`).
+fn fetch_repo(owner: &str, name: &str, token: &str) -> Result<RepoInfo, String> {
+    Ok(ureq::get(&format!("{API_BASE}/repos/{owner}/{name}"))
+        .set("Accept", "application/vnd.github+json")
+        .set("User-Agent", USER_AGENT)
+        .set("Authorization", &format!("Bearer {token}"))
+        .call()
+        .map_err(|e| rest_error("fetch repo", e))?
+        .into_json::<RepoResp>()
+        .map_err(|e| format!("fetch-repo response: {e}"))?
+        .into())
 }
 
 fn set_topics(repo: &RepoInfo, topics: &[String], token: &str) -> Result<(), String> {
@@ -268,21 +301,37 @@ fn set_remote(root: &Path, url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Tokenize an `https://` remote so the push authenticates without persisting the
-/// token (it is passed as an ephemeral URL, never written to `.git/config`).
-fn tokenize_url(url: &str, token: &str) -> Result<String, String> {
-    url.strip_prefix("https://")
-        .map(|rest| format!("https://x-access-token:{token}@{rest}"))
-        .ok_or_else(|| format!("unexpected remote url: {url}"))
+/// The `http.extraheader` value authenticating as `token`, base64 basic-auth
+/// (`x-access-token:<token>`, the GitHub-over-HTTPS convention). Passed to git
+/// via env (`GIT_CONFIG_*`), never argv, so the token is not in the process
+/// command line — nor written to `.git/config` (origin stays the clean URL).
+fn basic_auth_header(token: &str) -> String {
+    use base64::Engine as _;
+    let creds =
+        base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{token}"));
+    format!("AUTHORIZATION: basic {creds}")
 }
 
 fn push(root: &Path, token: &str) -> Result<(), String> {
-    let origin = git(root, &["remote", "get-url", "origin"])?;
-    let authed = tokenize_url(&origin, token)?;
-    git(
-        root,
-        &["push", &authed, &format!("{DEFAULT_BRANCH}:{DEFAULT_BRANCH}")],
-    )?;
+    // Auth via env-provided git config (GIT_CONFIG_*), NOT argv, so the token
+    // never appears in the world-readable process command line. origin is the
+    // clean https URL set by `set_remote`.
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "http.https://github.com/.extraheader")
+        .env("GIT_CONFIG_VALUE_0", basic_auth_header(token))
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .args(["push", "origin", &format!("{DEFAULT_BRANCH}:{DEFAULT_BRANCH}")])
+        .output()
+        .map_err(|e| format!("git not found on PATH ({e}); install git to publish"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git push failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
     Ok(())
 }
 
@@ -373,12 +422,17 @@ mod tests {
     }
 
     #[test]
-    fn tokenize_url_injects_credentials_only_for_https() {
-        assert_eq!(
-            tokenize_url("https://github.com/octocat/mod", "gho_x").unwrap(),
-            "https://x-access-token:gho_x@github.com/octocat/mod"
-        );
-        assert!(tokenize_url("git@github.com:octocat/mod.git", "gho_x").is_err());
+    fn basic_auth_header_base64_encodes_the_token_for_env_not_argv() {
+        use base64::Engine as _;
+        let header = basic_auth_header("gho_secret");
+        let b64 = header
+            .strip_prefix("AUTHORIZATION: basic ")
+            .expect("basic-auth prefix");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("valid base64");
+        // The token rides in the header (→ git env), never in a URL/argv.
+        assert_eq!(String::from_utf8(decoded).unwrap(), "x-access-token:gho_secret");
     }
 
     #[test]

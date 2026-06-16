@@ -52,8 +52,17 @@
             Open <ExternalLink class="size-3" />
           </a>
         </div>
-        <div class="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          <LoaderCircle class="size-3 animate-spin" /> Waiting for authorization…
+        <div class="mt-2 flex items-center justify-between gap-2">
+          <span class="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <LoaderCircle class="size-3 animate-spin" /> Waiting for authorization…
+          </span>
+          <button
+            class="text-[11px] text-muted-foreground hover:text-foreground"
+            onclick={() => publish.cancel()}
+            data-testid="publish-cancel"
+          >
+            Cancel
+          </button>
         </div>
       </div>
     {/if}
@@ -94,8 +103,9 @@
         {/if}
         Share on GitHub
       </Button>
-      <p class="px-1 text-[11px] text-muted-foreground">
-        Creates a public repo tagged <span class="font-mono">dcs-studio</span>, then pushes this project.
+      <p class="px-1 text-[11px] text-amber-600 dark:text-amber-500">
+        ⚠ Creates a <strong>public</strong>, world-readable repo tagged
+        <span class="font-mono">dcs-studio</span> and pushes this project's files to it.
       </p>
     {/if}
 

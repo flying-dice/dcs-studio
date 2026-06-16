@@ -13,15 +13,17 @@ import DOMPurify from "dompurify";
 marked.setOptions({ gfm: true, breaks: false });
 
 /**
- * Markdown → sanitized HTML string, ready for `el.innerHTML`.
+ * Markdown → sanitized HTML string, ready for `el.innerHTML` / `{@html}`.
  *
- * DOMPurify needs a live DOM. This helper is only invoked from the
- * browser-only hover path, but the module can be import-evaluated during
- * SvelteKit SSR — so guard on `window`. The SSR return is never rendered
- * (hover tooltips exist client-side only); the guard just keeps import safe.
+ * DOMPurify needs a live DOM. Callers now include the Marketplace product page,
+ * which feeds UNTRUSTED third-party GitHub READMEs — so this must never emit
+ * un-sanitized HTML. Under SSR (no `window`, so no DOMPurify) it FAILS CLOSED,
+ * returning empty rather than the raw `marked` output. The app is an
+ * `ssr=false` SPA so the live path always sanitizes; this guard ensures a stray
+ * SSR/prerender of a consumer can't become a stored-XSS hole in the webview.
  */
 export function renderMarkdown(md: string): string {
+  if (typeof window === "undefined") return "";
   const html = marked.parse(md, { async: false }) as string;
-  if (typeof window === "undefined") return html;
   return DOMPurify.sanitize(html);
 }

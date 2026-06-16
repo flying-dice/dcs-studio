@@ -420,6 +420,11 @@ fn read_cache() -> Option<Cache> {
     serde_json::from_str(&text).ok()
 }
 
+/// Whether a cache fetched at `fetched_at` is still fresh at `now` (pure).
+fn is_fresh(fetched_at: u64, now: u64) -> bool {
+    now.saturating_sub(fetched_at) < CACHE_TTL_SECONDS
+}
+
 /// The cached listings when within `CACHE_TTL_SECONDS` and `force` is false
 /// (model `Registry.FreshCache`).
 fn fresh_cache(force: bool) -> Option<Vec<MarketListing>> {
@@ -427,7 +432,7 @@ fn fresh_cache(force: bool) -> Option<Vec<MarketListing>> {
         return None;
     }
     let cache = read_cache()?;
-    (now_secs().saturating_sub(cache.fetched_at) < CACHE_TTL_SECONDS).then_some(cache.listings)
+    is_fresh(cache.fetched_at, now_secs()).then_some(cache.listings)
 }
 
 fn save_cache(listings: &[MarketListing]) {
@@ -482,6 +487,16 @@ mod tests {
         let listing = listing_from(repo("octocat", "bare-mod", &["dcs-studio"]));
         assert_eq!(listing.repo, "octocat/bare-mod");
         assert!(listing.labels.is_empty());
+    }
+
+    #[test]
+    fn cache_freshness_respects_the_ttl() {
+        assert!(is_fresh(1000, 1000), "same instant is fresh");
+        assert!(is_fresh(1000, 1000 + CACHE_TTL_SECONDS - 1), "within TTL");
+        assert!(!is_fresh(1000, 1000 + CACHE_TTL_SECONDS), "exactly TTL is stale");
+        assert!(!is_fresh(1000, 9_999_999), "ancient is stale");
+        // A clock skew (now < fetched_at) saturates to 0 → treated as fresh.
+        assert!(is_fresh(5000, 1000));
     }
 
     #[test]

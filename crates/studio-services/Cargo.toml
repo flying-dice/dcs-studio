@@ -22,6 +22,9 @@ portable-pty = "0.9"
 trash = "5.2.6"
 # GitHub device-flow HTTP (issue #11); same client the signing seam uses.
 ureq = { version = "2", features = ["json"] }
+# Basic-auth header for the publish push (issue #12), passed to git via env so
+# the token never lands in argv.
+base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

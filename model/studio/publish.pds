@@ -35,7 +35,9 @@ public data PublishError { message: string }
 /// GitHub's write REST surface for publishing — a black-box external system,
 /// authenticated as the logged-in user with the escalated (`public_repo`) token.
 public system GitHubWrite {
-  /// Create a public repo under the authenticated user (`POST /user/repos`).
+  /// Create a public repo under the authenticated user (`POST /user/repos`); when
+  /// it already exists, resolve and return the existing one so Share is
+  /// idempotent (a retry after a partial failure re-tags/commits/pushes).
   public CreateRepo(name: string, description: string, token: string): Result<studio::publish::RepoInfo, studio::publish::PublishError>;
 
   /// Replace the repo's topics (`PUT /repos/{owner}/{name}/topics`).
