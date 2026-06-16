@@ -15,6 +15,9 @@ import {
   deleteToTrash,
   dcsCall,
   dcsStatus,
+  githubSession,
+  githubSignOut,
+  type GithubSession,
 } from "./api";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -154,6 +157,36 @@ class AppState {
     this.dark = t.dark;
     if (t.dark) this.lastDark = id;
     else this.lastLight = id;
+  }
+
+  // GitHub identity (issue #11). The access token stays Rust-side (keyring);
+  // this is the profile only. Sign-in is OPTIONAL — the IDE is fully usable
+  // signed-out; `session` just drives the header chip + GitHub-backed features.
+  session = $state<GithubSession | null>(null);
+
+  /** Load the cached session on boot to populate the header chip. */
+  async loadSession(): Promise<void> {
+    if (!isTauri()) return; // browser dev: no backend; the chip shows "Sign in"
+    try {
+      this.session = (await githubSession()) ?? null;
+    } catch {
+      this.session = null;
+    }
+  }
+
+  /** Record the session after a successful sign-in. */
+  setSession(session: GithubSession): void {
+    this.session = session;
+  }
+
+  /** Sign out: clear the cached token + profile; the chip returns to "Sign in". */
+  async signOut(): Promise<void> {
+    try {
+      await githubSignOut();
+    } catch {
+      /* clearing the chip matters even if the backend call fails */
+    }
+    this.session = null;
   }
 
   // Workspace

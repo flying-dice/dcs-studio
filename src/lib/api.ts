@@ -361,6 +361,46 @@ export function dcsStop(writeDir: string): Promise<LaunchStatus> {
   return invoke<LaunchStatus>("dcs_stop", { writeDir });
 }
 
+/** A GitHub device-flow handshake to display: the user code + the URL to enter it at. */
+export interface GithubDeviceCode {
+  user_code: string;
+  verification_uri: string;
+}
+
+/** The signed-in GitHub session — profile only; the access token stays Rust-side. */
+export interface GithubSession {
+  login: string;
+  avatar_url: string;
+}
+
+/**
+ * Begin GitHub device-flow login: returns the user code + verification URL to
+ * display. The backend then polls and emits `github://authorized` (GithubSession)
+ * or `github://error` ({ message }).
+ */
+export function githubLoginStart(): Promise<GithubDeviceCode> {
+  return invoke<GithubDeviceCode>("github_login_start");
+}
+
+/**
+ * Cancel an in-progress device-flow login: stops the backend poll loop so a code
+ * authorized in the browser after the user cancels does not silently sign them
+ * in. Called when the sign-in modal is dismissed (Cancel/X/Esc/backdrop).
+ */
+export function githubLoginCancel(): Promise<void> {
+  return invoke<void>("github_login_cancel");
+}
+
+/** The cached session (profile), or null when signed out. */
+export function githubSession(): Promise<GithubSession | null> {
+  return invoke<GithubSession | null>("github_session");
+}
+
+/** Sign out: clear the cached token + profile; the chip returns to signed-out. */
+export function githubSignOut(): Promise<void> {
+  return invoke<void>("github_sign_out");
+}
+
 /** A detected `<install>\Scripts\MissionScripting.lua` candidate. */
 export interface MissionScriptFile {
   variant: string;

@@ -20,6 +20,11 @@ dcs-studio-project = { path = "../dcs-studio-project" }
 # so full-screen TUIs render; wezterm's crate, ConPTY-backed on Windows.
 portable-pty = "0.9"
 trash = "5.2.6"
+# GitHub device-flow HTTP (issue #11); same client the signing seam uses.
+ureq = { version = "2", features = ["json"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+# Token storage in the Windows Credential Manager (issue #11). Windows-only,
+# like winreg above; non-Windows builds (CI) use the in-memory fallback in github.rs.
+keyring = { version = "3", features = ["windows-native"] }

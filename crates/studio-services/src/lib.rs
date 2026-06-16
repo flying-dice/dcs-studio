@@ -9,6 +9,7 @@
 //! Stdout discipline: nothing in this crate prints.
 
 pub mod fs;
+pub mod github;
 pub mod inject;
 pub mod launcher;
 pub mod link;

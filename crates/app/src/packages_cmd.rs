@@ -27,14 +27,14 @@ fn signing_token() -> String {
     std::env::var("DCS_SIGNING_TOKEN").unwrap_or_else(|_| "dev".to_string())
 }
 
-/// The identity provider — a single static user from `DCS_SIGNING_USER` (the
-/// polymorphic IDP's stand-in), or logged-out when unset, so packaging is gated
-/// on being signed in (model `BuildRequiresLogin`). GitHub device-flow login
-/// (#11) replaces this.
+/// The identity provider — the signed-in GitHub user (issue #11) backs the
+/// packaging identity, so a logged-in author signs and a logged-out one is
+/// refused (model `BuildRequiresLogin`). `StaticIdentity` is still the carrier;
+/// only its source changed from an env var to the cached GitHub session.
 fn identity_provider() -> StaticIdentity {
-    match std::env::var("DCS_SIGNING_USER") {
-        Ok(user) if !user.trim().is_empty() => StaticIdentity::new(user),
-        _ => StaticIdentity::logged_out(),
+    match studio_services::github::current_session() {
+        Some(session) => StaticIdentity::new(session.login),
+        None => StaticIdentity::logged_out(),
     }
 }
 
