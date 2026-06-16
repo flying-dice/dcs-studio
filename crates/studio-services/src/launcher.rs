@@ -22,6 +22,12 @@ const PROFILE_HEIGHT: u32 = 720;
 /// How often the watcher polls the spawned child for exit.
 const WATCH_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Arguments passed to `DCS.exe`. `--no-launcher` is mandatory: without it DCS
+/// opens its interactive launcher UI and waits for a click, so the sim never
+/// boots and the bridge never comes up (matches the dcs-dev workflow + the e2e
+/// suite, which both launch with this flag).
+const DCS_LAUNCH_ARGS: &[&str] = &["--no-launcher"];
+
 /// One started DCS this manager owns: the child process plus where to undo the
 /// side effects (eject the bridge, restore the config) when it exits.
 struct LaunchSession {
@@ -289,9 +295,11 @@ fn resolve_exe() -> Result<(String, PathBuf), String> {
 }
 
 /// Spawn DCS.exe detached (no piped IO, no console window), with its bin dir as
-/// the working directory.
+/// the working directory and `--no-launcher` so it boots straight to the sim
+/// rather than the interactive launcher UI.
 fn spawn_dcs(exe_path: &str, bin_dir: &Path) -> Result<Child, String> {
     dcs_studio_project::quiet_command(exe_path)
+        .args(DCS_LAUNCH_ARGS)
         .current_dir(bin_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -491,7 +499,7 @@ fn quoted_string_end(s: &[u8], i: usize) -> Option<usize> {
 mod tests {
     use super::{
         backup_config, matching_brace, recover_write_dir, replace_graphics_block, restore_config,
-        write_low_spec, LaunchSlot,
+        write_low_spec, LaunchSlot, DCS_LAUNCH_ARGS,
     };
 
     const OPTIONS: &str = "options = {\n\t[\"VR\"] = {\n\t\t[\"enable\"] = false,\n\t},\n\t[\"graphics\"] = {\n\t\t[\"fullScreen\"] = true,\n\t\t[\"width\"] = 2560,\n\t\t[\"height\"] = 1440,\n\t\t[\"shadows\"] = 5,\n\t},\n\t[\"plugins\"] = {\n\t\t[\"foo\"] = 1,\n\t},\n}\n";
@@ -552,6 +560,15 @@ mod tests {
         restore_config(&path).expect("no-op restore");
         assert_eq!(std::fs::read_to_string(&path).expect("unchanged"), OPTIONS);
         let _ = std::fs::remove_dir_all(file.parent().unwrap());
+    }
+
+    // --- DCS boots to the sim, not the interactive launcher UI ---
+    #[test]
+    fn launch_args_pass_no_launcher() {
+        assert!(
+            DCS_LAUNCH_ARGS.contains(&"--no-launcher"),
+            "DCS.exe without --no-launcher opens the launcher UI and never boots the sim"
+        );
     }
 
     // --- T1: the single-launch slot is mutually exclusive ---
