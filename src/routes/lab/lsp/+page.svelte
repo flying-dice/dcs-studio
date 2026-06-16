@@ -1,7 +1,7 @@
 <script lang="ts">
   // Browser test surface for the PRODUCTION LSP client path — the exact
   // `LspClient` + `LuaAnalyzerProvider` classes the packaged app uses — over an
-  // injected in-page transport that behaves like `dcs-studio-cli lsp` on
+  // injected in-page transport that behaves like the `lua-analyzer` server on
   // the wire (framed JSON-RPC, request/response, publishDiagnostics push).
   // Covers what only the Tauri runtime would otherwise reach: request
   // correlation, UTF-16 position conversion on non-ASCII text, and the

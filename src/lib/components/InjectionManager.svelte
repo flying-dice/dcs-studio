@@ -2,14 +2,20 @@
   // Injection Manager: installs/updates/removes the in-DCS bridge (DLL + Lua
   // hook) into a detected DCS write dir — the in-app replacement for deploy.ps1.
   import { onMount } from "svelte";
+  import { isTauri } from "@tauri-apps/api/core";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import {
     dcsDetectInstalls,
     dcsInjectionStatus,
     dcsInject,
     dcsEject,
+    dcsLaunch,
+    dcsStop,
+    dcsLaunchStatus,
     pickFolder,
     type DcsInstall,
     type InjectionStatus,
+    type LaunchStatus,
   } from "$lib/api";
   import { app } from "$lib/state.svelte";
   import { ToolActions } from "$lib/tool-actions.svelte";
@@ -23,7 +29,9 @@
   let installs = $state<DcsInstall[]>([]);
   let selected = $state<string | null>(null);
   let status = $state<InjectionStatus | null>(null);
+  let launchState = $state<LaunchStatus | null>(null);
   const ui = new ToolActions();
+  const launchUi = new ToolActions();
 
   const anythingInstalled = $derived(
     !!status && (status.dll_installed || status.hook_installed),
@@ -101,8 +109,47 @@
     });
   }
 
+  async function refreshLaunch() {
+    try {
+      launchState = await dcsLaunchStatus();
+    } catch {
+      launchState = null;
+    }
+  }
+
+  async function launch() {
+    const writeDir = selected;
+    if (!writeDir) return;
+    await launchUi.run("DCS launching — windowed, low-spec.", async () => {
+      await dcsLaunch(writeDir);
+      await refreshLaunch();
+    });
+    // Injecting the bridge changed install status; reflect it.
+    await refreshStatus();
+  }
+
+  async function stop() {
+    const writeDir = selected;
+    if (!writeDir) return;
+    await launchUi.run("DCS stopped — bridge ejected, config restored.", async () => {
+      await dcsStop(writeDir);
+      await refreshLaunch();
+    });
+    await refreshStatus();
+  }
+
   onMount(() => {
     detect();
+    refreshLaunch();
+    if (!isTauri()) return;
+    // DCS exit (or an explicit stop) ejects the bridge and restores the config;
+    // refresh both readouts when it lands.
+    let unlisten: UnlistenFn | undefined;
+    listen("launch://done", () => {
+      refreshLaunch();
+      refreshStatus();
+    }).then((u) => (unlisten = u));
+    return () => unlisten?.();
   });
 </script>
 
@@ -258,6 +305,57 @@
           : app.dcsSimRunning
             ? "mission running"
             : "connected"}
+      </div>
+
+      <Separator />
+
+      <!-- Managed launch: inject + low-spec windowed config + start DCS;
+           auto-eject and restore the config on exit. -->
+      <div class="flex flex-col gap-1.5 px-3">
+        <div class="flex items-center justify-between pb-0.5">
+          <span
+            class="font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
+            >Launch</span
+          >
+          {#if launchState?.running}
+            <span class="font-mono text-[10px] text-emerald-500">running</span>
+          {/if}
+        </div>
+        {#if launchState?.running}
+          <Button
+            variant="destructive"
+            size="sm"
+            class="w-full"
+            disabled={launchUi.busy}
+            onclick={stop}
+          >
+            {launchUi.busy ? "Working…" : "Stop DCS"}
+          </Button>
+        {:else}
+          <Button
+            size="sm"
+            class="w-full"
+            disabled={launchUi.busy || !status.source_available || app.dcsConnected}
+            onclick={launch}
+          >
+            {launchUi.busy ? "Working…" : "Launch DCS (windowed, low-spec)"}
+          </Button>
+          {#if app.dcsConnected}
+            <p class="text-[11px] leading-snug text-muted-foreground">
+              DCS is already running — stop it before launching from here.
+            </p>
+          {/if}
+        {/if}
+        {#if launchUi.notice}
+          <p
+            class={cn(
+              "text-[11px] leading-snug",
+              launchUi.notice.ok ? "text-emerald-500" : "text-destructive",
+            )}
+          >
+            {launchUi.notice.text}
+          </p>
+        {/if}
       </div>
     {/if}
   </div>

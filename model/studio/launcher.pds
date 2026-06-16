@@ -1,0 +1,134 @@
+//! studio::launcher — managed DCS launch: assert the bridge is injected, back
+//! up the user's graphics config, write a low-spec windowed config, spawn
+//! DCS.exe, and — once DCS exits — eject the bridge and restore the user's
+//! config. DCS has no command-line flag for windowed/low-spec mode, so the
+//! window mode and graphics level are driven entirely through Config/options.lua,
+//! which this manager edits under a pristine backup (the same backup/restore
+//! shape as studio::mission).
+
+/// The fixed low-spec windowed profile written into options.lua's graphics
+/// block for a launch session (windowed, low detail). Restored away when DCS
+/// exits.
+public data LaunchProfile { width: number, height: number, fullScreen: bool }
+
+/// The result of starting a launch: DCS.exe was spawned and the user's config
+/// was backed up and replaced with the low-spec profile.
+public data LaunchOutcome { running: bool, exePath: string, configBackedUp: bool }
+
+/// Whether a launch session is active (a DCS child this manager spawned is
+/// still alive) and whether the low-spec config is currently in place.
+public data LaunchStatus { running: bool, configPatched: bool }
+
+public data LaunchError { message: string }
+
+/// Rust-side launch manager of the Tauri backend. Reuses the injection face
+/// (studio::inject::Injector) to assert and tear down the bridge, and resolves
+/// DCS.exe next to the detected game install. One launch session at a time.
+public container Launcher for studio::core::Studio {
+  /// Assert injection, back up Config/options.lua, write the low-spec windowed
+  /// profile, then spawn DCS.exe. Fails closed: if injection fails (a DLL
+  /// locked by an already-running DCS is the common case) nothing is written;
+  /// if a later step fails after the config was written, the backup is restored
+  /// before returning the error.
+  public Launch(writeDir: string): Result<studio::launcher::LaunchOutcome, studio::launcher::LaunchError> {
+    asserted = Result<studio::inject::InjectionStatus, studio::launcher::LaunchError> from self.AssertInjected(writeDir)
+    if (asserted.isErr) {
+      return Err(asserted.error)
+    }
+    backedUp = Result<void, studio::launcher::LaunchError> from self.BackupConfig(writeDir)
+    if (backedUp.isErr) {
+      return Err(backedUp.error)
+    }
+    written = Result<void, studio::launcher::LaunchError> from self.WriteLowSpecConfig(writeDir)
+    if (written.isErr) {
+      revertedWrite = Result<void, studio::launcher::LaunchError> from self.RestoreConfig(writeDir)
+      return Err(written.error)
+    }
+    spawned = Result<string, studio::launcher::LaunchError> from self.SpawnDcs()
+    if (spawned.isErr) {
+      revertedSpawn = Result<void, studio::launcher::LaunchError> from self.RestoreConfig(writeDir)
+      return Err(spawned.error)
+    }
+    outcome = studio::launcher::LaunchOutcome from { spawned.value }
+    return Ok(outcome)
+  }
+
+  /// Inject the bridge if missing or stale; surface the locked-DLL failure
+  /// (DCS already running) rather than relaunching a live sim.
+  AssertInjected(writeDir: string): Result<studio::inject::InjectionStatus, studio::launcher::LaunchError>;
+
+  /// Copy Config/options.lua to options.lua.dcs-launcher.bak once (a pristine
+  /// snapshot); a no-op if the backup already exists.
+  BackupConfig(writeDir: string): Result<void, studio::launcher::LaunchError>;
+
+  /// Replace the options.graphics block with the fixed low-spec windowed
+  /// profile, leaving every other section of options.lua untouched.
+  WriteLowSpecConfig(writeDir: string): Result<void, studio::launcher::LaunchError>;
+
+  /// Resolve DCS.exe (bin/DCS.exe under the detected game install) and spawn it
+  /// detached; returns the launched exe path.
+  SpawnDcs(): Result<string, studio::launcher::LaunchError>;
+
+  /// Whether a spawned DCS is still alive and whether the low-spec config is
+  /// currently in place.
+  public Status(): studio::launcher::LaunchStatus;
+
+  /// Kill the spawned DCS, then run the same teardown its natural exit would
+  /// (eject the bridge, restore the config).
+  public Stop(writeDir: string): Result<studio::launcher::LaunchStatus, studio::launcher::LaunchError> {
+    teardown = Result<void, studio::launcher::LaunchError> from self.OnExit(writeDir)
+    if (teardown.isErr) {
+      return Err(teardown.error)
+    }
+    status = studio::launcher::LaunchStatus from self.Status()
+    return Ok(status)
+  }
+
+  /// Teardown after DCS exits (called by the process watcher and by Stop): eject
+  /// the bridge best-effort, then restore the user's options.lua. The effects
+  /// run once per launch session — the watcher and an explicit Stop cannot
+  /// double-eject or double-restore.
+  OnExit(writeDir: string): Result<void, studio::launcher::LaunchError> {
+    self.TeardownBridge(writeDir)
+    restored = Result<void, studio::launcher::LaunchError> from self.RestoreConfig(writeDir)
+    if (restored.isErr) {
+      return Err(restored.error)
+    }
+    return Ok
+  }
+
+  /// Eject the bridge, best-effort: a failed eject must never block restoring
+  /// the user's config.
+  TeardownBridge(writeDir: string): void;
+
+  /// Copy the pristine options.lua.dcs-launcher.bak back over options.lua. Runs
+  /// after DCS has exited, so it overwrites DCS's own on-exit rewrite.
+  RestoreConfig(writeDir: string): Result<void, studio::launcher::LaunchError>;
+}
+
+/// A launch backs up the user's config, writes the low-spec windowed profile,
+/// and starts DCS.
+feature LaunchWritesLowSpecAndStarts for studio::launcher::Launcher {
+  given "a valid DCS write dir with the bridge injectable"
+  and "the user's Config/options.lua exists"
+  when "the developer launches DCS via the launcher"
+  then "options.lua is backed up to a pristine snapshot"
+  and "the options.graphics block is replaced with the low-spec windowed profile"
+  and "DCS.exe is spawned"
+}
+
+/// When DCS exits, the bridge is ejected and the user's config restored.
+feature ShutdownEjectsAndRestores for studio::launcher::Launcher {
+  given "DCS was launched via the launcher and is running"
+  when "DCS exits (or the developer stops it)"
+  then "the bridge is ejected"
+  and "the user's original options.lua is restored from the backup"
+}
+
+/// A launch cannot proceed against an already-running DCS.
+feature LaunchBlockedWhenDcsAlreadyRunning for studio::launcher::Launcher {
+  given "DCS is already running with the bridge DLL loaded"
+  when "the developer launches DCS via the launcher"
+  then "the locked-DLL injection failure is surfaced"
+  and "options.lua is left untouched"
+}

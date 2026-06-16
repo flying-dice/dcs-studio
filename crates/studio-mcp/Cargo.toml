@@ -8,8 +8,7 @@ name = "studio-mcp"
 edition = "2024"
 version.workspace = true
 
-# The handler moved from dcs-studio-cli, which opts into the pedantic
-# workspace lints — keep that bar.
+# The handler opts into the pedantic workspace lints — keep that bar.
 [lints]
 workspace = true
 

@@ -22,6 +22,15 @@ pub struct DcsInstall {
     valid: bool,
 }
 
+impl DcsInstall {
+    /// The Saved Games write dir path — for in-crate callers (e.g. the launcher's
+    /// crash recovery) that walk detected installs without re-serializing.
+    #[must_use]
+    pub fn write_dir(&self) -> &str {
+        &self.write_dir
+    }
+}
+
 /// What is (and isn't) installed in a given write dir, relative to the
 /// bridge artifacts this build would install.
 #[derive(serde::Serialize)]

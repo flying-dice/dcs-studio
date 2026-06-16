@@ -129,10 +129,10 @@ public container Workbench for studio::core::Studio {
     return Ok(root.value)
   }
 
-  /// Delegates to the same project-kit scaffolding the CLI's Init uses
-  /// (studio::cli::Cli.Init): refuses an existing root, renders the
-  /// template files in Rust. Every template also emits a dcs-studio.toml
-  /// manifest describing the mod, its files, and install mappings.
+  /// Delegates to the project-kit scaffolding (also used by the MCP
+  /// init_project tool): refuses an existing root, renders the template files
+  /// in Rust. Every template also emits a dcs-studio.toml manifest describing
+  /// the mod, its files, and install mappings.
   ScaffoldFromTemplate(parent: string, name: string, templateId: string): Result<string, studio::files::IoError>;
 
   /// Lazy file-tree expansion: list a folder's children on first open.

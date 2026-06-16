@@ -1,6 +1,6 @@
 # Tauri-free IDE service logic shared by the desktop app (thin Tauri command
-# wrappers in crates/app) and the headless MCP server in dcs-studio-cli
-# (model/studio/mcp.pds, issue #8).
+# wrappers in crates/app) and the IDE-hosted MCP tool surface (crates/studio-mcp,
+# model/studio/mcp.pds, issue #8).
 #
 # Edition 2021 to match the app crate the logic moved from; the engine
 # crates' pedantic workspace lints are deliberately not opted into so the

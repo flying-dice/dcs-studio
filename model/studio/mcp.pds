@@ -7,7 +7,7 @@
 //! (crates/studio-services). Calls into the sim target the dcs::bridge::Dcs
 //! published face only.
 //!
-//! Moved off the standalone `dcs-studio-cli mcp` stdio binary (issue #33): a
+//! Hosted in the IDE rather than a standalone stdio binary (issue #33): a
 //! second headless process dialed its own DCS link and collided with the one
 //! open IDE on the shared bridge. The surface now lives in the app and shares
 //! the IDE's already-open link, so there is one DCS connection, not two.
@@ -18,7 +18,7 @@
 //! trusts the loopback-only bind to keep it reachable from this machine alone,
 //! so any editor's config is just a URL. The IDE shows the server's status,
 //! port, and setup help; scaffolded projects carry a `.mcp.json` that points an
-//! MCP editor at it (see studio::cli::Cli).
+//! MCP editor at it (emitted by the project-kit templates).
 
 /// LLM agent attaching to the running IDE's loopback MCP server, sharing the
 /// IDE's live DCS link — there is no separate headless process.
@@ -45,27 +45,39 @@ public data NotImplemented { message: string }
 /// — the server runs on the developer's machine with their rights, and the
 /// MCP host (not this server) owns tool-permission policy.
 public container McpServer for studio::core::Studio {
-  /// init_project — scaffold a project from a template (same kit as the
-  /// CLI `init` and the app's New Project flow).
+  /// init_project — scaffold a project from a template (the same project kit
+  /// the app's New Project flow uses).
   public InitProject(template: string, parent: string, name: string): Result<string, studio::files::IoError> {
-    root = Result<string, studio::files::IoError> from studio::cli::Cli.Init(template, parent, name)
+    root = Result<string, studio::files::IoError> from self.Scaffold(template, parent, name)
     if (root.isErr) {
       return Err(root.error)
     }
     return Ok(root.value)
   }
 
-  /// check — analyse a workspace root; the result text carries findings
-  /// with stable codes and the tool errs on error-severity findings.
+  /// Project-kit scaffolding: render the template into <parent>/<name>,
+  /// refusing an existing root (the same kit core::Workbench.NewProject uses).
+  Scaffold(template: string, parent: string, name: string): Result<string, studio::files::IoError>;
+
+  /// check — analyse a workspace root with the engine; the result is the
+  /// error-severity finding count, and the tool errs when it is nonzero.
   public Check(root: string): number {
-    errors = number from studio::cli::Cli.Check(root)
+    files = dcslua::SourceUnit[] from self.CollectSources(root)
+    findings = syntax::Diagnostic[] from dcslua::DcsLuaLs.Analyse(files)
+    errors = number from self.CountErrors(findings)
     return errors
   }
 
+  /// Error-severity findings in the list.
+  CountErrors(findings: syntax::Diagnostic[]): number;
+
   /// build — cargo build for Rust projects, a clean no-op otherwise.
   public Build(root: string): number {
-    code = number from studio::cli::Cli.Build(root)
-    return code
+    built = Result<studio::build::BuildOutcome, studio::files::IoError> from studio::build::Builder.RunBuild(root)
+    if (built.isErr) {
+      return 1
+    }
+    return built.value.exitCode
   }
 
   /// read_dir — list a folder, directories first.
@@ -184,6 +196,32 @@ public container McpServer for studio::core::Studio {
       return Err(ejected.error)
     }
     return Ok(ejected.value)
+  }
+
+  /// launch_dcs — assert injection, back up + low-spec the graphics config,
+  /// and start DCS.exe (the managed launch lifecycle).
+  public LaunchDcs(writeDir: string): Result<studio::launcher::LaunchOutcome, studio::launcher::LaunchError> {
+    launched = Result<studio::launcher::LaunchOutcome, studio::launcher::LaunchError> from studio::launcher::Launcher.Launch(writeDir)
+    if (launched.isErr) {
+      return Err(launched.error)
+    }
+    return Ok(launched.value)
+  }
+
+  /// launch_status — whether a launched DCS is still running and whether the
+  /// low-spec config is currently in place.
+  public LaunchStatus(): studio::launcher::LaunchStatus {
+    status = studio::launcher::LaunchStatus from studio::launcher::Launcher.Status()
+    return status
+  }
+
+  /// stop_dcs — stop the launched DCS, eject the bridge, and restore config.
+  public StopDcs(writeDir: string): Result<studio::launcher::LaunchStatus, studio::launcher::LaunchError> {
+    stopped = Result<studio::launcher::LaunchStatus, studio::launcher::LaunchError> from studio::launcher::Launcher.Stop(writeDir)
+    if (stopped.isErr) {
+      return Err(stopped.error)
+    }
+    return Ok(stopped.value)
   }
 
   /// detect_mission_scripts — candidate MissionScripting.lua files.

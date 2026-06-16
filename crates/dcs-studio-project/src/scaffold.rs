@@ -1,4 +1,4 @@
-//! Materialise a template on disk (model: `studio::cli::Cli.Init`).
+//! Materialise a template on disk (model: `studio::core::Workbench.ScaffoldFromTemplate`).
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
