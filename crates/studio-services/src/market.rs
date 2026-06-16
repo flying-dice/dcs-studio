@@ -9,6 +9,9 @@
 //! network call, and a failed/offline search falls back to the last cache. ureq
 //! is blocking — callers run it off the UI thread.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
 
 const SEARCH_URL: &str = "https://api.github.com/search/repositories";
@@ -452,6 +455,197 @@ fn fall_back_to_cache(error: &str) -> Result<Vec<MarketListing>, String> {
         Some(cache) => Ok(cache.listings),
         None => Err(error.to_string()),
     }
+}
+
+// --- install: download payload → unpack to content store → LINK into DCS roots
+// (model studio::market `Library`) -----------------------------------------
+
+/// A what-was-installed record: the content store dir + the links placed.
+#[derive(Clone, Serialize, Deserialize)]
+struct InstalledEntry {
+    store: String,
+    links: Vec<String>,
+}
+
+fn market_dir() -> PathBuf {
+    std::env::temp_dir().join("dcs-studio-market")
+}
+
+fn store_dir(owner: &str, name: &str) -> PathBuf {
+    market_dir().join(format!("{owner}__{name}"))
+}
+
+fn ledger_path() -> PathBuf {
+    market_dir().join("installed.json")
+}
+
+fn read_ledger() -> HashMap<String, InstalledEntry> {
+    std::fs::read_to_string(ledger_path())
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn write_ledger(ledger: &HashMap<String, InstalledEntry>) {
+    let _ = std::fs::create_dir_all(market_dir());
+    if let Ok(text) = serde_json::to_string(ledger) {
+        let _ = std::fs::write(ledger_path(), text);
+    }
+}
+
+/// The DCS destination roots — Saved Games\DCS (GameInstall is left unconfigured;
+/// a `{GameInstall}` rule then fails the guard rather than installing wrong).
+fn resolve_roots() -> Result<dcs_studio_project::RootMap, String> {
+    let saved_games = dcs_studio_project::detect::default_saved_games()
+        .ok_or_else(|| "couldn't find your Saved Games\\DCS folder".to_string())?;
+    Ok(dcs_studio_project::RootMap {
+        saved_games,
+        game_install: None,
+    })
+}
+
+/// The `.zip` payload asset's download URL on the latest release.
+fn find_payload_asset(owner: &str, name: &str, token: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct Resp {
+        #[serde(default)]
+        assets: Vec<Asset>,
+    }
+    #[derive(Deserialize)]
+    struct Asset {
+        name: String,
+        browser_download_url: String,
+    }
+    let url = format!("{API_BASE}/repos/{owner}/{name}/releases/latest");
+    let resp: Resp = ureq::get(&url)
+        .set("Accept", "application/vnd.github+json")
+        .set("User-Agent", USER_AGENT)
+        .set("Authorization", &format!("Bearer {token}"))
+        .call()
+        .map_err(|e| format!("latest-release request failed: {e}"))?
+        .into_json()
+        .map_err(|e| format!("latest-release response: {e}"))?;
+    resp.assets
+        .into_iter()
+        .find(|a| a.name.ends_with(".zip"))
+        .map(|a| a.browser_download_url)
+        .ok_or_else(|| "this release has no installable .zip payload".to_string())
+}
+
+fn fetch_asset_bytes(url: &str, token: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    let resp = ureq::get(url)
+        .set("User-Agent", USER_AGENT)
+        .set("Authorization", &format!("Bearer {token}"))
+        .call()
+        .map_err(|e| format!("payload download failed: {e}"))?;
+    let mut buf = Vec::new();
+    resp.into_reader()
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("payload read failed: {e}"))?;
+    Ok(buf)
+}
+
+/// Replace `store` with the unpacked archive (a project-shaped tree).
+fn unpack(bytes: &[u8], store: &Path) -> Result<(), String> {
+    let _ = std::fs::remove_dir_all(store);
+    std::fs::create_dir_all(store).map_err(|e| format!("create store: {e}"))?;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .map_err(|e| format!("open payload: {e}"))?;
+    archive.extract(store).map_err(|e| format!("unpack payload: {e}"))?;
+    Ok(())
+}
+
+/// Link each `[[install]]` rule's resolved dest to its store source (never copy).
+/// Returns the placed link paths (for the ledger / uninstall). On the first
+/// failure, the links placed so far are rolled back so a half-install leaves
+/// nothing behind.
+fn deploy_links(store: &Path, roots: &dcs_studio_project::RootMap) -> Result<Vec<String>, String> {
+    let manifest = dcs_studio_project::manifest::load(store)?;
+    if manifest.install.is_empty() {
+        return Err("the mod declares no [[install]] rules — nothing to install".to_string());
+    }
+    let mut placed: Vec<String> = Vec::new();
+    for rule in &manifest.install {
+        let source = store.join(&rule.source);
+        if !source.exists() {
+            rollback(&placed);
+            return Err(format!("payload is missing install source: {}", rule.source));
+        }
+        // The studio::installer guard: dest must resolve under a whitelisted root.
+        let dest = match dcs_studio_project::install::resolve_dest(&rule.dest, roots) {
+            Ok(d) => d,
+            Err(e) => {
+                rollback(&placed);
+                return Err(e);
+            }
+        };
+        if let Err(e) = crate::linker::link(&dest, &source) {
+            rollback(&placed);
+            return Err(e);
+        }
+        placed.push(dest.to_string_lossy().to_string());
+    }
+    Ok(placed)
+}
+
+fn rollback(links: &[String]) {
+    for l in links {
+        let _ = crate::linker::unlink(Path::new(l));
+    }
+}
+
+/// Install a discovered mod (model `Library.Install`): sign-in gated; download
+/// the payload, unpack to the content store, link each dest, record the ledger.
+pub fn install(owner: &str, name: &str) -> Result<dcs_studio_project::InstallReport, String> {
+    let Some(token) = crate::github::current_token() else {
+        return Err(SIGN_IN_REQUIRED.to_string());
+    };
+    let roots = resolve_roots()?;
+    let payload_url = find_payload_asset(owner, name, &token)?;
+    let bytes = fetch_asset_bytes(&payload_url, &token)?;
+    let store = store_dir(owner, name);
+    unpack(&bytes, &store)?;
+    let links = deploy_links(&store, &roots)?;
+
+    let mut ledger = read_ledger();
+    ledger.insert(
+        format!("{owner}/{name}"),
+        InstalledEntry {
+            store: store.to_string_lossy().to_string(),
+            links: links.clone(),
+        },
+    );
+    write_ledger(&ledger);
+    Ok(dcs_studio_project::InstallReport {
+        copied: links.len(),
+        files: links,
+    })
+}
+
+/// Uninstall a mod (model `Library.Uninstall`): remove every link it placed
+/// (never following them into the target), then drop the store + ledger entry.
+pub fn uninstall(id: &str) -> Result<(), String> {
+    let mut ledger = read_ledger();
+    let entry = ledger
+        .get(id)
+        .cloned()
+        .ok_or_else(|| format!("{id} is not installed"))?;
+    for link in &entry.links {
+        crate::linker::unlink(Path::new(link))?;
+    }
+    let _ = std::fs::remove_dir_all(&entry.store);
+    ledger.remove(id);
+    write_ledger(&ledger);
+    Ok(())
+}
+
+/// The ids (`owner/name`) of installed mods (model `Library.InstalledIds`).
+#[must_use]
+pub fn installed_ids() -> Vec<String> {
+    let mut ids: Vec<String> = read_ledger().into_keys().collect();
+    ids.sort();
+    ids
 }
 
 #[cfg(test)]

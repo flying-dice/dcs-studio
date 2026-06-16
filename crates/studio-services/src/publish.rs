@@ -8,7 +8,8 @@
 //! REST calls use ureq, the git calls shell out. ureq + git are blocking —
 //! callers run this off the UI thread.
 
-use std::path::Path;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Deserialize;
@@ -385,8 +386,10 @@ pub fn share(root: &str) -> Result<RepoInfo, String> {
 }
 
 /// Publish a release for the already-shared project at `root` (model
-/// `Publisher.PublishRelease`): create the release for `tag` and upload
-/// `dcs-studio.toml` so the Marketplace product page shows the install plan.
+/// `Publisher.PublishRelease`): create the release for `tag`, then upload
+/// `dcs-studio.toml` (so discovery/product can read the install plan without the
+/// whole payload) AND a `<repo>-<tag>.zip` payload of the manifest + every
+/// `[[install]]` source, so the Marketplace can actually download + install it.
 pub fn publish_release(root: &str, tag: &str) -> Result<ReleaseInfo, String> {
     let root = Path::new(root);
     let token = publish_token()?;
@@ -395,9 +398,89 @@ pub fn publish_release(root: &str, tag: &str) -> Result<ReleaseInfo, String> {
     if !manifest_path.is_file() {
         return Err(format!("no {MANIFEST_FILE} at the project root — nothing to publish"));
     }
+    let manifest = dcs_studio_project::manifest::load(root)?;
+    // Build the payload archive first so a packaging error fails before we create
+    // an empty release on GitHub.
+    let payload = package_payload(root, &repo.name, tag, &manifest)?;
+
     let created = create_release(&repo, tag, &format!("Release {tag}"), &token)?;
-    upload_asset(&repo, created.id, &manifest_path, &token)?;
+    let result = (|| {
+        upload_asset(&repo, created.id, &manifest_path, &token)?;
+        upload_asset(&repo, created.id, &payload, &token)
+    })();
+    let _ = std::fs::remove_file(&payload); // best-effort temp cleanup
+    result?;
     Ok(created.info)
+}
+
+/// Zip the manifest + every `[[install]]` source into a temp `<repo>-<tag>.zip`
+/// at project-relative paths, so unpacking it yields a project-shaped tree the
+/// installer can deploy. Returns the temp archive path.
+fn package_payload(
+    root: &Path,
+    repo_name: &str,
+    tag: &str,
+    manifest: &dcs_studio_project::manifest::Manifest,
+) -> Result<PathBuf, String> {
+    let safe_tag: String = tag
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    let zip_path = std::env::temp_dir().join(format!("dcs-studio-{repo_name}-{safe_tag}.zip"));
+    let file = std::fs::File::create(&zip_path).map_err(|e| format!("create payload: {e}"))?;
+    let mut zip = zip::ZipWriter::new(file);
+    let opts = zip::write::SimpleFileOptions::default();
+
+    zip_add_file(&mut zip, root, Path::new(MANIFEST_FILE), opts)?;
+    for rule in &manifest.install {
+        let rel = Path::new(&rule.source);
+        let abs = root.join(rel);
+        if abs.is_file() {
+            zip_add_file(&mut zip, root, rel, opts)?;
+        } else if abs.is_dir() {
+            zip_add_dir(&mut zip, root, rel, opts)?;
+        } else {
+            return Err(format!("install source not found: {}", rule.source));
+        }
+    }
+    zip.finish().map_err(|e| format!("finish payload: {e}"))?;
+    Ok(zip_path)
+}
+
+/// Add `root/rel` to the zip under its forward-slashed relative path.
+fn zip_add_file(
+    zip: &mut zip::ZipWriter<std::fs::File>,
+    root: &Path,
+    rel: &Path,
+    opts: zip::write::SimpleFileOptions,
+) -> Result<(), String> {
+    let bytes = std::fs::read(root.join(rel)).map_err(|e| format!("read {}: {e}", rel.display()))?;
+    let name = rel.to_string_lossy().replace('\\', "/");
+    zip.start_file(name, opts).map_err(|e| format!("zip entry: {e}"))?;
+    zip.write_all(&bytes).map_err(|e| format!("zip write: {e}"))?;
+    Ok(())
+}
+
+/// Recursively add every file under `root/rel` to the zip (relative to `root`).
+fn zip_add_dir(
+    zip: &mut zip::ZipWriter<std::fs::File>,
+    root: &Path,
+    rel: &Path,
+    opts: zip::write::SimpleFileOptions,
+) -> Result<(), String> {
+    let dir = root.join(rel);
+    let entries = std::fs::read_dir(&dir).map_err(|e| format!("read dir {}: {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("dir entry: {e}"))?;
+        let child_rel = rel.join(entry.file_name());
+        let kind = entry.file_type().map_err(|e| format!("file type: {e}"))?;
+        if kind.is_dir() {
+            zip_add_dir(zip, root, &child_rel, opts)?;
+        } else if kind.is_file() {
+            zip_add_file(zip, root, &child_rel, opts)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

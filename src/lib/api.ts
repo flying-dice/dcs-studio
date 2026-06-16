@@ -477,6 +477,27 @@ export function marketProduct(owner: string, name: string): Promise<ProductDetai
   return invoke<ProductDetail>("market_product", { owner, name });
 }
 
+/** What an install pass linked into the DCS roots (model `InstallReport`). */
+export interface InstallReport {
+  copied: number;
+  files: string[];
+}
+
+/** Install a mod: download the release payload + link it into the DCS roots. */
+export function marketInstall(owner: string, name: string): Promise<InstallReport> {
+  return invoke<InstallReport>("market_install", { owner, name });
+}
+
+/** Uninstall a mod by id (`owner/name`): remove its links + content store. */
+export function marketUninstall(id: string): Promise<void> {
+  return invoke<void>("market_uninstall", { id });
+}
+
+/** The ids (`owner/name`) of installed mods. */
+export function marketInstalled(): Promise<string[]> {
+  return invoke<string[]>("market_installed");
+}
+
 // ── publishing (model studio::publish, issue #12) ───────────────────────────
 
 /** A created (or resolved) GitHub repository (model studio::publish `RepoInfo`). */

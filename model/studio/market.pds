@@ -44,6 +44,9 @@ public data InstallEntry { source: string, dest: string }
 /// present; otherwise `installs` is empty and the README still shows.
 public data ProductDetail { repo: string, name: string, author: string, description: string, repoUrl: string, avatarUrl: string, stars: number, readme: Option<string>, releaseTag: Option<string>, releaseUrl: Option<string>, assets: studio::market::ReleaseAsset[], downloadSize: number, installable: bool, installs: studio::market::InstallEntry[] }
 
+/// What an install pass placed on disk.
+public data InstallReport { copied: number, files: string[] }
+
 /// GitHub's REST search as the store consumes it — a black-box external system.
 /// The token is the logged-in user's (issue #11): the store is sign-in gated, so
 /// every request is authenticated.
@@ -140,6 +143,53 @@ public container Registry for studio::core::Studio {
   BuildProduct(owner: string, name: string, token: string): Result<studio::market::ProductDetail, studio::market::MarketError>;
 }
 
+/// Installs, tracks, and removes mods downloaded from the store.
+public container Library for studio::core::Studio {
+  /// Install a discovered mod (sign-in gated): download the release's payload
+  /// (`.zip` asset), unpack it to a content store, and place each `[[install]]`
+  /// rule by LINKING its destination to the store source — a junction for a
+  /// directory, a hard link for a same-volume file, a symlink otherwise; never a
+  /// copy. The two hard rules still hold: a source must exist in the payload, and
+  /// each dest must resolve under a whitelisted root (the studio::installer
+  /// guard). Records a ledger of placed links for uninstall.
+  #[manual]
+  public Install(owner: string, name: string): Result<studio::market::InstallReport, studio::market::MarketError> {
+    token = Option<string> from self.AuthToken()
+    if (token.isNone) {
+      refused = studio::market::MarketError from self.SignInRequired()
+      return Err(refused)
+    }
+    staged = Result<string, studio::market::MarketError> from self.DownloadPayload(owner, name, token.value)
+    if (staged.isErr) {
+      return Err(staged.error)
+    }
+    return self.DeployAndRecord(owner, name, staged.value)
+  }
+
+  /// The logged-in user's token, or None when signed out.
+  AuthToken(): Option<string>;
+
+  /// The "sign in to install" refusal.
+  SignInRequired(): studio::market::MarketError;
+
+  /// Download the release's payload `.zip` and unpack it to a per-mod content
+  /// store; returns that directory (a project-shaped tree with `dcs-studio.toml`).
+  DownloadPayload(owner: string, name: string, token: string): Result<string, studio::market::MarketError>;
+
+  /// Link the unpacked payload's `[[install]]` destinations to the store sources
+  /// (junction/hard-link/symlink, never copy) and record a ledger entry of the
+  /// placed links for uninstall.
+  DeployAndRecord(owner: string, name: string, store: string): Result<studio::market::InstallReport, studio::market::MarketError>;
+
+  /// Remove an installed mod: undo its deployed files and drop its content store
+  /// + ledger entry.
+  public Uninstall(id: string): Result<void, studio::market::MarketError>;
+
+  /// The ids (`owner/name`) of installed mods — drives the product page's
+  /// Install / Installed state.
+  public InstalledIds(): string[];
+}
+
 /// The store is gated: browsing requires a GitHub sign-in.
 feature MarketRequiresSignIn for studio::market::Registry {
   given "no GitHub session is cached"
@@ -185,4 +235,20 @@ feature ProductWithoutManifestIsNotInstallable for studio::market::Registry {
   when "its product page is opened"
   then "the README and repo details still show"
   but "the mod is marked not installable and the install plan is empty"
+}
+
+/// Installing downloads the release payload and LINKS it into the DCS roots.
+feature InstallLinksPayloadIntoRoots for studio::market::Library {
+  given "a signed-in user on an installable mod's product page"
+  when "they install it"
+  then "the release's payload is downloaded to a content store and each `[[install]]` dest is LINKED to its store source (junction/hard-link/symlink, never copied)"
+  but "a rule whose source is missing from the payload, or whose dest escapes a whitelisted root, fails the install"
+}
+
+/// Uninstall removes exactly the links that were placed.
+feature UninstallRemovesWhatWasInstalled for studio::market::Library {
+  given "an installed mod"
+  when "the user uninstalls it"
+  then "every link it placed is removed and its content store + ledger entry are dropped"
+  but "the link targets (the user's other files) are never followed or deleted"
 }

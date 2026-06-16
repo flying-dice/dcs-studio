@@ -23,18 +23,26 @@
     ArrowRight,
     Package,
     BookOpen,
+    RefreshCw,
+    Download,
+    Check,
+    Trash2,
   } from "@lucide/svelte";
 
   const owner = $derived($page.params.owner ?? "");
   const repo = $derived($page.params.repo ?? "");
   const product = $derived(marketplace.product);
 
-  // Load (or reload) when the route params change and the user is signed in.
+  // Load (or reload) when the route params change and the user is signed in,
+  // and refresh which mods are installed (drives the Install/Installed button).
   $effect(() => {
     if (app.session && owner && repo) {
       void marketplace.loadProduct(owner, repo);
+      void marketplace.refreshInstalled();
     }
   });
+
+  const installed = $derived(product ? marketplace.isInstalled(product.repo) : false);
 
   function formatBytes(n: number): string {
     if (n <= 0) return "—";
@@ -56,8 +64,22 @@
       <ArrowLeft class="size-4" />
     </Button>
     <span class="font-mono text-[11px] uppercase tracking-[0.28em] text-muted-foreground">Marketplace</span>
-    <div class="ml-auto">
-      {#if app.session}<GithubAuth />{/if}
+    <div class="ml-auto flex items-center gap-2">
+      {#if app.session}
+        <Button
+          variant="ghost"
+          size="sm"
+          class="gap-1.5"
+          title="Re-fetch this mod from GitHub"
+          disabled={marketplace.productBusy}
+          onclick={() => marketplace.loadProduct(owner, repo)}
+          data-testid="product-refresh"
+        >
+          <RefreshCw class={marketplace.productBusy ? "size-3.5 animate-spin" : "size-3.5"} />
+          Refresh
+        </Button>
+        <GithubAuth />
+      {/if}
     </div>
   </header>
 
@@ -116,8 +138,56 @@
           {/if}
         </main>
 
-        <!-- ── Aside: install plan + size ── -->
+        <!-- ── Aside: install action + plan + size ── -->
         <aside class="flex flex-col gap-4">
+          <!-- Install / Installed -->
+          <div class="rounded-xl border border-border bg-card p-3">
+            {#if !product.installable}
+              <p class="text-[12px] text-amber-600 dark:text-amber-500" data-testid="product-cannot-install">
+                Not installable — this release ships no <span class="font-mono">dcs-studio.toml</span>.
+              </p>
+            {:else if installed}
+              <div class="flex items-center gap-1.5 text-[12px] text-emerald-600 dark:text-emerald-500">
+                <Check class="size-4" /> Installed
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                class="mt-2 w-full gap-1.5"
+                disabled={marketplace.installBusy}
+                onclick={() => marketplace.uninstall(product.repo)}
+                data-testid="product-uninstall"
+              >
+                {#if marketplace.installBusy}
+                  <LoaderCircle class="size-3.5 animate-spin" />
+                {:else}
+                  <Trash2 class="size-3.5" />
+                {/if}
+                Uninstall
+              </Button>
+            {:else}
+              <Button
+                size="sm"
+                class="w-full gap-1.5"
+                disabled={marketplace.installBusy}
+                onclick={() => marketplace.install(owner, repo)}
+                data-testid="product-install"
+              >
+                {#if marketplace.installBusy}
+                  <LoaderCircle class="size-3.5 animate-spin" /> Installing…
+                {:else}
+                  <Download class="size-3.5" /> Install
+                {/if}
+              </Button>
+              <p class="mt-1.5 text-[11px] text-muted-foreground">
+                Links the files into your DCS folders (no copy); uninstall removes the links.
+              </p>
+            {/if}
+            {#if marketplace.installError}
+              <p class="mt-2 text-[11px] text-destructive" data-testid="product-install-error">{marketplace.installError}</p>
+            {/if}
+          </div>
+
           <div class="rounded-xl border border-border bg-card p-3">
             <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
               <HardDrive class="size-3.5" /> Download
@@ -140,29 +210,27 @@
             {/if}
           </div>
 
-          <div class="rounded-xl border border-border bg-card p-3">
-            <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-              <FolderInput class="size-3.5" /> Install plan
+          {#if product.installable}
+            <div class="rounded-xl border border-border bg-card p-3">
+              <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                <FolderInput class="size-3.5" /> Install plan
+              </div>
+              {#if product.installs.length > 0}
+                <ul class="mt-2 flex flex-col gap-2" data-testid="product-installs">
+                  {#each product.installs as rule (rule.source + rule.dest)}
+                    <li class="flex flex-col gap-0.5 text-[11px]">
+                      <span class="truncate font-mono text-foreground" title={rule.source}>{rule.source}</span>
+                      <span class="flex items-center gap-1 truncate font-mono text-muted-foreground" title={rule.dest}>
+                        <ArrowRight class="size-3 shrink-0" />{rule.dest}
+                      </span>
+                    </li>
+                  {/each}
+                </ul>
+              {:else}
+                <p class="mt-1 text-[11px] text-muted-foreground">Installable, but declares no install rules.</p>
+              {/if}
             </div>
-            {#if product.installable && product.installs.length > 0}
-              <ul class="mt-2 flex flex-col gap-2" data-testid="product-installs">
-                {#each product.installs as rule (rule.source + rule.dest)}
-                  <li class="flex flex-col gap-0.5 text-[11px]">
-                    <span class="truncate font-mono text-foreground" title={rule.source}>{rule.source}</span>
-                    <span class="flex items-center gap-1 truncate font-mono text-muted-foreground" title={rule.dest}>
-                      <ArrowRight class="size-3 shrink-0" />{rule.dest}
-                    </span>
-                  </li>
-                {/each}
-              </ul>
-            {:else if product.installable}
-              <p class="mt-1 text-[11px] text-muted-foreground">Installable, but declares no install rules.</p>
-            {:else}
-              <p class="mt-1 text-[11px] text-amber-600 dark:text-amber-500" data-testid="product-not-installable">
-                Not installable — this release ships no <span class="font-mono">dcs-studio.toml</span>.
-              </p>
-            {/if}
-          </div>
+          {/if}
 
           <a
             href={product.repo_url}

@@ -7,6 +7,9 @@
 import {
   marketDiscover,
   marketProduct,
+  marketInstall,
+  marketUninstall,
+  marketInstalled,
   type MarketListing,
   type ProductDetail,
 } from "./api";
@@ -29,6 +32,11 @@ class MarketplaceStore {
   product = $state<ProductDetail | null>(null);
   productBusy = $state(false);
   productError = $state<string | null>(null);
+
+  /** Ids (`owner/name`) of mods installed on this machine. */
+  installedIds = $state<string[]>([]);
+  installBusy = $state(false);
+  installError = $state<string | null>(null);
 
   // Monotonic token so a slow product load can't clobber a newer one (rapid
   // A→B→A navigation): only the latest call writes its result.
@@ -67,6 +75,50 @@ class MarketplaceStore {
     }
   }
 
+  /** Whether a mod (`owner/name`) is installed on this machine. */
+  isInstalled(id: string): boolean {
+    return this.installedIds.includes(id);
+  }
+
+  /** Refresh the installed-mods set from the ledger. */
+  async refreshInstalled(): Promise<void> {
+    try {
+      this.installedIds = await marketInstalled();
+    } catch {
+      this.installedIds = [];
+    }
+  }
+
+  /** Install a mod (download payload + link into the DCS roots), then refresh. */
+  async install(owner: string, name: string): Promise<void> {
+    if (this.installBusy) return;
+    this.installBusy = true;
+    this.installError = null;
+    try {
+      await marketInstall(owner, name);
+      await this.refreshInstalled();
+    } catch (error) {
+      this.installError = message(error);
+    } finally {
+      this.installBusy = false;
+    }
+  }
+
+  /** Uninstall a mod by id (`owner/name`), then refresh. */
+  async uninstall(id: string): Promise<void> {
+    if (this.installBusy) return;
+    this.installBusy = true;
+    this.installError = null;
+    try {
+      await marketUninstall(id);
+      await this.refreshInstalled();
+    } catch (error) {
+      this.installError = message(error);
+    } finally {
+      this.installBusy = false;
+    }
+  }
+
   /** Drop all discovered/product state — called on sign-out so the next user
    * (or the next sign-in) never sees the previous account's listings. */
   reset(): void {
@@ -75,6 +127,8 @@ class MarketplaceStore {
     this.loaded = false;
     this.product = null;
     this.productError = null;
+    this.installedIds = [];
+    this.installError = null;
     this.#productGen += 1; // abandon any in-flight product load
   }
 }
