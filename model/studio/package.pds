@@ -10,7 +10,7 @@
 
 /// The logged-in author requesting a signature. The IDP is polymorphic
 /// (studio::package::IdentityProvider) — a single static user stands in until
-/// GitHub device-flow login (issue #11) implements it.
+/// the GitHub device-flow login (issue #11) implements it.
 public data Identity { login: string }
 
 /// A server-issued signature over a package manifest. `keyId` names the author's
@@ -53,8 +53,8 @@ public system SigningService {
   public Validate(manifest: studio::package::PackageManifest, signature: studio::package::Signature): Result<studio::package::Validity, studio::package::PackageError>;
 }
 
-/// The logged-in identity source — a polymorphic seam (a static user now, GitHub
-/// device-flow #11 later).
+/// The logged-in identity source — a polymorphic seam (a static user now, the
+/// GitHub device-flow login #11 later).
 public system IdentityProvider {
   /// The current logged-in author, if any.
   public CurrentIdentity(): Option<studio::package::Identity>;

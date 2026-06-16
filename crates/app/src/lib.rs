@@ -3,6 +3,7 @@ mod build;
 mod dcs;
 mod format;
 mod fs;
+mod github;
 mod inject;
 mod install_cmd;
 mod launch;
@@ -47,6 +48,10 @@ pub fn run() {
         .manage(lsp::LspHosts::default())
         .manage(build::BuildState::default())
         .manage(term::TermRegistry::default())
+        // Single-flight + cancel guard for the GitHub device-flow poll loop
+        // (issue #11): lets the sign-in modal's Cancel/reopen actually stop the
+        // fire-and-forget loop so it never persists or emits after cancel.
+        .manage(std::sync::Arc::new(github::LoginGen::default()))
         .manage(startup_args)
         .setup(|app| {
             dcs::start(app.handle().clone());
@@ -107,6 +112,10 @@ pub fn run() {
             launch::dcs_launch,
             launch::dcs_launch_status,
             launch::dcs_stop,
+            github::github_login_start,
+            github::github_login_cancel,
+            github::github_session,
+            github::github_sign_out,
             lsp::lua_analyzer_path,
             lsp::lsp_start,
             lsp::lsp_send,

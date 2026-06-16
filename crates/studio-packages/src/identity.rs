@@ -1,7 +1,7 @@
 //! The signing identity (model `studio::package::Identity` / `IdentityProvider`).
 //!
 //! The IDP is a polymorphic seam: [`StaticIdentity`] is a single fixed user for
-//! now; real GitHub device-flow login (issue #11) implements [`IdentityProvider`]
+//! now; the GitHub device-flow login (issue #11) implements [`IdentityProvider`]
 //! and drops in without touching the packaging code.
 
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ pub trait IdentityProvider {
 }
 
 /// A single fixed user (or logged-out) — the polymorphic IDP's stand-in until
-/// GitHub device-flow login (issue #11) implements [`IdentityProvider`].
+/// the GitHub device-flow login (issue #11) implements [`IdentityProvider`].
 pub struct StaticIdentity {
     login: Option<String>,
 }

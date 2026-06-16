@@ -20,6 +20,7 @@
   import Editor from "$lib/components/Editor.svelte";
   import EditorTabs from "$lib/components/EditorTabs.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
+  import GithubAuth from "$lib/components/GithubAuth.svelte";
   import McpHelpModal from "$lib/components/McpHelpModal.svelte";
   import PanelResizeHandle from "$lib/components/PanelResizeHandle.svelte";
   import { lang } from "$lib/lang/intel.svelte";
@@ -68,9 +69,13 @@
   // Setup-help modal for the IDE-hosted MCP server (issue #39).
   let mcpHelpOpen = $state(false);
 
-  // Open the project the app was launched with (`--open <path>`), if any.
+  // Read the cached GitHub session first (for the header chip), then open the project
+  // the app was launched with (`--open <path>`), if any.
   onMount(() => {
-    void app.openStartupProject();
+    void (async () => {
+      await app.loadSession();
+      await app.openStartupProject();
+    })();
   });
 
   const darkThemes = EDITOR_THEMES.filter((t) => t.dark);
@@ -374,6 +379,9 @@
         {#each controls as c (c.label)}
           {@render headerBtn(c.icon, c.label)}
         {/each}
+        <Separator orientation="vertical" class="mx-1 !h-4" />
+
+        <GithubAuth />
         <Separator orientation="vertical" class="mx-1 !h-4" />
 
         <DropdownMenu.Root>

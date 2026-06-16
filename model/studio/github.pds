@@ -1,0 +1,130 @@
+//! studio::github — GitHub identity via OAuth device flow (issue #11). Sign-in is
+//! OPTIONAL: the IDE is fully usable signed-out; signing in (an opt-in action in
+//! the header) shows a device code to enter at github.com/login/device, then
+//! unlocks GitHub-backed features (identity for package signing now, repo
+//! provisioning later). The access token lives Rust-side (keyring); the webview
+//! only ever sees the profile (Session). Implements the
+//! studio::package::IdentityProvider seam. Repo provisioning is deferred (#12).
+
+/// OAuth scope: `read:user` only — least privilege for the identity slice. Repo
+/// provisioning (#12) escalates to `repo`/`workflow` when it needs them.
+public constant DEVICE_SCOPE = "read:user"
+
+/// Extra seconds to back off when GitHub answers `slow_down`.
+public constant SLOW_DOWN_BACKOFF_SECONDS = 5
+
+/// A device-flow handshake: show `userCode` at `verificationUri`, then poll with
+/// `deviceCode` every `intervalSeconds` until `expiresInSeconds` elapses.
+public data DeviceCode { userCode: string, verificationUri: string, deviceCode: string, intervalSeconds: number, expiresInSeconds: number }
+
+/// One classified poll response: `status` is one of `pending`, `slow_down`,
+/// `authorized`, `denied`, `expired`; `token` is set only when `authorized`.
+public data PollState { status: string, token: string }
+
+/// A GitHub user profile, from the API after authorization.
+public data GitHubUser { login: string, avatarUrl: string }
+
+/// The cached, UI-facing session — profile only, never the token.
+public data Session { login: string, avatarUrl: string }
+
+public data GitHubError { message: string }
+
+/// GitHub's published HTTP face (device flow + user). Black-box: the device flow
+/// needs only the public client_id — no client secret.
+public system GitHub {
+  /// Begin device flow for `clientId` with `scope`; returns the user code + URL.
+  public RequestDeviceCode(clientId: string, scope: string): Result<studio::github::DeviceCode, studio::github::GitHubError>;
+
+  /// One poll of the token endpoint, classified into a PollState (the token set
+  /// only when `authorized`); GitHub's pending/slow_down/expired/denied map to
+  /// the status string.
+  public PollAccessToken(clientId: string, deviceCode: string): Result<studio::github::PollState, studio::github::GitHubError>;
+
+  /// The authenticated user's profile for `token`.
+  public GetUser(token: string): Result<studio::github::GitHubUser, studio::github::GitHubError>;
+}
+
+/// The opt-in sign-in + cached session. Owns the device-flow decisions; the token
+/// store (keyring) is plumbing behind black-box faces.
+public container Identity for studio::core::Studio {
+  /// The cached session, if a token is stored — the offline / cached path.
+  public CachedSession(): Option<studio::github::Session> {
+    stored = Option<studio::github::Session> from self.ReadStoredSession()
+    return stored
+  }
+
+  /// Classify one poll tick and advance the sign-in: `authorized` -> fetch the user,
+  /// store the session, done; `pending`/`slow_down` -> keep waiting (the caller
+  /// widens the interval on slow_down); `denied`/`expired` -> terminal error.
+  /// Returns the new Session when authorized, None while still waiting.
+  #[manual]
+  public Advance(clientId: string, deviceCode: string): Result<Option<studio::github::Session>, studio::github::GitHubError> {
+    polled = Result<studio::github::PollState, studio::github::GitHubError> from studio::github::GitHub.PollAccessToken(clientId, deviceCode)
+    if (polled.isErr) {
+      return Err(polled.error)
+    }
+    waiting = bool from self.StillWaiting(polled.value)
+    if (waiting) {
+      return Ok(None)
+    }
+    terminal = Option<studio::github::GitHubError> from self.TerminalError(polled.value)
+    if (terminal.isSome) {
+      return Err(terminal.value)
+    }
+    user = Result<studio::github::GitHubUser, studio::github::GitHubError> from studio::github::GitHub.GetUser(polled.value.token)
+    if (user.isErr) {
+      return Err(user.error)
+    }
+    session = Result<studio::github::Session, studio::github::GitHubError> from self.StoreSession(polled.value.token, user.value)
+    if (session.isErr) {
+      return Err(session.error)
+    }
+    return Ok(Some(session.value))
+  }
+
+  /// `pending` or `slow_down` -> still polling.
+  StillWaiting(state: studio::github::PollState): bool;
+
+  /// `denied` or `expired` -> a terminal error; otherwise None.
+  TerminalError(state: studio::github::PollState): Option<studio::github::GitHubError>;
+
+  /// Persist the token (keyring) + profile; return the UI-facing Session.
+  StoreSession(token: string, user: studio::github::GitHubUser): Result<studio::github::Session, studio::github::GitHubError>;
+
+  /// The stored session (profile only) if a token is cached.
+  ReadStoredSession(): Option<studio::github::Session>;
+
+  /// Clear the cached token + profile; the signed-out state returns.
+  public SignOut(): void;
+
+  /// Cancel an in-progress sign-in: supersede the active poll so it stops
+  /// without storing a session or reporting a result. Sign-in is single-flight —
+  /// a fresh sign-in also supersedes any prior one — so a code authorized after
+  /// the user cancels (or restarts) lands on a superseded poll and is dropped.
+  public CancelSignIn(): void;
+}
+
+/// Sign-in is optional — the IDE works signed-out; signing in unlocks GitHub features.
+feature SignInIsOptional for studio::github::Identity {
+  given "no GitHub session is cached"
+  when "the IDE starts"
+  then "the IDE is fully usable without signing in"
+  and "the user can opt in to sign in, which stores a session and enables GitHub features"
+}
+
+/// Cancelling (or restarting) a sign-in stops the poll: consent is honored even
+/// if the code is authorized in the browser afterwards.
+feature CancelStopsTheSignIn for studio::github::Identity {
+  given "the user starts a sign-in and then cancels it (or starts a new one)"
+  when "the original device code is later authorized in the browser"
+  then "the superseded poll stores no session and reports no result"
+  but "a sign-in that is not cancelled still completes and stores its session"
+}
+
+/// A cached session works offline and is used without re-authorizing.
+feature OfflineUsesCachedSession for studio::github::Identity {
+  given "a GitHub session is cached from a previous sign-in"
+  when "the IDE starts offline"
+  then "the cached session is used without a network call"
+  but "signing out clears it and the chip returns to signed-out"
+}
