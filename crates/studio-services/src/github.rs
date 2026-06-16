@@ -11,10 +11,13 @@ const TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const USER_URL: &str = "https://api.github.com/user";
 const USER_AGENT: &str = concat!("dcs-studio/", env!("CARGO_PKG_VERSION"));
 
-/// OAuth scope (model `DEVICE_SCOPE`): `read:user` only — least privilege for the
-/// identity slice (the consent screen reads "read your profile"). Repo
-/// provisioning (#12) escalates to `repo`/`workflow` when it needs them.
-const SCOPE: &str = "read:user";
+/// Sign-in OAuth scope (model `DEVICE_SCOPE`): `read:user` only — least privilege
+/// for the identity slice (the consent screen reads "read your profile").
+pub const SIGN_IN_SCOPE: &str = "read:user";
+
+/// Publishing scope (issue #12): write to public repos. Requested as an escalation
+/// alongside `read:user` when the user first shares a project / cuts a release.
+pub const PUBLISH_SCOPE: &str = "read:user public_repo";
 
 /// Placeholder OAuth App client_id — the real one comes from `DCS_GITHUB_CLIENT_ID`
 /// (a public value; device flow needs no client secret). With the placeholder,
@@ -95,8 +98,9 @@ fn fake_login() -> Option<String> {
     None
 }
 
-/// Begin device flow: returns the user code + verification URL to display.
-pub fn request_device_code(client_id: &str) -> Result<DeviceCode, String> {
+/// Begin device flow for `scope` (e.g. [`SIGN_IN_SCOPE`] or [`PUBLISH_SCOPE`]):
+/// returns the user code + verification URL to display.
+pub fn request_device_code(client_id: &str, scope: &str) -> Result<DeviceCode, String> {
     #[derive(Deserialize)]
     struct Resp {
         device_code: String,
@@ -105,7 +109,7 @@ pub fn request_device_code(client_id: &str) -> Result<DeviceCode, String> {
         expires_in: u64,
         interval: u64,
     }
-    let body = serde_json::json!({ "client_id": client_id, "scope": SCOPE });
+    let body = serde_json::json!({ "client_id": client_id, "scope": scope });
     let resp: Resp = ureq::post(DEVICE_CODE_URL)
         .set("Accept", "application/json")
         .set("User-Agent", USER_AGENT)
@@ -231,6 +235,46 @@ pub fn current_session() -> Option<Session> {
         login: s.login,
         avatar_url: s.avatar_url,
     })
+}
+
+/// The cached OAuth access token, for authorizing Rust-side GitHub REST calls
+/// (the marketplace, issue #10 — `read:user` is enough for public search).
+/// Crate-internal on purpose: never a `#[tauri::command]`, never handed to the
+/// webview — the token must not leave the Rust side (#11). `None` when signed
+/// out, so callers fall back to unauthenticated requests.
+pub(crate) fn current_token() -> Option<String> {
+    store::load().map(|s| s.token)
+}
+
+/// The scopes granted to `token`, read from GitHub's `X-OAuth-Scopes` response
+/// header on a lightweight authenticated call (issue #12 publish gating).
+pub(crate) fn token_scopes(token: &str) -> Result<Vec<String>, String> {
+    let resp = ureq::get(USER_URL)
+        .set("Accept", "application/vnd.github+json")
+        .set("User-Agent", USER_AGENT)
+        .set("Authorization", &format!("Bearer {token}"))
+        .call()
+        .map_err(|e| format!("scope check failed: {e}"))?;
+    Ok(resp
+        .header("x-oauth-scopes")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect())
+}
+
+/// Whether the cached token can publish — it carries `public_repo` (or the
+/// broader `repo`). Makes one authenticated call; `false` when signed out or the
+/// check fails. The publish flow escalates the scope when this is false.
+#[must_use]
+pub fn can_publish() -> bool {
+    let Some(token) = current_token() else {
+        return false;
+    };
+    token_scopes(&token)
+        .map(|s| s.iter().any(|x| x == "public_repo" || x == "repo"))
+        .unwrap_or(false)
 }
 
 /// Clear the cached token + profile; the chip returns to signed-out (model `Identity.SignOut`).

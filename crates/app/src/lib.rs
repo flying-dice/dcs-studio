@@ -8,6 +8,8 @@ mod inject;
 mod install_cmd;
 mod launch;
 mod lsp;
+mod market;
+mod publish;
 // Exposed for the host-IPC integration test - exactly one item wide.
 pub use lsp::read_frame;
 mod mcp;
@@ -114,8 +116,14 @@ pub fn run() {
             launch::dcs_stop,
             github::github_login_start,
             github::github_login_cancel,
+            github::github_authorize_publish,
             github::github_session,
             github::github_sign_out,
+            market::market_discover,
+            market::market_product,
+            publish::publish_can,
+            publish::publish_share,
+            publish::publish_release,
             lsp::lua_analyzer_path,
             lsp::lsp_start,
             lsp::lsp_send,

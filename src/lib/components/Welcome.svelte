@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from "$app/navigation";
   import { app } from "$lib/state.svelte";
   import { pickFolder, pathExists } from "$lib/api";
   import { TEMPLATES } from "$lib/templates";
@@ -13,6 +14,7 @@
     Boxes,
     FolderOpen,
     Plus,
+    ShoppingCart,
     ArrowRight,
     Sun,
     Moon,
@@ -241,6 +243,15 @@
               </span>
               <kbd class="kbd ml-auto">⌘O</kbd>
               <ChevronRight class="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+            </button>
+
+            <button class="action group" onclick={() => goto("/marketplace")} data-testid="welcome-marketplace">
+              <span class="action-icon"><ShoppingCart class="size-[18px]" /></span>
+              <span class="flex min-w-0 flex-col items-start">
+                <span class="text-sm font-medium text-foreground">Marketplace</span>
+                <span class="text-[12px] text-muted-foreground">Browse community mods</span>
+              </span>
+              <ChevronRight class="ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
             </button>
           </div>
         {:else}

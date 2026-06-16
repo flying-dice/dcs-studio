@@ -1,0 +1,188 @@
+//! studio::market — the Marketplace: a standalone storefront for discovering
+//! dcs-studio mods on GitHub (issue #10, discovery slice). Browsing REQUIRES a
+//! GitHub sign-in (issue #11) — the store is gated, and every search runs as the
+//! logged-in user (30 req/min). A mod is any public repo carrying the
+//! `dcs-studio` topic; the repo's OTHER topics become its labels. A repo is
+//! listed whether or not it ships an installable `dcs-studio.toml` — that
+//! manifest is only required to DOWNLOAD/INSTALL (a later slice), where its
+//! absence fails the install. Search is rate-limited, so results are cached: a
+//! still-fresh cache serves without a network call, and a failed/offline search
+//! falls back to the last cache.
+
+/// The GitHub topic that marks a repo as a dcs-studio mod — the one tag an
+/// author adds; every other topic on the repo is carried through as a label.
+public constant DISCOVERY_TOPIC = "dcs-studio"
+
+/// How long cached discovery results stay fresh before a refresh is due
+/// (seconds); the cache still serves as the offline / rate-limited fallback.
+public constant CACHE_TTL_SECONDS = 900
+
+/// A repository search hit: identity, blurb, owner avatar, popularity, and its
+/// topics (one tagged `dcs-studio`; the rest become labels).
+public data RepoRef { owner: string, name: string, description: string, htmlUrl: string, avatarUrl: string, stars: number, topics: string[] }
+
+/// A store listing — a discovered mod. `author` is the repo owner; `labels` are
+/// the repo's topics minus the `dcs-studio` marker; `repoUrl`/`avatarUrl`/`stars`
+/// drive the card. Installability (a `dcs-studio.toml` release asset) is resolved
+/// at download time, not here, so a repo without one still lists.
+public data MarketListing { repo: string, name: string, author: string, description: string, labels: string[], repoUrl: string, avatarUrl: string, stars: number }
+
+/// A discovery failure (search transport, rate limit with no cache, not signed in).
+public data MarketError { message: string }
+
+/// One file in a release, with its byte size (drives the download-size total).
+public data ReleaseAsset { name: string, size: number }
+
+/// One `[[install]]` mapping from the mod's `dcs-studio.toml`: a source path
+/// (file or directory in the package) copied under a root-anchored destination
+/// (`{SavedGames}/...` or `{GameInstall}/...`) — "what installs where".
+public data InstallEntry { source: string, dest: string }
+
+/// A mod's product page: the repo header, the rendered README source, the latest
+/// release's assets + total download size, and the install plan parsed from the
+/// `dcs-studio.toml` release asset. `installable` is true only when that asset is
+/// present; otherwise `installs` is empty and the README still shows.
+public data ProductDetail { repo: string, name: string, author: string, description: string, repoUrl: string, avatarUrl: string, stars: number, readme: Option<string>, releaseTag: Option<string>, releaseUrl: Option<string>, assets: studio::market::ReleaseAsset[], downloadSize: number, installable: bool, installs: studio::market::InstallEntry[] }
+
+/// GitHub's REST search as the store consumes it — a black-box external system.
+/// The token is the logged-in user's (issue #11): the store is sign-in gated, so
+/// every request is authenticated.
+public system GitHubRest {
+  /// Public repos carrying `topic` (`GET /search/repositories?q=topic:<topic>`),
+  /// authenticated as the logged-in user.
+  public SearchReposByTopic(topic: string, token: string): Result<studio::market::RepoRef[], studio::market::MarketError>;
+
+  /// One repo's metadata for the product header (`GET /repos/{owner}/{name}`).
+  public GetRepo(owner: string, name: string, token: string): Result<studio::market::RepoRef, studio::market::MarketError>;
+
+  /// A repo's README source (`GET /repos/{owner}/{name}/readme`, raw), or None
+  /// when the repo has no README.
+  public GetReadme(owner: string, name: string, token: string): Result<Option<string>, studio::market::MarketError>;
+
+  /// The repo's latest release tag, URL, and assets — the install payload (`GET
+  /// /repos/{owner}/{name}/releases/latest`), or None when it has no release.
+  public GetLatestRelease(owner: string, name: string, token: string): Result<Option<studio::market::Release>, studio::market::MarketError>;
+
+  /// The text of a release asset — the `dcs-studio.toml` manifest — by its URL.
+  public FetchAssetText(asset: studio::market::ReleaseRef, token: string): Result<string, studio::market::MarketError>;
+}
+
+/// A repository's latest published release (`htmlUrl` links it; `manifestUrl` is
+/// the `dcs-studio.toml` asset's download URL when present).
+public data Release { tag: string, htmlUrl: string, assets: studio::market::ReleaseAsset[], manifestUrl: Option<string> }
+
+/// A pointer to a release asset to fetch by URL.
+public data ReleaseRef { downloadUrl: string }
+
+/// Discovers dcs-studio mods on GitHub and presents them as store listings.
+public container Registry for studio::core::Studio {
+  /// Discover mods for the store. Browsing requires a GitHub sign-in: with no
+  /// session the discovery is refused (the UI shows a sign-in wall). Otherwise a
+  /// still-fresh cache is served without a network call (unless `force`), else
+  /// the `dcs-studio` topic is searched as the logged-in user and each hit mapped
+  /// to a listing (the repo's other topics → labels). A rate-limited or offline
+  /// search falls back to the last cache instead of failing.
+  #[manual]
+  public Discover(force: bool): Result<studio::market::MarketListing[], studio::market::MarketError> {
+    token = Option<string> from self.AuthToken()
+    if (token.isNone) {
+      refused = studio::market::MarketError from self.SignInRequired()
+      return Err(refused)
+    }
+    fresh = Option<studio::market::MarketListing[]> from self.FreshCache(force)
+    if (fresh.isSome) {
+      return Ok(fresh.value)
+    }
+    found = Result<studio::market::RepoRef[], studio::market::MarketError> from studio::market::GitHubRest.SearchReposByTopic(studio::market::DISCOVERY_TOPIC, token.value)
+    if (found.isErr) {
+      return self.FallBackToCache(found.error)
+    }
+    listings = studio::market::MarketListing[] from self.BuildListings(found.value)
+    return Ok(listings)
+  }
+
+  /// The logged-in user's token (issue #11), or None when signed out.
+  AuthToken(): Option<string>;
+
+  /// The "sign in to browse the Marketplace" refusal.
+  SignInRequired(): studio::market::MarketError;
+
+  /// The cached listings when they are within `CACHE_TTL_SECONDS` and `force` is
+  /// false; None otherwise (a forced refresh, an empty/stale cache).
+  FreshCache(force: bool): Option<studio::market::MarketListing[]>;
+
+  /// Map each search hit to a listing: carry name/description/avatar/stars, and
+  /// the repo's topics MINUS the `dcs-studio` marker as labels.
+  BuildListings(repos: studio::market::RepoRef[]): studio::market::MarketListing[];
+
+  /// Serve the last cached listings (any age) when a live search fails (rate
+  /// limit / offline); surface `error` only when the cache is empty too.
+  FallBackToCache(error: studio::market::MarketError): Result<studio::market::MarketListing[], studio::market::MarketError>;
+
+  /// Load one mod's product page (sign-in gated, like the store). Gathers the
+  /// repo header, the README source, the latest release's assets + total download
+  /// size, and the install plan from the `dcs-studio.toml` release asset — when
+  /// that asset is absent the mod is not installable (empty install plan) but the
+  /// README still loads.
+  #[manual]
+  public LoadProduct(owner: string, name: string): Result<studio::market::ProductDetail, studio::market::MarketError> {
+    token = Option<string> from self.AuthToken()
+    if (token.isNone) {
+      refused = studio::market::MarketError from self.SignInRequired()
+      return Err(refused)
+    }
+    return self.BuildProduct(owner, name, token.value)
+  }
+
+  /// Assemble the product: fetch the repo, README, and latest release; sum the
+  /// asset sizes; and when the release carries a `dcs-studio.toml` asset, fetch +
+  /// parse it into the install plan (source → dest) and mark it installable.
+  BuildProduct(owner: string, name: string, token: string): Result<studio::market::ProductDetail, studio::market::MarketError>;
+}
+
+/// The store is gated: browsing requires a GitHub sign-in.
+feature MarketRequiresSignIn for studio::market::Registry {
+  given "no GitHub session is cached"
+  when "the user opens the Marketplace"
+  then "discovery is refused and a sign-in wall is shown"
+  but "after signing in, the store loads"
+}
+
+/// Every public repo carrying the `dcs-studio` topic is listed — manifest or not.
+feature DiscoveryListsTaggedRepos for studio::market::Registry {
+  given "a public repo carrying the `dcs-studio` topic"
+  when "discovery runs for a signed-in user"
+  then "the repo is listed as a store card"
+  but "whether it can actually be installed (a `dcs-studio.toml` release asset) is resolved later at download, not here"
+}
+
+/// The repo's other topics are pulled in automatically as labels.
+feature TopicsBecomeLabels for studio::market::Registry {
+  given "a discovered repo carrying topics beyond `dcs-studio`"
+  when "it is listed"
+  then "those other topics appear as the listing's labels"
+  but "the `dcs-studio` marker topic itself is not shown as a label"
+}
+
+/// Discovery degrades to the cache instead of failing when search is throttled.
+feature RateLimitedSearchFallsBackToCache for studio::market::Registry {
+  given "the GitHub search rate limit is hit, or the network is offline"
+  when "discovery runs"
+  then "the last cached listings are shown"
+  but "an empty cache surfaces the error instead"
+}
+
+/// The product page shows the README, the install plan, and the download size.
+feature ProductShowsReadmeAndInstallPlan for studio::market::Registry {
+  given "a mod whose latest release ships a `dcs-studio.toml` asset"
+  when "its product page is opened"
+  then "the README renders, the install plan lists each source → destination, and the total download size is shown"
+}
+
+/// A mod without a manifest still has a product page — it just can't be installed.
+feature ProductWithoutManifestIsNotInstallable for studio::market::Registry {
+  given "a tagged repo whose latest release has no `dcs-studio.toml` asset, or no release at all"
+  when "its product page is opened"
+  then "the README and repo details still show"
+  but "the mod is marked not installable and the install plan is empty"
+}

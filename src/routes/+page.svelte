@@ -9,6 +9,7 @@
   import BuildOutput from "$lib/components/BuildOutput.svelte";
   import InjectionManager from "$lib/components/InjectionManager.svelte";
   import PackagesManager from "$lib/components/PackagesManager.svelte";
+  import PublishManager from "$lib/components/PublishManager.svelte";
   import LuaConsole from "$lib/components/LuaConsole.svelte";
   import MissionScriptingManager from "$lib/components/MissionScriptingManager.svelte";
   import Problems from "$lib/components/Problems.svelte";
@@ -60,6 +61,7 @@
     Palette,
     Syringe,
     ShieldOff,
+    Rocket,
     FileCode,
     LoaderCircle,
     type LucideIcon,
@@ -94,6 +96,7 @@
     { id: "structure", label: "Structure", icon: ListTree },
     { id: "inject", label: "Inject", icon: Syringe },
     { id: "packages", label: "Packages", icon: Boxes },
+    { id: "publish", label: "Publish", icon: Rocket },
     { id: "mission", label: "Mission", icon: ShieldOff },
     { id: "database", label: "Database", icon: Database },
     { id: "notifications", label: "Notifications", icon: Bell },
@@ -532,6 +535,8 @@
                 <InjectionManager />
               {:else if app.rightTool === "packages"}
                 <PackagesManager />
+              {:else if app.rightTool === "publish"}
+                <PublishManager />
               {:else if app.rightTool === "mission"}
                 <MissionScriptingManager />
               {:else if app.rightTool === "structure"}
