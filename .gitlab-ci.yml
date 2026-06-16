@@ -1,6 +1,6 @@
 # CI gates for dcs-studio (issue #7). Mirrors the local gates the MRs
-# quote: engine + CLI Rust suites with pedantic clippy, svelte-check, and
-# the Tauri app crate (compile + unit/integration suites, incl. the
+# quote: engine + service/MCP Rust suites with pedantic clippy, svelte-check,
+# and the Tauri app crate (compile + unit/integration suites, incl. the
 # host<->real-server IPC seam) in the `app` job.
 #
 # The language e2e suite (`pnpm test:lang`) is NOT gated here: issue #32

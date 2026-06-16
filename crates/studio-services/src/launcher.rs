@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
@@ -39,6 +40,34 @@ fn state() -> &'static Mutex<Option<LaunchSession>> {
 
 fn lock() -> std::sync::MutexGuard<'static, Option<LaunchSession>> {
     state().lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// In-flight launch guard. The `state()` mutex only protects the *stored*
+/// session; the launch sequence (inject -> backup -> write -> spawn -> store)
+/// runs outside that lock. Without this, two concurrent `launch()` calls both
+/// observe no live session, both spawn `DCS.exe`, and the second store orphans
+/// the first child (no teardown ever runs for it). This single slot serialises
+/// the whole sequence — the model's "one launch session at a time".
+static LAUNCHING: AtomicBool = AtomicBool::new(false);
+
+/// RAII claim on the single launch slot; releases on drop, so every early
+/// return frees it.
+struct LaunchSlot;
+
+impl LaunchSlot {
+    /// Claim the launch slot, or `None` if a launch is already in flight.
+    fn try_claim() -> Option<LaunchSlot> {
+        LAUNCHING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| LaunchSlot)
+    }
+}
+
+impl Drop for LaunchSlot {
+    fn drop(&mut self) {
+        LAUNCHING.store(false, Ordering::Release);
+    }
 }
 
 /// The result of starting a launch.
@@ -83,6 +112,12 @@ fn options_path_for(write_dir: &str) -> String {
 /// closed: a locked DLL (DCS already running) aborts before anything is written;
 /// a failure after the config is written restores the backup first.
 pub fn launch(write_dir: &str) -> Result<LaunchOutcome, String> {
+    // Hold the launch slot across the entire sequence; released on every return
+    // (success stores the session before the slot drops, so the live session
+    // then guards subsequent launches).
+    let _slot = LaunchSlot::try_claim()
+        .ok_or_else(|| "a DCS launch is already in progress".to_string())?;
+
     {
         // One session at a time: a still-alive child blocks a second launch.
         let mut guard = lock();
@@ -166,6 +201,33 @@ pub fn stop(write_dir: &str) -> Result<LaunchStatus, String> {
         running: false,
         config_patched: false,
     })
+}
+
+/// Recover from an IDE death mid-session (issue #41 AC#5): if the process died
+/// while DCS was up, the in-memory watcher never ran teardown, so options.lua is
+/// left on the low-spec profile with an orphaned `.dcs-launcher.bak`. On the
+/// next start, restore every detected write dir that has a leftover backup, so
+/// the user's real graphics settings come back. Returns the write dirs restored.
+/// Safe to call once at startup — there is no live session yet, so it cannot
+/// race teardown.
+pub fn recover_orphaned() -> Vec<String> {
+    let mut recovered = Vec::new();
+    for install in inject::detect_installs() {
+        let write_dir = install.write_dir().to_string();
+        if recover_write_dir(&write_dir) {
+            recovered.push(write_dir);
+        }
+    }
+    recovered
+}
+
+/// Restore a single write dir's options.lua from a leftover launcher backup, if
+/// one is present; returns whether a restore happened. The unit-testable core of
+/// [`recover_orphaned`].
+#[must_use]
+pub fn recover_write_dir(write_dir: &str) -> bool {
+    let options_path = options_path_for(write_dir);
+    backup_path(&options_path).is_file() && restore_config(&options_path).is_ok()
 }
 
 /// Copy options.lua to its `.dcs-launcher.bak` pristine snapshot (once).
@@ -306,9 +368,10 @@ fn graphics_block(indent: &str, eol: &str) -> String {
 }
 
 /// Replace the `["graphics"] = { … }` block in options.lua with the low-spec
-/// table, preserving every other section. Brace-depth scan from the block's
-/// opening `{` to its matching `}` (the DCS graphics block carries no braces
-/// inside string values, so plain brace counting is sufficient).
+/// table, preserving every other section. The opening `{` is matched to its
+/// `}` with a Lua-aware scan ([`matching_brace`]) that skips braces inside
+/// string literals and comments, so a brace in a value or comment can't
+/// mis-splice the file.
 fn replace_graphics_block(content: &str, eol: &str) -> Result<String, String> {
     let key = content
         .find("[\"graphics\"]")
@@ -318,23 +381,8 @@ fn replace_graphics_block(content: &str, eol: &str) -> Result<String, String> {
             .find('{')
             .ok_or_else(|| "malformed [\"graphics\"] block (no '{')".to_string())?;
 
-    let bytes = content.as_bytes();
-    let mut depth = 0i32;
-    let mut close = None;
-    for (i, &b) in bytes.iter().enumerate().skip(open) {
-        match b {
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    close = Some(i);
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-    let close = close.ok_or_else(|| "unterminated [\"graphics\"] block".to_string())?;
+    let close = matching_brace(content.as_bytes(), open)
+        .ok_or_else(|| "unterminated [\"graphics\"] block".to_string())?;
 
     let line_start = content[..key].rfind('\n').map_or(0, |n| n + 1);
     let indent = &content[line_start..key];
@@ -343,9 +391,108 @@ fn replace_graphics_block(content: &str, eol: &str) -> Result<String, String> {
     Ok(format!("{}{}{}", &content[..open], block, &content[close + 1..]))
 }
 
+/// Index of the `}` matching the `{` at `open`, counting only braces that are
+/// real Lua syntax — those inside `"…"`/`'…'` strings, `[[…]]`/`[=[…]=]` long
+/// brackets, and `--` / `--[[…]]` comments are skipped. `None` if unterminated.
+fn matching_brace(s: &[u8], open: usize) -> Option<usize> {
+    let n = s.len();
+    let mut i = open;
+    let mut depth = 0i32;
+    while i < n {
+        // Comment: `--` then either a long bracket (`--[[ … ]]`) or to EOL.
+        if s[i] == b'-' && i + 1 < n && s[i + 1] == b'-' {
+            let after = i + 2;
+            if let Some(level) = long_bracket_open(s, after) {
+                i = long_bracket_close(s, after, level)?;
+            } else {
+                while i < n && s[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        // Long-bracket string: `[[ … ]]` / `[=[ … ]=]`.
+        if let Some(level) = long_bracket_open(s, i) {
+            i = long_bracket_close(s, i, level)?;
+            continue;
+        }
+        // Quoted string.
+        if s[i] == b'"' || s[i] == b'\'' {
+            i = quoted_string_end(s, i)?;
+            continue;
+        }
+        match s[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// If `s[i..]` opens a long bracket (`[`, then zero or more `=`, then `[`),
+/// return its level (the count of `=`); otherwise `None`.
+fn long_bracket_open(s: &[u8], i: usize) -> Option<usize> {
+    if s.get(i) != Some(&b'[') {
+        return None;
+    }
+    let mut j = i + 1;
+    while s.get(j) == Some(&b'=') {
+        j += 1;
+    }
+    (s.get(j) == Some(&b'[')).then_some(j - (i + 1))
+}
+
+/// Index just past a long bracket's closing `]` `=`×level `]`, given the run
+/// starts at `start`. `None` if never closed.
+fn long_bracket_close(s: &[u8], start: usize, level: usize) -> Option<usize> {
+    let mut i = start + level + 2; // past the opening `[` `=`×level `[`
+    let n = s.len();
+    while i < n {
+        if s[i] == b']' {
+            let mut j = i + 1;
+            let mut eqs = 0;
+            while s.get(j) == Some(&b'=') {
+                j += 1;
+                eqs += 1;
+            }
+            if eqs == level && s.get(j) == Some(&b']') {
+                return Some(j + 1);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Index just past the closing quote of the string opened at `i` (handling
+/// backslash escapes). `None` if never closed.
+fn quoted_string_end(s: &[u8], i: usize) -> Option<usize> {
+    let quote = s[i];
+    let mut j = i + 1;
+    let n = s.len();
+    while j < n {
+        match s[j] {
+            b'\\' => j += 2, // skip the escaped byte
+            b if b == quote => return Some(j + 1),
+            _ => j += 1,
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{backup_config, replace_graphics_block, restore_config, write_low_spec};
+    use super::{
+        backup_config, matching_brace, recover_write_dir, replace_graphics_block, restore_config,
+        write_low_spec, LaunchSlot,
+    };
 
     const OPTIONS: &str = "options = {\n\t[\"VR\"] = {\n\t\t[\"enable\"] = false,\n\t},\n\t[\"graphics\"] = {\n\t\t[\"fullScreen\"] = true,\n\t\t[\"width\"] = 2560,\n\t\t[\"height\"] = 1440,\n\t\t[\"shadows\"] = 5,\n\t},\n\t[\"plugins\"] = {\n\t\t[\"foo\"] = 1,\n\t},\n}\n";
 
@@ -405,5 +552,69 @@ mod tests {
         restore_config(&path).expect("no-op restore");
         assert_eq!(std::fs::read_to_string(&path).expect("unchanged"), OPTIONS);
         let _ = std::fs::remove_dir_all(file.parent().unwrap());
+    }
+
+    // --- T1: the single-launch slot is mutually exclusive ---
+    #[test]
+    fn launch_slot_is_mutually_exclusive() {
+        let first = LaunchSlot::try_claim().expect("first claim succeeds");
+        assert!(
+            LaunchSlot::try_claim().is_none(),
+            "a second launch cannot claim the slot while the first is in flight"
+        );
+        drop(first);
+        let again = LaunchSlot::try_claim().expect("the slot is free again after release");
+        drop(again);
+    }
+
+    // --- T2: braces inside strings/comments must not mis-splice the block ---
+    #[test]
+    fn graphics_block_with_braces_in_strings_and_comments_is_matched() {
+        // A value string holds an unbalanced `}` and `{`; a trailing comment
+        // holds stray braces too. A naive byte counter would close early.
+        let opts = "options = {\n\t[\"graphics\"] = {\n\t\t[\"label\"] = \"a}b{c\", -- note { and } here\n\t\t[\"width\"] = 2560,\n\t},\n\t[\"after\"] = {\n\t\t[\"k\"] = 1,\n\t},\n}\n";
+        let patched = replace_graphics_block(opts, "\n").expect("patch");
+        assert!(patched.contains("[\"width\"] = 1280,"));
+        // The whole graphics block (its brace-bearing string included) is gone.
+        assert!(!patched.contains("a}b{c"));
+        // The section AFTER graphics survived intact — the close brace landed right.
+        assert!(patched.contains("[\"after\"] = {"));
+        assert!(patched.contains("[\"k\"] = 1,"));
+    }
+
+    #[test]
+    fn matching_brace_skips_quotes_and_long_comments() {
+        // `{ "x}" --[[ } ]] }` — the real close is the final byte.
+        let s = b"{ \"x}\" --[[ } ]] }";
+        assert_eq!(matching_brace(s, 0), Some(s.len() - 1));
+        // Unterminated -> None, never a wrong index.
+        assert_eq!(matching_brace(b"{ \"oops", 0), None);
+    }
+
+    // --- T3: startup recovery restores a leftover backup ---
+    #[test]
+    fn recover_write_dir_restores_from_a_leftover_backup() {
+        let dir =
+            std::env::temp_dir().join(format!("studio-launcher-recover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = dir.join("Config");
+        std::fs::create_dir_all(&config).expect("config dir");
+        let opts = config.join("options.lua");
+        // A crashed session: options.lua left low-spec, the backup holds the original.
+        std::fs::write(&opts, "options = {\n\t[\"graphics\"] = {\n\t\t[\"width\"] = 1280,\n\t},\n}\n")
+            .expect("patched");
+        std::fs::write(config.join("options.lua.dcs-launcher.bak"), OPTIONS).expect("bak");
+
+        let wd = dir.to_string_lossy().into_owned();
+        assert!(recover_write_dir(&wd), "a leftover backup is restored");
+        assert_eq!(std::fs::read_to_string(&opts).expect("restored"), OPTIONS);
+        assert!(
+            !config.join("options.lua.dcs-launcher.bak").exists(),
+            "backup dropped after recovery"
+        );
+        // Nothing left to recover on a second pass.
+        assert!(!recover_write_dir(&wd), "no backup -> no recovery");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

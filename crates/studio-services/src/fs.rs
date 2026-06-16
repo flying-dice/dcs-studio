@@ -66,8 +66,8 @@ pub fn path_exists(path: &str) -> bool {
 }
 
 /// Scaffold `<parent>/<name>` from a named template (`blank`, `lua-script`,
-/// `rust-dll`) via the shared project kit (model/studio/cli.pds `Init`,
-/// issue #6 R1): refuses an existing root, renders the files in Rust.
+/// `rust-dll`) via the shared project kit (model/studio/mcp.pds
+/// `McpServer.Scaffold`): refuses an existing root, renders the files in Rust.
 /// Returns the new root path.
 pub fn create_project_from_template(
     parent: &str,

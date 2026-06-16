@@ -53,6 +53,13 @@ pub fn run() {
             // Host the agent MCP surface over loopback, sharing the live DCS
             // link (issue #33) — hosted in-process, not a separate sidecar.
             mcp::start(app.handle());
+            // Crash recovery (issue #41 AC#5): if a previous session died with
+            // DCS still up, restore any options.lua left on the low-spec launch
+            // profile from its orphaned backup.
+            let recovered = studio_services::launcher::recover_orphaned();
+            if !recovered.is_empty() {
+                tracing::info!(?recovered, "restored launch-clobbered options.lua on startup");
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
