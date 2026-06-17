@@ -578,24 +578,28 @@ fn fetch_asset_bytes(url: &str, token: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Replace `store` with the unpacked archive (a project-shaped tree), capped by
-/// entry-count and running uncompressed total (zip-bomb guard) and confined to
-/// `store` via `enclosed_name` (Zip-Slip guard). Extracts entry-by-entry so the
-/// caps apply before bytes hit the disk.
-fn unpack(bytes: &[u8], store: &Path) -> Result<(), String> {
+/// entry-count (`max_entries`) and a running budget of ACTUAL decompressed bytes
+/// (`max_uncompressed`), and confined to `store` via `enclosed_name` (Zip-Slip
+/// guard). The byte cap is on real output, not the archive's DECLARED
+/// `uncompressed_size` header (which zip does not enforce) — so a lying-header
+/// zip bomb that declares a tiny size is still stopped at the budget.
+fn unpack(
+    bytes: &[u8],
+    store: &Path,
+    max_uncompressed: u64,
+    max_entries: usize,
+) -> Result<(), String> {
+    use std::io::Read as _;
     let _ = std::fs::remove_dir_all(store);
     std::fs::create_dir_all(store).map_err(|e| format!("create store: {e}"))?;
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
         .map_err(|e| format!("open payload: {e}"))?;
-    if archive.len() > MAX_PAYLOAD_ENTRIES {
+    if archive.len() > max_entries {
         return Err("payload has too many files to install".to_string());
     }
-    let mut total: u64 = 0;
+    let mut budget = max_uncompressed;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| format!("payload entry: {e}"))?;
-        total = total.saturating_add(entry.size());
-        if total > MAX_UNCOMPRESSED_BYTES {
-            return Err("payload is too large when decompressed".to_string());
-        }
         // Zip-Slip guard: skip any entry whose name escapes the store.
         let Some(rel) = entry.enclosed_name() else {
             continue;
@@ -608,7 +612,15 @@ fn unpack(bytes: &[u8], store: &Path) -> Result<(), String> {
                 std::fs::create_dir_all(parent).map_err(|e| format!("unpack parent: {e}"))?;
             }
             let mut file = std::fs::File::create(&out).map_err(|e| format!("unpack file: {e}"))?;
-            std::io::copy(&mut entry, &mut file).map_err(|e| format!("unpack write: {e}"))?;
+            // Cap on ACTUAL bytes: read at most budget+1 so an oversize entry
+            // (honest OR lying-header) trips the check rather than being written.
+            let mut limited = entry.by_ref().take(budget + 1);
+            let written = std::io::copy(&mut limited, &mut file)
+                .map_err(|e| format!("unpack write: {e}"))?;
+            if written > budget {
+                return Err("payload is too large when decompressed".to_string());
+            }
+            budget -= written;
         }
     }
     Ok(())
@@ -674,7 +686,7 @@ pub fn install(owner: &str, name: &str) -> Result<dcs_studio_project::InstallRep
     let payload_url = find_payload_asset(owner, name, &token)?;
     let bytes = fetch_asset_bytes(&payload_url, &token)?;
     let store = store_dir(owner, name);
-    unpack(&bytes, &store)?;
+    unpack(&bytes, &store, MAX_UNCOMPRESSED_BYTES, MAX_PAYLOAD_ENTRIES)?;
     let links = deploy_links(&store, &roots)?;
 
     let mut ledger = read_ledger();
@@ -837,5 +849,98 @@ mod tests {
         assert!(result.is_err(), "an escaping source must be refused");
         assert!(!saved.join("pwned").exists(), "nothing planted in the DCS root");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &byte in data {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        !crc
+    }
+
+    /// A single STORED entry whose declared `uncompressed_size` is a LIE
+    /// (`forged`) while the real data is `data` — what an honest zip writer can't
+    /// produce. Mirrors the review PoC.
+    fn forged_zip(name: &str, data: &[u8], forged_uncompressed: u32) -> Vec<u8> {
+        let crc = crc32(data);
+        let csize = data.len() as u32;
+        let nlen = name.len() as u16;
+        let mut z = Vec::new();
+        // local file header
+        z.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        z.extend_from_slice(&20u16.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes()); // method: STORED
+        z.extend_from_slice(&0u16.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes());
+        z.extend_from_slice(&crc.to_le_bytes());
+        z.extend_from_slice(&csize.to_le_bytes());
+        z.extend_from_slice(&forged_uncompressed.to_le_bytes()); // the lie
+        z.extend_from_slice(&nlen.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes());
+        z.extend_from_slice(name.as_bytes());
+        z.extend_from_slice(data);
+        let cd_off = z.len() as u32;
+        // central directory header
+        z.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        z.extend_from_slice(&20u16.to_le_bytes());
+        z.extend_from_slice(&20u16.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes()); // STORED
+        z.extend_from_slice(&0u16.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes());
+        z.extend_from_slice(&crc.to_le_bytes());
+        z.extend_from_slice(&csize.to_le_bytes());
+        z.extend_from_slice(&forged_uncompressed.to_le_bytes()); // the lie
+        z.extend_from_slice(&nlen.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes());
+        z.extend_from_slice(&0u32.to_le_bytes());
+        z.extend_from_slice(&0u32.to_le_bytes()); // local header offset
+        z.extend_from_slice(name.as_bytes());
+        let cd_size = z.len() as u32 - cd_off;
+        // end of central directory
+        z.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes());
+        z.extend_from_slice(&1u16.to_le_bytes());
+        z.extend_from_slice(&1u16.to_le_bytes());
+        z.extend_from_slice(&cd_size.to_le_bytes());
+        z.extend_from_slice(&cd_off.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes());
+        z
+    }
+
+    #[test]
+    fn unpack_caps_actual_bytes_against_a_lying_uncompressed_header() {
+        // 4 KiB of real data, but the header DECLARES uncompressed_size = 0.
+        let data = vec![b'A'; 4096];
+        let zip = forged_zip("big.bin", &data, 0);
+        let store = std::env::temp_dir().join(format!("dcs-bomb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&store);
+
+        // A tiny 1 KiB budget: the real 4 KiB output must trip it despite the lie.
+        let result = unpack(&zip, &store, 1024, 100);
+
+        assert!(result.is_err(), "lying-header bomb must be rejected on actual bytes");
+        let _ = std::fs::remove_dir_all(&store);
+    }
+
+    #[test]
+    fn unpack_accepts_a_payload_within_budget() {
+        let data = b"hello world";
+        let zip = forged_zip("ok.txt", data, data.len() as u32);
+        let store = std::env::temp_dir().join(format!("dcs-ok-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&store);
+
+        unpack(&zip, &store, 1024, 100).expect("a small honest payload unpacks");
+        assert_eq!(std::fs::read(store.join("ok.txt")).unwrap(), data);
+        let _ = std::fs::remove_dir_all(&store);
     }
 }
