@@ -28,6 +28,9 @@ base64 = "0.22"
 # Package a release payload (publish) + unpack it on Marketplace install
 # (issue #10/#12); same crate the signed-package writer uses.
 zip = "2"
+# Persistent per-user data dir for the Marketplace content store + ledger
+# (issue #10) — must survive reboot, unlike temp.
+dirs = "6"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

@@ -5276,6 +5276,7 @@ dependencies = [
  "base64 0.22.1",
  "dcs-bridge-client",
  "dcs-studio-project",
+ "dirs",
  "keyring",
  "portable-pty",
  "serde",

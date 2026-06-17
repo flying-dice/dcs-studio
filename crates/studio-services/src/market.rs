@@ -460,6 +460,13 @@ fn fall_back_to_cache(error: &str) -> Result<Vec<MarketListing>, String> {
 // --- install: download payload → unpack to content store → LINK into DCS roots
 // (model studio::market `Library`) -----------------------------------------
 
+/// Hard ceilings on the untrusted, unsigned third-party payload (any
+/// topic-tagged public repo is one-click installable): cap the download and the
+/// decompressed total so a malicious release can't exhaust RAM/disk (zip bomb).
+const MAX_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_PAYLOAD_ENTRIES: usize = 20_000;
+
 /// A what-was-installed record: the content store dir + the links placed.
 #[derive(Clone, Serialize, Deserialize)]
 struct InstalledEntry {
@@ -467,8 +474,14 @@ struct InstalledEntry {
     links: Vec<String>,
 }
 
+/// The PERSISTENT per-user data dir for the content store + ledger — it backs
+/// the links placed into the DCS roots, so it must survive a reboot (temp would
+/// be cleared, dangling every installed link). Falls back to temp only if no
+/// data dir resolves.
 fn market_dir() -> PathBuf {
-    std::env::temp_dir().join("dcs-studio-market")
+    dirs::data_dir()
+        .map(|d| d.join("dcs-studio").join("market"))
+        .unwrap_or_else(|| std::env::temp_dir().join("dcs-studio-market"))
 }
 
 fn store_dir(owner: &str, name: &str) -> PathBuf {
@@ -504,7 +517,10 @@ fn resolve_roots() -> Result<dcs_studio_project::RootMap, String> {
     })
 }
 
-/// The `.zip` payload asset's download URL on the latest release.
+/// The download URL of the payload the publish side wrote — the asset named
+/// `dcs-studio-<name>-<tag>.zip` (see publish.rs `package_payload`). Matched by
+/// that exact `dcs-studio-<name>-` prefix so an unrelated `.zip` on the release
+/// can't be installed by mistake (publish + install agree on the artifact).
 fn find_payload_asset(owner: &str, name: &str, token: &str) -> Result<String, String> {
     #[derive(Deserialize)]
     struct Resp {
@@ -525,13 +541,19 @@ fn find_payload_asset(owner: &str, name: &str, token: &str) -> Result<String, St
         .map_err(|e| format!("latest-release request failed: {e}"))?
         .into_json()
         .map_err(|e| format!("latest-release response: {e}"))?;
+    let prefix = format!("dcs-studio-{name}-");
     resp.assets
         .into_iter()
-        .find(|a| a.name.ends_with(".zip"))
+        .find(|a| a.name.starts_with(&prefix) && a.name.ends_with(".zip"))
         .map(|a| a.browser_download_url)
-        .ok_or_else(|| "this release has no installable .zip payload".to_string())
+        .ok_or_else(|| {
+            format!("this release has no `{prefix}*.zip` payload (re-publish the release from DCS Studio)")
+        })
 }
 
+/// Download the payload, capped: reject an oversized Content-Length up front and
+/// hard-stop the stream past `MAX_PAYLOAD_BYTES` so an unsigned third-party asset
+/// can't exhaust memory.
 fn fetch_asset_bytes(url: &str, token: &str) -> Result<Vec<u8>, String> {
     use std::io::Read as _;
     let resp = ureq::get(url)
@@ -539,20 +561,56 @@ fn fetch_asset_bytes(url: &str, token: &str) -> Result<Vec<u8>, String> {
         .set("Authorization", &format!("Bearer {token}"))
         .call()
         .map_err(|e| format!("payload download failed: {e}"))?;
+    if let Some(len) = resp.header("Content-Length").and_then(|l| l.parse::<u64>().ok()) {
+        if len > MAX_PAYLOAD_BYTES {
+            return Err("payload is too large to install".to_string());
+        }
+    }
     let mut buf = Vec::new();
     resp.into_reader()
+        .take(MAX_PAYLOAD_BYTES + 1)
         .read_to_end(&mut buf)
         .map_err(|e| format!("payload read failed: {e}"))?;
+    if buf.len() as u64 > MAX_PAYLOAD_BYTES {
+        return Err("payload exceeds the size limit".to_string());
+    }
     Ok(buf)
 }
 
-/// Replace `store` with the unpacked archive (a project-shaped tree).
+/// Replace `store` with the unpacked archive (a project-shaped tree), capped by
+/// entry-count and running uncompressed total (zip-bomb guard) and confined to
+/// `store` via `enclosed_name` (Zip-Slip guard). Extracts entry-by-entry so the
+/// caps apply before bytes hit the disk.
 fn unpack(bytes: &[u8], store: &Path) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(store);
     std::fs::create_dir_all(store).map_err(|e| format!("create store: {e}"))?;
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
         .map_err(|e| format!("open payload: {e}"))?;
-    archive.extract(store).map_err(|e| format!("unpack payload: {e}"))?;
+    if archive.len() > MAX_PAYLOAD_ENTRIES {
+        return Err("payload has too many files to install".to_string());
+    }
+    let mut total: u64 = 0;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| format!("payload entry: {e}"))?;
+        total = total.saturating_add(entry.size());
+        if total > MAX_UNCOMPRESSED_BYTES {
+            return Err("payload is too large when decompressed".to_string());
+        }
+        // Zip-Slip guard: skip any entry whose name escapes the store.
+        let Some(rel) = entry.enclosed_name() else {
+            continue;
+        };
+        let out = store.join(rel);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out).map_err(|e| format!("unpack dir: {e}"))?;
+        } else {
+            if let Some(parent) = out.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("unpack parent: {e}"))?;
+            }
+            let mut file = std::fs::File::create(&out).map_err(|e| format!("unpack file: {e}"))?;
+            std::io::copy(&mut entry, &mut file).map_err(|e| format!("unpack write: {e}"))?;
+        }
+    }
     Ok(())
 }
 
@@ -567,6 +625,17 @@ fn deploy_links(store: &Path, roots: &dcs_studio_project::RootMap) -> Result<Vec
     }
     let mut placed: Vec<String> = Vec::new();
     for rule in &manifest.install {
+        // SECURITY: `rule.source` comes from the untrusted downloaded manifest.
+        // It must stay under the content store — otherwise a malicious mod could
+        // link a DCS dest to an arbitrary path on disk. Mirrors the trusted
+        // installer's source guard (install.rs).
+        if !dcs_studio_project::install::stays_under(&rule.source) {
+            rollback(&placed);
+            return Err(format!(
+                "install source '{}' escapes the package — refusing",
+                rule.source
+            ));
+        }
         let source = store.join(&rule.source);
         if !source.exists() {
             rollback(&placed);
@@ -740,5 +809,33 @@ mod tests {
         assert_eq!(p.download_size, 0);
         assert_eq!(p.release_tag, None);
         assert_eq!(p.repo, "octocat/bare-mod");
+    }
+
+    #[test]
+    fn deploy_links_refuses_a_source_escaping_the_payload() {
+        // A malicious downloaded manifest must not link a DCS dest to a path
+        // outside the content store (the security regression from review).
+        let base = std::env::temp_dir().join(format!("dcs-market-sec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let store = base.join("store");
+        let saved = base.join("saved");
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::create_dir_all(&saved).unwrap();
+        std::fs::write(base.join("secret.txt"), b"top secret").unwrap();
+        std::fs::write(
+            store.join("dcs-studio.toml"),
+            "[project]\nname = \"evil\"\n\n[[install]]\nsource = \"../secret.txt\"\ndest = \"{SavedGames}/pwned\"\n",
+        )
+        .unwrap();
+        let roots = dcs_studio_project::RootMap {
+            saved_games: saved.clone(),
+            game_install: None,
+        };
+
+        let result = deploy_links(&store, &roots);
+
+        assert!(result.is_err(), "an escaping source must be refused");
+        assert!(!saved.join("pwned").exists(), "nothing planted in the DCS root");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
