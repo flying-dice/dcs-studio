@@ -365,7 +365,7 @@ public container Workbench for studio::core::Studio {
   /// captured before the write — on the tab that was saved.
   MarkSaved(doc: studio::core::Document): void;
 
-  /// Run a snippet from the Lua console and append its result (or error) to
+  /// Run a snippet from the REPL and append its result (or error) to
   /// the console log. A null result renders as `nil`.
   #[manual]
   public RunLua(code: string): void {
@@ -381,6 +381,31 @@ public container Workbench for studio::core::Studio {
   }
 
   AppendConsoleEntry(entry: studio::core::ConsoleEntry): void;
+
+  /// Run the file at `path` against the live sim — the file IS the source now
+  /// that the console is output-only (invoked from the file tree's "Run in DCS"
+  /// or the editor's Run control/shortcut). An open tab's live buffer is
+  /// preferred over on-disk text so unsaved edits run as written; otherwise the
+  /// file is read from disk. The Lua result lands in the console log; a read
+  /// failure is returned to the caller, not the log.
+  #[manual]
+  public RunFile(path: string): Result<void, studio::files::IoError> {
+    open = Option<studio::core::Document> from self.TabFor(path)
+    if (open.isSome) {
+      self.RunLua(open.value.text)
+      return Ok
+    }
+    contents = Result<string, studio::files::IoError> from studio::files::WorkspaceFs.ReadTextFile(path)
+    if (contents.isErr) {
+      return Err(contents.error)
+    }
+    self.RunLua(contents.value)
+    return Ok
+  }
+
+  /// The open tab whose path is `path`, if any — so a file runs from its live
+  /// (possibly unsaved) buffer rather than stale disk text.
+  TabFor(path: string): Option<studio::core::Document>;
 
   /// Route a JSON-RPC call to DCS: in the packaged app via the Rust bridge
   /// client (DcsLink); in a plain browser (vite dev, Playwright) straight
@@ -457,11 +482,21 @@ public container Workbench for studio::core::Studio {
   PersistPanelWidths(): void;
 }
 
-/// The developer runs Lua against the live sim from the console.
+/// The developer runs ad-hoc Lua against the live sim from the REPL.
 feature LuaConsoleEval for studio::core::Workbench {
   given "the bridge DLL is injected and DCS is running"
-  when "the developer runs a Lua snippet from the console"
+  when "the developer runs a Lua snippet from the REPL"
   then "the snippet executes in the DCS GUI/hooks environment"
+  and "the result (or Lua error) is appended to the console log"
+}
+
+/// The developer runs the file they are editing — or any file in the tree —
+/// against the live sim, without retyping it into a console.
+feature RunFileInDcs for studio::core::Workbench {
+  given "the bridge DLL is injected and DCS is running"
+  and "a file is open in the editor (or selected in the file tree)"
+  when "the developer runs it in DCS (Run control, shortcut, or tree action)"
+  then "the file's content executes in the DCS GUI/hooks environment"
   and "the result (or Lua error) is appended to the console log"
 }
 

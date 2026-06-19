@@ -3,7 +3,8 @@
 // "Run Selection in Lua Console" feed the SAME log. The console's input editor
 // stays component-local; only the shared state lives here.
 
-import { dcsCall } from "./api";
+import { dcsCall, readTextFile } from "./api";
+import { app } from "./state.svelte";
 import { errorMessage } from "$lib/utils";
 
 export interface ConsoleEntry {
@@ -55,3 +56,14 @@ class LuaConsoleStore {
 }
 
 export const luaConsole = new LuaConsoleStore();
+
+/** Run the file at `path` in DCS (model `Workbench.RunFile`): an open tab's live
+ *  buffer wins over on-disk text so unsaved edits run as written, else the file
+ *  is read from disk; the result lands in the console log and the Console panel
+ *  is surfaced. A read failure rejects — it never enters the log. */
+export async function runFile(path: string): Promise<void> {
+  const open = app.openFiles.find((f) => f.path === path);
+  const text = open?.docText ? open.docText : await readTextFile(path);
+  app.bottomTool = "lua";
+  await luaConsole.run(text);
+}

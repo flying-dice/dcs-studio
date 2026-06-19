@@ -11,6 +11,7 @@
   import PackagesManager from "$lib/components/PackagesManager.svelte";
   import PublishManager from "$lib/components/PublishManager.svelte";
   import LuaConsole from "$lib/components/LuaConsole.svelte";
+  import Repl from "$lib/components/Repl.svelte";
   import MissionScriptingManager from "$lib/components/MissionScriptingManager.svelte";
   import Problems from "$lib/components/Problems.svelte";
   import ProblemChips from "$lib/components/ProblemChips.svelte";
@@ -26,6 +27,7 @@
   import PanelResizeHandle from "$lib/components/PanelResizeHandle.svelte";
   import { lang } from "$lib/lang/intel.svelte";
   import { mcp } from "$lib/mcp.svelte";
+  import { runFile } from "$lib/lua-console.svelte";
   import { cn } from "$lib/utils.js";
 
   import { Button } from "$lib/components/ui/button/index.js";
@@ -56,6 +58,7 @@
     PackageCheck,
     PackageMinus,
     Play,
+    SquareChevronRight,
     Bug,
     Settings,
     Palette,
@@ -98,12 +101,13 @@
     { id: "packages", label: "Packages", icon: Boxes },
     { id: "publish", label: "Publish", icon: Rocket },
     { id: "mission", label: "Mission", icon: ShieldOff },
+    { id: "repl", label: "REPL", icon: SquareChevronRight },
     { id: "database", label: "Database", icon: Database },
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "ai", label: "Assistant", icon: Sparkles },
   ];
   const bottomTools: Tool[] = [
-    { id: "lua", label: "Lua Console", icon: FileCode },
+    { id: "lua", label: "Console", icon: FileCode },
     { id: "terminal", label: "Terminal", icon: SquareTerminal },
     { id: "problems", label: "Problems", icon: TriangleAlert },
     { id: "usages", label: "Usages", icon: Search },
@@ -509,6 +513,21 @@
             class="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-border/60 px-2"
           >
             <EditorTabs />
+            {#if app.filePath}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                class="ml-auto shrink-0 text-muted-foreground hover:text-foreground"
+                title="Run in DCS (Ctrl+Enter)"
+                aria-label="Run in DCS"
+                data-testid="editor-run-in-dcs"
+                onclick={() => {
+                  if (app.filePath) void runFile(app.filePath);
+                }}
+              >
+                <Play />
+              </Button>
+            {/if}
           </div>
           <div class="min-h-0 flex-1">
             {#if app.filePath}
@@ -539,6 +558,8 @@
                 <PublishManager />
               {:else if app.rightTool === "mission"}
                 <MissionScriptingManager />
+              {:else if app.rightTool === "repl"}
+                <Repl />
               {:else if app.rightTool === "structure"}
                 <ScrollArea class="h-full">
                   <Structure path={app.filePath} />

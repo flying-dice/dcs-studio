@@ -1,6 +1,7 @@
 <script lang="ts">
   import { readDir, type DirEntry } from "$lib/api";
   import { app } from "$lib/state.svelte";
+  import { runFile } from "$lib/lua-console.svelte";
   import { cn, errorMessage } from "$lib/utils.js";
   import { fileIconFor, FOLDER_ICON } from "$lib/file-icons";
   import FileIcon from "./FileIcon.svelte";
@@ -187,6 +188,15 @@
       </div>
     </ContextMenu.Trigger>
     <ContextMenu.Content class="w-56" data-testid="tree-context-menu">
+      {#if !entry.is_dir}
+        <ContextMenu.Item
+          onSelect={() => void runFile(entry.path).catch((e) => (actionError = errorMessage(e)))}
+          data-testid="tree-run-in-dcs"
+        >
+          Run in DCS
+        </ContextMenu.Item>
+        <ContextMenu.Separator />
+      {/if}
       <ContextMenu.Item onSelect={() => startCreate("file")}>New File…</ContextMenu.Item>
       <ContextMenu.Item onSelect={() => startCreate("folder")}>New Folder…</ContextMenu.Item>
       <ContextMenu.Separator />

@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { EditorView, basicSetup } from "codemirror";
-  import { EditorState, Compartment, type Extension } from "@codemirror/state";
+  import { keymap } from "@codemirror/view";
+  import { EditorState, Compartment, Prec, type Extension } from "@codemirror/state";
   import { StreamLanguage } from "@codemirror/language";
   import { lua } from "@codemirror/legacy-modes/mode/lua";
   import { toml } from "@codemirror/legacy-modes/mode/toml";
@@ -81,6 +82,20 @@
       doc: text,
       extensions: [
         basicSetup,
+        // Ctrl/Cmd+Enter runs the selection (or whole file) in DCS — the same
+        // gesture as the REPL (model RunFile). High-prec so it owns the key.
+        Prec.high(
+          keymap.of([
+            {
+              key: "Mod-Enter",
+              preventDefault: true,
+              run: () => {
+                runActiveInDcs();
+                return true;
+              },
+            },
+          ]),
+        ),
         EditorView.updateListener.of((u) => {
           if (u.docChanged) {
             app.onDocEdited(path, u.state.doc.toString());
@@ -404,13 +419,13 @@
     app.bottomTool = "usages";
   }
 
-  // Run the selection (or the caret's line if nothing is selected) in the Lua
-  // console — a DCS-native touch (model RunLua).
-  function runSelectionInConsole() {
+  // Run the selection (or the whole file if nothing is selected) in DCS — the
+  // file is the source now that the console is output-only (model RunFile; any
+  // file, not just Lua). The result lands in the Console panel.
+  function runActiveInDcs() {
     if (!view) return;
     const { from, to } = view.state.selection.main;
-    const code =
-      from === to ? view.state.doc.lineAt(from).text : view.state.sliceDoc(from, to);
+    const code = from === to ? view.state.doc.toString() : view.state.sliceDoc(from, to);
     void luaConsole.run(code);
     app.bottomTool = "lua";
   }
@@ -446,12 +461,10 @@
         >
           Find Usages
         </ContextMenu.Item>
-        {#if isLua}
-          <ContextMenu.Separator />
-          <ContextMenu.Item onSelect={runSelectionInConsole} data-testid="ctx-run-selection">
-            Run Selection in Lua Console
-          </ContextMenu.Item>
-        {/if}
+        <ContextMenu.Separator />
+        <ContextMenu.Item onSelect={runActiveInDcs} data-testid="ctx-run-in-dcs">
+          Run in DCS
+        </ContextMenu.Item>
       {/if}
     </ContextMenu.Content>
   </ContextMenu.Root>
