@@ -34,7 +34,13 @@ pub fn run() {
     // `--open <path>` launches with a project already open (the frontend reads
     // it on boot via `startup_open`). The e2e suite uses it to point the real
     // app at a fixture project on disk.
-    let startup_args = startup::StartupArgs::parse(std::env::args());
+    let mut startup_args = startup::StartupArgs::parse(std::env::args());
+    // Launch seam: `DCS_OPEN` opens a project on boot when no `--open` was
+    // passed — lets the harness / teaser recorder point the app at a fixture
+    // project without the native folder picker (which automation can't click).
+    if startup_args.open.is_none() {
+        startup_args.open = std::env::var("DCS_OPEN").ok().filter(|p| !p.trim().is_empty());
+    }
     tauri::Builder::default()
         // Single instance first (Tauri requires it before other plugins): a
         // second launch focuses the running window instead of starting a rival
