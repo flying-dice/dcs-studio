@@ -2,8 +2,7 @@
 name = "teaser-mod"
 version = "0.1.0"
 
-# Deploy the script into the mission-scripting search path so a mission's
-# DO SCRIPT FILE trigger (or a hook) can load it.
+# Deploy the mod's script into the DCS scripts area.
 [[install]]
-source = "Scripts/on_mission_start.lua"
+source = "Scripts/hello.lua"
 dest = "{SavedGames}/Scripts/teaser-mod"

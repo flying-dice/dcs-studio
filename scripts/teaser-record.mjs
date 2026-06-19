@@ -10,13 +10,17 @@
 // Records the SCREEN (the app window) — don't touch the machine during the run,
 // and expect DCS to launch (windowed, low-spec) partway through.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 
 const FFMPEG = process.env.FFMPEG ?? "ffmpeg"; // pass FFMPEG=<full path> if not on PATH
 const WINDOW = process.env.TEASER_WINDOW ?? "dcs-studio"; // gdigrab window title; "desktop" = whole screen
 const OUT = resolve("teaser-results");
 mkdirSync(OUT, { recursive: true });
+// Clean prior screenshots so a take's shots aren't mixed with an older run's.
+for (const f of readdirSync(OUT)) {
+  if (f.endsWith(".png")) rmSync(resolve(OUT, f));
+}
 const VIDEO = resolve(OUT, "teaser.mp4");
 
 function killApp(app) {
@@ -51,6 +55,15 @@ while (!(await cdpReady())) {
 }
 await new Promise((r) => setTimeout(r, 3000)); // let the window paint
 
+// Keep the IDE maximized + in front (and DCS minimized) for the whole take, so
+// DCS — launched windowed mid-take — never covers the studio.
+const focus = spawn(
+  "powershell",
+  ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/teaser-focus.ps1"],
+  { stdio: "ignore" },
+);
+focus.on("error", () => {});
+
 // 2) Capture the app window. Title capture keeps the frame to the IDE; set
 //    TEASER_WINDOW=desktop to grab the whole screen instead.
 const input = WINDOW === "desktop" ? "desktop" : `title=${WINDOW}`;
@@ -77,6 +90,11 @@ try {
   ff.kill("SIGINT");
 }
 await new Promise((r) => ff.on("exit", r));
+try {
+  focus.kill();
+} catch {
+  /* best effort */
+}
 killApp(app);
 
 console.log(`\n[teaser] ${pw.status === 0 ? "✓" : "⚠"} done — video: ${VIDEO}`);
