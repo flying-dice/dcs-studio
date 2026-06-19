@@ -31,16 +31,12 @@ pub fn run() {
     let log_path = dcs_studio_project::logging::default_log_path();
     dcs_studio_project::logging::init_to_file("info", &log_path);
     tracing::info!(log = %log_path.display(), "dcs-studio app starting");
-    // `--open <path>` launches with a project already open (the frontend reads
-    // it on boot via `startup_open`). The e2e suite uses it to point the real
-    // app at a fixture project on disk.
-    let mut startup_args = startup::StartupArgs::parse(std::env::args());
-    // Launch seam: `DCS_OPEN` opens a project on boot when no `--open` was
-    // passed — lets the harness / teaser recorder point the app at a fixture
-    // project without the native folder picker (which automation can't click).
-    if startup_args.open.is_none() {
-        startup_args.open = std::env::var("DCS_OPEN").ok().filter(|p| !p.trim().is_empty());
-    }
+    // Launch seam: `--open <path>` (the e2e suite) or the `DCS_OPEN` env (the
+    // harness / teaser recorder) opens a project on boot without the native
+    // folder picker automation can't click. Resolution lives in
+    // `StartupArgs::resolve` so the env fallback is unit-tested.
+    let startup_args =
+        startup::StartupArgs::resolve(std::env::args(), std::env::var("DCS_OPEN").ok());
     tauri::Builder::default()
         // Single instance first (Tauri requires it before other plugins): a
         // second launch focuses the running window instead of starting a rival

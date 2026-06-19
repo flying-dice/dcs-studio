@@ -31,6 +31,20 @@ impl StartupArgs {
         }
         Self { open }
     }
+
+    /// Resolve the project to open on boot: a `--open`/`-o`/`--open=` arg wins;
+    /// otherwise fall back to `env_open` (the `DCS_OPEN` env — the harness /
+    /// teaser-recorder seam). A blank fallback is ignored. Pure (the env value is
+    /// passed in) so it is unit-testable, unlike a direct `std::env::var` in
+    /// `run()`.
+    #[must_use]
+    pub fn resolve<I: IntoIterator<Item = String>>(args: I, env_open: Option<String>) -> Self {
+        let mut me = Self::parse(args);
+        if me.open.is_none() {
+            me.open = env_open.filter(|p| !p.trim().is_empty());
+        }
+        me
+    }
 }
 
 /// The project path the app was asked to open on boot, if any. The frontend
@@ -75,5 +89,27 @@ mod tests {
             parse(&["dcs-studio", "--open", "C:/a", "--open=C:/b"]),
             Some("C:/b".into())
         );
+    }
+
+    fn resolve(args: &[&str], env: Option<&str>) -> Option<String> {
+        StartupArgs::resolve(args.iter().map(ToString::to_string), env.map(ToString::to_string)).open
+    }
+
+    #[test]
+    fn dcs_open_env_opens_when_no_arg() {
+        assert_eq!(resolve(&["dcs-studio"], Some("C:/proj")), Some("C:/proj".into()));
+    }
+
+    #[test]
+    fn an_open_arg_wins_over_dcs_open_env() {
+        assert_eq!(
+            resolve(&["dcs-studio", "--open", "C:/a"], Some("C:/b")),
+            Some("C:/a".into())
+        );
+    }
+
+    #[test]
+    fn a_blank_dcs_open_env_is_ignored() {
+        assert_eq!(resolve(&["dcs-studio"], Some("   ")), None);
     }
 }

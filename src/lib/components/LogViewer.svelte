@@ -27,10 +27,24 @@
   });
 
   // A DCS log line: `2026-06-16 08:53:27.674 INFO    SUBSYS (pid): message`.
+  // Group 2 is the subsystem — used by the mod match below.
   const LINE = /^[\d.\-: ]+(ERROR|WARNING|INFO|DEBUG)\s+(\S+)/;
   type Row = { text: string; level: "error" | "warning" | "info" | "plain"; mine: boolean };
 
-  function parse(text: string, tag: string): Row {
+  // A line "belongs to" the current mod when its subsystem IS the tag (the
+  // bridge's namespaced logger, e.g. log.write("teaser-mod", …)) or the tag
+  // appears as a whole word in the line (how a mission script tags env.info
+  // output). The length-4 floor + word boundaries stop a short folder name
+  // like "DCS"/"info" from matching nearly every line.
+  function modMatcher(tag: string): ((text: string, subsys: string) => boolean) | null {
+    const t = tag.trim().toLowerCase();
+    if (t === "") return null;
+    const esc = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const word = t.length >= 4 ? new RegExp(`\\b${esc}\\b`) : null;
+    return (text, subsys) => subsys.toLowerCase() === t || (word?.test(text.toLowerCase()) ?? false);
+  }
+
+  function parse(text: string, isMine: (text: string, subsys: string) => boolean): Row {
     const m = LINE.exec(text);
     const level: Row["level"] = !m
       ? "plain"
@@ -39,20 +53,16 @@
         : m[1] === "WARNING"
           ? "warning"
           : "info";
-    // "Ours" = the line names the mod tag — whether as the log subsystem (the
-    // bridge's namespaced logger) or printed into the message itself
-    // (env.info("modtag: …"), how a mission script logs under SCRIPTING) — so
-    // both reach the highlight/filter.
-    const mine = tag !== "" && text.toLowerCase().includes(tag.toLowerCase());
-    return { text, level, mine };
+    const subsys = m?.[2] ?? "";
+    return { text, level, mine: isMine(text, subsys) };
   }
 
   const rows = $derived.by<Row[]>(() => {
     const f = filter.trim().toLowerCase();
-    const tag = modTag.trim();
+    const isMine = modMatcher(modTag) ?? (() => false);
     return tail.text
       .split("\n")
-      .map((t) => parse(t, tag))
+      .map((t) => parse(t, isMine))
       .filter((r) => (!onlyMod || r.mine) && (!f || r.text.toLowerCase().includes(f)));
   });
 
