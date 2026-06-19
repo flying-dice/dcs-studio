@@ -58,21 +58,10 @@ fn packages_dir(app: &AppHandle, sub: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// The DCS roots for a package install: the shared resolver (`DCS_SAVED_GAMES`
+/// override else detection) with the detected `{GameInstall}` root.
 fn resolve_roots() -> Result<RootMap, String> {
-    // `DCS_SAVED_GAMES` overrides detection — for a non-standard layout, and the
-    // seam the e2e points at a temp roots dir.
-    let saved_games = std::env::var_os("DCS_SAVED_GAMES")
-        .map(PathBuf::from)
-        .or_else(crate::inject::default_write_dir)
-        .ok_or_else(|| {
-            "No DCS Saved Games write dir found — run DCS once so it creates \
-             Saved Games\\DCS, then try again"
-                .to_string()
-        })?;
-    Ok(RootMap {
-        saved_games,
-        game_install: crate::mission::default_game_install(),
-    })
+    dcs_studio_project::detect::resolve_roots(crate::mission::default_game_install())
 }
 
 /// Pack the project at `root` into a signed `.dcspkg` in the incoming folder

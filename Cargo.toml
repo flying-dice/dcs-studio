@@ -20,14 +20,31 @@ members = [
 edition = "2021"
 version = "0.1.0"
 
-# Opt-in lints for the dcs-lua engine crates (`[lints] workspace = true`);
-# the app/bridge crates don't opt in and are unaffected.
+# Lint policy. The dcs-lua engine crates opt in (`[lints] workspace = true`) and
+# take the FULL set — pedantic + the safety lints below. The app/bridge/services/
+# packages crates take ONLY the safety lints (their own package `[lints.clippy]`),
+# not pedantic, by design (their moved code stays behaviourally identical).
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 # Spans and offsets are u32 by design (compact arena indices, rust-analyzer
 # style); source sizes are bounded well under u32::MAX, so usize -> u32 casts
 # are intentional and checked at the LineIndex boundary.
 cast_possible_truncation = "allow"
+# Safety / no-shortcuts: keep panics and debugging leftovers out of production.
+# `unwrap`/`expect`/panic → a propagated `Result`, a safe fallback, or a guarded
+# precondition (idiomatic in tests — exempt via clippy.toml).
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+indexing_slicing = "warn"
+clone_on_copy = "warn"
+needless_borrow = "warn"
+needless_lifetimes = "warn"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

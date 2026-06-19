@@ -6,7 +6,7 @@
 //! derived from the engine's byte spans at this edge.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use dcs_lua_lsp_core::workspace::Workspace;
 use dcs_lua_lsp_core::{
@@ -52,7 +52,7 @@ impl Backend {
     /// Update one document and collect the publish set while the lock is
     /// held; the awaits happen outside the lock.
     fn set_and_collect(&self, path: &str, text: &str) -> Vec<(Url, Vec<Diagnostic>)> {
-        let mut workspace = self.workspace.lock().expect("workspace lock");
+        let mut workspace = self.workspace.lock().unwrap_or_else(PoisonError::into_inner);
         workspace.set_source(path, text);
         // `file_findings` is the shared finding set (parse + type + future);
         // this edge only maps it to LSP wire diagnostics. A cross-file edit
@@ -81,7 +81,7 @@ impl LanguageServer for Backend {
             && let Ok(path) = root_uri.to_file_path()
         {
             tracing::info!(root = %path.display(), "initialize");
-            *self.root.lock().expect("root lock") = Some(path);
+            *self.root.lock().unwrap_or_else(PoisonError::into_inner) = Some(path);
         } else {
             tracing::info!(root = "none", "initialize (no rootUri)");
         }
@@ -108,7 +108,7 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _: InitializedParams) {
         // Mount the whole workspace so diagnostics cover unopened files.
-        let root = self.root.lock().expect("root lock").clone();
+        let root = self.root.lock().unwrap_or_else(PoisonError::into_inner).clone();
         let Some(root) = root else {
             tracing::warn!("initialized with no root — nothing to walk");
             return;
@@ -116,13 +116,13 @@ impl LanguageServer for Backend {
         let files = dcs_studio_project::sources::collect(&root);
         tracing::info!(root = %root.display(), files = files.len(), "workspace walk");
         {
-            let mut walked = self.walked.lock().expect("walked lock");
+            let mut walked = self.walked.lock().unwrap_or_else(PoisonError::into_inner);
             for (path, _) in &files {
                 walked.insert(path.clone());
             }
         }
         let batches = {
-            let mut workspace = self.workspace.lock().expect("workspace lock");
+            let mut workspace = self.workspace.lock().unwrap_or_else(PoisonError::into_inner);
             for (path, text) in &files {
                 workspace.set_source(path, text);
             }
@@ -178,12 +178,12 @@ impl LanguageServer for Backend {
         let Some(path) = uri_path(&params.text_document.uri) else {
             return;
         };
-        if self.walked.lock().expect("walked lock").contains(&path) {
+        if self.walked.lock().unwrap_or_else(PoisonError::into_inner).contains(&path) {
             return;
         }
         self.workspace
             .lock()
-            .expect("workspace lock")
+            .unwrap_or_else(PoisonError::into_inner)
             .remove_source(&path);
         self.client
             .publish_diagnostics(params.text_document.uri, Vec::new(), None)
@@ -197,7 +197,7 @@ impl LanguageServer for Backend {
         let Some(path) = uri_path(&params.text_document.uri) else {
             return Ok(None);
         };
-        let workspace = self.workspace.lock().expect("workspace lock");
+        let workspace = self.workspace.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(entry) = workspace.file(&path) else {
             return Ok(None);
         };
@@ -214,7 +214,7 @@ impl LanguageServer for Backend {
         let Some(path) = uri_path(&position_params.text_document.uri) else {
             return Ok(None);
         };
-        let workspace = self.workspace.lock().expect("workspace lock");
+        let workspace = self.workspace.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(entry) = workspace.file(&path) else {
             return Ok(None);
         };
@@ -244,7 +244,7 @@ impl LanguageServer for Backend {
         let Some(path) = uri_path(&params.text_document.uri) else {
             return Ok(None);
         };
-        let workspace = self.workspace.lock().expect("workspace lock");
+        let workspace = self.workspace.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(entry) = workspace.file(&path) else {
             return Ok(None);
         };
@@ -269,7 +269,7 @@ impl LanguageServer for Backend {
         let Some(path) = uri_path(&params.text_document.uri) else {
             return Ok(None);
         };
-        let workspace = self.workspace.lock().expect("workspace lock");
+        let workspace = self.workspace.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(entry) = workspace.file(&path) else {
             return Ok(None);
         };
@@ -298,7 +298,7 @@ impl LanguageServer for Backend {
         let Some(path) = uri_path(&position.text_document.uri) else {
             return Ok(None);
         };
-        let workspace = self.workspace.lock().expect("workspace lock");
+        let workspace = self.workspace.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(entry) = workspace.file(&path) else {
             return Ok(None);
         };
@@ -314,7 +314,7 @@ impl LanguageServer for Backend {
         let Some(path) = uri_path(&position.text_document.uri) else {
             return Ok(None);
         };
-        let workspace = self.workspace.lock().expect("workspace lock");
+        let workspace = self.workspace.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(entry) = workspace.file(&path) else {
             return Ok(None);
         };
@@ -331,7 +331,7 @@ impl LanguageServer for Backend {
         let Some(path) = uri_path(&position.text_document.uri) else {
             return Ok(None);
         };
-        let workspace = self.workspace.lock().expect("workspace lock");
+        let workspace = self.workspace.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(entry) = workspace.file(&path) else {
             return Ok(None);
         };

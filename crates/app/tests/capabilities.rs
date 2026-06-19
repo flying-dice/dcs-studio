@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, clippy::print_stdout, clippy::print_stderr)] // integration test crate: test code, exempt from the production safety lints
+
 //! Capability-manifest guard for the binary placeholder's OS actions.
 //!
 //! `open_path` (the "Open in associated application" action) is scope-gated by

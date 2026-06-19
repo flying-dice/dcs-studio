@@ -7,6 +7,21 @@ name = "mock-package-server"
 edition.workspace = true
 version.workspace = true
 
+[lints.clippy]
+# Safety / no-shortcuts (production): `unwrap`/`expect`/panic → a propagated
+# `Result`, a safe fallback, or a guarded precondition. Pedantic intentionally
+# NOT taken (engine-crate only); test `unwrap`/`expect`/`dbg` exempt via clippy.toml.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+indexing_slicing = "warn"
+clone_on_copy = "warn"
+needless_borrow = "warn"
+needless_lifetimes = "warn"
+
 [lib]
 path = "src/lib.rs"
 

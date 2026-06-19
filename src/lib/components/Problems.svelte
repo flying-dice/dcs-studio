@@ -8,7 +8,7 @@
   import { lang } from "$lib/lang/intel.svelte";
   import type { Diagnostic } from "$lib/lang/provider";
   import { openExternal } from "$lib/external";
-  import { cn } from "$lib/utils.js";
+  import { cn, fileName, groupByFile } from "$lib/utils.js";
 
   type Severity = "error" | "warning" | "info";
   // Display order doubles as the sort rank: errors before warnings before info.
@@ -41,22 +41,17 @@
   });
 
   const groups = $derived.by(() => {
-    const byFile = new Map<string, Diagnostic[]>();
-    for (const d of lang.diagnostics) {
-      if (!shown[severityOf(d)]) continue;
-      const list = byFile.get(d.path) ?? [];
-      list.push(d);
-      byFile.set(d.path, list);
-    }
+    const visible = lang.diagnostics.filter((d) => shown[severityOf(d)]);
+    const entries = groupByFile(visible, (d) => d.path);
     // Within a file: severity first (errors, warnings, info), then span.
-    for (const list of byFile.values()) {
+    for (const [, list] of entries) {
       list.sort(
         (a, b) =>
           SEVERITIES.indexOf(severityOf(a)) - SEVERITIES.indexOf(severityOf(b)) ||
           a.start - b.start,
       );
     }
-    return [...byFile.entries()].sort(([a], [b]) => a.localeCompare(b));
+    return entries;
   });
 
   /** Severities the disabled filters are currently hiding findings of. */
@@ -66,10 +61,6 @@
   const hiddenCount = $derived(
     hiddenSeverities.reduce((n, s) => n + counts[s], 0),
   );
-
-  function fileName(path: string): string {
-    return path.split(/[\\/]/).pop() ?? path;
-  }
 
   function open(finding: Diagnostic) {
     app.openFile(finding.path, fileName(finding.path), {

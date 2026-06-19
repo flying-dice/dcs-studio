@@ -7,7 +7,7 @@
 //! set (NOT real crypto; the mock SERVER does ed25519 and is tested over HTTP).
 
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -116,7 +116,7 @@ impl MockSigningClient {
     pub fn revoke(&self, user: &str) {
         self.revoked
             .lock()
-            .expect("revoked lock")
+            .unwrap_or_else(PoisonError::into_inner)
             .insert(user.to_string());
     }
 
@@ -146,7 +146,7 @@ impl SigningClient for MockSigningClient {
         if self
             .revoked
             .lock()
-            .expect("revoked lock")
+            .unwrap_or_else(PoisonError::into_inner)
             .contains(&signature.key_id)
         {
             return Ok(Validity {

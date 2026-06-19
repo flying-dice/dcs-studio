@@ -112,7 +112,7 @@ pub fn detect_installs() -> Vec<DcsInstall> {
 /// kept only if it looks like a genuine write dir (has a `Config` subdir
 /// — the same validity marker `detect_installs` uses).
 pub fn default_write_dir() -> Option<PathBuf> {
-    dcs_studio_project::detect::default_saved_games().filter(|dir| dir.join("Config").is_dir())
+    dcs_studio_project::detect::write_dir()
 }
 
 fn status_for(write_dir: &str) -> InjectionStatus {

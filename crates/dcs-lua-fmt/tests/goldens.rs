@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, clippy::print_stdout, clippy::print_stderr)] // integration test crate: test code, exempt from the production safety lints
+
 //! Formatter conformance harness: `CONFORMANCE/format/<case>.lua` must
 //! format (default config) to the hand-written `<case>.formatted.lua`,
 //! and every expected output must be a fixed point of the formatter

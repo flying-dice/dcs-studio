@@ -4,7 +4,7 @@
 //! against the (non-revoked) signer's key.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use base64::Engine;
 use ed25519_dalek::{Signature as EdSignature, Signer, SigningKey, Verifier};
@@ -27,7 +27,7 @@ impl State {
 
     /// The user's signing key, minted on first use.
     fn key_for(&self, user: &str) -> SigningKey {
-        let mut keys = self.keys.lock().expect("keys lock");
+        let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
         keys.entry(user.to_string())
             .or_insert_with(|| SigningKey::generate(&mut rand::rngs::OsRng))
             .clone()
@@ -36,20 +36,20 @@ impl State {
     fn verifying_key(&self, user: &str) -> Option<ed25519_dalek::VerifyingKey> {
         self.keys
             .lock()
-            .expect("keys lock")
+            .unwrap_or_else(PoisonError::into_inner)
             .get(user)
             .map(SigningKey::verifying_key)
     }
 
     fn is_revoked(&self, user: &str) -> bool {
-        self.revoked.lock().expect("revoked lock").contains(user)
+        self.revoked.lock().unwrap_or_else(PoisonError::into_inner).contains(user)
     }
 
     /// Revoke a user — every signature with this `key_id` now validates false.
     pub fn revoke(&self, user: &str) {
         self.revoked
             .lock()
-            .expect("revoked lock")
+            .unwrap_or_else(PoisonError::into_inner)
             .insert(user.to_string());
     }
 }
@@ -107,10 +107,10 @@ fn sign(body: &[u8], state: &State) -> (u16, String) {
         key_id: req.user,
         signed_at: "2026-01-01T00:00:00Z".to_string(),
     };
-    (
-        200,
-        serde_json::to_string(&signature).expect("serialise signature"),
-    )
+    match serde_json::to_string(&signature) {
+        Ok(json) => (200, json),
+        Err(e) => (500, json_err(&format!("serialise signature: {e}"))),
+    }
 }
 
 fn verify(body: &[u8], state: &State) -> (u16, String) {
@@ -118,10 +118,10 @@ fn verify(body: &[u8], state: &State) -> (u16, String) {
         return (400, json_err("malformed verify request"));
     };
     let verdict = validate(&req, state);
-    (
-        200,
-        serde_json::to_string(&verdict).expect("serialise validity"),
-    )
+    match serde_json::to_string(&verdict) {
+        Ok(json) => (200, json),
+        Err(e) => (500, json_err(&format!("serialise validity: {e}"))),
+    }
 }
 
 fn validate(req: &VerifyRequest, state: &State) -> Validity {

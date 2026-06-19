@@ -381,6 +381,8 @@ fn pump(
         match reader.read(&mut buf) {
             Ok(0) | Err(_) => break,
             Ok(n) => {
+                // `Read::read` guarantees n <= buf.len(), so this slice is in bounds.
+                #[allow(clippy::indexing_slicing)]
                 let chunk = &buf[..n];
                 let seq = match sessions.lock() {
                     Ok(mut map) => match map.get_mut(id) {

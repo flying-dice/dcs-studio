@@ -33,7 +33,10 @@ impl PackageManifest {
     /// this is stable — the client and server derive identical bytes from the
     /// same manifest, which is all that signing/verification requires.
     #[must_use]
+    // Infallible serialise (String/Vec fields only); fail loud on the impossible
+    // rather than a fallback — empty/default bytes would corrupt the signature.
+    #[allow(clippy::expect_used)]
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        serde_json::to_vec(self).expect("manifest serialises")
+        serde_json::to_vec(self).expect("PackageManifest has no non-serialisable fields")
     }
 }

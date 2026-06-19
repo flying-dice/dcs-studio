@@ -8,8 +8,14 @@
 //!
 //! Stdout discipline: nothing in this crate prints.
 
+// Test code is exempt from the production safety lints — indexing into
+// known-shape fixtures, `panic!` on bad setup, and stderr debug are idiomatic
+// there (unwrap/expect/dbg are exempted via clippy.toml).
+#![cfg_attr(test, allow(clippy::indexing_slicing, clippy::panic, clippy::print_stderr))]
+
 pub mod fs;
 pub mod github;
+mod github_http;
 pub mod inject;
 pub mod launcher;
 pub mod link;

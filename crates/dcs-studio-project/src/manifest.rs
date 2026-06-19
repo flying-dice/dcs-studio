@@ -104,7 +104,7 @@ pub fn parse(text: &str) -> Result<Manifest, String> {
 ///
 /// The file is missing or unreadable, or its contents fail [`parse`].
 pub fn load(root: &Path) -> Result<Manifest, String> {
-    let path = root.join("dcs-studio.toml");
+    let path = root.join(crate::MANIFEST_FILE);
     let text =
         std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
     parse(&text)
@@ -122,7 +122,7 @@ pub fn nearest(path: &Path) -> Option<PathBuf> {
     };
     start
         .ancestors()
-        .find(|dir| dir.join("dcs-studio.toml").is_file())
+        .find(|dir| dir.join(crate::MANIFEST_FILE).is_file())
         .map(Path::to_path_buf)
 }
 

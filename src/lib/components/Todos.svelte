@@ -6,22 +6,14 @@
   import { RefreshCw } from "@lucide/svelte";
   import { app } from "$lib/state.svelte";
   import { todos as appTodos, type TodoEntry, type TodoScanner } from "$lib/todos.svelte";
-  import { cn } from "$lib/utils.js";
+  import { cn, fileName, groupByFile } from "$lib/utils.js";
 
   // Injectable store so /lab/todos drives the real grouping, splice, and
   // navigation from a plain browser (same seam convention as Editor's
   // readFile).
   let { store = appTodos }: { store?: TodoScanner } = $props();
 
-  const groups = $derived.by(() => {
-    const byFile = new Map<string, TodoEntry[]>();
-    for (const e of store.entries) {
-      const list = byFile.get(e.path) ?? [];
-      list.push(e);
-      byFile.set(e.path, list);
-    }
-    return [...byFile.entries()].sort(([a], [b]) => a.localeCompare(b));
-  });
+  const groups = $derived.by(() => groupByFile(store.entries, (e) => e.path));
 
   const TAG_STYLES: Record<string, string> = {
     TODO: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
@@ -29,10 +21,6 @@
     HACK: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
     XXX: "bg-purple-500/15 text-purple-600 dark:text-purple-400",
   };
-
-  function fileName(path: string): string {
-    return path.split(/[\\/]/).pop() ?? path;
-  }
 
   function open(entry: TodoEntry) {
     // Same open+navigate mechanics as the Problems panel (model OpenTodo).

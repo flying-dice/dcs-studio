@@ -149,61 +149,82 @@ pub fn status(root: &Path, roots: &RootMap) -> Result<InstallStatus, String> {
             up_to_date: false,
         });
     }
+    // Walk the rules and fold their verdicts: installed if ANY rule placed a
+    // file, up-to-date only if EVERY rule's files are present and current.
     let mut any_installed = false;
     let mut all_ok = true;
     for rule in &manifest.install {
-        if !stays_under(&rule.source) {
-            all_ok = false;
-            continue;
-        }
-        let dest_dir = resolve_dest(&rule.dest, roots)?;
-        let source = root.join(rule.source.trim_end_matches(['/', '\\']));
-        if source.is_file() {
-            let dest = dest_dir.join(source.file_name().unwrap());
-            if dest.is_file() {
-                any_installed = true;
-                if fs::read(&source).ok() != fs::read(&dest).ok() {
-                    all_ok = false;
-                }
-            } else {
-                all_ok = false;
-            }
-        } else if source.is_dir() {
-            for entry in WalkDir::new(&source)
-                .into_iter()
-                .filter_map(std::result::Result::ok)
-            {
-                if !entry.file_type().is_file() {
-                    continue;
-                }
-                let Ok(relative) = entry.path().strip_prefix(&source) else {
-                    all_ok = false;
-                    continue;
-                };
-                let dest = dest_dir.join(relative);
-                if dest.is_file() {
-                    any_installed = true;
-                    if fs::read(entry.path()).ok() != fs::read(&dest).ok() {
-                        all_ok = false;
-                    }
-                } else {
-                    all_ok = false;
-                }
-            }
-        } else {
-            // Source missing — check dest by filename only; can't compare content.
-            if let Some(name) = Path::new(rule.source.trim_end_matches(['/', '\\'])).file_name()
-                && dest_dir.join(name).is_file()
-            {
-                any_installed = true;
-            }
-            all_ok = false;
-        }
+        let (installed, ok) = rule_status(root, rule, roots)?;
+        any_installed |= installed;
+        all_ok &= ok;
     }
     Ok(InstallStatus {
         installed: any_installed,
         up_to_date: any_installed && all_ok,
     })
+}
+
+/// One install rule's deployed state: `installed` = at least one of its files is
+/// present at the destination, `ok` = every file is present AND its bytes match
+/// the source. A rule whose source escapes its root, or whose source is missing
+/// (so content cannot be compared), is never `ok`.
+///
+/// # Errors
+/// Returns `Err` when the rule's `dest` does not resolve under a named root.
+fn rule_status(
+    root: &Path,
+    rule: &crate::manifest::InstallRule,
+    roots: &RootMap,
+) -> Result<(bool, bool), String> {
+    if !stays_under(&rule.source) {
+        return Ok((false, false));
+    }
+    let dest_dir = resolve_dest(&rule.dest, roots)?;
+    let source = root.join(rule.source.trim_end_matches(['/', '\\']));
+    if source.is_file() {
+        // `is_file()` guarantees a final path component (status's `# Panics` note
+        // records the impossible exception).
+        #[allow(clippy::unwrap_used)]
+        let dest = dest_dir.join(source.file_name().unwrap());
+        Ok(check_file(&source, &dest))
+    } else if source.is_dir() {
+        // Same per-file check as the file branch, walked over the tree.
+        let mut installed = false;
+        let mut ok = true;
+        for entry in WalkDir::new(&source)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let Ok(relative) = entry.path().strip_prefix(&source) else {
+                ok = false;
+                continue;
+            };
+            let (file_installed, file_ok) = check_file(entry.path(), &dest_dir.join(relative));
+            installed |= file_installed;
+            ok &= file_ok;
+        }
+        Ok((installed, ok))
+    } else {
+        // Source missing — presence by filename only; content cannot be compared,
+        // so the rule is never `ok`.
+        let installed = Path::new(rule.source.trim_end_matches(['/', '\\']))
+            .file_name()
+            .is_some_and(|name| dest_dir.join(name).is_file());
+        Ok((installed, false))
+    }
+}
+
+/// One deployed file's state: `installed` = the destination file exists, `ok` =
+/// it exists AND its bytes match the source. A missing destination is neither.
+fn check_file(source: &Path, dest: &Path) -> (bool, bool) {
+    if dest.is_file() {
+        (true, fs::read(source).ok() == fs::read(dest).ok())
+    } else {
+        (false, false)
+    }
 }
 
 /// Remove every file that the project's `[[install]]` rules deployed

@@ -6,10 +6,11 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::github_http;
+
 const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const USER_URL: &str = "https://api.github.com/user";
-const USER_AGENT: &str = concat!("dcs-studio/", env!("CARGO_PKG_VERSION"));
 
 /// Sign-in OAuth scope (model `DEVICE_SCOPE`): `read:user` only — least privilege
 /// for the identity slice (the consent screen reads "read your profile").
@@ -112,7 +113,7 @@ pub fn request_device_code(client_id: &str, scope: &str) -> Result<DeviceCode, S
     let body = serde_json::json!({ "client_id": client_id, "scope": scope });
     let resp: Resp = ureq::post(DEVICE_CODE_URL)
         .set("Accept", "application/json")
-        .set("User-Agent", USER_AGENT)
+        .set("User-Agent", github_http::USER_AGENT)
         .send_json(body)
         .map_err(|e| format!("device-code request failed: {e}"))?
         .into_json()
@@ -138,7 +139,7 @@ pub fn poll_access_token(client_id: &str, device_code: &str) -> Result<PollState
     let (access_token, error) = read_token_response(
         ureq::post(TOKEN_URL)
             .set("Accept", "application/json")
-            .set("User-Agent", USER_AGENT)
+            .set("User-Agent", github_http::USER_AGENT)
             .send_json(body),
     )?;
     classify(access_token.as_deref(), error.as_deref())
@@ -194,10 +195,8 @@ pub fn get_user(token: &str) -> Result<GitHubUser, String> {
         login: String,
         avatar_url: String,
     }
-    let resp: Resp = ureq::get(USER_URL)
-        .set("Accept", "application/vnd.github+json")
-        .set("User-Agent", USER_AGENT)
-        .set("Authorization", &format!("Bearer {token}"))
+    let resp: Resp = github_http::get(USER_URL, token)
+        .set("Accept", github_http::ACCEPT_JSON)
         .call()
         .map_err(|e| format!("get-user failed: {e}"))?
         .into_json()
@@ -249,10 +248,8 @@ pub(crate) fn current_token() -> Option<String> {
 /// The scopes granted to `token`, read from GitHub's `X-OAuth-Scopes` response
 /// header on a lightweight authenticated call (issue #12 publish gating).
 pub(crate) fn token_scopes(token: &str) -> Result<Vec<String>, String> {
-    let resp = ureq::get(USER_URL)
-        .set("Accept", "application/vnd.github+json")
-        .set("User-Agent", USER_AGENT)
-        .set("Authorization", &format!("Bearer {token}"))
+    let resp = github_http::get(USER_URL, token)
+        .set("Accept", github_http::ACCEPT_JSON)
         .call()
         .map_err(|e| format!("scope check failed: {e}"))?;
     Ok(resp
@@ -264,7 +261,13 @@ pub(crate) fn token_scopes(token: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// Whether the cached token can publish — it carries `public_repo` (or the
+/// Whether `scopes` permit publishing — they carry `public_repo` (or the broader
+/// `repo`). Pure, so the publish gate is decided without a GitHub round-trip.
+fn grants_publish(scopes: &[String]) -> bool {
+    scopes.iter().any(|s| s == "public_repo" || s == "repo")
+}
+
+/// Whether the cached token can publish — its scopes carry `public_repo` (or the
 /// broader `repo`). Makes one authenticated call; `false` when signed out or the
 /// check fails. The publish flow escalates the scope when this is false.
 #[must_use]
@@ -272,9 +275,7 @@ pub fn can_publish() -> bool {
     let Some(token) = current_token() else {
         return false;
     };
-    token_scopes(&token)
-        .map(|s| s.iter().any(|x| x == "public_repo" || x == "repo"))
-        .unwrap_or(false)
+    token_scopes(&token).map(|s| grants_publish(&s)).unwrap_or(false)
 }
 
 /// Clear the cached token + profile; the chip returns to signed-out (model `Identity.SignOut`).
@@ -377,7 +378,7 @@ mod store {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify, resolve_client_id, PLACEHOLDER_CLIENT_ID};
+    use super::{classify, grants_publish, resolve_client_id, PLACEHOLDER_CLIENT_ID};
 
     #[test]
     fn classify_maps_every_device_flow_arm() {
@@ -413,6 +414,14 @@ mod tests {
         assert!(classify(None, None).is_err());
         // An empty access_token is not "authorized".
         assert!(classify(Some(""), Some("authorization_pending")).expect("pending").status == "pending");
+    }
+
+    #[test]
+    fn grants_publish_needs_public_repo_or_repo() {
+        assert!(grants_publish(&["read:user".to_string(), "public_repo".to_string()]));
+        assert!(grants_publish(&["repo".to_string()]));
+        assert!(!grants_publish(&["read:user".to_string()]));
+        assert!(!grants_publish(&[]));
     }
 
     #[test]

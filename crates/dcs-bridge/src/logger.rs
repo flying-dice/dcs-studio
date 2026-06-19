@@ -2,13 +2,16 @@ use log::{debug, error, info, warn};
 use mlua::prelude::{LuaMetaMethod, LuaTable};
 use mlua::{Lua, Result, UserData, UserDataMethods};
 
-struct _Logger {
+/// The Lua `logger.Logger` userdata: a namespaced logger constructed with
+/// `logger.Logger.new(ns)` and registered under the string key "Logger" by
+/// [`inject_module`]. (The type is live — reached only through the Lua proxy.)
+struct Logger {
     ns: String,
 }
 
-impl _Logger {
+impl Logger {
     pub fn new(ns: String) -> Self {
-        _Logger { ns }
+        Logger { ns }
     }
 
     pub fn debug(&self, msg: String) {
@@ -28,9 +31,9 @@ impl _Logger {
     }
 }
 
-impl UserData for _Logger {
+impl UserData for Logger {
     fn add_methods<'lua, M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_function("new", |_lua: &Lua, ns: String| Ok(_Logger::new(ns)));
+        methods.add_function("new", |_lua: &Lua, ns: String| Ok(Logger::new(ns)));
 
         methods.add_meta_method(LuaMetaMethod::ToString, |_: &Lua, this, (): ()| {
             Ok(format!("Logger({})", this.ns))
@@ -64,7 +67,7 @@ pub fn inject_module(lua: &Lua, table: &LuaTable) -> Result<()> {
     m.set("info", lua.create_function(info)?)?;
     m.set("warn", lua.create_function(warn)?)?;
     m.set("error", lua.create_function(error)?)?;
-    m.set("Logger", lua.create_proxy::<_Logger>()?)?;
+    m.set("Logger", lua.create_proxy::<Logger>()?)?;
 
     table.set("logger", m)?;
 

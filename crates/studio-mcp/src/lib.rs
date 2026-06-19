@@ -87,6 +87,10 @@ impl Session {
     }
 
     fn block_on<T>(&self, future: impl Future<Output = T>) -> T {
+        // A default multi-thread runtime is effectively infallible (only OS
+        // thread/IO-driver exhaustion fails); `block_on` returns `T`, so there is
+        // no Result to propagate here — fail loud on the impossible.
+        #[allow(clippy::expect_used)]
         let runtime = self.runtime.get_or_init(|| {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -377,7 +381,10 @@ fn build_tool(root: &Path) -> Value {
 /// and errors live at the end).
 fn tail_lines(text: &str, count: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
-    lines[lines.len().saturating_sub(count)..].join("\n")
+    // `saturating_sub` keeps start <= len, so the slice is always in bounds.
+    #[allow(clippy::indexing_slicing)]
+    let tail = &lines[lines.len().saturating_sub(count)..];
+    tail.join("\n")
 }
 
 // ---- workspace fs tools ------------------------------------------------------

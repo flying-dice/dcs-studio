@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, clippy::print_stdout, clippy::print_stderr)] // integration test crate: test code, exempt from the production safety lints
+
 //! End-to-end over the in-process `MockSigningClient` (model `studio::package`):
 //! build → discover → install → links placed → uninstall, plus the three refusal
 //! arms — tampered payload, revoked author, escaping rule.

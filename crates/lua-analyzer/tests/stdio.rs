@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, clippy::print_stdout, clippy::print_stderr)] // integration test crate: test code, exempt from the production safety lints
+
 //! End-to-end over real stdio: the `lua-analyzer` LSP server driven exactly
 //! the way an external client (editor, the IDE host, an LLM agent) drives it.
 

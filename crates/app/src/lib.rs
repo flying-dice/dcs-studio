@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::indexing_slicing, clippy::panic, clippy::print_stderr, clippy::unwrap_used, clippy::expect_used))] // test code exempt (clippy.toml's allow-*-in-tests misses cfg'd free helpers like throwaway_child)
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod build;
 mod dcs;
@@ -147,5 +149,11 @@ pub fn run() {
             startup::startup_open,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap_or_else(|e| {
+            // A failed boot (missing WebView2, asset/IPC/plugin init) has nowhere
+            // to recover to — log it to the on-disk tracing sink instead of
+            // unwinding, then exit non-zero.
+            tracing::error!(error = %e, "tauri application failed to start");
+            std::process::exit(1);
+        });
 }

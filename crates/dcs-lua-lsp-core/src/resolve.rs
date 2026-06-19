@@ -518,9 +518,8 @@ fn global_match<'a>(
             name: func_name,
             func,
         } => {
-            let simple = func_name.segments.len() == 1
-                && func_name.method.is_none()
-                && func_name.segments[0].text == name;
+            let simple = func_name.method.is_none()
+                && matches!(func_name.segments.as_slice(), [seg] if seg.text == name);
             simple.then_some(Decl::GlobalFunction {
                 name: func_name,
                 func,

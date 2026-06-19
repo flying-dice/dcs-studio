@@ -9,16 +9,10 @@ use std::path::Path;
 
 use dcs_studio_project::{install, InstallReport, InstallStatus, RootMap, UninstallReport};
 
+/// The DCS roots for a project install: the shared resolver (model `ResolveRoots`)
+/// with the detected `{GameInstall}` root.
 fn resolve_roots() -> Result<RootMap, String> {
-    let saved_games = crate::inject::default_write_dir().ok_or_else(|| {
-        "No DCS Saved Games write dir found — run DCS once so it creates \
-         Saved Games\\DCS, then try again"
-            .to_string()
-    })?;
-    Ok(RootMap {
-        saved_games,
-        game_install: crate::mission::default_game_install(),
-    })
+    dcs_studio_project::detect::resolve_roots(crate::mission::default_game_install())
 }
 
 /// Install the project at `root` per its manifest's `[[install]]` rules.

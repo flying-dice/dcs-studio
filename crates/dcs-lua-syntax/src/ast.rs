@@ -53,17 +53,23 @@ impl Ast {
         BlockId(self.blocks.len() as u32 - 1)
     }
 
+    // Arena accessors: an `ExprId`/`StatId`/`BlockId` is only ever produced by
+    // this `Ast`'s own `alloc_*`, so `id.0` is always a valid index into the
+    // matching vec — the indexing cannot panic (totality contract).
     #[must_use]
+    #[allow(clippy::indexing_slicing)]
     pub fn expr(&self, id: ExprId) -> &Expr {
         &self.exprs[id.0 as usize]
     }
 
     #[must_use]
+    #[allow(clippy::indexing_slicing)]
     pub fn stat(&self, id: StatId) -> &Stat {
         &self.stats[id.0 as usize]
     }
 
     #[must_use]
+    #[allow(clippy::indexing_slicing)]
     pub fn block(&self, id: BlockId) -> &Block {
         &self.blocks[id.0 as usize]
     }

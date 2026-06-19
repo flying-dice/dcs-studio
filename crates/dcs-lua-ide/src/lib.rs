@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::indexing_slicing, clippy::panic, clippy::print_stderr))] // test code exempt; unwrap/expect/dbg via clippy.toml
+
 //! dcs-lua-ide — the wasm `IdeSession` edge over the engine. Its generated
 //! bindings were the IDE's browser-mode language path until issue #32 retired
 //! that path; the crate remains the engine's wasm-bindgen surface.

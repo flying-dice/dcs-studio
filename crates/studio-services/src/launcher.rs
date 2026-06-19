@@ -320,9 +320,12 @@ fn spawn_watcher() {
                 };
                 let exited = !matches!(session.child.try_wait(), Ok(None));
                 if exited {
-                    let session = guard.take().expect("session present under the same lock");
-                    drop(guard);
-                    let _ = teardown(&session.write_dir, &session.options_path);
+                    // `guard.as_mut()` above proved the session present under this
+                    // same lock; take it to own teardown, releasing the lock first.
+                    if let Some(session) = guard.take() {
+                        drop(guard);
+                        let _ = teardown(&session.write_dir, &session.options_path);
+                    }
                     return;
                 }
             }
@@ -402,6 +405,9 @@ fn replace_graphics_block(content: &str, eol: &str) -> Result<String, String> {
 /// Index of the `}` matching the `{` at `open`, counting only braces that are
 /// real Lua syntax — those inside `"…"`/`'…'` strings, `[[…]]`/`[=[…]=]` long
 /// brackets, and `--` / `--[[…]]` comments are skipped. `None` if unterminated.
+// Every `s[i]` below is bounds-guarded by the `while i < n` loop invariant
+// (and the `i + 1 < n` short-circuit for the look-ahead).
+#[allow(clippy::indexing_slicing)]
 fn matching_brace(s: &[u8], open: usize) -> Option<usize> {
     let n = s.len();
     let mut i = open;
@@ -459,6 +465,9 @@ fn long_bracket_open(s: &[u8], i: usize) -> Option<usize> {
 
 /// Index just past a long bracket's closing `]` `=`×level `]`, given the run
 /// starts at `start`. `None` if never closed.
+// `s[i]` is bounds-guarded by the `while i < n` loop invariant; the look-aheads
+// use `s.get(..)`.
+#[allow(clippy::indexing_slicing)]
 fn long_bracket_close(s: &[u8], start: usize, level: usize) -> Option<usize> {
     let mut i = start + level + 2; // past the opening `[` `=`×level `[`
     let n = s.len();
@@ -481,6 +490,9 @@ fn long_bracket_close(s: &[u8], start: usize, level: usize) -> Option<usize> {
 
 /// Index just past the closing quote of the string opened at `i` (handling
 /// backslash escapes). `None` if never closed.
+// `s[i]` holds the caller's `i < n` precondition (the `matching_brace` loop
+// guard at the only call site); `s[j]` is bounds-guarded by `while j < n`.
+#[allow(clippy::indexing_slicing)]
 fn quoted_string_end(s: &[u8], i: usize) -> Option<usize> {
     let quote = s[i];
     let mut j = i + 1;

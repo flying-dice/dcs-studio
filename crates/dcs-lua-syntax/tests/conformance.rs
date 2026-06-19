@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, clippy::print_stdout, clippy::print_stderr)] // integration test crate: test code, exempt from the production safety lints
+
 //! Conformance harness: globs `CONFORMANCE/<layer>/` and diffs rendered
 //! output against the hand-written goldens (CONFORMANCE/README.md).
 

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, clippy::print_stdout, clippy::print_stderr)] // integration test crate: test code, exempt from the production safety lints
+
 //! The MCP handler driven in-process, exactly the dispatch the app hosts over
 //! its loopback transport: a real [`Session`] (its own lazily dialed link, or
 //! a fake bridge) fed JSON-RPC through [`handle`]. The LSP server is its own

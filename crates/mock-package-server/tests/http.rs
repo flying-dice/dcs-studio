@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, clippy::print_stdout, clippy::print_stderr)] // integration test crate: test code, exempt from the production safety lints
+
 //! End-to-end over real HTTP + real ed25519: spawn the mock server binary, then
 //! drive `studio_packages::HttpSigningClient` against it — sign a manifest,
 //! validate it, revoke the author, and confirm validation now fails. This is the

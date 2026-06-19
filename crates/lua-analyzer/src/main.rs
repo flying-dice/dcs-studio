@@ -12,7 +12,7 @@
 
 mod server;
 
-fn main() {
+fn main() -> std::io::Result<()> {
     // Logs go to STDERR (stdout is the LSP wire). Raise verbosity with e.g.
     // `DCS_LOG=lua_analyzer=trace,info`. The host captures this stderr and
     // folds it into the app's own log, so a crash here is visible there.
@@ -20,7 +20,7 @@ fn main() {
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "lua-analyzer starting");
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()
-        .expect("tokio runtime construction cannot fail with default settings")
+        .build()?
         .block_on(server::serve());
+    Ok(())
 }

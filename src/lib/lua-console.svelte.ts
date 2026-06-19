@@ -4,6 +4,7 @@
 // stays component-local; only the shared state lives here.
 
 import { dcsCall } from "./api";
+import { errorMessage } from "$lib/utils";
 
 export interface ConsoleEntry {
   code: string;
@@ -40,7 +41,7 @@ class LuaConsoleStore {
       this.entries.push({
         code: trimmed,
         ok: false,
-        output: e instanceof Error ? e.message : String(e),
+        output: errorMessage(e),
         at: new Date(),
       });
     } finally {

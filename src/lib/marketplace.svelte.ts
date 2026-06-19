@@ -13,10 +13,7 @@ import {
   type MarketListing,
   type ProductDetail,
 } from "./api";
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+import { errorMessage } from "$lib/utils";
 
 class MarketplaceStore {
   /** Discovered mods (every public repo carrying the `dcs-studio` topic). */
@@ -51,7 +48,7 @@ class MarketplaceStore {
     try {
       this.listings = await marketDiscover(force);
     } catch (error) {
-      this.error = message(error);
+      this.error = errorMessage(error);
     } finally {
       // Mark loaded on BOTH paths so a failed discovery doesn't retry-loop.
       this.loaded = true;
@@ -69,7 +66,7 @@ class MarketplaceStore {
       const detail = await marketProduct(owner, name);
       if (gen === this.#productGen) this.product = detail;
     } catch (error) {
-      if (gen === this.#productGen) this.productError = message(error);
+      if (gen === this.#productGen) this.productError = errorMessage(error);
     } finally {
       if (gen === this.#productGen) this.productBusy = false;
     }
@@ -98,7 +95,7 @@ class MarketplaceStore {
       await marketInstall(owner, name);
       await this.refreshInstalled();
     } catch (error) {
-      this.installError = message(error);
+      this.installError = errorMessage(error);
     } finally {
       this.installBusy = false;
     }
@@ -113,7 +110,7 @@ class MarketplaceStore {
       await marketUninstall(id);
       await this.refreshInstalled();
     } catch (error) {
-      this.installError = message(error);
+      this.installError = errorMessage(error);
     } finally {
       this.installBusy = false;
     }

@@ -57,11 +57,6 @@ impl LinkShared {
         let _ = self.client.set(client);
     }
 
-    /// The adopted client, if the link has been started.
-    pub fn client(&self) -> Option<DcsClient> {
-        self.client.get().cloned()
-    }
-
     /// Record one heartbeat sample; `None` latency means "unmeasured" (the
     /// ping failed or the link is down).
     pub fn record_heartbeat(&self, sim_running: bool, latency_ms: Option<u32>) {
@@ -81,12 +76,11 @@ impl LinkShared {
         let client = DcsClient::connect(url);
         let mut connected = client.connected_watch();
         let _ = tokio::time::timeout(CONNECT_GRACE, connected.wait_for(|up| *up)).await;
-        // A racing first dial may have won the OnceLock; use whichever did.
-        let _ = self.client.set(client);
-        self.client
-            .get()
-            .expect("client was just set or already present")
-            .clone()
+        // A racing first dial may have won the OnceLock; adopt ours if the cell is
+        // still empty, then return whichever client is stored — our just-built one
+        // is the fallback for the impossible empty-cell case, never a panic.
+        let _ = self.client.set(client.clone());
+        self.client.get().cloned().unwrap_or(client)
     }
 
     /// Forward an arbitrary JSON-RPC call to the in-DCS bridge. Guard: a

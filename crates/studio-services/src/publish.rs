@@ -14,15 +14,12 @@ use std::process::Command;
 
 use serde::Deserialize;
 
-const API_BASE: &str = "https://api.github.com";
+use crate::github_http::{self, API_BASE};
+use dcs_studio_project::{DISCOVERY_TOPIC, MANIFEST_FILE};
+
 const UPLOADS_BASE: &str = "https://uploads.github.com";
-const USER_AGENT: &str = concat!("dcs-studio/", env!("CARGO_PKG_VERSION"));
-/// The marketplace marker topic every shared repo gets (model `DISCOVERY_TOPIC`).
-const DISCOVERY_TOPIC: &str = "dcs-studio";
 /// The branch the initial commit is pushed to (model `DEFAULT_BRANCH`).
 const DEFAULT_BRANCH: &str = "main";
-/// The manifest uploaded as the release's installability anchor.
-const MANIFEST_FILE: &str = "dcs-studio.toml";
 
 /// A created (or resolved) GitHub repository (model `RepoInfo`).
 #[derive(Clone, Debug, serde::Serialize, Deserialize)]
@@ -129,17 +126,20 @@ impl From<RepoResp> for RepoInfo {
 /// Create the repo, or — when it already exists for this user (422) — resolve and
 /// return the existing one, so `share` is idempotent: a retry after a partial
 /// failure re-tags/commits/pushes instead of dying on "name already exists".
-fn create_repo(name: &str, description: &str, token: &str) -> Result<RepoInfo, String> {
+fn create_repo(
+    name: &str,
+    description: &str,
+    token: &str,
+    login: Option<&str>,
+) -> Result<RepoInfo, String> {
     let body = serde_json::json!({
         "name": name,
         "description": description,
         "private": false,
         "auto_init": false,
     });
-    match ureq::post(&format!("{API_BASE}/user/repos"))
-        .set("Accept", "application/vnd.github+json")
-        .set("User-Agent", USER_AGENT)
-        .set("Authorization", &format!("Bearer {token}"))
+    match github_http::post(&format!("{API_BASE}/user/repos"), token)
+        .set("Accept", github_http::ACCEPT_JSON)
         .send_json(body)
     {
         Ok(resp) => Ok(resp
@@ -148,10 +148,9 @@ fn create_repo(name: &str, description: &str, token: &str) -> Result<RepoInfo, S
             .into()),
         // Already exists for this user — continue with the existing repo.
         Err(ureq::Error::Status(422, _)) => {
-            let login = crate::github::current_session()
-                .map(|s| s.login)
-                .ok_or_else(|| "repo exists but no session to resolve it".to_string())?;
-            fetch_repo(&login, name, token)
+            let login =
+                login.ok_or_else(|| "repo exists but no session to resolve it".to_string())?;
+            fetch_repo(login, name, token)
         }
         Err(e) => Err(rest_error("create repo", e)),
     }
@@ -159,10 +158,8 @@ fn create_repo(name: &str, description: &str, token: &str) -> Result<RepoInfo, S
 
 /// Resolve an existing repo (`GET /repos/{owner}/{name}`).
 fn fetch_repo(owner: &str, name: &str, token: &str) -> Result<RepoInfo, String> {
-    Ok(ureq::get(&format!("{API_BASE}/repos/{owner}/{name}"))
-        .set("Accept", "application/vnd.github+json")
-        .set("User-Agent", USER_AGENT)
-        .set("Authorization", &format!("Bearer {token}"))
+    Ok(github_http::get(&format!("{API_BASE}/repos/{owner}/{name}"), token)
+        .set("Accept", github_http::ACCEPT_JSON)
         .call()
         .map_err(|e| rest_error("fetch repo", e))?
         .into_json::<RepoResp>()
@@ -172,10 +169,8 @@ fn fetch_repo(owner: &str, name: &str, token: &str) -> Result<RepoInfo, String> 
 
 fn set_topics(repo: &RepoInfo, topics: &[String], token: &str) -> Result<(), String> {
     let body = serde_json::json!({ "names": topics });
-    ureq::put(&format!("{API_BASE}/repos/{}/{}/topics", repo.owner, repo.name))
-        .set("Accept", "application/vnd.github+json")
-        .set("User-Agent", USER_AGENT)
-        .set("Authorization", &format!("Bearer {token}"))
+    github_http::put(&format!("{API_BASE}/repos/{}/{}/topics", repo.owner, repo.name), token)
+        .set("Accept", github_http::ACCEPT_JSON)
         .send_json(body)
         .map_err(|e| rest_error("set topics", e))?;
     Ok(())
@@ -195,10 +190,8 @@ fn create_release(repo: &RepoInfo, tag: &str, body: &str, token: &str) -> Result
         tag_name: String,
     }
     let payload = serde_json::json!({ "tag_name": tag, "name": tag, "body": body });
-    let resp: Resp = ureq::post(&format!("{API_BASE}/repos/{}/{}/releases", repo.owner, repo.name))
-        .set("Accept", "application/vnd.github+json")
-        .set("User-Agent", USER_AGENT)
-        .set("Authorization", &format!("Bearer {token}"))
+    let resp: Resp = github_http::post(&format!("{API_BASE}/repos/{}/{}/releases", repo.owner, repo.name), token)
+        .set("Accept", github_http::ACCEPT_JSON)
         .send_json(payload)
         .map_err(|e| rest_error("create release", e))?
         .into_json()
@@ -218,13 +211,14 @@ fn upload_asset(repo: &RepoInfo, release_id: u64, path: &Path, token: &str) -> R
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| "asset has no filename".to_string())?;
-    ureq::post(&format!(
-        "{UPLOADS_BASE}/repos/{}/{}/releases/{release_id}/assets?name={filename}",
-        repo.owner, repo.name
-    ))
+    github_http::post(
+        &format!(
+            "{UPLOADS_BASE}/repos/{}/{}/releases/{release_id}/assets?name={filename}",
+            repo.owner, repo.name
+        ),
+        token,
+    )
     .set("Content-Type", "application/octet-stream")
-    .set("User-Agent", USER_AGENT)
-    .set("Authorization", &format!("Bearer {token}"))
     .send_bytes(&bytes)
     .map_err(|e| rest_error("upload asset", e))?;
     Ok(())
@@ -250,13 +244,14 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// The commit identity: the signed-in GitHub login, or a generic fallback.
-fn committer_identity() -> (String, String) {
-    match crate::github::current_session() {
-        Some(s) => {
-            let email = format!("{}@users.noreply.github.com", s.login);
-            (s.login, email)
-        }
+/// The commit identity for `login` (the signed-in GitHub login resolved once at
+/// the `share` entry), or a generic fallback when logged out — pure, no keyring.
+fn committer_identity(login: Option<&str>) -> (String, String) {
+    match login {
+        Some(login) => (
+            login.to_string(),
+            format!("{login}@users.noreply.github.com"),
+        ),
         None => (
             "DCS Studio".to_string(),
             "dcs-studio@users.noreply.github.com".to_string(),
@@ -264,10 +259,10 @@ fn committer_identity() -> (String, String) {
     }
 }
 
-fn init_and_commit(root: &Path, message: &str) -> Result<(), String> {
+fn init_and_commit(root: &Path, message: &str, login: Option<&str>) -> Result<(), String> {
     git(root, &["init"])?;
     git(root, &["add", "-A"])?;
-    let (name, email) = committer_identity();
+    let (name, email) = committer_identity(login);
     // Explicit -c identity so the commit works without global git config.
     let out = Command::new("git")
         .arg("-C")
@@ -376,10 +371,14 @@ fn publish_token() -> Result<String, String> {
 pub fn share(root: &str) -> Result<RepoInfo, String> {
     let root = Path::new(root);
     let token = publish_token()?;
+    // Resolve the signed-in identity ONCE at the entry and thread it down, so the
+    // commit identity and the existing-repo (422) lookup don't each reach into
+    // the keyring deep in the flow.
+    let login = crate::github::current_session().map(|s| s.login);
     let plan = plan_repo(root)?;
-    let repo = create_repo(&plan.name, &plan.description, &token)?;
+    let repo = create_repo(&plan.name, &plan.description, &token, login.as_deref())?;
     set_topics(&repo, &plan.topics, &token)?;
-    init_and_commit(root, &plan.commit_message)?;
+    init_and_commit(root, &plan.commit_message, login.as_deref())?;
     set_remote(root, &repo.html_url)?;
     push(root, &token)?;
     Ok(repo)
@@ -486,6 +485,26 @@ fn zip_add_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn committer_identity_uses_the_login_else_a_generic_fallback() {
+        // Pure now — the login is threaded in, so the commit identity is
+        // testable without the keyring singleton.
+        assert_eq!(
+            committer_identity(Some("octocat")),
+            (
+                "octocat".to_string(),
+                "octocat@users.noreply.github.com".to_string(),
+            ),
+        );
+        assert_eq!(
+            committer_identity(None),
+            (
+                "DCS Studio".to_string(),
+                "dcs-studio@users.noreply.github.com".to_string(),
+            ),
+        );
+    }
 
     #[test]
     fn slugify_makes_github_safe_names() {

@@ -138,30 +138,6 @@ fn project_block(name: &str, template: &str) -> String {
     )
 }
 
-/// Per-template guidance shown after a successful scaffold, reusable by the
-/// app's New Project flow. Empty for unknown ids.
-#[must_use]
-pub fn next_steps(template: &str) -> &'static str {
-    match template {
-        "rust-dll" => {
-            "next steps:\n\
-             \x20 cargo build --release\n\
-             \x20 use DCS Studio's install action to copy the DLL + hook into Saved Games\n\
-             \x20 then start DCS and watch Saved Games/DCS/Logs/dcs.log"
-        }
-        "lua-script" => {
-            "next steps:\n\
-             \x20 open the folder in DCS Studio to edit, check, and run it\n\
-             \x20 load it via a mission trigger (DO SCRIPT FILE) — see README.md"
-        }
-        "blank" => {
-            "next steps:\n\
-             \x20 edit dcs-studio.toml — declare your files and [[install]] rules"
-        }
-        _ => "",
-    }
-}
-
 /// Render a template's files, or `None` for an unknown id.
 #[must_use]
 pub fn render(template: &str, name: &str) -> Option<Vec<TemplateFile>> {
@@ -614,18 +590,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn next_steps_guides_every_template() {
-        for id in ["blank", "lua-script", "rust-dll"] {
-            assert!(!next_steps(id).is_empty(), "next_steps empty for {id}");
-        }
-        assert!(next_steps("rust-dll").contains("cargo build"));
-        assert!(next_steps("rust-dll").contains("install"));
-        assert!(next_steps("lua-script").contains("DCS Studio"));
-        assert!(next_steps("blank").contains("dcs-studio.toml"));
-        assert!(next_steps("nope").is_empty());
     }
 
     #[test]

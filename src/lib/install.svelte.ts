@@ -10,6 +10,7 @@ import {
   type InstallStatus,
 } from "$lib/api";
 import { build } from "$lib/build.svelte";
+import { errorMessage } from "$lib/utils";
 
 export class InstallStore {
   /** An install is in flight. */
@@ -37,7 +38,7 @@ export class InstallStore {
       build.lines.push(`Installed ${report.copied} file(s):`);
       for (const f of report.files) build.lines.push(`  + ${f}`);
     } catch (e) {
-      build.lines.push(`Install failed: ${e instanceof Error ? e.message : e}`);
+      build.lines.push(`Install failed: ${errorMessage(e)}`);
     } finally {
       this.installing = false;
       await this.refreshStatus(root);
@@ -53,7 +54,7 @@ export class InstallStore {
       build.lines.push(`Uninstalled ${report.removed} file(s):`);
       for (const f of report.files) build.lines.push(`  - ${f}`);
     } catch (e) {
-      build.lines.push(`Uninstall failed: ${e instanceof Error ? e.message : e}`);
+      build.lines.push(`Uninstall failed: ${errorMessage(e)}`);
     } finally {
       this.uninstalling = false;
       await this.refreshStatus(root);

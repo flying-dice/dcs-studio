@@ -3,6 +3,23 @@ name = "dcs-bridge"
 edition.workspace = true
 version.workspace = true
 
+[lints.clippy]
+# Safety / no-shortcuts — and this crate is the in-DCS DLL, where a panic crashes
+# the live sim: `unwrap`/`expect`/panic → a propagated `Result`, a safe fallback,
+# or a guarded precondition. Pedantic intentionally not taken; tests exempt via clippy.toml.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+indexing_slicing = "warn"
+clone_on_copy = "warn"
+needless_borrow = "warn"
+needless_lifetimes = "warn"
+
 [lib]
 crate-type = ["cdylib"]
 

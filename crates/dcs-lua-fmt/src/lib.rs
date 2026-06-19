@@ -10,6 +10,10 @@
 //! does not parse cleanly returns `Err` with its diagnostics — never
 //! half-formatted. WASM-safe: no I/O, threads, or clock.
 
+// Test code is exempt from the production safety lints — indexing into
+// known-shape fixtures and `panic!` on bad setup are idiomatic there.
+#![cfg_attr(test, allow(clippy::indexing_slicing, clippy::panic, clippy::print_stderr))]
+
 mod config;
 mod printer;
 mod range;

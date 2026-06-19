@@ -16,6 +16,11 @@
 //! - [`process`] — spawn child processes without console-window flashes.
 //! - [`todos`] — workspace comment-tag scanner (Todos panel, issue #16).
 
+// Test code is exempt from the production safety lints — indexing into
+// known-shape fixtures and `panic!` on bad setup are idiomatic there
+// (unwrap/expect/dbg via clippy.toml).
+#![cfg_attr(test, allow(clippy::indexing_slicing, clippy::panic, clippy::print_stderr))]
+
 pub mod detect;
 pub mod install;
 pub mod logging;
@@ -34,3 +39,13 @@ pub use manifest::{InstallRule, Manifest, ProjectMeta, format_config_for};
 pub use process::quiet_command;
 pub use templates::{TemplateContents, TemplateFile};
 pub use toolchain::ToolchainStatus;
+
+/// The GitHub topic that marks a public repo as a dcs-studio mod: the Marketplace
+/// discovers by it (`studio::market`) and `share` tags every repo with it
+/// (`studio::publish`), so the reader and writer agree by sharing this one const.
+pub const DISCOVERY_TOPIC: &str = "dcs-studio";
+
+/// The project manifest filename — at the project root, and uploaded as a release
+/// asset so the Marketplace reads the install plan without the whole payload. The
+/// single source the writer (publish) and reader (discovery) share.
+pub const MANIFEST_FILE: &str = "dcs-studio.toml";

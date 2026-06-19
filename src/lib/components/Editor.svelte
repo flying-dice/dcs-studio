@@ -10,6 +10,7 @@
   import { rust } from "@codemirror/lang-rust";
   import { app } from "$lib/state.svelte";
   import { classifyAndRead, type FileLoad } from "$lib/api";
+  import { errorMessage } from "$lib/utils";
   import { langIntelFor } from "$lib/lang/codemirror";
   import { editorCommands } from "$lib/editor/commands";
   import {
@@ -328,7 +329,7 @@
       renameBox = null;
       view?.focus();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       // Keep the box open showing why, so the developer can fix the name.
       if (renameBox) renameBox = { ...renameBox, busy: false, error: message };
     }

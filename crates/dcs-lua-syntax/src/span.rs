@@ -53,6 +53,9 @@ impl LineIndex {
     /// The 1-based `(line, column)` for `offset`; an offset past the end
     /// clamps to the end of the source.
     #[must_use]
+    // `line` is a `binary_search` result index into `line_starts` (never empty —
+    // line 1 starts at 0), so it is always < len; the indexing cannot panic.
+    #[allow(clippy::indexing_slicing)]
     pub fn line_col(&self, offset: u32) -> (u32, u32) {
         let offset = offset.min(self.len);
         let line = match self.line_starts.binary_search(&offset) {

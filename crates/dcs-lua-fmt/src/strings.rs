@@ -53,6 +53,9 @@ pub(crate) fn normalize(raw: &str, style: QuoteStyle) -> String {
 /// runtime byte value, per the Lua 5.1 escape set. Unknown escapes decode
 /// to the escaped byte — both sides of a comparison use the same rule.
 #[must_use]
+// `bytes[1..len-1]` is guarded by the `len < 2` early return; `content[i]` by the
+// `while i < content.len()` loop — neither can be out of bounds.
+#[allow(clippy::indexing_slicing)]
 pub(crate) fn decode_short(raw: &str) -> Vec<u8> {
     let bytes = raw.as_bytes();
     if bytes.len() < 2 {

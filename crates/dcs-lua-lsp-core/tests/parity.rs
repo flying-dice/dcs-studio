@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, clippy::print_stdout, clippy::print_stderr)] // integration test crate: test code, exempt from the production safety lints
+
 //! LuaLS-parity BDD suite (plan "Cucumber harness").
 //!
 //! Gherkin scenarios under `tests/features/` exercise the type layer the way

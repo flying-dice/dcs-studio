@@ -143,6 +143,9 @@ impl<'a> Printer<'a> {
     /// Any comment strictly inside `(lo, hi)`. Blank-line trivia is
     /// ignored: layout inside an otherwise-empty construct belongs to the
     /// printer, and counting it would make collapsing non-idempotent.
+    // `from` is a `partition_point` result, so 0 <= from <= len — `trivia[from..]`
+    // is always a valid (possibly empty) slice.
+    #[allow(clippy::indexing_slicing)]
     fn has_comment_in(&self, lo: u32, hi: u32) -> bool {
         let from = self.trivia.partition_point(|t| t.span.start <= lo);
         self.trivia[from..]
@@ -239,6 +242,9 @@ impl<'a> Printer<'a> {
     }
 
     #[expect(clippy::too_many_lines, reason = "one arm per statement form")]
+    // Assign always has >= 1 target and If always has >= 1 arm by parser
+    // construction, so `targets[0]`/`arms[0]`/`arms[1..]` cannot be out of bounds.
+    #[allow(clippy::indexing_slicing)]
     fn print_stat(&mut self, sid: StatId, depth: usize, separated: bool) {
         let ast = self.ast;
         let span = ast.stat(sid).span;

@@ -83,7 +83,7 @@ pub(crate) fn param_types(
                     ref ty => Some(ty.clone()),
                 };
             }
-            usage[position].clone()
+            usage.get(position).cloned().flatten()
         })
         .collect()
 }
@@ -153,7 +153,7 @@ fn return_expr_type(
             .params
             .iter()
             .position(|param| param.text == *name)
-            .and_then(|position| params[position].clone())
+            .and_then(|position| params.get(position).cloned().flatten())
             .unwrap_or_else(|| infer_type(workspace, path, expr)),
         ExprKind::MethodCall { method, .. } => {
             string_method_return(&method.text).unwrap_or(Type::Unknown)
@@ -215,6 +215,10 @@ struct Collector<'a> {
     witness: Vec<Witness>,
 }
 
+// `self.index` maps each parameter name to its slot in `self.witness` (both
+// built in lockstep, one entry per parameter), so a position from `index.get`
+// is always a valid `witness` index.
+#[allow(clippy::indexing_slicing)]
 impl<'a> Collector<'a> {
     fn new(ast: &'a Ast, func: &'a FuncBody) -> Self {
         let mut index = HashMap::new();

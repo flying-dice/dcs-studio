@@ -7,12 +7,12 @@ use std::io::Write;
 
 use mock_package_server::{handle, State};
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let port: u16 = std::env::args()
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
-    let server = tiny_http::Server::http(("127.0.0.1", port)).expect("bind mock signing server");
+    let server = tiny_http::Server::http(("127.0.0.1", port))?;
     let addr = server.server_addr();
     // The actual (possibly ephemeral) address, flushed so a parent process can
     // read it immediately.
@@ -25,6 +25,9 @@ fn main() {
         let _ = request.as_reader().read_to_end(&mut body);
         let path = request.url().split('?').next().unwrap_or("/").to_string();
         let (code, json) = handle(&path, &body, &state);
+        // The two header constants are valid by construction — `from_bytes` only
+        // fails on invalid header bytes, which these literals are not.
+        #[allow(clippy::expect_used)]
         let response = tiny_http::Response::from_string(json)
             .with_status_code(code)
             .with_header(
@@ -39,4 +42,5 @@ fn main() {
             );
         let _ = request.respond(response);
     }
+    Ok(())
 }

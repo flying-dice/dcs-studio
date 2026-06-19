@@ -8,6 +8,10 @@
 //! identifier resolution (innermost scope → file globals → workspace
 //! globals), doc-comment bodies, and shallow initializer-inferred types.
 
+// Test code is exempt from the production safety lints — indexing into
+// known-shape fixtures and `panic!` on bad setup are idiomatic there.
+#![cfg_attr(test, allow(clippy::indexing_slicing, clippy::panic, clippy::print_stderr))]
+
 pub mod analysis;
 pub mod annot;
 pub mod assignable;

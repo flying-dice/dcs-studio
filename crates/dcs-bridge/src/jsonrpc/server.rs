@@ -159,7 +159,7 @@ impl Drop for JsonRpcServer {
 impl UserData for JsonRpcServer {
     fn add_methods<'lua, M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_function("new", |_lua: &Lua, config: ServerConfig| {
-            Ok(JsonRpcServer::new(config).map_err(LuaError::external)?)
+            JsonRpcServer::new(config).map_err(LuaError::external)
         });
 
         methods.add_meta_method(MetaMethod::ToString, |_, this: &Self, ()| {
@@ -204,16 +204,18 @@ async fn post_rpc(
     data: Data<Mutex<AppData>>,
     body: Json<JsonRpcRequest>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let mut data_guard = data
-        .lock()
-        .map_err(|e| ErrorInternalServerError(format!("Failed to acquire data lock: {}", e)))?;
-
     let request = body.into_inner();
 
-    let maybe_receiver = push_rpc_request(&mut data_guard, request);
-    let request_timeout = data_guard.timeout;
-
-    drop(data_guard);
+    // Hold the std Mutex only to enqueue the request and read the timeout, in a
+    // block that ends before any `.await` — a guard must never span an await
+    // point (it would block the executor / risk a deadlock inside the sim).
+    let (maybe_receiver, request_timeout) = {
+        let mut data_guard = data
+            .lock()
+            .map_err(|e| ErrorInternalServerError(format!("Failed to acquire data lock: {}", e)))?;
+        let maybe_receiver = push_rpc_request(&mut data_guard, request);
+        (maybe_receiver, data_guard.timeout)
+    };
 
     let Some(receiver) = maybe_receiver else {
         return Ok(HttpResponse::Accepted().body("OK"));
@@ -273,14 +275,16 @@ async fn handle_text_frame(message: String, session: &Session, data: &Data<Mutex
         return;
     };
 
-    let Ok(mut data_guard) = data.lock() else {
-        error!("Failed to acquire data lock, skipping frame");
-        return;
+    // Enqueue under the std Mutex in a block that ends before the `.await`
+    // below — a guard must never span an await point inside the sim.
+    let (maybe_receiver, request_timeout) = {
+        let Ok(mut data_guard) = data.lock() else {
+            error!("Failed to acquire data lock, skipping frame");
+            return;
+        };
+        let maybe_receiver = push_rpc_request(&mut data_guard, request);
+        (maybe_receiver, data_guard.timeout)
     };
-
-    let maybe_receiver = push_rpc_request(&mut data_guard, request);
-    let request_timeout = data_guard.timeout;
-    drop(data_guard);
 
     if let Some(receiver) = maybe_receiver {
         notify_session(session.clone(), receiver, request_timeout)

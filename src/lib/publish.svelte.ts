@@ -16,10 +16,7 @@ import {
   type RepoInfo,
   type ReleaseInfo,
 } from "./api";
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+import { errorMessage } from "$lib/utils";
 
 class PublishStore {
   busy = $state(false);
@@ -82,7 +79,7 @@ class PublishStore {
       await this.#ensureScope();
       await action();
     } catch (error) {
-      this.error = message(error);
+      this.error = errorMessage(error);
     } finally {
       this.busy = false;
       this.device = null;

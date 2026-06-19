@@ -13,6 +13,7 @@ pub struct Identity {
     pub login: String,
 }
 
+// TODO: clean-code - 0.6 - KISS: IdentityProvider has a single impl (StaticIdentity) and the promised GitHub impl never landed; collapse the &dyn trait and have build_package_with take Identity/Option<Identity> directly.
 /// A source of the current logged-in identity.
 pub trait IdentityProvider {
     /// The current author, or `None` when logged out.

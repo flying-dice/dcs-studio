@@ -139,6 +139,9 @@ fn type_hint(offset: u32, label: String) -> InlayHint {
 /// the function start, for `()`) up to the body, skipping any `)` that falls
 /// inside a comment. `None` when no `)` is found (malformed source) — the
 /// return hint is then omitted rather than misplaced.
+// `hi = min(bytes.len(), …)` and the `lo > hi` early return below bound the
+// slice: lo <= hi <= bytes.len(), so `bytes[lo..hi]` cannot panic.
+#[allow(clippy::indexing_slicing)]
 fn locate_close_paren(source: &str, trivia: &[SpannedTrivia], func: &FuncBody) -> Option<u32> {
     let lo = func.params.last().map_or(func.span.start, |param| param.span.end) as usize;
     let bytes = source.as_bytes();

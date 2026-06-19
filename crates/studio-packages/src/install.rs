@@ -105,8 +105,19 @@ pub fn entry_for(artifact: &Path) -> Result<PackageEntry, String> {
     })
 }
 
-/// Install the package at `entry.path`: hash-check, server-validate, then link
-/// the payload into the roots from `store_dir`.
+/// A package that cleared the trust gate ([`verify`]): its payload is staged at
+/// `staging` and proven to match the signed `manifest` (no tamper), and the
+/// signing server confirmed the signature authentic with the author not revoked.
+/// Consumed by [`deploy`] — the only thing allowed to link a `Verified` payload.
+struct Verified {
+    id: String,
+    manifest: PackageManifest,
+    signature: crate::signing::Signature,
+    staging: PathBuf,
+}
+
+/// Install the package at `entry.path`: the trust gate ([`verify`]), then — only
+/// if it passes — the deploy transaction ([`deploy`]).
 ///
 /// # Errors
 /// Returns `Err` when the artifact is unreadable, the payload was tampered (hash
@@ -118,6 +129,24 @@ pub fn install(
     store_dir: &Path,
     signer: &dyn SigningClient,
 ) -> Result<PackageInstallReport, String> {
+    let verified = verify(entry, store_dir, signer)?;
+    deploy(verified, roots, store_dir)
+}
+
+/// The trust gate: stage the payload under `store_dir`, prove it matches the
+/// signed manifest (tamper check), then have the server confirm the signature is
+/// authentic AND the author not revoked — BEFORE anything is linked. The staged
+/// payload is left for [`deploy`] to commit; on ANY failure the staging dir is
+/// removed first so a rejected package never leaves a turd behind.
+///
+/// # Errors
+/// Returns `Err` when the artifact is unreadable, extraction fails, the payload
+/// was tampered (hash mismatch), or the server rejects it (invalid or revoked).
+fn verify(
+    entry: &PackageEntry,
+    store_dir: &Path,
+    signer: &dyn SigningClient,
+) -> Result<Verified, String> {
     let artifact = Path::new(&entry.path);
     let (manifest, signature) = crate::archive::read_header(artifact)?;
     let id = package_id(&manifest.name, &manifest.content_hash);
@@ -144,10 +173,37 @@ pub fn install(
         ));
     }
 
-    // Commit: move the payload into the store, then link each rule's dest in.
-    // Replace any prior install of this exact package CLEANLY first — drop its
-    // ledgered links, not just the store dir — so a re-install never collides
-    // with its own surviving destinations (and never strands dangling links).
+    Ok(Verified {
+        id,
+        manifest,
+        signature,
+        staging,
+    })
+}
+
+/// Commit a [`Verified`] package: move the staged payload into the content store,
+/// link each rule's destination in, and ledger what was placed.
+///
+/// Replace any prior install of this exact package CLEANLY first — drop its
+/// ledgered links, not just the store dir — so a re-install never collides with
+/// its own surviving destinations (and never strands dangling links). On ANY
+/// failure every link placed so far is rolled back and the store dropped, so a
+/// half-finished install never survives.
+///
+/// # Errors
+/// Returns `Err` when the payload cannot be committed to the store, a rule
+/// escapes its root, or a link cannot be placed.
+fn deploy(
+    verified: Verified,
+    roots: &RootMap,
+    store_dir: &Path,
+) -> Result<PackageInstallReport, String> {
+    let Verified {
+        id,
+        manifest,
+        signature,
+        staging,
+    } = verified;
     let store = store_dir.join(&id);
     if store.exists() {
         let _ = uninstall(&id, store_dir);

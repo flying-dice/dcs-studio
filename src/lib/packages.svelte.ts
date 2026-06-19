@@ -12,10 +12,7 @@ import {
   uninstallPackage,
   type PackageEntry,
 } from "./api";
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+import { errorMessage } from "$lib/utils";
 
 class PackagesStore {
   /** Discovered `.dcspkg` files in the watch folder. */
@@ -51,7 +48,7 @@ class PackagesStore {
       this.revokedIds = health.filter((h) => h.status === "revoked").map((h) => h.id);
       this.unverifiedIds = health.filter((h) => h.status === "unverified").map((h) => h.id);
     } catch (error) {
-      this.error = message(error);
+      this.error = errorMessage(error);
     }
   }
 
@@ -78,7 +75,7 @@ class PackagesStore {
       await action();
       await this.refresh();
     } catch (error) {
-      this.error = message(error);
+      this.error = errorMessage(error);
     } finally {
       this.busy = false;
     }

@@ -45,8 +45,7 @@ impl TypeTable {
 
     fn absorb(&mut self, block: &dcs_lua_syntax::AnnotationBlock) {
         if let Some(name) = &block.class_name {
-            self.classes.entry(name.clone()).or_default();
-            let def = self.classes.get_mut(name).unwrap();
+            let def = self.classes.entry(name.clone()).or_default();
             if block.class_parent.is_some() {
                 def.parent.clone_from(&block.class_parent);
             }

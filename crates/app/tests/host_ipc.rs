@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, clippy::print_stdout, clippy::print_stderr)] // integration test crate: test code, exempt from the production safety lints
+
 //! Host <-> real-server IPC seam (decisions/005): drives the app's frame
 //! reader (`lsp.rs`) against an actual spawned `lua-analyzer` process — the
 //! exact byte path the Tauri host pumps, minus the webview layer that

@@ -2,7 +2,7 @@
 // (the logic moved there for the headless MCP server, issue #8 —
 // model/studio/inject.pds).
 
-pub use studio_services::inject::{default_write_dir, DcsInstall, InjectionStatus};
+pub use studio_services::inject::{DcsInstall, InjectionStatus};
 
 /// Scan `%USERPROFILE%\Saved Games` for DCS write dirs (`DCS` or `DCS.*`).
 /// `valid` = the dir contains a `Config` subdir (DCS write-dir marker).

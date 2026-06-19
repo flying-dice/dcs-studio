@@ -12,6 +12,11 @@ use crate::printer;
 /// Format the statement run enclosing `range`; bytes outside the spliced
 /// run are untouched. A range that touches no statement returns the source
 /// unchanged.
+// All indexing into `stats` is bounds-guarded: `first <= last` (early-returned
+// otherwise) and both stay in `0..stats.len()`, with `first > 0` / `last + 1 <
+// stats.len()` guards on the neighbour look-ups. `src[..]` slices use byte
+// offsets kept <= src.len(). (Totality: the formatter never panics.)
+#[allow(clippy::indexing_slicing)]
 pub(crate) fn format_range(
     src: &str,
     parsed: &Parsed,
@@ -87,7 +92,12 @@ pub(crate) fn format_range(
             if t.span.start < splice_end {
                 continue;
             }
-            let same_line = !src[splice_end as usize..t.span.start as usize].contains('\n');
+            // Match the checked sibling above: a reversed range on a warning-only
+            // recovery parse must not panic — an invalid range is treated as
+            // "not same line" so the trivia merge stops safely.
+            let same_line = src
+                .get(splice_end as usize..t.span.start as usize)
+                .is_some_and(|s| !s.contains('\n'));
             if same_line && !matches!(t.trivia, Trivia::BlankLines { .. }) {
                 splice_end = t.span.end;
             } else {
@@ -133,7 +143,8 @@ pub(crate) fn format_range(
 /// Whether a real `;` statement separator (a `;` byte outside any
 /// comment) sits in `src[from..to)`.
 fn semi_separates(src: &str, trivia: &[SpannedTrivia], from: u32, to: u32) -> bool {
-    src[from as usize..to as usize]
+    src.get(from as usize..to as usize)
+        .unwrap_or("")
         .bytes()
         .enumerate()
         .any(|(i, byte)| {

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, clippy::print_stdout, clippy::print_stderr)] // integration test crate: test code, exempt from the production safety lints
+
 //! The rust-dll template's "generated code compiles" claim, proven by
 //! actually compiling it (issue #22): scaffold a project into a temp dir
 //! and run a real `cargo check` on it. The unit tests in `templates.rs`

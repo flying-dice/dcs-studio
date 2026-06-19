@@ -60,7 +60,8 @@ impl Parser {
             members.push(self.postfix());
         }
         if members.len() == 1 {
-            members.pop().unwrap()
+            // len == 1 just checked; `Type::Any` is the unreachable-case default.
+            members.pop().unwrap_or(Type::Any)
         } else {
             flatten_union(members)
         }
@@ -108,7 +109,11 @@ impl Parser {
     }
 
     fn literal_string(&mut self) -> Type {
-        let quote = self.peek().unwrap();
+        // The caller (`primary`) only dispatches here on a peeked quote, so this
+        // is Some; fall back to `Any` rather than panic if that ever changes.
+        let Some(quote) = self.peek() else {
+            return Type::Any;
+        };
         self.pos += 1;
         let mut s = String::new();
         while let Some(c) = self.peek() {
@@ -121,6 +126,9 @@ impl Parser {
         Type::Any
     }
 
+    // `self.chars[start..self.pos]`: `start` is a saved `self.pos`, which only
+    // advances while `peek()` is Some, so start <= self.pos <= chars.len().
+    #[allow(clippy::indexing_slicing)]
     fn literal_number(&mut self) -> Type {
         let start = self.pos;
         if self.peek() == Some('-') {
@@ -139,6 +147,8 @@ impl Parser {
         }
     }
 
+    // `self.chars[start..self.pos]`: scanner invariant start <= self.pos <= len.
+    #[allow(clippy::indexing_slicing)]
     fn name(&mut self) -> String {
         let start = self.pos;
         while matches!(self.peek(), Some(c) if is_name_continue(c)) {
@@ -288,7 +298,8 @@ fn flatten_union(members: Vec<Type>) -> Type {
         }
     }
     if flat.len() == 1 {
-        flat.pop().unwrap()
+        // len == 1 just checked; `Type::Any` is the unreachable-case default.
+        flat.pop().unwrap_or(Type::Any)
     } else {
         Type::Union(flat)
     }

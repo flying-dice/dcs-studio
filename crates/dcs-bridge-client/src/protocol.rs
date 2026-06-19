@@ -53,10 +53,6 @@ pub struct JsonRpcError {
     pub data: Option<serde_json::Value>,
 }
 
-/// Parameters for [`METHOD_PING`]. The bridge ignores them; present for typing.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
-pub struct PingParams {}
-
 /// Result payload of [`METHOD_PING`].
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PongResult {

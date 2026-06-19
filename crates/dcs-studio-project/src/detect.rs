@@ -28,6 +28,41 @@ pub fn default_saved_games() -> Option<PathBuf> {
     variants.into_iter().next()
 }
 
+/// The detected DCS write dir for installs: the preferred `Saved Games\DCS`
+/// ([`default_saved_games`]) kept only when it's a genuine write dir — it has a
+/// `Config` subdir (the validity marker the Injection Manager uses). The single
+/// source for "where installs go"; the `DCS_SAVED_GAMES` override and the
+/// `{GameInstall}` root are layered on in [`resolve_roots`].
+#[must_use]
+pub fn write_dir() -> Option<PathBuf> {
+    default_saved_games().filter(|dir| dir.join("Config").is_dir())
+}
+
+/// Resolve the install roots (model `ResolveRoots`): the Saved Games write dir —
+/// the `DCS_SAVED_GAMES` override (trusted as-is, for a non-standard layout and
+/// the e2e's temp-roots seam), else the detected [`write_dir`] — plus the
+/// caller-chosen `{GameInstall}` root. Pass `None` to leave `{GameInstall}`
+/// unconfigured so a `{GameInstall}` rule fails the root guard rather than
+/// installing to the wrong place (the Marketplace passes `None`; a project
+/// install passes the detected game install).
+///
+/// # Errors
+/// Returns `Err` when no Saved Games write dir can be resolved.
+pub fn resolve_roots(game_install: Option<PathBuf>) -> Result<crate::RootMap, String> {
+    let saved_games = std::env::var_os("DCS_SAVED_GAMES")
+        .map(PathBuf::from)
+        .or_else(write_dir)
+        .ok_or_else(|| {
+            "No DCS Saved Games write dir found — run DCS once so it creates \
+             Saved Games\\DCS, then try again"
+                .to_string()
+        })?;
+    Ok(crate::RootMap {
+        saved_games,
+        game_install,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

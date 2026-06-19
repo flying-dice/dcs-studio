@@ -1,7 +1,7 @@
 <script lang="ts">
   import { readDir, type DirEntry } from "$lib/api";
   import { app } from "$lib/state.svelte";
-  import { cn } from "$lib/utils.js";
+  import { cn, errorMessage } from "$lib/utils.js";
   import { fileIconFor, FOLDER_ICON } from "$lib/file-icons";
   import FileIcon from "./FileIcon.svelte";
   import { ChevronRight } from "@lucide/svelte";
@@ -87,7 +87,7 @@
     try {
       await renameEntry(entry, value);
     } catch (e) {
-      actionError = e instanceof Error ? e.message : String(e);
+      actionError = errorMessage(e);
     }
   }
 
@@ -109,7 +109,7 @@
     try {
       await createEntry(targetDir(entry), kind, value);
     } catch (e) {
-      actionError = e instanceof Error ? e.message : String(e);
+      actionError = errorMessage(e);
     }
   }
 
@@ -118,7 +118,7 @@
     try {
       await duplicateEntry(entry);
     } catch (e) {
-      actionError = e instanceof Error ? e.message : String(e);
+      actionError = errorMessage(e);
     }
   }
 
@@ -127,7 +127,7 @@
     try {
       await deleteEntry(entry);
     } catch (e) {
-      actionError = e instanceof Error ? e.message : String(e);
+      actionError = errorMessage(e);
     }
   }
 

@@ -45,6 +45,12 @@ struct Parser<'src> {
     depth: u32,
 }
 
+// The parser indexes the token stream by a cursor (`self.pos`) and the AST by
+// newtype arena ids. Both are total by construction: the token stream always
+// ends with an `Eof` the cursor never advances past, and an arena id is only
+// produced by this `Ast`'s own `alloc_*` — so neither index can be out of
+// bounds (the parser never panics on any input).
+#[allow(clippy::indexing_slicing)]
 impl<'src> Parser<'src> {
     fn new(src: &'src str, lexed: crate::token::Lexed) -> Self {
         Self {

@@ -1,0 +1,6 @@
+# Idiomatic test code may unwrap/expect/dbg freely — the safety lints
+# (Cargo.toml `[workspace.lints]` + the non-engine crates' `[lints.clippy]`)
+# target production paths only.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-dbg-in-tests = true

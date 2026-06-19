@@ -5,20 +5,11 @@
   import { Search } from "@lucide/svelte";
   import { app } from "$lib/state.svelte";
   import { usages, type UsageItem } from "$lib/usages.svelte";
+  import { fileName, groupByFile } from "$lib/utils.js";
 
-  function fileName(path: string): string {
-    return path.split(/[\\/]/).pop() ?? path;
-  }
-
-  const groups = $derived.by(() => {
-    const byFile = new Map<string, UsageItem[]>();
-    for (const item of usages.items) {
-      const list = byFile.get(item.path) ?? [];
-      list.push(item);
-      byFile.set(item.path, list);
-    }
-    return [...byFile.entries()].sort(([a], [b]) => a.localeCompare(b));
-  });
+  const groups = $derived.by(() =>
+    groupByFile(usages.items, (item) => item.path),
+  );
 
   function open(item: UsageItem) {
     app.openFileAt(item.path, item.offset);

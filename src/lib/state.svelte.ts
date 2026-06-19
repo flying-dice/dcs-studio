@@ -13,17 +13,14 @@ import {
   createProjectFromTemplate,
   renamePath,
   deleteToTrash,
-  dcsCall,
-  dcsStatus,
   githubSession,
   githubSignOut,
   type GithubSession,
 } from "./api";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import { canonicalPath } from "./paths";
-import { wsConnected } from "./dcs-ws";
+import { dcsLink } from "./dcs-link.svelte";
 import { lang } from "./lang/intel.svelte";
 import { saveWithFormat } from "./save-format";
 import { todos } from "./todos.svelte";
@@ -253,89 +250,26 @@ class AppState {
     return !!doc && doc.docText !== doc.savedText;
   }
 
-  // Live DCS link status, driven by the Rust-side heartbeat (see dcs.rs).
-  // `dcsConnected` = WS to the bridge is up (DCS may still be in the menu);
-  // `dcsSimRunning` = pings are ponging, i.e. a mission is actually running.
-  dcsConnected = $state(false);
-  dcsSimRunning = $state(false);
-  dcsLatencyMs = $state<number | null>(null);
-  dcsTime = $state<number | null>(null);
-  private dcsInitialised = false;
-
-  /** Subscribe to the DCS link events. Called once from the root layout. */
-  async initDcs() {
-    if (this.dcsInitialised) return;
-    this.dcsInitialised = true;
-
-    if (!isTauri()) {
-      this.startBrowserHeartbeat();
-      return;
-    }
-    await this.listenToLinkEvents();
-    await this.seedFromBackendSnapshot();
+  // Live DCS link status — the polling/event engine lives in the `dcsLink`
+  // store (dcs-link.svelte.ts). Re-exposed here as read-only proxies so the
+  // status bar and Injection Manager read `app.dcsConnected` etc. unchanged
+  // (a getter onto a $state field stays reactive in Svelte 5).
+  get dcsConnected(): boolean {
+    return dcsLink.connected;
+  }
+  get dcsSimRunning(): boolean {
+    return dcsLink.simRunning;
+  }
+  get dcsLatencyMs(): number | null {
+    return dcsLink.latencyMs;
+  }
+  get dcsTime(): number | null {
+    return dcsLink.time;
   }
 
-  /**
-   * Outside Tauri (vite dev / Playwright) there are no Rust-side events:
-   * drive the status from a browser-side ping heartbeat over the bridge WS.
-   */
-  private startBrowserHeartbeat() {
-    const beat = async () => {
-      const started = performance.now();
-      try {
-        const pong = (await dcsCall("ping")) as { dcs_time?: number } | null;
-        // Same rule as the Rust heartbeat (dcs.rs): the bridge pongs from
-        // the main menu too; a mission is live only once dcs_time > 0.
-        const dcsTime = typeof pong?.dcs_time === "number" ? pong.dcs_time : 0;
-        this.dcsConnected = true;
-        this.dcsSimRunning = dcsTime > 0;
-        this.dcsTime = dcsTime;
-        this.dcsLatencyMs = Math.round(performance.now() - started);
-      } catch {
-        this.dcsConnected = wsConnected();
-        this.dcsSimRunning = false;
-        this.dcsLatencyMs = null;
-        this.dcsTime = null;
-      }
-    };
-    void beat();
-    setInterval(() => void beat(), 2000);
-  }
-
-  /** Relay the Rust-side link events into the reactive fields. */
-  private async listenToLinkEvents() {
-    await listen("dcs://connected", () => {
-      this.dcsConnected = true;
-    });
-    await listen("dcs://disconnected", () => {
-      this.dcsConnected = false;
-      this.dcsSimRunning = false;
-      this.dcsLatencyMs = null;
-      this.dcsTime = null;
-    });
-    await listen<{ sim_running: boolean; latency_ms?: number; dcs_time?: number }>(
-      "dcs://heartbeat",
-      (e) => {
-        this.dcsSimRunning = e.payload.sim_running;
-        this.dcsLatencyMs = e.payload.latency_ms ?? null;
-        this.dcsTime = e.payload.dcs_time ?? null;
-      },
-    );
-  }
-
-  /**
-   * Seed from the backend snapshot to cover events emitted before we
-   * started listening (the heartbeat starts with the app, not the UI).
-   */
-  private async seedFromBackendSnapshot() {
-    try {
-      const s = await dcsStatus();
-      this.dcsConnected = s.connected;
-      this.dcsSimRunning = s.sim_running;
-      this.dcsLatencyMs = s.latency_ms;
-    } catch {
-      /* backend not ready yet — events will catch us up */
-    }
+  /** Subscribe to the DCS link heartbeat. Called once from the root layout. */
+  initDcs(): Promise<void> {
+    return dcsLink.init();
   }
 
   // Which tool window is open in each stripe (null = collapsed)

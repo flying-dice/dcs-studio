@@ -34,6 +34,51 @@ export interface IntelFs {
 
 const tauriFs: IntelFs = { readDir, readTextFile };
 
+const MAX_WALK_DEPTH = 32;
+
+/**
+ * Every provider-claimed file (.lua, .rs, …) under `root`, read through `fs`
+ * (model `CollectSources`). A self-contained workspace crawler — it changes for
+ * filesystem reasons independent of provider lifecycle: skips `SKIPPED_DIRS` and
+ * dotfiles, caps recursion at `MAX_WALK_DEPTH`, and tracks visited dirs
+ * case-insensitively so a symlink cycle can't recurse unboundedly. `claims(name)`
+ * decides which files a provider handles; one unreadable file (locked, vanished)
+ * is skipped, never fatal.
+ */
+async function collectWorkspaceSources(
+  root: string,
+  fs: IntelFs,
+  claims: (fileName: string) => boolean,
+): Promise<SourceFile[]> {
+  const files: SourceFile[] = [];
+  const visited = new Set<string>();
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    const key = dir.toLowerCase();
+    if (depth > MAX_WALK_DEPTH || visited.has(key)) return;
+    visited.add(key);
+    const entries = await fs.readDir(dir);
+    for (const entry of entries) {
+      if (entry.is_dir) {
+        if (!SKIPPED_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
+          await walk(entry.path, depth + 1);
+        }
+        continue;
+      }
+      if (claims(entry.name)) {
+        try {
+          const text = await fs.readTextFile(entry.path);
+          files.push({ path: entry.path, text });
+        } catch {
+          // One unreadable file (locked, binary-masquerading, vanished)
+          // never takes language intelligence down with it.
+        }
+      }
+    }
+  };
+  await walk(root, 0);
+  return files;
+}
+
 export class LangIntel {
   /** Both seams injectable so `/lab/mount` and `/lab/rust` drive the
    * real mount path — fake filesystem, fake/failing providers. */
@@ -327,38 +372,11 @@ export class LangIntel {
   }
 
   /** Every provider-claimed file (.lua, .rs, …) under the root (model
-   * `CollectSources`). */
-  private async collectSources(root: string): Promise<SourceFile[]> {
-    const files: SourceFile[] = [];
-    // Symlink cycles must not recurse unboundedly: track visited dirs and
-    // cap the depth (a real mod tree is a handful of levels).
-    const visited = new Set<string>();
-    const MAX_DEPTH = 32;
-    const walk = async (dir: string, depth: number): Promise<void> => {
-      const key = dir.toLowerCase();
-      if (depth > MAX_DEPTH || visited.has(key)) return;
-      visited.add(key);
-      const entries = await this.fs.readDir(dir);
-      for (const entry of entries) {
-        if (entry.is_dir) {
-          if (!SKIPPED_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
-            await walk(entry.path, depth + 1);
-          }
-          continue;
-        }
-        if (providerFor(entry.name)) {
-          try {
-            const text = await this.fs.readTextFile(entry.path);
-            files.push({ path: entry.path, text });
-          } catch {
-            // One unreadable file (locked, binary-masquerading, vanished)
-            // never takes language intelligence down with it.
-          }
-        }
-      }
-    };
-    await walk(root, 0);
-    return files;
+   * `CollectSources`), via the free workspace crawler. */
+  private collectSources(root: string): Promise<SourceFile[]> {
+    return collectWorkspaceSources(root, this.fs, (name) =>
+      Boolean(providerFor(name)),
+    );
   }
 
   /**

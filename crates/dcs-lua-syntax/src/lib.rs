@@ -6,6 +6,10 @@
 //! clock, or I/O. Analysis is total: lexing and parsing never fail on user
 //! input; anomalies ride alongside as diagnostics.
 
+// Test code is exempt from the production safety lints — indexing into
+// known-shape fixtures and `panic!` on bad setup are idiomatic there.
+#![cfg_attr(test, allow(clippy::indexing_slicing, clippy::panic, clippy::print_stderr))]
+
 pub mod annotation;
 pub mod ast;
 pub mod diagnostic;
