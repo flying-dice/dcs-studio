@@ -9,6 +9,7 @@ mod github;
 mod inject;
 mod install_cmd;
 mod launch;
+mod logs;
 mod lsp;
 mod market;
 mod publish;
@@ -113,6 +114,7 @@ pub fn run() {
             inject::dcs_injection_status,
             inject::dcs_inject,
             inject::dcs_eject,
+            logs::dcs_log_tail,
             launch::dcs_launch,
             launch::dcs_launch_status,
             launch::dcs_stop,

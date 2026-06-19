@@ -12,6 +12,7 @@
   import PublishManager from "$lib/components/PublishManager.svelte";
   import LuaConsole from "$lib/components/LuaConsole.svelte";
   import Repl from "$lib/components/Repl.svelte";
+  import LogViewer from "$lib/components/LogViewer.svelte";
   import MissionScriptingManager from "$lib/components/MissionScriptingManager.svelte";
   import Problems from "$lib/components/Problems.svelte";
   import ProblemChips from "$lib/components/ProblemChips.svelte";
@@ -67,6 +68,7 @@
     ShieldOff,
     Rocket,
     FileCode,
+    FileClock,
     LoaderCircle,
     type LucideIcon,
   } from "@lucide/svelte";
@@ -114,6 +116,7 @@
     { id: "usages", label: "Usages", icon: Search },
     { id: "todos", label: "Todos", icon: ListTodo },
     { id: "output", label: "Output", icon: ScrollText },
+    { id: "dcslog", label: "DCS Log", icon: FileClock },
   ];
 
   const labelFor = (list: Tool[], id: string | null) =>
@@ -601,6 +604,8 @@
                 <BuildOutput />
               {:else if app.bottomTool === "terminal"}
                 <Terminal />
+              {:else if app.bottomTool === "dcslog"}
+                <LogViewer />
               {:else}
                 {@render placeholder(labelFor(bottomTools, app.bottomTool))}
               {/if}

@@ -1,0 +1,23 @@
+//! studio::logs — the DCS log viewer (issue #47 debugging companion): tail
+//! Saved Games\DCS\Logs\dcs.log into a bottom panel so the developer watches
+//! what their script did in-sim — prints, Lua errors, the bridge's logger
+//! output — without leaving the IDE. Backed by `crates/studio-services/src/logs.rs`
+//! + the app's `dcs_log_tail` command; UI in `src/lib/components/LogViewer.svelte`.
+
+/// A read of the DCS log tail: the most-recent bytes as text, plus whether the
+/// file exceeded the byte cap (so the panel can show a "tail only" hint).
+public data LogTail { text: string, truncated: bool }
+
+/// Reads the DCS World log for the in-IDE viewer.
+public container DcsLog for studio::core::Studio {
+  /// The DCS log path — `{writeDir}/Logs/dcs.log` — or none when no DCS write
+  /// dir is detected (the same write dir the Injection Manager installs into).
+  LogPath(): Option<string>;
+
+  /// Tail the DCS log: at most `maxBytes` from the end of [`LogPath`], decoded
+  /// to text with a torn first line (at the byte cut) dropped so the first
+  /// visible line is whole. Empty text when there is no write dir or the log
+  /// does not exist yet — never an error, so a fresh machine just shows an
+  /// empty panel.
+  Tail(maxBytes: number): studio::logs::LogTail;
+}

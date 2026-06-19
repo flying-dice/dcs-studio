@@ -20,6 +20,7 @@ pub mod inject;
 pub mod launcher;
 pub mod link;
 pub mod linker;
+pub mod logs;
 pub mod market;
 pub mod mission;
 pub mod publish;

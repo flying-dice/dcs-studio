@@ -76,6 +76,19 @@ export function pathExists(path: string): Promise<boolean> {
   return invoke<boolean>("path_exists", { path });
 }
 
+export interface LogTail {
+  text: string;
+  truncated: boolean;
+}
+
+/** Tail the DCS log (`{writeDir}\Logs\dcs.log`), at most `maxBytes` from the end
+ *  (model studio::logs `DcsLog.Tail`). Empty outside the desktop app, or when no
+ *  DCS write dir / log exists yet. */
+export function dcsLogTail(maxBytes = 256 * 1024): Promise<LogTail> {
+  if (!isTauri()) return Promise.resolve({ text: "", truncated: false });
+  return invoke<LogTail>("dcs_log_tail", { maxBytes });
+}
+
 /**
  * Scaffold a new project at `<parent>/<name>` from a named template
  * (`blank`, `lua-script`, `rust-dll`) via the shared project kit.
