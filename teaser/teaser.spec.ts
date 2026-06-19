@@ -9,7 +9,7 @@
 //
 //   node scripts/teaser-record.mjs
 import { test, expect } from "../e2e-lang/_tauri";
-import type { Locator, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 const BASE = "http://localhost:1420";
 const beat = (page: Page, ms = 1200) => page.waitForTimeout(ms);
@@ -37,16 +37,15 @@ async function clickIf(page: Page, name: RegExp): Promise<boolean> {
   return false;
 }
 
-async function typeSlow(loc: Locator, text: string): Promise<void> {
-  await loc.click();
-  await loc.pressSequentially(text, { delay: 45 });
-}
-
 async function runRepl(page: Page, code: string): Promise<void> {
   const input = page.getByTestId("lua-console-input").locator(".cm-content");
   await input.click();
+  // Clear the editor first (select-all + delete) WITHOUT re-clicking — a second
+  // click would drop the selection and the typed code would append to the
+  // default doc, producing malformed Lua.
   await page.keyboard.press("Control+A");
-  await typeSlow(input, code);
+  await page.keyboard.press("Delete");
+  await page.keyboard.type(code, { delay: 45 });
   await beat(page, 600);
   await page.getByTestId("lua-console-run").click();
   await beat(page, 1800);
@@ -82,13 +81,16 @@ test("dcs-studio speedrun", async ({ page }) => {
 
   // 4) Back to Inject — LAUNCH DCS from the app, then wait for the live link.
   await openTool(page, "inject");
-  await clickIf(page, /Launch DCS/i);
-  await shot(page, "launching");
-  await page
-    .getByRole("button", { name: /Stop DCS/i })
-    .first()
-    .waitFor({ state: "visible", timeout: 180_000 })
-    .catch(() => {});
+  // Only launch if the bridge isn't already connected (a prior take may have
+  // left DCS up — re-clicking Launch would spawn a second sim).
+  const link = () => page.getByText(/DCS:\s*connected|mission running/i).first();
+  if (!(await link().isVisible().catch(() => false))) {
+    await clickIf(page, /Launch DCS/i);
+    await shot(page, "launching");
+    // Wait for the bridge to actually CONNECT (DCS cold-boots ~1-2 min), not the
+    // "running" spawn state — else the REPL races ahead and says "not connected".
+    await link().waitFor({ state: "visible", timeout: 240_000 }).catch(() => {});
+  }
   await beat(page, 3000);
   await shot(page, "dcs-live");
 
