@@ -46,6 +46,12 @@ pub fn write_dir() -> Option<PathBuf> {
 /// installing to the wrong place (the Marketplace passes `None`; a project
 /// install passes the detected game install).
 ///
+/// Every install path — project, package, and Marketplace — resolves roots
+/// through here, so `DCS_SAVED_GAMES` applies uniformly. This is a deliberate
+/// convergence: before the install-kit was unified (issue #6 R1), the project
+/// path resolved its write dir directly and ignored the override; now it honours
+/// it exactly as the package path always has.
+///
 /// # Errors
 /// Returns `Err` when no Saved Games write dir can be resolved.
 pub fn resolve_roots(game_install: Option<PathBuf>) -> Result<crate::RootMap, String> {

@@ -45,9 +45,19 @@ Owned by `src/lib/editor/refactor.ts`; backed by the language engine (the
 | Find Usages        | `Shift-F12`             | Lists every occurrence in the **Usages** panel; each row navigates.   |
 | Rename Symbol      | `F2`                    | Inline widget; rewrites every occurrence across files. Refused for an invalid name, or when an affected file has unsaved edits (save first). |
 
-These actions, plus **Run Selection in Lua Console** and Cut/Copy/Paste/Format,
-are also on the editor's right-click context menu (issue #17). The language
-entries are disabled until the engine is ready.
+These actions, plus **Run in DCS** and Cut/Copy/Paste/Format, are also on the
+editor's right-click context menu (issue #17). The language entries are disabled
+until the engine is ready.
+
+## Run in DCS (issue #47)
+
+Owned by `src/lib/components/Editor.svelte` (the `Mod-Enter` keymap) and the
+editor + file-tree right-click menus. Sends Lua to the live DCS GUI/hooks
+environment via the bridge's `eval`; the result lands in the **Console** panel.
+
+| Action     | Keybinding  | Notes                                                                 |
+| ---------- | ----------- | --------------------------------------------------------------------- |
+| Run in DCS | `Mod-Enter` | Runs the current selection, else the whole file. Also on the editor right-click menu, the file-tree right-click ("Run in DCS"), and the tab-strip ▶ button (same selection-else-whole gesture for the active file). |
 
 ## Navigation / editing from the base setup
 

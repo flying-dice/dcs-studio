@@ -5,7 +5,9 @@
 
 import { dcsCall, readTextFile } from "./api";
 import { app } from "./state.svelte";
+import { canonicalPath } from "./paths";
 import { errorMessage } from "$lib/utils";
+import type { EditorView } from "@codemirror/view";
 
 export interface ConsoleEntry {
   code: string;
@@ -57,13 +59,30 @@ class LuaConsoleStore {
 
 export const luaConsole = new LuaConsoleStore();
 
-/** Run the file at `path` in DCS (model `Workbench.RunFile`): an open tab's live
- *  buffer wins over on-disk text so unsaved edits run as written, else the file
- *  is read from disk; the result lands in the console log and the Console panel
- *  is surfaced. A read failure rejects — it never enters the log. */
+/** Run the file at `path` in DCS (model `Workbench.RunFile`): a loaded tab's live
+ *  buffer wins over on-disk text so unsaved edits run as written — even when the
+ *  buffer is empty — else the file is read from disk; the result lands in the
+ *  console log and the Console panel is surfaced. A read failure rejects — it
+ *  never enters the log. */
 export async function runFile(path: string): Promise<void> {
-  const open = app.openFiles.find((f) => f.path === path);
-  const text = open?.docText ? open.docText : await readTextFile(path);
+  // Canonicalise to match `openFiles[].path` (set by `openFile`), so an open tab
+  // is found whatever case its drive letter arrives in.
+  const canonical = canonicalPath(path);
+  const open = app.openFiles.find((f) => f.path === canonical);
+  // The buffer is authoritative for a loaded TEXT tab — even if emptied; a
+  // loading/binary/absent tab falls back to disk.
+  const text = open?.kind === "text" ? open.docText : await readTextFile(canonical);
   app.bottomTool = "lua";
   await luaConsole.run(text);
+}
+
+/** Run a CodeMirror view's current selection — or its whole doc when nothing is
+ *  selected — in DCS; the result lands in the Console. The one editor Run
+ *  gesture: the editor keymap/menu and the tab-strip Run button both route here,
+ *  so they stay in lock-step. */
+export function runViewInDcs(view: EditorView): void {
+  const { from, to } = view.state.selection.main;
+  const code = from === to ? view.state.doc.toString() : view.state.sliceDoc(from, to);
+  app.bottomTool = "lua";
+  void luaConsole.run(code);
 }

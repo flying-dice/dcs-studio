@@ -29,7 +29,7 @@
     makeTauriFormatter,
     runFormat,
   } from "$lib/editor/format";
-  import { luaConsole } from "$lib/lua-console.svelte";
+  import { runViewInDcs } from "$lib/lua-console.svelte";
   import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import BinaryPlaceholder from "$lib/components/BinaryPlaceholder.svelte";
 
@@ -421,13 +421,10 @@
 
   // Run the selection (or the whole file if nothing is selected) in DCS — the
   // file is the source now that the console is output-only (model RunFile; any
-  // file, not just Lua). The result lands in the Console panel.
+  // file, not just Lua). Shared with the tab-strip Run button via runViewInDcs
+  // so the two gestures never diverge.
   function runActiveInDcs() {
-    if (!view) return;
-    const { from, to } = view.state.selection.main;
-    const code = from === to ? view.state.doc.toString() : view.state.sliceDoc(from, to);
-    void luaConsole.run(code);
-    app.bottomTool = "lua";
+    if (view) runViewInDcs(view);
   }
 </script>
 

@@ -27,7 +27,8 @@
   import PanelResizeHandle from "$lib/components/PanelResizeHandle.svelte";
   import { lang } from "$lib/lang/intel.svelte";
   import { mcp } from "$lib/mcp.svelte";
-  import { runFile } from "$lib/lua-console.svelte";
+  import { runFile, runViewInDcs } from "$lib/lua-console.svelte";
+  import { editorViewFor } from "$lib/lang/codemirror";
   import { cn } from "$lib/utils.js";
 
   import { Button } from "$lib/components/ui/button/index.js";
@@ -522,7 +523,15 @@
                 aria-label="Run in DCS"
                 data-testid="editor-run-in-dcs"
                 onclick={() => {
-                  if (app.filePath) void runFile(app.filePath);
+                  const p = app.filePath;
+                  if (!p) return;
+                  // Same gesture as the editor's Ctrl+Enter: selection, else the
+                  // whole file. A live editor view carries the selection; a
+                  // binary tab has none, so run its content (surfacing a read
+                  // failure rather than dropping it, like the file-tree action).
+                  const view = editorViewFor(p);
+                  if (view) runViewInDcs(view);
+                  else void runFile(p).catch((e) => console.error("Run in DCS failed:", e));
                 }}
               >
                 <Play />
