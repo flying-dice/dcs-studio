@@ -229,6 +229,8 @@
               variant="ghost"
               size="icon-sm"
               aria-pressed={active === t.id}
+              aria-label={t.label}
+              data-testid={`tool-${t.id}`}
               onclick={() => toggle(t.id)}
               class={cn(
                 "text-muted-foreground hover:text-foreground",

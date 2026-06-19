@@ -5,6 +5,7 @@
 // (scripts/teaser-record.mjs) — Playwright can't video a CDP-attached context.
 // Paced with explicit waits so it reads as a demo, and LENIENT — a beat that
 // can't reach a panel/the live sim is skipped, never failing the whole take.
+// Each beat also drops a verification screenshot under teaser-results/.
 //
 //   node scripts/teaser-record.mjs
 import { test, expect } from "../e2e-lang/_tauri";
@@ -13,19 +14,17 @@ import type { Locator, Page } from "@playwright/test";
 const BASE = "http://localhost:1420";
 const beat = (page: Page, ms = 1200) => page.waitForTimeout(ms);
 
-/** Open a tool window by its label, tolerant of how the toggle is queried. */
-async function openTool(page: Page, label: string): Promise<void> {
-  for (const loc of [
-    page.getByRole("button", { name: label, exact: true }),
-    page.locator(`button[title="${label}"]`),
-    page.getByRole("button", { name: label }),
-  ]) {
-    if (await loc.count()) {
-      await loc.first().click().catch(() => {});
-      break;
-    }
-  }
-  await beat(page, 900);
+let shotN = 0;
+/** Save a verification screenshot of the webview state at this beat. */
+const shot = (page: Page, name: string) =>
+  page
+    .screenshot({ path: `teaser-results/${String(++shotN).padStart(2, "0")}-${name}.png` })
+    .catch(() => {});
+
+/** Toggle a tool window by id (left/right/bottom rails carry data-testid="tool-<id>"). */
+async function openTool(page: Page, id: string): Promise<void> {
+  await page.getByTestId(`tool-${id}`).first().click().catch(() => {});
+  await beat(page, 1000);
 }
 
 /** Click the first matching, enabled button; returns whether it fired. */
@@ -56,54 +55,58 @@ async function runRepl(page: Page, code: string): Promise<void> {
 test("dcs-studio speedrun", async ({ page }) => {
   test.setTimeout(360_000);
   await page.goto(`${BASE}/`);
-  // The app opened the teaser-mod project (DCS_OPEN) — wait for the workbench.
-  await expect(page.getByTestId("editor-tab").first()).toBeVisible({ timeout: 90_000 });
+  // The app opened the teaser-mod project (DCS_OPEN) — wait for its file tree.
+  await expect(page.getByRole("button", { name: "dcs-studio.toml" })).toBeVisible({ timeout: 90_000 });
   await beat(page, 1600);
+  await shot(page, "workbench");
 
-  // 1) Show the on-mission-start script in the editor.
-  const file = page.getByTestId("tree-node").filter({ hasText: "on_mission_start" }).first();
-  if (await file.count()) {
-    await file.click();
-    await beat(page, 1600);
-  }
-
-  // 2) Injection Manager: install the in-DCS bridge, then LAUNCH DCS from the
-  //    app (windowed, low-spec). This is the "launch the sim" beat.
-  await openTool(page, "Inject");
+  // 1) Open the on-mission-start script (expand Scripts, then click the file).
+  await page.getByRole("button", { name: "Scripts" }).first().click().catch(() => {});
   await beat(page, 900);
+  await page.getByRole("button", { name: "on_mission_start.lua" }).first().click().catch(() => {});
+  await beat(page, 1600);
+  await shot(page, "script");
+
+  // 2) Injection Manager: install the in-DCS bridge.
+  await openTool(page, "inject");
+  await shot(page, "inject-panel");
   await clickIf(page, /^(Inject|Update|Reinstall)/);
-  await beat(page, 2000);
+  await beat(page, 2500);
+  await shot(page, "injected");
 
   // 3) Mission Scripting: desanitize so the mod's mission script can use io/lfs.
-  await openTool(page, "Mission");
-  await beat(page, 900);
+  await openTool(page, "mission");
   await clickIf(page, /Desanitize all/i);
   await beat(page, 1500);
+  await shot(page, "desanitized");
 
-  // 4) Back to Inject — launch DCS, then wait for the live link (the bridge
-  //    answers from boot; "Stop DCS" appears + the footer link goes live).
-  await openTool(page, "Inject");
-  await beat(page, 700);
+  // 4) Back to Inject — LAUNCH DCS from the app, then wait for the live link.
+  await openTool(page, "inject");
   await clickIf(page, /Launch DCS/i);
-  // DCS cold start: wait (up to ~3 min) for the running indicator.
+  await shot(page, "launching");
   await page
     .getByRole("button", { name: /Stop DCS/i })
     .first()
     .waitFor({ state: "visible", timeout: 180_000 })
     .catch(() => {});
-  await beat(page, 2500);
+  await beat(page, 3000);
+  await shot(page, "dcs-live");
 
   // 5) REPL against the LIVE sim (hook env: DCS.*, lfs.*).
-  await openTool(page, "REPL");
+  await openTool(page, "repl");
   await runRepl(page, "return DCS.getModelTime()");
+  await shot(page, "repl-modeltime");
   await runRepl(page, "return lfs.writedir()");
+  await shot(page, "repl-writedir");
 
   // 6) DCS Log viewer — watch the sim's output; highlight + isolate the mod.
-  await openTool(page, "DCS Log");
+  await openTool(page, "dcslog");
   await beat(page, 1800);
+  await shot(page, "dcs-log");
   const onlyMod = page.getByTestId("dcs-log-only-mod");
   if (await onlyMod.count()) {
     await onlyMod.first().click();
     await beat(page, 2500);
   }
+  await shot(page, "dcs-log-mod");
 });
