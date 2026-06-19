@@ -32,7 +32,6 @@
 
   function parse(text: string, tag: string): Row {
     const m = LINE.exec(text);
-    const subsys = m?.[2] ?? "";
     const level: Row["level"] = !m
       ? "plain"
       : m[1] === "ERROR"
@@ -40,7 +39,11 @@
         : m[1] === "WARNING"
           ? "warning"
           : "info";
-    const mine = tag !== "" && subsys.toLowerCase() === tag.toLowerCase();
+    // "Ours" = the line names the mod tag — whether as the log subsystem (the
+    // bridge's namespaced logger) or printed into the message itself
+    // (env.info("modtag: …"), how a mission script logs under SCRIPTING) — so
+    // both reach the highlight/filter.
+    const mine = tag !== "" && text.toLowerCase().includes(tag.toLowerCase());
     return { text, level, mine };
   }
 
