@@ -357,9 +357,8 @@
 
   // ---- editor context menu (issue #17) ------------------------------------
   // Whether the active file has a ready language provider — gates the
-  // go-to-definition / find-usages entries and the Lua-only Run Selection.
+  // go-to-definition / find-usages entries.
   const langReady = $derived(hasRefactorProvider(app.filePath));
-  const isLua = $derived(!!app.filePath?.toLowerCase().endsWith(".lua"));
 
   function hasSelection(): boolean {
     if (!view) return false;

@@ -1,7 +1,7 @@
 // Shared Lua-console store (model studio::core Workbench.RunLua): holds the run
-// log and the eval action so both the Lua Console panel and the editor's
-// "Run Selection in Lua Console" feed the SAME log. The console's input editor
-// stays component-local; only the shared state lives here.
+// log and the eval action so both the REPL panel and the editor's "Run in DCS"
+// feed the SAME log. The console's input editor stays component-local; only the
+// shared state lives here.
 
 import { dcsCall, readTextFile } from "./api";
 import { app } from "./state.svelte";
