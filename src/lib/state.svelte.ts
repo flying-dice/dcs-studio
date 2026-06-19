@@ -27,6 +27,8 @@ import { wsConnected } from "./dcs-ws";
 import { lang } from "./lang/intel.svelte";
 import { saveWithFormat } from "./save-format";
 import { todos } from "./todos.svelte";
+import { marketplace } from "./marketplace.svelte";
+import { publish } from "./publish.svelte";
 import type { Extension } from "@codemirror/state";
 
 /** Persist one string to localStorage, swallowing quota / SSR-absence errors. */
@@ -187,6 +189,9 @@ class AppState {
       /* clearing the chip matters even if the backend call fails */
     }
     this.session = null;
+    // Don't leak the previous account's GitHub-backed state into the next one.
+    marketplace.reset();
+    publish.reset();
   }
 
   // Workspace

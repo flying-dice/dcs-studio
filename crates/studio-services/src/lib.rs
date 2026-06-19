@@ -13,5 +13,8 @@ pub mod github;
 pub mod inject;
 pub mod launcher;
 pub mod link;
+pub mod linker;
+pub mod market;
 pub mod mission;
+pub mod publish;
 pub mod term;

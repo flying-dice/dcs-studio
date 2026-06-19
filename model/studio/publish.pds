@@ -1,0 +1,166 @@
+//! studio::publish — share a project to GitHub and cut a release so the
+//! Marketplace can discover it (issue #12, the publish side of #10). Two flows:
+//! Share (create the repo, tag it `dcs-studio`, init + commit + push the project)
+//! and PublishRelease (upload `dcs-studio.toml` + the project's files as a GitHub
+//! release's assets). Publishing REQUIRES a write-scoped token: the read-only
+//! sign-in (#11, `read:user`) is escalated to `public_repo` on first publish.
+//! Local git shells out to the installed `git` (init/add/commit/remote/push) —
+//! one mechanism, no embedded git; repo creation, topic, release, and asset
+//! upload go through GitHub's REST API as the logged-in user.
+
+/// The OAuth scope publishing needs (write to public repos) — escalated from the
+/// read-only sign-in scope on first publish.
+public constant PUBLISH_SCOPE = "public_repo"
+
+/// The branch the initial commit is pushed to.
+public constant DEFAULT_BRANCH = "main"
+
+/// The marketplace marker topic every shared repo is tagged with so discovery
+/// (studio::market) finds it.
+public constant DISCOVERY_TOPIC = "dcs-studio"
+
+/// A created (or resolved) GitHub repository.
+public data RepoInfo { fullName: string, htmlUrl: string, owner: string, name: string }
+
+/// A created GitHub release.
+public data ReleaseInfo { tag: string, htmlUrl: string }
+
+/// The plan for a new repo, derived from the project manifest: name, blurb, the
+/// topics (always including `dcs-studio`), and the first commit message.
+public data RepoPlan { name: string, description: string, topics: string[], commitMessage: string }
+
+/// A publish failure (auth/scope, git, REST transport, already-exists).
+public data PublishError { message: string }
+
+/// GitHub's write REST surface for publishing — a black-box external system,
+/// authenticated as the logged-in user with the escalated (`public_repo`) token.
+public system GitHubWrite {
+  /// Create a public repo under the authenticated user (`POST /user/repos`); when
+  /// it already exists, resolve and return the existing one so Share is
+  /// idempotent (a retry after a partial failure re-tags/commits/pushes).
+  public CreateRepo(name: string, description: string, token: string): Result<studio::publish::RepoInfo, studio::publish::PublishError>;
+
+  /// Replace the repo's topics (`PUT /repos/{owner}/{name}/topics`).
+  public SetTopics(repo: studio::publish::RepoInfo, topics: string[], token: string): Result<void, studio::publish::PublishError>;
+
+  /// Create a release for `tag` (`POST /repos/{owner}/{name}/releases`).
+  public CreateRelease(repo: studio::publish::RepoInfo, tag: string, body: string, token: string): Result<studio::publish::ReleaseInfo, studio::publish::PublishError>;
+
+  /// Upload one file as a release asset (`POST .../releases/{id}/assets`).
+  public UploadAsset(repo: studio::publish::RepoInfo, release: studio::publish::ReleaseInfo, path: string, token: string): Result<void, studio::publish::PublishError>;
+}
+
+/// Local git via the installed `git` binary (gix has no production push, and one
+/// mechanism is simpler). A black-box external system.
+public system GitLocal {
+  /// Initialise a repo at `root` (if needed) and commit all files.
+  public InitAndCommit(root: string, message: string): Result<void, studio::publish::PublishError>;
+
+  /// Point the `origin` remote at `url`.
+  public SetRemote(root: string, url: string): Result<void, studio::publish::PublishError>;
+
+  /// Push `DEFAULT_BRANCH` to `origin`, authenticating with `token`.
+  public Push(root: string, token: string): Result<void, studio::publish::PublishError>;
+}
+
+/// Shares projects to GitHub and publishes their releases.
+public container Publisher for studio::core::Studio {
+  /// Share the project at `root`: ensure a write-scoped token, plan the repo from
+  /// the manifest, create it, tag it `dcs-studio` (so the Marketplace finds it),
+  /// init + commit locally, wire `origin`, and push. Returns the new repo.
+  #[manual]
+  public Share(root: string): Result<studio::publish::RepoInfo, studio::publish::PublishError> {
+    token = Result<string, studio::publish::PublishError> from self.PublishToken()
+    if (token.isErr) {
+      return Err(token.error)
+    }
+    plan = studio::publish::RepoPlan from self.PlanRepo(root)
+    created = Result<studio::publish::RepoInfo, studio::publish::PublishError> from studio::publish::GitHubWrite.CreateRepo(plan.name, plan.description, token.value)
+    if (created.isErr) {
+      return Err(created.error)
+    }
+    topiced = Result<void, studio::publish::PublishError> from studio::publish::GitHubWrite.SetTopics(created.value, plan.topics, token.value)
+    if (topiced.isErr) {
+      return Err(topiced.error)
+    }
+    committed = Result<void, studio::publish::PublishError> from studio::publish::GitLocal.InitAndCommit(root, plan.commitMessage)
+    if (committed.isErr) {
+      return Err(committed.error)
+    }
+    remoted = Result<void, studio::publish::PublishError> from studio::publish::GitLocal.SetRemote(root, created.value.htmlUrl)
+    if (remoted.isErr) {
+      return Err(remoted.error)
+    }
+    pushed = Result<void, studio::publish::PublishError> from studio::publish::GitLocal.Push(root, token.value)
+    if (pushed.isErr) {
+      return Err(pushed.error)
+    }
+    return Ok(created.value)
+  }
+
+  /// Publish a release for an already-shared project at `root`: create the GitHub
+  /// release for `tag`, then upload `dcs-studio.toml` + the project's files as
+  /// assets — that manifest asset is what makes the Marketplace listing
+  /// installable.
+  #[manual]
+  public PublishRelease(root: string, tag: string): Result<studio::publish::ReleaseInfo, studio::publish::PublishError> {
+    token = Result<string, studio::publish::PublishError> from self.PublishToken()
+    if (token.isErr) {
+      return Err(token.error)
+    }
+    repo = studio::publish::RepoInfo from self.RepoOfProject(root)
+    body = string from self.ReleaseBody(root, tag)
+    release = Result<studio::publish::ReleaseInfo, studio::publish::PublishError> from studio::publish::GitHubWrite.CreateRelease(repo, tag, body, token.value)
+    if (release.isErr) {
+      return Err(release.error)
+    }
+    uploaded = Result<void, studio::publish::PublishError> from self.UploadReleaseAssets(repo, release.value, root, token.value)
+    if (uploaded.isErr) {
+      return Err(uploaded.error)
+    }
+    return Ok(release.value)
+  }
+
+  /// A write-scoped token (`public_repo`): the cached sign-in token when it
+  /// already carries the scope, else escalated via a fresh sign-in. Refused if
+  /// the user declines to authorize.
+  PublishToken(): Result<string, studio::publish::PublishError>;
+
+  /// The repo plan from the project manifest: name, description, topics (always
+  /// including `dcs-studio`), and the initial commit message.
+  PlanRepo(root: string): studio::publish::RepoPlan;
+
+  /// The GitHub repo the project's `origin` remote points at (it must already be
+  /// shared).
+  RepoOfProject(root: string): studio::publish::RepoInfo;
+
+  /// The release notes body for `tag` (e.g. derived from the manifest version).
+  ReleaseBody(root: string, tag: string): string;
+
+  /// Upload `dcs-studio.toml` + the project's files as assets of `release`.
+  UploadReleaseAssets(repo: studio::publish::RepoInfo, release: studio::publish::ReleaseInfo, root: string, token: string): Result<void, studio::publish::PublishError>;
+}
+
+/// Publishing needs write access — the read-only sign-in is escalated first.
+feature PublishingRequiresWriteScope for studio::publish::Publisher {
+  given "a user signed in only with the read-only scope"
+  when "they share a project or publish a release"
+  then "they are asked to authorize the `public_repo` scope first"
+  but "declining cancels the publish and changes nothing on GitHub"
+}
+
+/// A shared repo is tagged so the Marketplace discovers it.
+feature SharedRepoIsTaggedForDiscovery for studio::publish::Publisher {
+  given "a project being shared"
+  when "the repo is created"
+  then "it is tagged with the `dcs-studio` topic"
+  and "it then appears in the Marketplace store for signed-in users"
+}
+
+/// A release carries the manifest + files so the mod is installable.
+feature ReleaseUploadsManifestAndFiles for studio::publish::Publisher {
+  given "an already-shared project"
+  when "a release is published"
+  then "the `dcs-studio.toml` manifest and the project files are uploaded as release assets"
+  and "the Marketplace product page then shows the install plan and download size"
+}

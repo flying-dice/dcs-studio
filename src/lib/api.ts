@@ -391,6 +391,15 @@ export function githubLoginCancel(): Promise<void> {
   return invoke<void>("github_login_cancel");
 }
 
+/**
+ * Escalate the token to the publishing scope (`public_repo`, issue #12) via the
+ * same device flow as sign-in — returns the code to show; success arrives on the
+ * shared `github://authorized` event. Used when {@link publishCan} is false.
+ */
+export function githubAuthorizePublish(): Promise<GithubDeviceCode> {
+  return invoke<GithubDeviceCode>("github_authorize_publish");
+}
+
 /** The cached session (profile), or null when signed out. */
 export function githubSession(): Promise<GithubSession | null> {
   return invoke<GithubSession | null>("github_session");
@@ -399,6 +408,128 @@ export function githubSession(): Promise<GithubSession | null> {
 /** Sign out: clear the cached token + profile; the chip returns to signed-out. */
 export function githubSignOut(): Promise<void> {
   return invoke<void>("github_sign_out");
+}
+
+/**
+ * A discovered Marketplace mod (model studio::market `MarketListing`): a public
+ * repo tagged `dcs-studio`. `author` is the repo owner; `labels` are the repo's
+ * other topics. Installability (a `dcs-studio.toml` release asset) is resolved
+ * at download time, not here, so a repo without one still lists.
+ */
+export interface MarketListing {
+  repo: string;
+  name: string;
+  author: string;
+  description: string;
+  labels: string[];
+  repo_url: string;
+  avatar_url: string;
+  stars: number;
+}
+
+/**
+ * Discover dcs-studio mods on GitHub by topic for the Marketplace. Requires a
+ * GitHub sign-in (the store is gated) and searches as the logged-in user. Serves
+ * a still-fresh cache without a network call unless `force` (the Refresh button);
+ * a rate-limited or offline search falls back to the last cache.
+ */
+export function marketDiscover(force: boolean): Promise<MarketListing[]> {
+  return invoke<MarketListing[]>("market_discover", { force });
+}
+
+/** One release file with its byte size (model studio::market `ReleaseAsset`). */
+export interface ProductAsset {
+  name: string;
+  size: number;
+}
+
+/** One `[[install]]` mapping — what installs where (model `InstallEntry`). */
+export interface InstallEntry {
+  source: string;
+  dest: string;
+}
+
+/**
+ * A mod's product page (model studio::market `ProductDetail`): repo header,
+ * README source (markdown), the latest release's assets + total `download_size`
+ * (bytes), and the install plan from the `dcs-studio.toml` asset. `installable`
+ * is true only when that asset is present and parses.
+ */
+export interface ProductDetail {
+  repo: string;
+  name: string;
+  author: string;
+  description: string;
+  repo_url: string;
+  avatar_url: string;
+  stars: number;
+  readme: string | null;
+  release_tag: string | null;
+  release_url: string | null;
+  assets: ProductAsset[];
+  download_size: number;
+  installable: boolean;
+  installs: InstallEntry[];
+}
+
+/** Load one mod's product page (README + install plan + size). Sign-in gated. */
+export function marketProduct(owner: string, name: string): Promise<ProductDetail> {
+  return invoke<ProductDetail>("market_product", { owner, name });
+}
+
+/** What an install pass linked into the DCS roots (model `InstallReport`). */
+export interface InstallReport {
+  copied: number;
+  files: string[];
+}
+
+/** Install a mod: download the release payload + link it into the DCS roots. */
+export function marketInstall(owner: string, name: string): Promise<InstallReport> {
+  return invoke<InstallReport>("market_install", { owner, name });
+}
+
+/** Uninstall a mod by id (`owner/name`): remove its links + content store. */
+export function marketUninstall(id: string): Promise<void> {
+  return invoke<void>("market_uninstall", { id });
+}
+
+/** The ids (`owner/name`) of installed mods. */
+export function marketInstalled(): Promise<string[]> {
+  return invoke<string[]>("market_installed");
+}
+
+// ── publishing (model studio::publish, issue #12) ───────────────────────────
+
+/** A created (or resolved) GitHub repository (model studio::publish `RepoInfo`). */
+export interface RepoInfo {
+  full_name: string;
+  html_url: string;
+  owner: string;
+  name: string;
+}
+
+/** A created GitHub release (model studio::publish `ReleaseInfo`). */
+export interface ReleaseInfo {
+  tag: string;
+  html_url: string;
+}
+
+/** Whether the cached token already carries the publishing scope (`public_repo`).
+ * When false the UI runs {@link githubAuthorizePublish} first. */
+export function publishCan(): Promise<boolean> {
+  return invoke<boolean>("publish_can");
+}
+
+/** Share the project at `root` to GitHub: create the repo, tag `dcs-studio`,
+ * init/commit/push. Requires a publish-scoped token. */
+export function publishShare(root: string): Promise<RepoInfo> {
+  return invoke<RepoInfo>("publish_share", { root });
+}
+
+/** Publish a release for the shared project at `root` (uploads `dcs-studio.toml`
+ * so the Marketplace product page shows the install plan). */
+export function publishRelease(root: string, tag: string): Promise<ReleaseInfo> {
+  return invoke<ReleaseInfo>("publish_release", { root, tag });
 }
 
 /** A detected `<install>\Scripts\MissionScripting.lua` candidate. */

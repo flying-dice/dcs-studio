@@ -41,8 +41,31 @@ fn fail(app: &AppHandle, message: impl Into<String>) {
 /// consent: a code authorized in the browser after Cancel lands on nobody.
 #[tauri::command]
 pub fn github_login_start(app: AppHandle, login_gen: State<'_, Arc<LoginGen>>) -> Result<DeviceCode, String> {
+    start_device_flow(&app, &login_gen, studio_services::github::SIGN_IN_SCOPE)
+}
+
+/// Escalate the token to the publishing scope (`public_repo`, issue #12) via the
+/// same single-flight device-flow loop as sign-in; on success it stores the
+/// broader-scoped token and emits `github://authorized`. The publish UI calls
+/// this when the cached token is read-only.
+#[tauri::command]
+pub fn github_authorize_publish(
+    app: AppHandle,
+    login_gen: State<'_, Arc<LoginGen>>,
+) -> Result<DeviceCode, String> {
+    start_device_flow(&app, &login_gen, studio_services::github::PUBLISH_SCOPE)
+}
+
+/// The shared device-flow starter: request a code for `scope`, then spawn the
+/// generation-guarded poll loop (single-flight + cancellable, issue #11).
+fn start_device_flow(
+    app: &AppHandle,
+    login_gen: &Arc<LoginGen>,
+    scope: &str,
+) -> Result<DeviceCode, String> {
     let client_id = studio_services::github::client_id();
-    let device = studio_services::github::request_device_code(&client_id)?;
+    let device = studio_services::github::request_device_code(&client_id, scope)?;
+    let app = app.clone();
 
     let device_code = device.device_code.clone();
     let interval = device.interval_seconds.max(1);
@@ -50,7 +73,7 @@ pub fn github_login_start(app: AppHandle, login_gen: State<'_, Arc<LoginGen>>) -
 
     // Claim this attempt's generation, superseding any loop still running from a
     // prior Sign in. The loop stops as soon as it sees it is no longer current.
-    let gen = Arc::clone(&login_gen);
+    let gen = Arc::clone(login_gen);
     let my_gen = gen.claim();
 
     tauri::async_runtime::spawn(async move {
