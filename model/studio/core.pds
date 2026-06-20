@@ -365,8 +365,9 @@ public container Workbench for studio::core::Studio {
   /// captured before the write — on the tab that was saved.
   MarkSaved(doc: studio::core::Document): void;
 
-  /// Run a snippet from the REPL and append its result (or error) to
-  /// the console log. A null result renders as `nil`.
+  /// Run a Lua snippet — a file's text or the editor's selection — against the
+  /// live sim and append its result (or error) to the console log. A null result
+  /// renders as `nil`.
   #[manual]
   public RunLua(code: string): void {
     payload = dcs::bridge::Json from { code }
@@ -480,14 +481,6 @@ public container Workbench for studio::core::Studio {
 
   /// Persist both side-panel widths to localStorage.
   PersistPanelWidths(): void;
-}
-
-/// The developer runs ad-hoc Lua against the live sim from the REPL.
-feature LuaConsoleEval for studio::core::Workbench {
-  given "the bridge DLL is injected and DCS is running"
-  when "the developer runs a Lua snippet from the REPL"
-  then "the snippet executes in the DCS GUI/hooks environment"
-  and "the result (or Lua error) is appended to the console log"
 }
 
 /// The developer runs the file they are editing — or any file in the tree —

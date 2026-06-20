@@ -11,7 +11,6 @@
   import PackagesManager from "$lib/components/PackagesManager.svelte";
   import PublishManager from "$lib/components/PublishManager.svelte";
   import LuaConsole from "$lib/components/LuaConsole.svelte";
-  import Repl from "$lib/components/Repl.svelte";
   import LogViewer from "$lib/components/LogViewer.svelte";
   import MissionScriptingManager from "$lib/components/MissionScriptingManager.svelte";
   import Problems from "$lib/components/Problems.svelte";
@@ -60,7 +59,6 @@
     PackageCheck,
     PackageMinus,
     Play,
-    SquareChevronRight,
     Bug,
     Settings,
     Palette,
@@ -104,7 +102,6 @@
     { id: "packages", label: "Packages", icon: Boxes },
     { id: "publish", label: "Publish", icon: Rocket },
     { id: "mission", label: "Mission", icon: ShieldOff },
-    { id: "repl", label: "REPL", icon: SquareChevronRight },
     { id: "database", label: "Database", icon: Database },
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "ai", label: "Assistant", icon: Sparkles },
@@ -572,8 +569,6 @@
                 <PublishManager />
               {:else if app.rightTool === "mission"}
                 <MissionScriptingManager />
-              {:else if app.rightTool === "repl"}
-                <Repl />
               {:else if app.rightTool === "structure"}
                 <ScrollArea class="h-full">
                   <Structure path={app.filePath} />
