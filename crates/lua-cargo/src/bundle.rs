@@ -220,7 +220,7 @@ fn emit_bundle(modules: &BTreeMap<String, String>, entry: &str) -> String {
     out.push_str(
         r#"local __modules = {}
 local __loaded = {}
-local __load = load or loadstring
+local __load = loadstring or load
 local __hostrequire = rawget(_G, "require")
 local __require
 -- Per-module env: reads/writes pass through to _G (so a module's own globals
@@ -396,12 +396,31 @@ mod tests {
     /// Oracle: actually RUN the emitted bundle under the lua5.1 interpreter — the
     /// require graph must resolve through the load()+setfenv shim, and a module's
     /// own global must write through to _G. Proves the mechanism, not just parse.
+    /// The PUC Lua 5.1 interpreter, pinned to the SAME toolchain as the compile
+    /// oracle: the interpreter beside `DCS_PUC_LUAC` (CI sets it; `luac`→`lua`),
+    /// else a `lua5.1` on PATH. Tying it to DCS_PUC_LUAC stops a stray non-5.1
+    /// `lua5.1` (e.g. LuaJIT, which accepts `load(string)`) from masking a
+    /// 5.1-only load-form regression — the round-1 vacuity.
+    fn puc_lua51() -> Option<String> {
+        if let Ok(luac) = std::env::var("DCS_PUC_LUAC") {
+            let lua = luac.replacen("luac", "lua", 1);
+            if Command::new(&lua).arg("-v").output().is_ok() {
+                return Some(lua);
+            }
+        }
+        Command::new("lua5.1")
+            .arg("-v")
+            .output()
+            .ok()
+            .map(|_| "lua5.1".to_string())
+    }
+
     #[test]
     fn bundle_runs_and_resolves_requires_under_lua51() {
-        if Command::new("lua5.1").arg("-v").output().is_err() {
-            eprintln!("skip: lua5.1 interpreter not on PATH");
+        let Some(lua) = puc_lua51() else {
+            eprintln!("skip: no PUC lua5.1 interpreter (DCS_PUC_LUAC or PATH)");
             return;
-        }
+        };
         let tree = TempTree::new("exec");
         tree.write(
             "CargoLua.toml",
@@ -414,7 +433,7 @@ mod tests {
             "local u = require(\"util\")\nMY_GLOBAL = u.greet()\nprint(MY_GLOBAL)\nreturn 0\n",
         );
         bundle(&tree.0).expect("bundle");
-        let out = Command::new("lua5.1")
+        let out = Command::new(&lua)
             .arg(tree.0.join("dist").join("out.lua"))
             .output()
             .expect("run lua5.1");
