@@ -148,8 +148,10 @@ public container Library for studio::core::Studio {
   /// Install a discovered mod (sign-in gated): download the release's payload
   /// (`.zip` asset), unpack it to a content store, and place each `[[install]]`
   /// rule by LINKING its destination to the store source — a junction for a
-  /// directory, a hard link for a same-volume file, a symlink otherwise; never a
-  /// copy. The two hard rules still hold: a source must exist in the payload, and
+  /// directory, a hard link for a same-volume file, a symlink otherwise (and if
+  /// that cross-volume symlink needs privilege on Windows, a one-shot elevated
+  /// `mklink` fallback via UAC); never a copy. The two hard rules still hold: a
+  /// source must exist in the payload, and
   /// each dest must resolve under a whitelisted root (the studio::installer
   /// guard). Records a ledger of placed links for uninstall.
   #[manual]

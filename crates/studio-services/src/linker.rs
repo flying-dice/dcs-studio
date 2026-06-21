@@ -59,13 +59,63 @@ fn link_dir(link_path: &Path, target: &Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn link_file(link_path: &Path, target: &Path) -> Result<(), String> {
-    // Same volume → hard link (no elevation). Fall through to a symlink otherwise.
+    // Same volume → hard link (no elevation).
     if same_volume(link_path, target) && std::fs::hard_link(target, link_path).is_ok() {
         return Ok(());
     }
-    std::os::windows::fs::symlink_file(target, link_path).map_err(|e| {
-        format!("symlink file failed ({e}); enable Windows Developer Mode or run elevated")
-    })
+    // Cross-volume (or a failed hard link) → file symlink. Try unprivileged first
+    // — works when Windows Developer Mode is on — then fall back to a one-shot
+    // elevated `mklink` (a single UAC prompt), mirroring the original NodeJS
+    // linker's createSymlinkElevated. The common same-drive case never reaches here.
+    if std::os::windows::fs::symlink_file(target, link_path).is_ok() {
+        return Ok(());
+    }
+    symlink_file_elevated(link_path, target)
+}
+
+/// Create a file symlink through an ELEVATED `mklink` (one UAC prompt) — the
+/// cross-volume fallback when Developer Mode is off.
+#[cfg(windows)]
+fn symlink_file_elevated(link_path: &Path, target: &Path) -> Result<(), String> {
+    let command = elevated_mklink_command(
+        &link_path.display().to_string(),
+        &target.display().to_string(),
+    )?;
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &command])
+        .output()
+        .map_err(|e| format!("symlink elevation could not launch: {e}"))?;
+    // The link's creation is the sole, authoritative success check — elevated
+    // exit codes are unreliable across the UAC boundary. It cannot false-positive:
+    // `link()` (the only path here) verified the destination was absent on entry,
+    // so any link present now was made by this mklink.
+    if link_path.symlink_metadata().is_ok() {
+        return Ok(());
+    }
+    Err(format!(
+        "cross-volume symlink needs privilege; the UAC elevation was declined or mklink failed ({}). Enable Windows Developer Mode to link without a prompt.",
+        String::from_utf8_lossy(&out.stderr).trim()
+    ))
+}
+
+/// The PowerShell command that creates a file symlink with one UAC prompt:
+/// `Start-Process cmd /C mklink` elevated (`-Verb RunAs`), waiting for it. Pure
+/// (no IO) so the quoting/escaping is unit-tested without actually elevating.
+/// Returns Err for a path containing `"` (illegal in a Windows filename anyway),
+/// which would break out of cmd's quoting — the content-store path is influenced
+/// by the downloaded `.zip`'s entry names, so reject it rather than escape it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn elevated_mklink_command(link: &str, target: &str) -> Result<String, String> {
+    if link.contains('"') || target.contains('"') {
+        return Err("refusing to link a path containing a double-quote".to_string());
+    }
+    // `mklink "<link>" "<target>"` (no flag = a FILE symlink). The paths are
+    // double-quoted for cmd; the whole arg string is single-quoted for
+    // PowerShell, so any `'` in a path is doubled to stay inside that string.
+    let inner = format!("/C mklink \"{link}\" \"{target}\"").replace('\'', "''");
+    Ok(format!(
+        "Start-Process -FilePath cmd.exe -ArgumentList '{inner}' -Verb RunAs -Wait -WindowStyle Hidden"
+    ))
 }
 
 #[cfg(not(windows))]
@@ -112,7 +162,42 @@ fn junction(link_path: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
-// Real symlink round-trips on the OS that always permits it (Unix CI). The whole
+// The elevated-mklink command construction is pure, so it is tested on every
+// platform (the actual UAC elevation is not unit-testable).
+#[cfg(test)]
+mod cmd_tests {
+    use super::elevated_mklink_command;
+
+    #[test]
+    fn elevated_mklink_command_quotes_paths_and_elevates() {
+        let cmd = elevated_mklink_command(r"C:\a b\link.lua", r"D:\store\real.lua").expect("ok");
+        assert!(cmd.contains("-Verb RunAs"), "elevates via UAC: {cmd}");
+        assert!(cmd.contains("-Wait"), "waits for the elevated process: {cmd}");
+        assert!(
+            cmd.contains(r#"mklink "C:\a b\link.lua" "D:\store\real.lua""#),
+            "mklink with double-quoted paths (handles spaces): {cmd}"
+        );
+    }
+
+    #[test]
+    fn elevated_mklink_command_escapes_single_quotes_for_powershell() {
+        // A `'` in a path must not break out of the PowerShell single-quoted arg.
+        let cmd = elevated_mklink_command(r"C:\o'brien\l.lua", r"D:\t.lua").expect("ok");
+        assert!(cmd.contains("o''brien"), "single quote doubled: {cmd}");
+    }
+
+    #[test]
+    fn elevated_mklink_command_rejects_a_double_quote_in_a_path() {
+        // A `"` would close cmd's quoting and inject — reject rather than escape.
+        assert!(
+            elevated_mklink_command("C:\\a\"b\\l.lua", r"D:\t.lua").is_err(),
+            "double-quote path rejected"
+        );
+        assert!(elevated_mklink_command(r"C:\l.lua", "D:\\t\"x.lua").is_err());
+    }
+}
+
+// Real symlink round-trips on the OS that always permits it (Unix CI). This
 // module is cfg'd off on Windows — file symlinks need Developer Mode and
 // junctions need a child process, neither of which belongs in a unit test.
 #[cfg(all(test, not(windows)))]
