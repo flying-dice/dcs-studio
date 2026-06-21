@@ -11,6 +11,7 @@
 	// snapshot the IDE-hosted MCP server status (issue #39) for the status bar.
 	onMount(() => {
 		app.initDcs();
+		void app.initWatcher();
 		void mcp.refresh();
 	});
 

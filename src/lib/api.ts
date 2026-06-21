@@ -40,6 +40,19 @@ export function writeTextFile(path: string, contents: string): Promise<void> {
   return invoke<void>("write_text_file", { path, contents });
 }
 
+/** Start the recursive workspace fs watcher on `path` (issue #40). Replaces any
+ * prior watch. A no-op in the browser (no Tauri backend). */
+export function watchStart(path: string): Promise<void> {
+  if (!isTauri()) return Promise.resolve();
+  return invoke<void>("watch_start", { path });
+}
+
+/** Stop the workspace fs watcher. A no-op in the browser. */
+export function watchStop(): Promise<void> {
+  if (!isTauri()) return Promise.resolve();
+  return invoke<void>("watch_stop");
+}
+
 /** A formatting outcome (model `fmt::Formatted`). */
 export interface FormatResult {
   /** The formatted source, or the input unchanged when `guard_tripped`. */

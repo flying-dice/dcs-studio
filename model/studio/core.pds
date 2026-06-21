@@ -37,6 +37,10 @@ data ConsoleEntry { code: string, ok: bool, output: string }
 /// DCS Studio — the desktop editor application.
 public system Studio;
 
+/// A batch of workspace paths that changed on disk, delivered by the fs watcher
+/// (issue #40) — drives the tree refresh + open-buffer reconciliation.
+public data FsChanged { paths: string[] }
+
 /// SvelteKit UI: welcome screen, file tree, CodeMirror editor, tool-window
 /// stripes, status bar, Lua console, and the injection / mission-scripting
 /// manager panels. Runs inside the Tauri webview (or a plain browser for dev
@@ -440,6 +444,55 @@ public container Workbench for studio::core::Studio {
   #[onevent(studio::link::Heartbeat)]
   OnHeartbeat(beat: studio::link::Heartbeat): void;
 
+  /// React to a workspace fs-change batch (issue #40): refresh the file tree so
+  /// added/removed files appear, then reconcile each changed path's open buffer.
+  #[onevent(studio::core::FsChanged)]
+  OnFsChanged(change: studio::core::FsChanged): void {
+    self.RefreshTree()
+    for (path in change.paths) {
+      self.ReconcilePath(path)
+    }
+  }
+
+  /// Reconcile one changed path against its open buffer: a CLEAN buffer reloads
+  /// silently; a DIRTY one is flagged stale (never overwritten — the editor
+  /// shows a reload-or-keep banner); a change already matching the saved
+  /// baseline (the editor's own save) is a no-op; an unreadable/deleted or
+  /// binary path falls through (only the tree refresh reflects it).
+  ReconcilePath(path: string): void {
+    tab = Option<studio::core::Document> from self.OpenTextTab(path)
+    if (tab.isSome) {
+      onDisk = Option<string> from self.DiskText(path)
+      if (onDisk.isSome) {
+        changed = bool from onDisk.value != tab.value.savedText
+        if (changed) {
+          clean = bool from tab.value.text == tab.value.savedText
+          if (clean) {
+            self.ReloadBuffer(tab.value, onDisk.value)
+          } else {
+            self.FlagStale(tab.value)
+          }
+        }
+      }
+    }
+  }
+
+  /// Re-read the file tree from disk (added/removed files appear).
+  RefreshTree(): void;
+
+  /// The open TEXT tab for `path`, if any (binary/absent → None).
+  OpenTextTab(path: string): Option<studio::core::Document>;
+
+  /// The file's current on-disk text, or None when gone/unreadable/binary.
+  DiskText(path: string): Option<string>;
+
+  /// Replace a clean buffer's text + saved baseline with the on-disk text and
+  /// re-apply it to the editor view.
+  ReloadBuffer(doc: studio::core::Document, text: string): void;
+
+  /// Mark a dirty buffer stale so the editor surfaces the reload-or-keep banner.
+  FlagStale(doc: studio::core::Document): void;
+
   /// Browser-only fallback heartbeat: outside Tauri there are no Rust-side
   /// events, so the UI pings the bridge directly. Sim-running follows the
   /// same rule as the native heartbeat — the pong's dcsTime must advance
@@ -707,4 +760,36 @@ feature PanelResizeDrag for studio::core::Workbench {
   and "the center editor fills the remaining space"
   and "releasing the drag persists both side-panel widths to localStorage"
   and "the persisted widths are restored when the app is reopened"
+}
+
+/// A new file appearing in the workspace shows up without a manual refresh.
+feature WatcherRefreshesTreeOnExternalChange for studio::core::Workbench {
+  given "an open project"
+  when "a file is added or removed in the workspace from outside the editor"
+  then "the fs watcher delivers the change and the file tree refreshes to reflect it"
+}
+
+/// An external edit to a file with no unsaved changes silently reloads.
+feature ExternalChangeReloadsCleanBuffer for studio::core::Workbench {
+  given "a file open in the editor with no unsaved edits"
+  when "its on-disk content changes from outside the editor"
+  then "the buffer reloads from disk so it never silently diverges"
+  but "a change matching the saved baseline (the editor's own save) is a no-op"
+}
+
+/// An external edit to a file with unsaved changes warns instead of clobbering.
+feature ExternalChangeWarnsDirtyBuffer for studio::core::Workbench {
+  given "a file open in the editor with unsaved edits"
+  when "its on-disk content changes from outside the editor"
+  then "the buffer is flagged stale and the editor offers reload-or-keep"
+  but "the user's unsaved edits are never overwritten without consent"
+}
+
+/// A file deleted on disk while open keeps its tab (the buffer is the source of
+/// truth until saved) — only the tree reflects the removal. Scope cut for #40.
+feature ExternalDeleteOfOpenFileKeepsTab for studio::core::Workbench {
+  given "a file open in the editor"
+  when "the file is deleted on disk from outside the editor"
+  then "the file tree drops it but the editor tab and its buffer remain"
+  and "saving the tab recreates the file from the buffer"
 }

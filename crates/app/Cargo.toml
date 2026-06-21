@@ -55,4 +55,8 @@ studio-services = { path = "../studio-services" }
 studio-packages = { path = "../studio-packages" }
 studio-mcp = { path = "../studio-mcp" }
 base64 = "0.22"
+# Workspace filesystem watcher (issue #40): a recursive notify watch with a
+# small debounce so bursts (saves, git ops) collapse into one UI refresh.
+notify = "6"
+notify-debouncer-mini = "0.4"
 

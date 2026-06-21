@@ -311,6 +311,31 @@
     }
   });
 
+  // A clean buffer's file changed on disk (issue #40): re-apply the store's
+  // refreshed text to the live view (active tab) or drop the parked state so
+  // reactivation reloads (inactive).
+  $effect(() => {
+    const { paths } = app.reloaded;
+    for (const p of paths) {
+      if (p === shownPath && view) {
+        const doc = app.openFiles.find((f) => f.path === p);
+        // Replace via a change transaction (NOT setState) so undo history and
+        // the caret/scroll survive a routine external reload (git pull, an
+        // on-disk formatter). Skip when the view already has the text — a no-op
+        // reload (e.g. the editor's own save echoed back) must not disturb it.
+        if (doc && doc.kind === "text" && view.state.doc.toString() !== doc.docText) {
+          view.dispatch({
+            changes: { from: 0, to: view.state.doc.length, insert: doc.docText },
+          });
+          syncDebugView(view, p);
+        }
+      } else {
+        parkedStates.delete(p);
+        parkedScroll.delete(p);
+      }
+    }
+  });
+
   // Live theme swap (affects the shown state; parked states re-sync on swap).
   $effect(() => {
     const cm = app.cm;
@@ -484,9 +509,30 @@
   function runActiveInDcs() {
     if (view) runViewInDcs(view);
   }
+
+  // The active tab's file changed on disk while it had unsaved edits (issue #40).
+  const staleDoc = $derived(
+    app.openFiles.find((f) => f.path === app.activePath && f.diskChanged),
+  );
 </script>
 
 <div class="relative h-full w-full">
+  {#if staleDoc}
+    <div
+      class="absolute inset-x-0 top-0 z-20 flex items-center gap-2 border-b border-amber-500/40 bg-amber-500/15 px-3 py-1.5 text-[12px] text-amber-200 backdrop-blur"
+      data-testid="stale-buffer-banner"
+    >
+      <span class="flex-1">This file changed on disk while you have unsaved edits.</span>
+      <button
+        class="rounded bg-amber-500/30 px-2 py-0.5 hover:bg-amber-500/50"
+        onclick={() => void app.reloadFromDisk(staleDoc.path)}>Reload from disk</button
+      >
+      <button
+        class="rounded px-2 py-0.5 hover:bg-white/10"
+        onclick={() => app.dismissDiskChanged(staleDoc.path)}>Keep my changes</button
+      >
+    </div>
+  {/if}
   <ContextMenu.Root>
     <ContextMenu.Trigger class="block h-full w-full">
       <div class="h-full w-full overflow-hidden [&_.cm-editor]:h-full" bind:this={host}></div>
