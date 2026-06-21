@@ -238,6 +238,14 @@ fn install_with(
     let Some(token) = token else {
         return Err(SIGN_IN_REQUIRED.to_string());
     };
+    // Defence in depth (issue #48): a library is never installable into DCS, even
+    // via a direct call that bypassed the product page's hidden Install button.
+    let repo = super::get_repo(owner, name, token)?;
+    if repo.topics.iter().any(|t| t == dcs_studio_project::LIBRARY_TOPIC) {
+        return Err(format!(
+            "{owner}/{name} is a dcs-studio library — add it as a dependency (lua-cargo), not install it into DCS"
+        ));
+    }
     let roots = resolve_roots()?;
     let payload_url = find_payload_asset(owner, name, token)?;
     let bytes = fetch_asset_bytes(&payload_url, token)?;

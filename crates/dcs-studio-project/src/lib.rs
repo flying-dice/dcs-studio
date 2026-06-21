@@ -46,6 +46,11 @@ pub use toolchain::ToolchainStatus;
 /// (`studio::publish`), so the reader and writer agree by sharing this one const.
 pub const DISCOVERY_TOPIC: &str = "dcs-studio";
 
+/// The GitHub topic that marks a discovered repo as a LIBRARY (issue #48): a
+/// shared Lua dependency, discoverable + "Add as dependency"-able but NEVER
+/// installable into DCS. Reader (market) and writer (publish) share this const.
+pub const LIBRARY_TOPIC: &str = "dcs-studio-library";
+
 /// The project manifest filename — at the project root, and uploaded as a release
 /// asset so the Marketplace reads the install plan without the whole payload. The
 /// single source the writer (publish) and reader (discovery) share.

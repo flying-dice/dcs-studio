@@ -182,7 +182,18 @@
                     </span>
                   {/if}
                   <span class="min-w-0 flex-1">
-                    <span class="block truncate text-[13px] font-medium" title={mod.name}>{mod.name}</span>
+                    <span class="flex items-center gap-1.5">
+                      <span class="min-w-0 truncate text-[13px] font-medium" title={mod.name}>{mod.name}</span>
+                      {#if mod.is_library}
+                        <span
+                          class="shrink-0 rounded bg-accent px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-muted-foreground"
+                          title="Dependency-only library — not installable"
+                          data-testid="market-card-library"
+                        >
+                          library
+                        </span>
+                      {/if}
+                    </span>
                     <span class="block truncate font-mono text-[10px] text-muted-foreground">by {mod.author}</span>
                   </span>
                   <span class="flex shrink-0 items-center gap-1 font-mono text-[10px] text-muted-foreground" title="Stars">

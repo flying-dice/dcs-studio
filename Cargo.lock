@@ -3378,6 +3378,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lua-cargo"
+version = "0.1.0"
+dependencies = [
+ "dcs-lua-syntax",
+ "serde",
+ "serde_json",
+ "toml 0.8.2",
+]
+
+[[package]]
 name = "lzma-rs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

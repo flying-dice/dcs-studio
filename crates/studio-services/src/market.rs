@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::github_http::{self, API_BASE};
-use dcs_studio_project::{DISCOVERY_TOPIC, MANIFEST_FILE};
+use dcs_studio_project::{DISCOVERY_TOPIC, LIBRARY_TOPIC, MANIFEST_FILE};
 
 const SEARCH_URL: &str = "https://api.github.com/search/repositories";
 /// How long a cache stays fresh enough to skip a live search (model
@@ -47,6 +47,9 @@ pub struct MarketListing {
     pub repo_url: String,
     pub avatar_url: String,
     pub stars: u64,
+    /// A dependency-only library (carries `dcs-studio-library`): "Add as
+    /// dependency", never installable into DCS (issue #48).
+    pub is_library: bool,
 }
 
 /// What the cache file holds: the listings + when they were fetched.
@@ -90,6 +93,9 @@ pub struct ProductDetail {
     pub download_size: u64,
     pub installable: bool,
     pub installs: Vec<InstallEntry>,
+    /// A dependency-only library (issue #48): forced non-installable; the product
+    /// page offers "Add as dependency" instead of Install.
+    pub is_library: bool,
 }
 
 /// A repo's latest release, internal to assembly (`manifest_url` is the
@@ -152,10 +158,12 @@ pub fn search_repos_by_topic(topic: &str, token: &str) -> Result<Vec<RepoRef>, S
 /// Map a search hit to a store listing: author = owner, labels = the repo's
 /// topics minus the `dcs-studio` marker (model `Registry.BuildListings`).
 fn listing_from(repo: RepoRef) -> MarketListing {
+    let is_library = repo.topics.iter().any(|t| t == LIBRARY_TOPIC);
+    // The two marker topics drive behaviour, not labels — keep both out.
     let labels = repo
         .topics
         .iter()
-        .filter(|t| t.as_str() != DISCOVERY_TOPIC)
+        .filter(|t| t.as_str() != DISCOVERY_TOPIC && t.as_str() != LIBRARY_TOPIC)
         .cloned()
         .collect();
     MarketListing {
@@ -167,6 +175,7 @@ fn listing_from(repo: RepoRef) -> MarketListing {
         repo_url: repo.html_url,
         avatar_url: repo.avatar_url,
         stars: repo.stars,
+        is_library,
     }
 }
 
@@ -332,7 +341,10 @@ fn assemble_product(
     let manifest = manifest_text
         .as_deref()
         .and_then(|t| dcs_studio_project::manifest::parse(t).ok());
-    let installable = manifest.is_some();
+    let is_library = repo.topics.iter().any(|t| t == LIBRARY_TOPIC);
+    // A library is NEVER installable into DCS, regardless of a manifest asset
+    // (issue #48): you bundle it as a dependency, not install it into the sim.
+    let installable = manifest.is_some() && !is_library;
     let installs = manifest
         .map(|m| {
             m.install
@@ -366,6 +378,7 @@ fn assemble_product(
         download_size,
         installable,
         installs,
+        is_library,
     }
 }
 
@@ -562,4 +575,31 @@ mod tests {
         assert_eq!(p.repo, "octocat/bare-mod");
     }
 
+    #[test]
+    fn library_listing_is_marked_and_the_library_topic_is_not_a_label() {
+        let listing =
+            listing_from(repo("flying-dice", "mylib", &["dcs-studio", "dcs-studio-library", "util"]));
+        assert!(listing.is_library, "carries the library topic");
+        // Both marker topics are filtered out; only real topics are labels.
+        assert_eq!(listing.labels, vec!["util".to_string()]);
+    }
+
+    #[test]
+    fn library_product_is_forced_non_installable_even_with_a_manifest() {
+        let release = LatestRelease {
+            tag: "10.0.0".to_string(),
+            html_url: "https://github.com/flying-dice/mylib/releases/latest".to_string(),
+            assets: vec![ProductAsset { name: "dcs-studio.toml".to_string(), size: 200 }],
+            manifest_url: Some("https://example.invalid/dcs-studio.toml".to_string()),
+        };
+        let manifest = "[project]\nname = \"Lib\"\n\n[[install]]\nsource = \"a\"\ndest = \"{SavedGames}/Scripts/a\"\n";
+        let p = assemble_product(
+            repo("flying-dice", "mylib", &["dcs-studio", "dcs-studio-library"]),
+            None,
+            Some(release),
+            Some(manifest.to_string()),
+        );
+        assert!(p.is_library, "flagged a library");
+        assert!(!p.installable, "a library is never installable, manifest asset notwithstanding");
+    }
 }

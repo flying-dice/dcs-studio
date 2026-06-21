@@ -20,6 +20,8 @@
   } from "@lucide/svelte";
 
   let tag = $state("v0.1.0");
+  // Publish-time choice: mark the repo as a dependency-only library (#48).
+  let asLibrary = $state(false);
 </script>
 
 <div class="flex h-full flex-col gap-2 p-2 text-[13px]" data-testid="publish-panel">
@@ -88,12 +90,22 @@
         </div>
       </div>
     {:else}
+      <label class="flex items-start gap-2 px-1 py-0.5 text-[11px] text-muted-foreground">
+        <input
+          type="checkbox"
+          bind:checked={asLibrary}
+          disabled={publish.busy}
+          class="mt-0.5 size-3.5 shrink-0 accent-primary"
+          data-testid="publish-as-library"
+        />
+        <span>Publish as library (dependency-only, not installable)</span>
+      </label>
       <Button
         size="sm"
         variant="outline"
         class="gap-1.5"
         disabled={publish.busy}
-        onclick={() => publish.share(root)}
+        onclick={() => publish.share(root, asLibrary)}
         data-testid="publish-share"
       >
         {#if publish.busy && !publish.device}
