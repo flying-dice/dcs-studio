@@ -186,16 +186,10 @@ local started, err = pcall(function()
     local step_mode = nil -- "over" | "into" | "out" pending, or nil
     local step_depth = 0
     local last_drain = os.clock()
-
-    -- Active frame count from the function that triggered the hook upward; only
-    -- relative values matter (step over/out compare against the paused depth).
-    local function cur_depth()
-      local d = 2
-      while debug.getinfo(d, "l") do
-        d = d + 1
-      end
-      return d - 2
-    end
+    -- Logical call depth, maintained by the hook's call/return events rather
+    -- than walking the stack each line. Robust where frame-counting isn't: it
+    -- tracks through C frames (pcall) and tail calls, and is O(1) per line.
+    local depth = 0
 
     -- Snapshot the full Lua call stack from `base` upward (stopping at the
     -- enclosing C frame — the pcall that ran the chunk), capturing each frame's
@@ -251,17 +245,32 @@ local started, err = pcall(function()
       return bridge.json.safe_encode({ frames = frames, pause_id = dbg.pause_id, cond_error = dbg.cond_error })
     end
 
-    local hook = function(_, line)
+    local hook = function(event, line)
+      -- Maintain the call-depth counter off call/return events (a tail call is
+      -- a "call" then a "tail return"; both keep the counter balanced).
+      if event == "call" then
+        depth = depth + 1
+        return
+      elseif event == "return" or event == "tail return" then
+        depth = depth - 1
+        return
+      end
+      -- event == "line" from here on.
       local info = debug.getinfo(2, "nSlf")
       local src = (info and info.source) or source
-      local depth = cur_depth()
-      -- Throttled RPC drain DURING the run, so a manual Pause (and live state
-      -- queries) are delivered even while the chunk holds the sim thread. The
-      -- hook is disabled while it runs, so this re-entrant drain is safe.
+      -- Throttled RPC drain DURING the run, so a manual Pause/Stop (and live
+      -- state queries) are delivered even while the chunk holds the sim thread.
+      -- The hook is disabled while it runs, so this re-entrant drain is safe.
       local now = os.clock()
       if (now - last_drain) > DRAIN_INTERVAL_SECONDS then
         last_drain = now
         server:process_rpc(router)
+      end
+      -- Cooperative Stop: unwind the chunk so a runaway/looping run can be
+      -- killed (there is no terminate primitive over the bridge otherwise).
+      if bridge.debug.take_stop() then
+        debug.sethook()
+        error("debug: stopped by user", 0)
       end
       local hit = false
       if bridge.debug.should_pause(src, line) then
@@ -348,12 +357,16 @@ local started, err = pcall(function()
     -- can't phantom-break this run on its first line.
     bridge.debug.reset_session()
     dbg.last_ping = os.clock()
-    debug.sethook(hook, "l")
+    debug.sethook(hook, "clr") -- call + line + return events (depth + lines)
     local ran_ok, run_err = pcall(chunk)
     debug.sethook() -- always remove the scoped hook
     dbg.running = false
     if not ran_ok then
-      dbg.error = tostring(run_err)
+      local msg = tostring(run_err)
+      -- A user Stop unwinds via error() but is a clean end, not a failure.
+      if not string.find(msg, "debug: stopped", 1, true) then
+        dbg.error = msg
+      end
       return { ran = false, error = dbg.error }
     end
     return { ran = true }
@@ -415,6 +428,14 @@ local started, err = pcall(function()
   -- to the busy sim thread via the hook's throttled drain.
   router:add_method("debug_pause", function()
     bridge.debug.request_pause()
+    return { ok = true }
+  end)
+
+  -- Stop: terminate the running chunk. Request the unwind, and release the pump
+  -- with a continue so a paused session resumes straight into the stop check.
+  router:add_method("debug_stop", function()
+    bridge.debug.request_stop()
+    bridge.debug.request_resume("continue")
     return { ok = true }
   end)
 

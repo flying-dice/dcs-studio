@@ -7,6 +7,10 @@
 
 import { dcsCall, readTextFile } from "$lib/api";
 import { app } from "$lib/state.svelte";
+import { sourceId, pathOf, baseName, luaStr, sessionAction } from "$lib/debug-util";
+
+// Re-export the path helpers so components keep importing them from here.
+export { pathOf, baseName } from "$lib/debug-util";
 
 /** One variable in the lazy tree. `ref` 0 = a leaf; >0 = expandable via
  * `expand(ref)` (only valid for the current pause). */
@@ -44,33 +48,6 @@ export interface EvalResult {
 export type DebugStatus = "idle" | "running" | "paused";
 
 const POLL_MS = 250;
-
-/** The sim-side source id for a file: a "=name" chunkname so the debugged
- * chunk's `debug.getinfo(...).source` reads back verbatim and lines up with the
- * breakpoints we register. */
-function sourceId(path: string): string {
-  return `=${path}`;
-}
-
-/** The path embedded in a sim-side source id ("=path" → "path"). */
-export function pathOf(source: string): string {
-  return source.startsWith("=") ? source.slice(1) : source;
-}
-
-/** The file name (last path segment) of a path. */
-export function baseName(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path;
-}
-
-/** Render a Lua string literal, escaping the embedding hazards. */
-function luaStr(s: string): string {
-  const esc = s
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r");
-  return `"${esc}"`;
-}
 
 class DebugSession {
   /** path → sorted 1-based breakpoint lines. Reassigned on change for runes
@@ -295,7 +272,9 @@ class DebugSession {
       return; // a dropped poll is harmless; the next tick retries
     }
     const paused = (state as { paused?: boolean })?.paused === true;
-    if (paused) {
+    const running = (state as { running?: boolean })?.running === true;
+    const action = sessionAction(paused, running, this.#sawActive);
+    if (action === "pause") {
       let frames: DebugFrame[] = [];
       let pauseId = 0;
       let condError: string | undefined;
@@ -335,21 +314,19 @@ class DebugSession {
           app.openFile(p, baseName(p), { line: top.line, col: 1 });
         }
       }
-    } else {
-      // Not paused: either running between breakpoints, or the session ended.
-      // The `running` flag (not the blocking debug_run promise) is the truth —
-      // so a long pause/run doesn't end the session when the client call times
-      // out.
-      const st = state as { running?: boolean; error?: string };
-      if (st.running === true) {
-        this.#sawActive = true;
-        if (this.status === "paused") this.#clearPausedState();
-        this.status = "running";
-      } else if (this.#sawActive) {
-        if (st.error) this.error = String(st.error);
-        this.#finish();
-      }
+    } else if (action === "run") {
+      // Running between breakpoints. The `running` flag (not the blocking
+      // debug_run promise, which times out on a long run/pause) is the truth.
+      this.#sawActive = true;
+      if (this.status === "paused") this.#clearPausedState();
+      this.status = "running";
+    } else if (action === "finish") {
+      // The run flag dropped after activity — the session has ended.
+      const err = (state as { error?: string }).error;
+      if (err) this.error = String(err);
+      this.#finish();
     }
+    // action === "wait": not started yet — don't end the session prematurely.
   }
 
   #resume(mode: string): void {
@@ -373,13 +350,14 @@ class DebugSession {
     this.#resume("step_out");
   }
 
-  /** No terminate over the bridge — clear breakpoints and let the chunk run to
-   * completion (which ends the session). */
+  /** Terminate the session: clear breakpoints and ask the sim to unwind the
+   * running chunk (debug_stop), so even a runaway/infinite-loop run ends. The
+   * session then finishes via polling (running flag drops). */
   stop(): void {
     if (this.activeSource) {
       void this.#debugEval("clear_breakpoints", "").catch(() => {});
+      void dcsCall("debug_stop").catch(() => {});
     }
-    if (this.status === "paused") this.#resume("continue");
   }
 
   #finish(): void {

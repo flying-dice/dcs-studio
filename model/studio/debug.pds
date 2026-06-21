@@ -49,6 +49,11 @@ public container DebugController for studio::core::Studio {
   /// Request a manual break-all while a run is in flight (forwards debug_pause).
   Pause(): void;
 
+  /// Terminate the run: clear breakpoints and unwind the chunk (forwards
+  /// debug_stop), so even a runaway/infinite-loop run ends. The session then
+  /// finishes via polling when the running flag drops.
+  Stop(): void;
+
   /// Set (or, with an empty cond, clear) a breakpoint's condition (forwards
   /// debug.set_condition).
   SetCondition(source: string, line: number, cond: string): void;

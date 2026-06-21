@@ -105,6 +105,7 @@ web:
     - npm i -g pnpm@9
     - pnpm install --frozen-lockfile
     - pnpm check
+    - pnpm test:unit
 
 # NOTE: there is no `e2e` job here any more. The language e2e suite
 # (`pnpm test:lang`, e2e-lang/) was retargeted by issue #32 to drive the

@@ -174,7 +174,14 @@ function dcs_studio_debug.request_pause() end
 ---@return boolean pause
 function dcs_studio_debug.take_pause() end
 
---- Clear all pause/resume/break-all state. Called by the hook at the start of a debug_run so a stale request from a prior session can't bleed in.
+--- Request that the running chunk be terminated (Stop unwinds a runaway or looping run, which has no natural end).
+function dcs_studio_debug.request_stop() end
+
+--- Whether a stop was requested since the last call (consumed by the hook).
+---@return boolean stop
+function dcs_studio_debug.take_stop() end
+
+--- Clear all pause/resume/break-all/stop state. Called by the hook at the start of a debug_run so a stale request from a prior session can't bleed in.
 function dcs_studio_debug.reset_session() end
 
 --- A namespaced logger writing to the DCS Studio log.

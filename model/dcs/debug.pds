@@ -94,6 +94,11 @@ container PauseController for dcs::bridge::Dcs {
   /// Manual break-all: stop at the next line of debugged code. Delivered to the
   /// busy sim thread by the hook's throttled RPC drain during a run.
   RequestPause(): void;
+
+  /// Terminate the run: the hook unwinds the chunk at the next line (an error()
+  /// the run's pcall catches and reports as a clean stop, not a failure). The
+  /// only way to end a runaway/infinite-loop run, which has no natural end.
+  RequestStop(): void;
 }
 
 /// Breakpoints set by the IDE are honoured by the registry.

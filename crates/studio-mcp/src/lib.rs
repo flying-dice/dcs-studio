@@ -641,6 +641,11 @@ fn debug_tool_specs() -> Vec<Value> {
             "inputSchema": { "type": "object", "properties": {} }
         }),
         json!({
+            "name": "debug_stop",
+            "description": "Terminate the running debug session, unwinding the chunk (kills a runaway/looping run).",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
             "name": "debug_continue",
             "description": "Resume a debugger paused at a breakpoint. `mode` selects continue (default) or a step: \"step_over\", \"step_into\", \"step_out\".",
             "inputSchema": {
@@ -663,6 +668,7 @@ fn debug_tools(session: &Session, name: &str, args: &Value) -> Option<Result<Val
         "debug_expand" => Some(debug_expand_tool(session, args)),
         "debug_eval" => Some(debug_eval_tool(session, args)),
         "debug_pause" => Some(Ok(forward_to_dcs(session, "debug_pause", None))),
+        "debug_stop" => Some(Ok(forward_to_dcs(session, "debug_stop", None))),
         "debug_continue" => {
             let params = args
                 .get("mode")

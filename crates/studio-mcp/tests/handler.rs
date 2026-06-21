@@ -18,7 +18,7 @@ use studio_mcp::{Session, handle};
 
 /// Every tool the surface advertises, in registry order — an accidental drop
 /// or rename of any tool fails the `tools/list` assertion below.
-const FULL_TOOL_SURFACE: [&str; 34] = [
+const FULL_TOOL_SURFACE: [&str; 35] = [
     "init_project",
     "check",
     "build",
@@ -52,6 +52,7 @@ const FULL_TOOL_SURFACE: [&str; 34] = [
     "debug_expand",
     "debug_eval",
     "debug_pause",
+    "debug_stop",
     "debug_continue",
 ];
 

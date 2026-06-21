@@ -28,6 +28,10 @@ static CONDITIONS: Mutex<BTreeMap<(String, u32), String>> = Mutex::new(BTreeMap:
 /// debugged code (a manual "Pause"), then clears the flag.
 static PAUSE_REQ: AtomicBool = AtomicBool::new(false);
 
+/// A stop request: when set, the line hook unwinds the running chunk (Stop), so
+/// a runaway/infinite-loop run can be terminated. Cleared on consumption.
+static STOP_REQ: AtomicBool = AtomicBool::new(false);
+
 /// The current pause: a JSON snapshot string (source/line/locals) while stopped
 /// at a breakpoint, or `None` when running. The line hook sets it; the editor /
 /// MCP reads it via `paused()`.
@@ -103,6 +107,18 @@ pub(crate) fn take_pause() -> bool {
     PAUSE_REQ.swap(false, Ordering::Relaxed)
 }
 
+/// Request that the running chunk be terminated (Stop kills a runaway/looping
+/// run, which has no natural end).
+pub(crate) fn request_stop() {
+    STOP_REQ.store(true, Ordering::Relaxed);
+}
+
+/// Whether a stop was requested since the last call (consumed by the hook,
+/// which then unwinds the chunk).
+pub(crate) fn take_stop() -> bool {
+    STOP_REQ.swap(false, Ordering::Relaxed)
+}
+
 fn pause_slot<T>(f: impl FnOnce(&mut Option<String>) -> T) -> T {
     let mut guard = PAUSE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     f(&mut guard)
@@ -118,6 +134,7 @@ fn resume_slot<T>(f: impl FnOnce(&mut Option<String>) -> T) -> T {
 /// prior session can't bleed into the new one (a phantom break on line 1).
 pub(crate) fn reset_session() {
     PAUSE_REQ.store(false, Ordering::Relaxed);
+    STOP_REQ.store(false, Ordering::Relaxed);
     resume_slot(|r| *r = None);
     pause_slot(|p| *p = None);
 }
@@ -314,11 +331,31 @@ pub fn register(sub: &mut Sub) -> Result<()> {
     )?;
 
     sub.func(
+        "request_stop",
+        &[],
+        &[],
+        "Request that the running chunk be terminated (Stop unwinds a runaway \
+         or looping run, which has no natural end).",
+        |lua: &Lua, ()| {
+            request_stop();
+            ().into_lua_multi(lua)
+        },
+    )?;
+
+    sub.func(
+        "take_stop",
+        &[],
+        &[r_named("boolean", "stop")],
+        "Whether a stop was requested since the last call (consumed by the hook).",
+        |lua: &Lua, ()| take_stop().into_lua_multi(lua),
+    )?;
+
+    sub.func(
         "reset_session",
         &[],
         &[],
-        "Clear all pause/resume/break-all state. Called by the hook at the start \
-         of a debug_run so a stale request from a prior session can't bleed in.",
+        "Clear all pause/resume/break-all/stop state. Called by the hook at the \
+         start of a debug_run so a stale request from a prior session can't bleed in.",
         |lua: &Lua, ()| {
             reset_session();
             ().into_lua_multi(lua)
