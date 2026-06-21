@@ -368,24 +368,14 @@ container Types for dcs::bridge::Dcs {
   /// boot, no mission required, and always matches the loaded DLL exactly.
   EmitDlua(): dcs::bridge::TypeDefs;
 
-  /// Whether an API root name (`DCS`, `Export`, `net`, `lfs`, `log`) is bound in
-  /// `_G` right now. A mission-state root can be absent until a mission runs
-  /// (dcsTime > 0), so the dump reflects what the running build exposes rather
-  /// than erroring on what isn't loaded yet.
-  RootPresent(root: string): bool;
-
-  /// Walk one `_G` API root, typing each member: a function → a `fun(...)`
-  /// annotation, a nested table → recurse until MAX_INTROSPECTION_DEPTH (then an
-  /// opaque table), userdata/thread → an opaque handle. A visited set breaks
-  /// cycles; the walk is sim-safe and never raises inside a frame.
-  WalkRoot(root: string): dcs::bridge::TypeDefs;
-
   /// Introspect the modder-facing DCS API — the curated hooks/GUI roots (`DCS`,
   /// `Export`, `net`, `lfs`, `log`), not all of `_G`, so the dump stays
   /// authoritative and bounded — and emit it as dotted `.d.lua` statements. Each
-  /// root present in `_G` is walked to MAX_INTROSPECTION_DEPTH and concatenated;
-  /// an absent root is skipped, not errored. Never raises in the sim: a walk
-  /// failure yields the partial dump gathered so far.
+  /// root present in `_G` is walked, typing every member: a function → a
+  /// `fun(...)` annotation, a nested table → recurse until MAX_INTROSPECTION_DEPTH
+  /// (then an opaque table), userdata/thread → an opaque handle; a visited set
+  /// breaks cycles. An absent root is skipped, not errored. Never raises in the
+  /// sim: a walk failure yields the partial dump gathered so far.
   DumpGlobals(): dcs::bridge::TypeDefs;
 }
 
