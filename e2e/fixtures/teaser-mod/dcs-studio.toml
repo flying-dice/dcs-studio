@@ -1,8 +1,0 @@
-[project]
-name = "teaser-mod"
-version = "0.1.0"
-
-# Deploy the mod's script into the DCS scripts area.
-[[install]]
-source = "Scripts/hello.lua"
-dest = "{SavedGames}/Scripts/teaser-mod"

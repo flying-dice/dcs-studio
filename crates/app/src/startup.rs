@@ -33,10 +33,9 @@ impl StartupArgs {
     }
 
     /// Resolve the project to open on boot: a `--open`/`-o`/`--open=` arg wins;
-    /// otherwise fall back to `env_open` (the `DCS_OPEN` env — the harness /
-    /// teaser-recorder seam). A blank fallback is ignored. Pure (the env value is
-    /// passed in) so it is unit-testable, unlike a direct `std::env::var` in
-    /// `run()`.
+    /// otherwise fall back to `env_open` (the `DCS_OPEN` env — the test-harness
+    /// seam). A blank fallback is ignored. Pure (the env value is passed in) so
+    /// it is unit-testable, unlike a direct `std::env::var` in `run()`.
     #[must_use]
     pub fn resolve<I: IntoIterator<Item = String>>(args: I, env_open: Option<String>) -> Self {
         let mut me = Self::parse(args);

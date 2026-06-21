@@ -32,7 +32,7 @@
   type Row = { text: string; level: "error" | "warning" | "info" | "plain"; mine: boolean };
 
   // A line "belongs to" the current mod when its subsystem IS the tag (the
-  // bridge's namespaced logger, e.g. log.write("teaser-mod", …)) or the tag
+  // bridge's namespaced logger, e.g. log.write("my-mod", …)) or the tag
   // appears as a whole word in the line (how a mission script tags env.info
   // output). The length-4 floor + word boundaries stop a short folder name
   // like "DCS"/"info" from matching nearly every line.

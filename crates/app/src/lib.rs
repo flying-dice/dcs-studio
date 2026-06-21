@@ -32,9 +32,9 @@ pub fn run() {
     dcs_studio_project::logging::init_to_file("info", &log_path);
     tracing::info!(log = %log_path.display(), "dcs-studio app starting");
     // Launch seam: `--open <path>` (the e2e suite) or the `DCS_OPEN` env (the
-    // harness / teaser recorder) opens a project on boot without the native
-    // folder picker automation can't click. Resolution lives in
-    // `StartupArgs::resolve` so the env fallback is unit-tested.
+    // test harness) opens a project on boot without the native folder picker
+    // automation can't click. Resolution lives in `StartupArgs::resolve` so the
+    // env fallback is unit-tested.
     let startup_args =
         startup::StartupArgs::resolve(std::env::args(), std::env::var("DCS_OPEN").ok());
     tauri::Builder::default()

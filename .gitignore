@@ -29,5 +29,4 @@ vite.config.ts.timestamp-*
 # source); the bundler picks them up during `tauri build`.
 /crates/app/binaries/
 /.playwright-mcp
-teaser-results/
 test-results/
