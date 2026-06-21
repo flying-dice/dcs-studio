@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { EditorView, basicSetup } from "codemirror";
   import { keymap } from "@codemirror/view";
+  import { redo, undo } from "@codemirror/commands";
   import { EditorState, Compartment, Prec, type Extension } from "@codemirror/state";
   import { StreamLanguage } from "@codemirror/language";
   import { lua } from "@codemirror/legacy-modes/mode/lua";
@@ -180,6 +181,29 @@
     app.setBufferFormatter(() =>
       view ? runFormat(view, null) : Promise.resolve(),
     );
+    // Publish the editor's command surface for the application menu (Edit →
+    // Undo / Redo / Cut / Copy / Paste, issue #59). Mirrors setBufferFormatter:
+    // registered on mount, cleared on destroy, so the menu acts on the live view
+    // without the raw CodeMirror view leaking into global state. Cut / Copy /
+    // Paste reuse the editor's own context-menu handlers — one clipboard path.
+    // Undo / Redo refocus the view, since the menu took focus to dispatch.
+    app.setEditorCommands({
+      undo: () => {
+        if (view) {
+          undo(view);
+          view.focus();
+        }
+      },
+      redo: () => {
+        if (view) {
+          redo(view);
+          view.focus();
+        }
+      },
+      cut: cutSelection,
+      copy: copySelection,
+      paste: () => void pasteClipboard(),
+    });
     // Right-click the breakpoint gutter → open an inline condition editor.
     setConditionHandler((path, line, x, y) => {
       const rect = host.getBoundingClientRect();
@@ -194,6 +218,7 @@
     });
     return () => {
       app.setBufferFormatter(null);
+      app.setEditorCommands(null);
       setConditionHandler(null);
       view?.destroy();
     };

@@ -29,7 +29,9 @@
   import Welcome from "$lib/components/Welcome.svelte";
   import GithubAuth from "$lib/components/GithubAuth.svelte";
   import McpHelpModal from "$lib/components/McpHelpModal.svelte";
+  import AboutModal from "$lib/components/AboutModal.svelte";
   import PanelResizeHandle from "$lib/components/PanelResizeHandle.svelte";
+  import { newRootFile } from "$lib/tree-actions";
   import { lang } from "$lib/lang/intel.svelte";
   import { mcp } from "$lib/mcp.svelte";
   import { debug } from "$lib/debug-session.svelte";
@@ -82,6 +84,8 @@
 
   // Setup-help modal for the IDE-hosted MCP server (issue #39).
   let mcpHelpOpen = $state(false);
+  // About dialog (Help → About DCS Studio, issue #59).
+  let aboutOpen = $state(false);
 
   // Read the cached GitHub session first (for the header chip), then open the project
   // the app was launched with (`--open <path>`), if any.
@@ -158,18 +162,27 @@
     return `${label}: off`;
   }
 
-  // Top-left application menu. Items with an `action` are wired; the rest are
-  // representative placeholders. View items toggle the panel islands.
-  type MenuItem = { label?: string; shortcut?: string; action?: () => void; sep?: boolean };
+  // Top-left application menu. Every item dispatches an action — no entry is a
+  // silent no-op (issue #59). View items toggle the panel islands; the Edit
+  // items disable when no text editor is active (`app.canEdit`).
+  type MenuItem = {
+    label?: string;
+    shortcut?: string;
+    action?: () => void;
+    // Reactive predicate; the item renders disabled while it returns true.
+    disabled?: () => boolean;
+    testId?: string;
+    sep?: boolean;
+  };
   type MenuDef = { label: string; items: MenuItem[] };
   const MENUS: MenuDef[] = [
     {
       label: "File",
       items: [
-        { label: "New Project…", action: () => void app.closeProject() },
+        { label: "New Project…", action: () => void app.newProject() },
         { label: "Open Project…", shortcut: "⌘O", action: () => app.openFolder() },
         { sep: true },
-        { label: "New File", shortcut: "⌘N" },
+        { label: "New File", shortcut: "⌘N", action: () => void newRootFile(), testId: "menu-new-file" },
         { label: "Save", shortcut: "⌘S", action: () => app.saveFile() },
         { sep: true },
         { label: "Close Editor", action: () => app.closeActiveFile() },
@@ -179,12 +192,12 @@
     {
       label: "Edit",
       items: [
-        { label: "Undo", shortcut: "⌘Z" },
-        { label: "Redo", shortcut: "⇧⌘Z" },
+        { label: "Undo", shortcut: "⌘Z", action: () => app.editUndo(), disabled: () => !app.canEdit, testId: "menu-undo" },
+        { label: "Redo", shortcut: "⇧⌘Z", action: () => app.editRedo(), disabled: () => !app.canEdit, testId: "menu-redo" },
         { sep: true },
-        { label: "Cut", shortcut: "⌘X" },
-        { label: "Copy", shortcut: "⌘C" },
-        { label: "Paste", shortcut: "⌘V" },
+        { label: "Cut", shortcut: "⌘X", action: () => app.editCut(), disabled: () => !app.canEdit, testId: "menu-cut" },
+        { label: "Copy", shortcut: "⌘C", action: () => app.editCopy(), disabled: () => !app.canEdit, testId: "menu-copy" },
+        { label: "Paste", shortcut: "⌘V", action: () => app.editPaste(), disabled: () => !app.canEdit, testId: "menu-paste" },
       ],
     },
     {
@@ -213,7 +226,12 @@
         },
       ],
     },
-    { label: "Help", items: [{ label: "About DCS Studio" }] },
+    {
+      label: "Help",
+      items: [
+        { label: "About DCS Studio", action: () => (aboutOpen = true), testId: "menu-about" },
+      ],
+    },
   ];
 
   function openOutput() {
@@ -225,6 +243,15 @@
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
       app.saveFile();
+      return;
+    }
+    // New File (⌘N) — the menu's File → New File. preventDefault stops the
+    // webview/browser from opening a new window. newRootFile no-ops with no
+    // project open, so a stray ⌘N on the Welcome screen is harmless (Welcome
+    // owns its own ⌘N → new-project form).
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
+      e.preventDefault();
+      void newRootFile();
       return;
     }
     // Run (⇧F10) / Debug (⇧F9) — match the Run menu + toolbar.
@@ -376,7 +403,11 @@
                 {#if item.sep}
                   <Menubar.Separator />
                 {:else}
-                  <Menubar.Item onclick={item.action}>
+                  <Menubar.Item
+                    onclick={item.action}
+                    disabled={item.disabled?.() ?? false}
+                    data-testid={item.testId}
+                  >
                     {item.label}
                     {#if item.shortcut}<Menubar.Shortcut>{item.shortcut}</Menubar.Shortcut>{/if}
                   </Menubar.Item>
@@ -784,5 +815,6 @@
     </footer>
   </div>
   <McpHelpModal open={mcpHelpOpen} onClose={() => (mcpHelpOpen = false)} />
+  <AboutModal open={aboutOpen} onClose={() => (aboutOpen = false)} />
 </Tooltip.Provider>
 {/if}

@@ -10,6 +10,7 @@
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
   import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import { copyPath } from "$lib/tree-actions";
+  import { APP_VERSION } from "$lib/version";
 
   import {
     Boxes,
@@ -68,6 +69,15 @@
     location = await defaultLocation();
     queueMicrotask(() => nameInput?.focus());
   }
+
+  // Arrived via File → New Project… (state.welcomeIntent): open the new-project
+  // form straight away, then clear the intent so a later manual return to
+  // Welcome stays on the idle launcher. Consume-once, like app.pendingJump.
+  $effect(() => {
+    if (app.welcomeIntent !== "new") return;
+    app.welcomeIntent = null;
+    void startNew();
+  });
 
   function cancelNew() {
     mode = "idle";
@@ -437,7 +447,7 @@
 
   <!-- ── Bottom frame ── -->
   <footer class="reveal relative z-20 flex shrink-0 items-center justify-between px-8 pb-6 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70" style="--d:360ms">
-    <span>v0.1.0</span>
+    <span>v{APP_VERSION}</span>
     <span>⌘N new · ⌘O open</span>
   </footer>
 </div>

@@ -128,6 +128,22 @@ export interface ProjectOps {
   resetWorkspace(): void;
 }
 
+/**
+ * The editor's command surface for the application menu (Edit → Undo / Redo /
+ * Cut / Copy / Paste, issue #59). The active CodeMirror view is component-local
+ * to Editor.svelte; rather than leak the raw view into global state, the editor
+ * registers these thin commands on mount and clears them on destroy. The menu
+ * dispatches through here and never touches CodeMirror — the mirror of the
+ * `setBufferFormatter` seam.
+ */
+export interface EditorCommandBus {
+  undo(): void;
+  redo(): void;
+  cut(): void;
+  copy(): void;
+  paste(): void;
+}
+
 const RECENTS_KEY = "dcs.recents";
 const RECENTS_MAX = 8;
 
@@ -204,6 +220,14 @@ class AppState {
   rootPath = $state<string | null>(null);
   rootName = $state<string>("");
 
+  /**
+   * Set when the user reaches the Welcome screen via File → New Project… (issue
+   * #59): the Welcome screen reads it once and opens its new-project form, so
+   * "New Project…" is meaningfully different from a bare Close Project (which
+   * lands on the idle Welcome). Null on a plain close.
+   */
+  welcomeIntent = $state<"new" | null>(null);
+
   // Recently opened projects (most-recent first), persisted to localStorage.
   recents = $state<RecentProject[]>(loadRecents());
 
@@ -231,6 +255,11 @@ class AppState {
   // FormatBeforeSave: no buffer → unchanged). Held here so EVERY save entry
   // point (editor ⌘S, global ⌘S, File → Save) reformats identically.
   private formatActiveBuffer: (() => Promise<void>) | null = null;
+
+  // The editor's command surface for the Edit menu (issue #59). Registered by
+  // the editor on mount, cleared (`null`) on destroy; absent when no editor is
+  // mounted, so the Edit menu items disable (see `canEdit`).
+  private editorBus = $state<EditorCommandBus | null>(null);
 
   /** The active tab's record, if any file is open. */
   get activeDoc(): OpenDoc | null {
@@ -420,6 +449,19 @@ class AppState {
     } finally {
       this.switching = false;
     }
+  }
+
+  /**
+   * File → New Project… (issue #59): the scaffold flow lives on the Welcome
+   * screen (templates.ts), so a "new project" returns there with its
+   * new-project form already open — distinct from Close Project, which lands on
+   * the idle Welcome. closeProject owns the unsaved-changes guard; if the user
+   * cancels that prompt the project stays open, so the intent is disarmed.
+   */
+  async newProject(): Promise<void> {
+    this.welcomeIntent = "new";
+    await this.closeProject();
+    if (this.rootPath !== null) this.welcomeIntent = null;
   }
 
   /** How many open tabs have unsaved edits — the blast radius a project
@@ -807,6 +849,46 @@ class AppState {
    */
   setBufferFormatter(format: (() => Promise<void>) | null) {
     this.formatActiveBuffer = format;
+  }
+
+  /**
+   * Register the editor's command surface for the Edit menu (issue #59). The
+   * editor sets this on mount and clears it (`null`) on destroy — the mirror of
+   * setBufferFormatter.
+   */
+  setEditorCommands(bus: EditorCommandBus | null) {
+    this.editorBus = bus;
+  }
+
+  /**
+   * Whether the Edit menu's editor commands can act: a text editor is mounted
+   * and its active tab is editable text. Binary / still-loading tabs and the
+   * no-file state disable Undo / Redo / Cut / Copy / Paste. Gated on the active
+   * doc being editable text rather than DOM focus on purpose — opening the menu
+   * moves focus off the editor, so a focus test would disable the very command
+   * the user just reached for.
+   */
+  get canEdit(): boolean {
+    return this.editorBus !== null && this.activeDoc?.kind === "text";
+  }
+
+  // Edit-menu dispatchers (issue #59). Each is a no-op unless an editable text
+  // editor is active — the menu items are disabled then, but the guard also
+  // covers the keyboard / edge paths so a stray dispatch can never NPE.
+  editUndo() {
+    if (this.canEdit) this.editorBus?.undo();
+  }
+  editRedo() {
+    if (this.canEdit) this.editorBus?.redo();
+  }
+  editCut() {
+    if (this.canEdit) this.editorBus?.cut();
+  }
+  editCopy() {
+    if (this.canEdit) this.editorBus?.copy();
+  }
+  editPaste() {
+    if (this.canEdit) this.editorBus?.paste();
   }
 
   /**

@@ -59,6 +59,22 @@ environment via the bridge's `eval`; the result lands in the **Console** panel.
 | ---------- | ----------- | --------------------------------------------------------------------- |
 | Run in DCS | `Mod-Enter` | Runs the current selection, else the whole file. Also on the editor right-click menu, the file-tree right-click ("Run in DCS"), and the tab-strip ▶ button (same selection-else-whole gesture for the active file). |
 
+## Application menu (issue #59)
+
+The top File / Edit / Help menus dispatch real actions — no item is a dead
+no-op. One carries its own shortcut:
+
+| Action   | Keybinding | Notes                                                                 |
+| -------- | ---------- | --------------------------------------------------------------------- |
+| New File | `Mod-n`    | Creates `untitled.lua` (then `untitled-2.lua`, …) under the project root and opens it; rename it in the tree. File → New File. |
+
+**Edit menu** — Undo / Redo / Cut / Copy / Paste act on the focused editor and
+are **disabled when no text editor is open**. Their keys (`Mod-z` / `Mod-Shift-z`
+and the platform clipboard keys) come from CodeMirror's `basicSetup`; the menu
+routes the same commands through the app store, so the entries are live rather
+than decoration. **Help → About** opens the About dialog (app name, real
+version, repository / docs links).
+
 ## Navigation / editing from the base setup
 
 These come from CodeMirror's `basicSetup` and are listed here for completeness;
