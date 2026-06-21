@@ -4,6 +4,7 @@ import {
   classifyBuildDone,
   dcsConnectedNotification,
   dcsDisconnectedNotification,
+  shouldRecordLinkEvent,
   launchDoneNotification,
   publishSharedNotification,
   publishReleasedNotification,
@@ -73,6 +74,23 @@ describe("link / launch classifiers", () => {
       severity: "info",
       message: "DCS exited.",
     });
+  });
+});
+
+describe("shouldRecordLinkEvent", () => {
+  it("records a real flip from the seeded baseline", () => {
+    expect(shouldRecordLinkEvent(true, false)).toBe(true); // a live link drops
+    expect(shouldRecordLinkEvent(false, true)).toBe(true); // a dropped link recovers
+  });
+
+  it("suppresses the boot re-emit of the current state (no flip)", () => {
+    expect(shouldRecordLinkEvent(true, true)).toBe(false);
+    expect(shouldRecordLinkEvent(false, false)).toBe(false);
+  });
+
+  it("stays silent on the first event when no snapshot seeded the baseline", () => {
+    expect(shouldRecordLinkEvent(null, true)).toBe(false);
+    expect(shouldRecordLinkEvent(null, false)).toBe(false);
   });
 });
 
@@ -167,6 +185,11 @@ describe("relativeTime", () => {
     expect(relativeTime(now, now - 2 * 60_000)).toBe("2m ago");
     expect(relativeTime(now, now - 3 * 3_600_000)).toBe("3h ago");
     expect(relativeTime(now, now - 2 * 86_400_000)).toBe("2d ago");
+  });
+
+  it("caps at days — entries are session-scoped, so no month/year branch", () => {
+    expect(relativeTime(now, now - 45 * 86_400_000)).toBe("45d ago");
+    expect(relativeTime(now, now - 800 * 86_400_000)).toBe("800d ago");
   });
 
   it("never reads negative for a future timestamp", () => {

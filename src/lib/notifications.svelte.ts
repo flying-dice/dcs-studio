@@ -13,11 +13,12 @@
 
 import { isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { BuildDone } from "./api";
+import { dcsStatus, type BuildDone } from "./api";
 import {
   classifyBuildDone,
   dcsConnectedNotification,
   dcsDisconnectedNotification,
+  shouldRecordLinkEvent,
   launchDoneNotification,
   appendEntry,
   unreadCountOf,
@@ -39,6 +40,11 @@ export class NotificationStore {
   private open = false;
   // Backend listeners are attached once, from the root layout.
   private listening = false;
+  // Last-known DCS link state, seeded from the backend snapshot before the
+  // listeners attach (see init). A link event raises an entry only when it
+  // flips this — the relay re-emits the current state at boot, which is not a
+  // transition. `null` until seeded: the first event then sets it silently.
+  private linkConnected: boolean | null = null;
 
   /**
    * Unseen count for the rail bell badge (model `UnreadCount`). A getter over
@@ -96,6 +102,12 @@ export class NotificationStore {
    */
   async init(): Promise<void> {
     if (this.listening || !isTauri()) return;
+    // Seed the last-known link state before attaching listeners. The relay
+    // re-emits the current link state at startup (dcs.rs:59); seeding first
+    // means that boot emit predates this listener (dropped, not recorded), and
+    // every event we do observe is matched against the baseline — so only a
+    // real flip raises an entry, never a routine launch.
+    await this.seedLinkState();
     const attached: UnlistenFn[] = [];
     try {
       attached.push(
@@ -105,10 +117,10 @@ export class NotificationStore {
         }),
       );
       attached.push(
-        await listen("dcs://connected", () => this.add(dcsConnectedNotification())),
+        await listen("dcs://connected", () => this.onLinkEvent(true)),
       );
       attached.push(
-        await listen("dcs://disconnected", () => this.add(dcsDisconnectedNotification())),
+        await listen("dcs://disconnected", () => this.onLinkEvent(false)),
       );
       attached.push(
         await listen("launch://done", () => this.add(launchDoneNotification())),
@@ -117,6 +129,33 @@ export class NotificationStore {
     } catch (error) {
       for (const unlisten of attached) unlisten();
       throw error;
+    }
+  }
+
+  /**
+   * Record a link up/down only on a real flip from the last-known state. The
+   * relay's boot emit carries the current state, not a change, and the status
+   * bar already shows it — see `shouldRecordLinkEvent`.
+   */
+  private onLinkEvent(connected: boolean): void {
+    const record = shouldRecordLinkEvent(this.linkConnected, connected);
+    this.linkConnected = connected;
+    if (record) {
+      this.add(connected ? dcsConnectedNotification() : dcsDisconnectedNotification());
+    }
+  }
+
+  /**
+   * Best-effort baseline from the backend snapshot — the same `dcs_status`
+   * source `dcs-link.svelte.ts` seeds from. On failure the baseline stays
+   * unknown and the first link event establishes it without an entry.
+   */
+  private async seedLinkState(): Promise<void> {
+    try {
+      const { connected } = await dcsStatus();
+      this.linkConnected = connected;
+    } catch {
+      /* no snapshot — first link event sets the baseline, no spurious entry */
     }
   }
 }

@@ -81,6 +81,21 @@ export function dcsDisconnectedNotification(): NotificationInput {
   return { source: "dcs-link", severity: "warning", message: "DCS link dropped." };
 }
 
+/**
+ * Whether a `dcs://connected` / `dcs://disconnected` event is a real link
+ * transition worth a durable entry, given the last-known state `last`. The
+ * backend watch relay (crates/app/src/dcs.rs:59) emits the *current* link state
+ * once at startup — not only on changes — so recording every event would raise
+ * a spurious entry on a routine launch where nothing was missed (issue #56
+ * Risks: "notify only on state transitions"; the status bar already shows the
+ * live state). Records only on an actual flip. `last` is `null` until the
+ * baseline is seeded from the `dcs_status` snapshot; while unknown the first
+ * event establishes it silently rather than raising an entry.
+ */
+export function shouldRecordLinkEvent(last: boolean | null, connected: boolean): boolean {
+  return last !== null && last !== connected;
+}
+
 /** A managed DCS launch exited — `launch://done` (payload-less). */
 export function launchDoneNotification(): NotificationInput {
   return { source: "launch", severity: "info", message: "DCS exited." };
@@ -151,6 +166,9 @@ export function withoutEntry(list: NotificationEntry[], id: number): Notificatio
  * A compact "2m ago" for `atMs` measured against `nowMs` (both epoch ms). The
  * clock is a parameter so this stays pure and testable — the Welcome panel's
  * `ago`, with the `now` lifted out. A future timestamp never reads negative.
+ * Days is the coarsest unit: entries are in-memory and session-scoped (capped
+ * at MAX_NOTIFICATIONS, never persisted), so no row survives long enough to
+ * reach a month/year branch.
  */
 export function relativeTime(nowMs: number, atMs: number): string {
   const s = Math.max(0, Math.floor((nowMs - atMs) / 1000));
@@ -161,8 +179,5 @@ export function relativeTime(nowMs: number, atMs: number): string {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
   const d = Math.floor(h / 24);
-  if (d < 30) return `${d}d ago`;
-  const mo = Math.floor(d / 30);
-  if (mo < 12) return `${mo}mo ago`;
-  return `${Math.floor(mo / 12)}y ago`;
+  return `${d}d ago`;
 }

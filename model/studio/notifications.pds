@@ -79,13 +79,17 @@ public container NotificationCenter for studio::core::Studio {
   /// The IDE-hosted MCP server's boot status. Only a fail-closed bind error (a
   /// port clash the developer must resolve) is notification-worthy; a healthy
   /// server is review-only via the status bar, so a running server classifies
-  /// to nothing. A not-running server always carries its bind error.
+  /// to nothing — as does a not-running server with no recorded error yet (one
+  /// still coming up), since there is nothing actionable to disclose.
   #[manual]
-  public ClassifyMcpStatus(running: bool, error: string): Option<studio::notifications::Notification> {
+  public ClassifyMcpStatus(running: bool, error: Option<string>): Option<studio::notifications::Notification> {
     if (running) {
       return None
     }
-    clash = studio::notifications::Notification from { "mcp", "error", self.McpErrorMessage(error), false }
+    if (error.isNone) {
+      return None
+    }
+    clash = studio::notifications::Notification from { "mcp", "error", self.McpErrorMessage(error.value), false }
     return Some(clash)
   }
 
@@ -118,6 +122,7 @@ feature OnlyFailClosedMcpIsNoticed for studio::notifications::NotificationCenter
   when "the port is already taken and the server fails closed"
   then "an error notification records the bind failure"
   but "a server that binds and serves records nothing — the status bar already shows it"
+  but "a not-running server still coming up — no bind error recorded yet — also records nothing"
 }
 
 /// Informational events are review-only — they never send the developer
