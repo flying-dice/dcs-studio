@@ -2,6 +2,7 @@
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod build;
+mod database_cmd;
 mod dcs;
 mod format;
 mod fs;
@@ -148,6 +149,10 @@ pub fn run() {
             term::term_default_shell,
             todos_cmd::scan_todos,
             todos_cmd::scan_file_todos,
+            database_cmd::db_write_dir,
+            database_cmd::db_discover,
+            database_cmd::db_tables,
+            database_cmd::db_query,
             watch::watch_start,
             watch::watch_stop,
             mission::dcs_detect_mission_scripts,

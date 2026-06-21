@@ -48,6 +48,10 @@ zip = "2"
 # Persistent per-user data dir for the Marketplace content store + ledger
 # (issue #10) — must survive reboot, unlike temp.
 dirs = "6"
+# Read-only browser over the SQLite DBs the in-DCS dcs_studio.dll writes
+# (model/studio/database.pds, issue #49). Bundled SQLite (vendored C via cc) —
+# no external sqlite3.dll, same pin as crates/dcs-bridge.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

@@ -29,6 +29,7 @@ import { fileWatcher } from "./file-watcher.svelte";
 import { lang } from "./lang/intel.svelte";
 import { saveWithFormat } from "./save-format";
 import { todos } from "./todos.svelte";
+import { database } from "./database.svelte";
 import { marketplace } from "./marketplace.svelte";
 import { publish } from "./publish.svelte";
 import type { Extension } from "@codemirror/state";
@@ -373,6 +374,12 @@ class AppState {
       // …and rescan comment tags for the Todos panel (model/studio/todos.pds
       // RefreshAll) — equally fire-and-forget and non-fatal.
       void todos.refreshAll(path);
+      // …and rediscover the SQLite DBs the DLL writes under lfs.writedir() for
+      // the Database panel (model/studio/database.pds RefreshDatabases). Reset
+      // first so a previously-opened database's tables/result/selection don't
+      // leak across the switch; discovery itself is fire-and-forget and non-fatal.
+      database.reset();
+      void database.refresh();
     } finally {
       this.switching = false;
     }
@@ -409,6 +416,7 @@ class AppState {
       void watchStop().catch((e) => console.error("watch stop failed:", e));
       this.projectOps.resetWorkspace();
       todos.reset();
+      database.reset();
     } finally {
       this.switching = false;
     }
