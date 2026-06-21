@@ -1,8 +1,14 @@
-//! dcs::bridge — DCS World with the dcs-bridge DLL injected: a GameGUI hook
+//! dcs::bridge — DCS World with the dcs_studio DLL injected: a GameGUI hook
 //! loads the native module, which serves JSON-RPC over WebSocket on
 //! ws://127.0.0.1:25569/ws. Queued requests are drained once per simulation
 //! frame — which fires at the main menu too (verified live), so RPCs answer
 //! from boot.
+//!
+//! The native module's Lua surface is self-describing: every binding is
+//! registered through a facade that records its EmmyLua type, emitted as a
+//! `dcs_studio.d.lua` definition file (the `emit_dlua` call) so the editor's
+//! lua-analyzer gives completion/hover on `require("dcs_studio")`. This is
+//! tooling, kept out of the disclosed bodies below.
 
 /// Opaque JSON value carried across the RPC boundary.
 public data Json;
@@ -91,7 +97,7 @@ container Sim for dcs::bridge::Dcs {
   RegisterFrameCallback(): void;
 }
 
-/// GameGUI hook (Scripts/Hooks/DcsStudio.lua): loads the native dcs_bridge
+/// GameGUI hook (Scripts/Hooks/DcsStudio.lua): loads the native dcs_studio
 /// module from Mods/tech/DcsStudio/bin, registers the RPC methods, and
 /// drains the request queue once per simulation frame.
 container Hook for dcs::bridge::Dcs {
@@ -202,6 +208,123 @@ component Router for dcs::bridge::RpcServer {
   }
 }
 
+/// A filesystem write failure or a refused path. The bridge confines every
+/// write to the DCS write dir (lfs.writedir()); a path that escapes it is
+/// rejected before any IO touches disk.
+public data FileError { message: string }
+
+/// Sim-side file writing under the guarded DCS write root: Lua running in the
+/// sim dumps tables/telemetry to disk. Every destination resolves under
+/// lfs.writedir(), and a path that is absolute, drive-prefixed, or climbs out
+/// with `..` is refused — the same lexical guard the installer uses
+/// (studio::install StaysUnder).
+container Files for dcs::bridge::Dcs {
+  /// lfs.writedir() — the DCS Saved Games root every write is confined to.
+  WriteRoot(): string;
+
+  /// Whether every component of `path` is a plain name (no `..`, `.`, absolute
+  /// or drive-prefixed segment), so joining it under the root cannot escape.
+  StaysUnderRoot(path: string): bool;
+
+  /// Join the write root and a contained relative path into an absolute path.
+  Join(root: string, path: string): string;
+
+  /// The create-parents + truncate/append write of `content` to an
+  /// already-resolved absolute path. IO failures (locked file, full disk)
+  /// become a FileError.
+  WriteResolved(absolute: string, content: string, append: bool): Result<void, dcs::bridge::FileError>;
+
+  /// Write `content` to `path` under the write root, truncating unless
+  /// `append`. A path that escapes the root is refused before any IO; an IO
+  /// failure surfaces as a FileError.
+  Write(path: string, content: string, append: bool): Result<void, dcs::bridge::FileError> {
+    if (!self.StaysUnderRoot(path)) {
+      escape = dcs::bridge::FileError from { path }
+      return Err(escape)
+    }
+    root = string from self.WriteRoot()
+    absolute = string from self.Join(root, path)
+    io = Result<void, dcs::bridge::FileError> from self.WriteResolved(absolute, content, append)
+    if (io.isErr) {
+      return Err(io.error)
+    }
+    return Ok
+  }
+
+  /// Sim-safe JSON encode (NaN/Inf → null, non-UTF-8 lossy); never raises.
+  EncodeJson(table: dcs::bridge::Json): Result<string, dcs::bridge::FileError>;
+
+  /// Serialize `table` sim-safely and Write it as JSON to `path`. The escape
+  /// and IO arms are Write's; a value that cannot be encoded is the added
+  /// failure arm.
+  DumpTable(path: string, table: dcs::bridge::Json): Result<void, dcs::bridge::FileError> {
+    encoded = Result<string, dcs::bridge::FileError> from self.EncodeJson(table)
+    if (encoded.isErr) {
+      return Err(encoded.error)
+    }
+    written = Result<void, dcs::bridge::FileError> from self.Write(path, encoded.value, false)
+    if (written.isErr) {
+      return Err(written.error)
+    }
+    return Ok
+  }
+}
+
+/// A SQLite failure (open, SQL syntax, a busy lock). Surfaced to Lua as
+/// (nil, message), never a panic.
+public data SqlError { message: string }
+
+/// An open SQLite database handle (mlua userdata). Constructed by Open; a
+/// file-backed handle's database is confined to the DCS write root.
+data SqliteHandle;
+
+/// Embedded SQLite reachable from sim-side Lua. A file-backed database resolves
+/// under lfs.writedir() (":memory:" excepted); the handle opens with WAL and a
+/// zero busy timeout so a lock returns SQLITE_BUSY immediately instead of
+/// freezing the sim frame.
+container Sqlite for dcs::bridge::Dcs {
+  /// lfs.writedir() — the root a file-backed database is confined to.
+  WriteRoot(): string;
+
+  /// Whether `path` stays under the write root (no `..`, absolute, or drive).
+  StaysUnderRoot(path: string): bool;
+
+  /// Whether `path` is the special in-memory database name (":memory:").
+  IsMemory(path: string): bool;
+
+  /// Join the write root and a contained relative path into an absolute path.
+  Join(root: string, path: string): string;
+
+  /// Open the connection at an already-resolved target (an absolute path or the
+  /// in-memory name) and apply the per-frame-safety pragmas.
+  Connect(target: string): Result<dcs::bridge::SqliteHandle, dcs::bridge::SqlError>;
+
+  /// Open (creating if needed) a database at `path` under the write root, or an
+  /// in-memory DB for ":memory:". A path that escapes the root is refused
+  /// before any connection is opened.
+  Open(path: string): Result<dcs::bridge::SqliteHandle, dcs::bridge::SqlError> {
+    if (self.IsMemory(path)) {
+      memory = Result<dcs::bridge::SqliteHandle, dcs::bridge::SqlError> from self.Connect(path)
+      return memory
+    }
+    if (!self.StaysUnderRoot(path)) {
+      escape = dcs::bridge::SqlError from { path }
+      return Err(escape)
+    }
+    root = string from self.WriteRoot()
+    absolute = string from self.Join(root, path)
+    opened = Result<dcs::bridge::SqliteHandle, dcs::bridge::SqlError> from self.Connect(absolute)
+    return opened
+  }
+
+  /// Execute SQL. With bind params, one parameterised statement returning
+  /// rows-affected; without, a statement batch (e.g. a schema) returning 0.
+  Exec(handle: dcs::bridge::SqliteHandle, sql: string, params: Option<dcs::bridge::Json>): Result<number, dcs::bridge::SqlError>;
+
+  /// Run a query, returning its rows as JSON — an array of column-keyed objects.
+  Query(handle: dcs::bridge::SqliteHandle, sql: string, params: Option<dcs::bridge::Json>): Result<dcs::bridge::Json, dcs::bridge::SqlError>;
+}
+
 /// The bridge answers before any mission is loaded.
 feature AnswersFromBoot for dcs::bridge::Dcs {
   given "DCS has booted to the main menu with the bridge injected"
@@ -224,4 +347,48 @@ feature LuaErrorSurfaced for dcs::bridge::Dcs {
   when "an eval'd snippet raises a Lua error"
   then "an internal-error response carries the message"
   and "the stack traceback is stripped from it"
+}
+
+/// The runtime's serde helpers never crash the sim. `json.encode` is strict
+/// (a non-representable value — NaN/Inf, a function — returns nil + an error),
+/// while `json.safe_encode` is total: it coerces NaN/Inf to null and decodes
+/// non-UTF-8 strings lossily, so it returns a string for any input and never
+/// raises. (The codecs themselves are plumbing, kept out of the disclosed
+/// bodies; this is the one guarantee that matters in a live sim.)
+feature SafeEncodeNeverPanics for dcs::bridge::Dcs {
+  given "Lua code running in the sim with a value holding NaN or a non-UTF-8 string"
+  when "it calls dcs_studio.json.safe_encode on that value"
+  then "a JSON string returns with NaN coerced to null and bytes decoded lossily"
+  and "the sim is never brought down by the encode"
+}
+
+/// File writes cannot escape the DCS write dir.
+feature DumpRefusesPathEscape for dcs::bridge::Dcs {
+  given "Lua running in the sim"
+  when "it calls dcs_studio.file.write_text with an absolute path or one containing `..`"
+  then "the write is refused with a path-escape error"
+  and "nothing is written outside lfs.writedir()"
+}
+
+/// A table dumps to a JSON file under the write dir.
+feature DumpTableToJson for dcs::bridge::Dcs {
+  given "Lua running in the sim with a data table"
+  when "it calls dcs_studio.file.dump on a `.json` path under the write dir"
+  then "the table is serialized sim-safely and written under lfs.writedir()"
+}
+
+/// A file-backed database lands under the DCS write dir.
+feature SqliteDbUnderWriteRoot for dcs::bridge::Dcs {
+  given "Lua running in the sim"
+  when "it calls dcs_studio.sqlite.open on a relative path under the write dir"
+  then "the database file is created under lfs.writedir()"
+  and "a path that escapes the write root is refused"
+}
+
+/// SQL failures surface as errors, never crash the sim.
+feature SqliteErrorSurfaced for dcs::bridge::Dcs {
+  given "an open database"
+  when "a query has a SQL error or hits a busy lock"
+  then "the call returns nil plus an error message"
+  and "the sim keeps running"
 }

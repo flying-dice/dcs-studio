@@ -1,0 +1,107 @@
+//! dcs::debug — the in-sim debugger surface of the dcs_studio runtime
+//! (crates/dcs-bridge/src/debug.rs). The IDE debugger (studio::debug) drives a
+//! breakpoint registry over the bridge's `eval` control surface; the sim's Lua
+//! line hook consults it to decide when to pause.
+//!
+//! Two Lua states matter. The dcs_studio DLL loads in the GameGUI HOOKS state
+//! (DCS.*, eval), so a rust-dll *hook* mod debugs there directly. A MISSION
+//! script runs in a separate, sandboxed mission lua_State the bridge has no
+//! native handle to (studio::mission) — debugging it is a later sub-phase and
+//! depends on de-sanitizing `debug.*`.
+//!
+//! Scope: BreakpointRegistry is implemented. PauseController is the disclosed
+//! CONTRACT the next sub-phase satisfies — the live line hook + the re-entrant
+//! pause-pump that keeps the bridge responsive while a breakpoint is held, the
+//! stack snapshot, and evaluate-in-frame.
+
+/// A set of breakpoint lines for one source file (1-based).
+public data Breakpoints { source: string, lines: number[] }
+
+/// The sim-side breakpoint registry: the IDE debugger sets breakpoints per
+/// source, and the line hook asks whether a given source:line should pause.
+container BreakpointRegistry for dcs::bridge::Dcs {
+  /// Replace the breakpoints for `source` with `lines`. An empty list clears
+  /// that source (the editor sends the full set per source). Returns the count set.
+  SetBreakpoints(source: string, lines: number[]): number {
+    deduped = number[] from self.Dedup(lines)
+    self.Store(source, deduped)
+    count = number from self.Count(deduped)
+    return count
+  }
+
+  /// Drop duplicate lines, keeping ascending order.
+  Dedup(lines: number[]): number[];
+
+  /// Persist (or, for an empty set, clear) the breakpoints for `source`.
+  Store(source: string, lines: number[]): void;
+
+  /// How many lines `lines` holds.
+  Count(lines: number[]): number;
+
+  /// Whether a breakpoint is set at `source:line` — consulted by the line hook.
+  ShouldPause(source: string, line: number): bool;
+
+  /// Set (or, with an empty cond, clear) a conditional breakpoint: the hook
+  /// pauses at `source:line` only when `cond` evaluates truthy in the stopped
+  /// frame.
+  SetCondition(source: string, line: number, cond: string): void;
+
+  /// The condition expression on `source:line`, if any.
+  ConditionAt(source: string, line: number): Option<string>;
+
+  /// Remove every breakpoint and condition.
+  Clear(): void;
+}
+
+/// The live-pause machine the line hook drives once a breakpoint hits. Declared
+/// as the contract the next sub-phase implements: on a hit it snapshots the
+/// stack and enters a bounded pump that keeps draining RPC — so the editor
+/// stays responsive while the world is frozen — resuming on continue/step or
+/// after an auto-continue timeout, so a vanished debugger can never freeze the
+/// sim forever.
+container PauseController for dcs::bridge::Dcs {
+  /// The Lua line hook: on each line, pause if a breakpoint is set here.
+  OnLine(source: string, line: number): void;
+
+  /// Snapshot the paused stack for the editor, serialized sim-safely so an
+  /// inspected NaN/non-UTF-8 value never crashes the sim being debugged. Each
+  /// frame lists its scopes (Locals/Upvalues/Globals) as expandable refs; the
+  /// scope/variable values stay in a handle registry kept alive for the pause
+  /// and inspected lazily via Expand. Upvalues appear only where the host
+  /// provides debug.getupvalue (DCS's hooks env strips it).
+  Snapshot(): dcs::bridge::Json;
+
+  /// Expand a scope or variable ref captured at the current pause into its
+  /// child variables — lazy table inspection (tables expand on demand rather
+  /// than serialized up front). Refs are valid only for the pause that minted
+  /// them; cleared on resume.
+  Expand(handle: number): dcs::bridge::Json;
+
+  /// Drain RPC while paused until a resume/step arrives or the safety timeout
+  /// elapses; the timeout auto-continues so the sim is never frozen forever.
+  PumpUntilResumed(): void;
+
+  /// Evaluate `expr` in the paused frame's environment (locals → upvalues →
+  /// globals, via setfenv). Powers watches and the debug console.
+  EvalInFrame(frame: number, expr: string): Result<dcs::bridge::Json, dcs::bridge::LuaError>;
+
+  /// Manual break-all: stop at the next line of debugged code. Delivered to the
+  /// busy sim thread by the hook's throttled RPC drain during a run.
+  RequestPause(): void;
+}
+
+/// Breakpoints set by the IDE are honoured by the registry.
+feature BreakpointRegistered for dcs::bridge::Dcs {
+  given "the IDE debugger connected over the bridge"
+  when "it sets breakpoints for a source file over the bridge"
+  then "the registry reports those lines as pause points"
+  and "an empty set for that source clears them"
+}
+
+/// A detached debugger never freezes the sim.
+feature DebuggerDetachNeverFreezesSim for dcs::bridge::Dcs {
+  given "the sim paused at a breakpoint"
+  when "the IDE debugger disconnects without sending continue"
+  then "the pause auto-continues after the safety timeout"
+  and "the simulation resumes"
+}

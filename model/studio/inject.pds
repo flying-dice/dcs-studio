@@ -65,10 +65,10 @@ public container Injector for studio::core::Studio {
     return Ok(refreshed)
   }
 
-  /// Resolve the freshly built dcs_bridge.dll next to (or near) the exe.
+  /// Resolve the freshly built dcs_studio.dll next to (or near) the exe.
   SourceDllPath(): Option<string>;
 
-  /// Copy to Mods/tech/DcsStudio/bin/dcs_bridge.dll, creating dirs on demand.
+  /// Copy to Mods/tech/DcsStudio/bin/dcs_studio.dll, creating dirs on demand.
   CopyDll(source: string, writeDir: string): Result<void, studio::inject::InjectError>;
 
   /// Write the embedded hook to Scripts/Hooks/DcsStudio.lua.

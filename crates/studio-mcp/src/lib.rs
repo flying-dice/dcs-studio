@@ -210,6 +210,7 @@ pub fn tools_list() -> Value {
     tools.extend(launcher_tool_specs());
     tools.extend(mission_tool_specs());
     tools.extend(lang_tool_specs());
+    tools.extend(debug_tool_specs());
     json!({ "tools": tools })
 }
 
@@ -233,6 +234,9 @@ fn tools_call(session: &Session, params: &Value) -> Result<Value, ToolError> {
         }
     }
     if let Some(result) = dcs_tools(session, name, &arguments) {
+        return result;
+    }
+    if let Some(result) = debug_tools(session, name, &arguments) {
         return result;
     }
     Err(ToolError::invalid(format!("unknown tool: {name}")))
@@ -539,6 +543,183 @@ fn forward_to_dcs(session: &Session, method: &str, params: Option<Value>) -> Val
         Ok(value) => tool_json(&value, false),
         Err(message) => tool_text(&message, true),
     }
+}
+
+// ---- debugger tools ----------------------------------------------------------
+//
+// The in-IDE Lua debugger (model/studio/debug.pds) exposed over MCP so an agent
+// can drive it: breakpoints update the sim-side registry, and run/state/continue
+// drive the scoped line-hook debugger in the GameGUI hook. Breakpoint calls
+// `eval` a `dcs_studio.debug.*` expression; run/state/continue forward the
+// `debug_*` RPC methods.
+
+/// Render a Lua string literal, escaping the embedding hazards so a source path
+/// can't break out of the quotes.
+fn lua_string(s: &str) -> String {
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r");
+    format!("\"{escaped}\"")
+}
+
+fn debug_tool_specs() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "debug_set_breakpoints",
+            "description": "Set the breakpoints for a source file in the in-sim debugger (replaces the full set for that source). Lines are 1-based.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source": { "type": "string", "description": "Source identifier the breakpoints belong to (e.g. \"=demo\")" },
+                    "lines": { "type": "array", "items": { "type": "integer" }, "description": "1-based breakpoint lines" }
+                },
+                "required": ["source", "lines"]
+            }
+        }),
+        json!({
+            "name": "debug_breakpoints",
+            "description": "List the breakpoints currently set in the in-sim debugger, by source.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "debug_clear_breakpoints",
+            "description": "Clear every breakpoint in the in-sim debugger.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "debug_run",
+            "description": "Run a Lua chunk under the scoped line-hook debugger. It pauses at breakpoints set for `source`; poll debug_state and resume with debug_continue. Blocks the sim frame only while paused, with a 30s auto-continue.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source": { "type": "string", "description": "Source identifier (match debug_set_breakpoints; e.g. \"=demo\")" },
+                    "code": { "type": "string", "description": "Lua source to run under the debugger" }
+                },
+                "required": ["source", "code"]
+            }
+        }),
+        json!({
+            "name": "debug_state",
+            "description": "Whether the debugger is paused, and if so a snapshot of the call stack: frames[] with source/line/name and scope refs (Locals/Upvalues/Globals).",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "debug_expand",
+            "description": "Expand a scope/variable ref from the pause snapshot into its children (each with name/type/value preview and its own ref if expandable). Lazy table inspection; only valid while paused.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "ref": { "type": "integer", "description": "A scope or variable ref from debug_state / a prior debug_expand" }
+                },
+                "required": ["ref"]
+            }
+        }),
+        json!({
+            "name": "debug_eval",
+            "description": "Evaluate a Lua expression in a paused frame (names resolve through that frame's locals/upvalues then globals). Returns the value preview + type, an expandable ref for tables, or an error.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "frame": { "type": "integer", "description": "0-based frame index from debug_state (default 0 = top)" },
+                    "expr": { "type": "string", "description": "Lua expression (or statement)" }
+                },
+                "required": ["expr"]
+            }
+        }),
+        json!({
+            "name": "debug_pause",
+            "description": "Request a manual break-all: the debugger stops at the next line of running debugged code.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "debug_continue",
+            "description": "Resume a debugger paused at a breakpoint. `mode` selects continue (default) or a step: \"step_over\", \"step_into\", \"step_out\".",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "mode": { "type": "string", "description": "continue | step_over | step_into | step_out" }
+                }
+            }
+        }),
+    ]
+}
+
+fn debug_tools(session: &Session, name: &str, args: &Value) -> Option<Result<Value, ToolError>> {
+    match name {
+        "debug_set_breakpoints" => Some(debug_set_breakpoints_tool(session, args)),
+        "debug_breakpoints" => Some(Ok(forward_to_dcs(
+            session,
+            "eval",
+            Some(json!({ "code": "return require(\"dcs_studio\").debug.breakpoints()" })),
+        ))),
+        "debug_clear_breakpoints" => Some(Ok(forward_to_dcs(
+            session,
+            "eval",
+            Some(json!({ "code": "return require(\"dcs_studio\").debug.clear_breakpoints()" })),
+        ))),
+        "debug_run" => Some(debug_run_tool(session, args)),
+        "debug_state" => Some(Ok(forward_to_dcs(session, "debug_state", None))),
+        "debug_expand" => match require_u32(args, "ref", "debug_expand") {
+            Ok(ref_id) => Some(Ok(forward_to_dcs(
+                session,
+                "debug_expand",
+                Some(json!({ "ref": ref_id })),
+            ))),
+            Err(e) => Some(Err(e)),
+        },
+        "debug_eval" => match require_str(args, "expr", "debug_eval") {
+            Ok(expr) => {
+                let frame = args.get("frame").and_then(Value::as_u64).unwrap_or(0);
+                Some(Ok(forward_to_dcs(
+                    session,
+                    "debug_eval",
+                    Some(json!({ "frame": frame, "expr": expr })),
+                )))
+            }
+            Err(e) => Some(Err(e)),
+        },
+        "debug_pause" => Some(Ok(forward_to_dcs(session, "debug_pause", None))),
+        "debug_continue" => {
+            let params = args
+                .get("mode")
+                .and_then(Value::as_str)
+                .map(|mode| json!({ "mode": mode }));
+            Some(Ok(forward_to_dcs(session, "debug_continue", params)))
+        }
+        _ => None,
+    }
+}
+
+fn debug_set_breakpoints_tool(session: &Session, args: &Value) -> Result<Value, ToolError> {
+    let source = require_str(args, "source", "debug_set_breakpoints")?;
+    let lines = args
+        .get("lines")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ToolError::invalid("debug_set_breakpoints requires 'lines' (an array)".to_string())
+        })?
+        .iter()
+        .filter_map(|v| v.as_u64().and_then(|n| u32::try_from(n).ok()))
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let code = format!(
+        "return require(\"dcs_studio\").debug.set_breakpoints({}, {{{lines}}})",
+        lua_string(source)
+    );
+    Ok(forward_to_dcs(session, "eval", Some(json!({ "code": code }))))
+}
+
+fn debug_run_tool(session: &Session, args: &Value) -> Result<Value, ToolError> {
+    let source = require_str(args, "source", "debug_run")?;
+    let code = require_str(args, "code", "debug_run")?;
+    Ok(forward_to_dcs(
+        session,
+        "debug_run",
+        Some(json!({ "source": source, "code": code })),
+    ))
 }
 
 // ---- injection tools ---------------------------------------------------------

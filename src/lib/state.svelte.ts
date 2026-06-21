@@ -512,6 +512,21 @@ class AppState {
     this.treeVersion += 1;
   }
 
+  /**
+   * Count of open inline tree edits (a create or rename box). While any box is
+   * open the SWR poll is suspended (FileTree) so the tree doesn't reload and
+   * shift — or blur the box — out from under the user mid-type.
+   */
+  treeEditing = $state(0);
+
+  beginTreeEdit() {
+    this.treeEditing += 1;
+  }
+
+  endTreeEdit() {
+    this.treeEditing = Math.max(0, this.treeEditing - 1);
+  }
+
   /** Whether `path` is at or under `dir` (descendant test for tab coordination). */
   private isUnder(path: string, dir: string): boolean {
     return (

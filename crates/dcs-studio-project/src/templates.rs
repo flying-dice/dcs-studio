@@ -131,6 +131,21 @@ fn mcp_config_file() -> TemplateFile {
     )
 }
 
+/// The generated EmmyLua type definitions for the in-DCS `dcs_studio` DLL
+/// surface, scaffolded so `lua-analyzer` gives completion/hover on
+/// `require("dcs_studio")` (resolved in the GameGUI hooks environment). The
+/// file is regenerated from the binding facade
+/// (`crates/dcs-bridge/src/surface.rs`) and checked in — a types-only `@meta`
+/// file, harmless wherever the runtime module isn't actually loaded.
+fn studio_typedefs_file() -> TemplateFile {
+    TemplateFile {
+        path: "types/dcs_studio.d.lua".to_string(),
+        contents: TemplateContents::Text(
+            include_str!("../../dcs-bridge/types/dcs_studio.d.lua").to_string(),
+        ),
+    }
+}
+
 fn project_block(name: &str, template: &str) -> String {
     format!(
         "\n[project]\nname = \"{}\"\nversion = \"0.1.0\"\nauthor = \"\"\ndescription = \"\"\ntemplate = \"{template}\"\ndcs_min_version = \"2.9.0\"\n",
@@ -194,22 +209,20 @@ fn lua_script(name: &str) -> Vec<TemplateFile> {
                  local {ident} = {{}}\n\n\
                  {ident}.name    = \"{name}\"\n\
                  {ident}.version = \"0.1.0\"\n\n\
-                 local function log(msg)\n\
-                 \x20   -- env.info exists inside the mission scripting environment.\n\
-                 \x20   if env and env.info then\n\
-                 \x20       env.info(string.format(\"[%s] %s\", {ident}.name, msg))\n\
-                 \x20   else\n\
-                 \x20       print(string.format(\"[%s] %s\", {ident}.name, msg))\n\
-                 \x20   end\n\
+                 local function info(msg)\n\
+                 \x20   -- Loaded in the DCS GUI/hooks environment, where the\n\
+                 \x20   -- log API is available -- assume log + log.info.\n\
+                 \x20   log.info(string.format(\"[%s] %s\", {ident}.name, msg))\n\
                  end\n\n\
                  function {ident}.start()\n\
-                 \x20   log(\"loaded v\" .. {ident}.version)\n\
+                 \x20   info(\"loaded v\" .. {ident}.version)\n\
                  end\n\n\
                  {ident}.start()\n\n\
                  return {ident}\n"
             ),
         ),
         lua_script_readme(name, &slug),
+        studio_typedefs_file(),
         mcp_config_file(),
     ]
 }
@@ -268,7 +281,7 @@ fn lua_script_readme(name: &str, slug: &str) -> TemplateFile {
                  Install rules in `dcs-studio.toml` map project files to your DCS folders via\n\
                  named roots (`{{SavedGames}}`, `{{GameInstall}}`), resolved per-machine.\n\n\
                  ## Logs\n\n\
-                 `env.info` output lands in `Saved Games/DCS/Logs/dcs.log`, tagged with the\n\
+                 `log.info` output lands in `Saved Games/DCS/Logs/dcs.log`, tagged with the\n\
                  script name.\n"
         ),
     )
@@ -300,6 +313,7 @@ fn rust_dll(name: &str) -> Vec<TemplateFile> {
         rust_dll_lib_rs(name, &ident),
         rust_dll_hook(name, &slug, &ident),
         rust_dll_readme(name, &slug, &ident),
+        studio_typedefs_file(),
         mcp_config_file(),
     ]
 }
@@ -542,7 +556,21 @@ mod tests {
     #[test]
     fn lua_script_template_scaffolds_valid_lua() {
         let files = render("lua-script", "My Script Mod").expect("known template");
-        assert_eq!(files.len(), 4);
+        assert_eq!(files.len(), 5);
+        // The dcs_studio type definitions are scaffolded for hook-side
+        // completion, and must themselves parse cleanly under the engine.
+        let typedefs = files
+            .iter()
+            .find(|f| f.path == "types/dcs_studio.d.lua")
+            .expect("dcs_studio typedefs scaffolded");
+        let typedef_text = typedefs.contents.as_text().expect("typedefs are text");
+        assert!(typedef_text.contains("---@class dcs_studio"));
+        assert!(
+            dcs_lua_syntax::parser::parse(typedef_text)
+                .diagnostics
+                .is_empty(),
+            "scaffolded dcs_studio.d.lua has syntax findings"
+        );
         let main = files
             .iter()
             .find(|f| f.path.ends_with("main.lua"))

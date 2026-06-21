@@ -33,6 +33,6 @@ export default async function globalSetup(): Promise<void> {
   }
   throw new Error(
     `DCS bridge did not answer /health within ${BOOT_TIMEOUT_MS / 60_000} min — ` +
-      "check Saved Games\\DCS.openbeta\\Logs\\dcs.log (DCS-STUDIO lines) and dcs_bridge.log",
+      "check Saved Games\\DCS.openbeta\\Logs\\dcs.log (DCS-STUDIO lines) and dcs_studio.log",
   );
 }

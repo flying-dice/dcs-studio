@@ -1,5 +1,6 @@
+use crate::facade::{p, p_opt, r, Sub};
 use log::{debug, error, info, warn};
-use mlua::prelude::{LuaMetaMethod, LuaTable};
+use mlua::prelude::LuaMetaMethod;
 use mlua::{Lua, Result, UserData, UserDataMethods};
 
 /// The Lua `logger.Logger` userdata: a namespaced logger constructed with
@@ -61,15 +62,38 @@ impl UserData for Logger {
     }
 }
 
-pub fn inject_module(lua: &Lua, table: &LuaTable) -> Result<()> {
-    let m = lua.create_table()?;
-    m.set("debug", lua.create_function(debug)?)?;
-    m.set("info", lua.create_function(info)?)?;
-    m.set("warn", lua.create_function(warn)?)?;
-    m.set("error", lua.create_function(error)?)?;
-    m.set("Logger", lua.create_proxy::<Logger>()?)?;
+/// Register the `logger` sub-namespace: the level free functions and the
+/// `Logger` userdata proxy, with their `.d.lua` types recorded.
+pub fn register(sub: &mut Sub) -> Result<()> {
+    type LevelFn = fn(&Lua, (String, Option<String>)) -> Result<()>;
+    let levels: [(&str, &str, LevelFn); 4] = [
+        ("debug", "Log a message at debug level.", debug),
+        ("info", "Log a message at info level.", info),
+        ("warn", "Log a message at warn level.", warn),
+        ("error", "Log a message at error level.", error),
+    ];
+    for (name, doc, f) in levels {
+        sub.func(
+            name,
+            &[p("msg", "string"), p_opt("ns", "string")],
+            &[],
+            doc,
+            f,
+        )?;
+    }
 
-    table.set("logger", m)?;
+    sub.proxy::<Logger>("Logger", "A namespaced logger writing to the DCS Studio log.", |ud| {
+        ud.constructor(
+            "new",
+            &[p("ns", "string")],
+            &[r("dcs_studio.logger.Logger")],
+            "Create a logger that tags every line with namespace `ns`.",
+        )
+        .method("debug", &[p("msg", "string")], &[], "Log at debug level under this logger's namespace.")
+        .method("info", &[p("msg", "string")], &[], "Log at info level under this logger's namespace.")
+        .method("warn", &[p("msg", "string")], &[], "Log at warn level under this logger's namespace.")
+        .method("error", &[p("msg", "string")], &[], "Log at error level under this logger's namespace.");
+    })?;
 
     Ok(())
 }

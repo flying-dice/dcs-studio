@@ -2,8 +2,8 @@ use log::LevelFilter;
 use mlua::{FromLua, Lua, LuaSerdeExt, Value as LuaValue};
 use serde::Deserialize;
 
-/// Optional module configuration read from the Lua global `DCS_BRIDGE`,
-/// e.g. `DCS_BRIDGE = { logger_level = "info" }`.
+/// Optional module configuration read from the Lua global `DCS_STUDIO`,
+/// e.g. `DCS_STUDIO = { logger_level = "info" }`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModuleConfig {
     pub logger_level: Option<LevelFilter>,

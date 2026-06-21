@@ -20,7 +20,14 @@ clone_on_copy = "warn"
 needless_borrow = "warn"
 needless_lifetimes = "warn"
 
+# The package keeps the historical name `dcs-bridge` (so `-p dcs-bridge`, the
+# `.cargo/config.toml` LUA_LIB path, and the embedded-hook includes are stable),
+# but the produced cdylib is `dcs_studio.dll`: this crate is now the full
+# DCS Studio runtime, not just the bridge listener. The Lua module fn in
+# lib.rs must match this name — mlua derives `luaopen_dcs_studio` from it and
+# `require("dcs_studio")` resolves the DLL basename.
 [lib]
+name = "dcs_studio"
 crate-type = ["cdylib"]
 
 [dependencies]
@@ -30,6 +37,14 @@ actix-web = "4"
 actix-ws = "0.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = "0.8"
+# Bundled SQLite (vendored C, compiled via `cc` into the cdylib) — no external
+# sqlite3.dll. Independent of the LUA_LIB pin: mlua resolves `lua_*` against
+# DCS's import lib; rusqlite statically links its own SQLite.
+rusqlite = { version = "0.32", features = ["bundled"] }
 log = "0.4"
 log4rs = "1"
 dcs-bridge-client = { path = "../dcs-bridge-client" }
+# The lua-free type model + `.d.lua` emitter the binding facade records into,
+# so the live mlua surface and its generated definitions can't drift.
+dcs-studio-project = { path = "../dcs-studio-project" }

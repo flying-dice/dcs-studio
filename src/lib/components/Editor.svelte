@@ -13,6 +13,8 @@
   import { classifyAndRead, type FileLoad } from "$lib/api";
   import { errorMessage } from "$lib/utils";
   import { langIntelFor } from "$lib/lang/codemirror";
+  import { debuggerExtension, syncDebugView, setConditionHandler } from "$lib/editor/debugger";
+  import { debug } from "$lib/debug-session.svelte";
   import { editorCommands } from "$lib/editor/commands";
   import {
     refactorExtensions,
@@ -30,6 +32,7 @@
     runFormat,
   } from "$lib/editor/format";
   import { runViewInDcs } from "$lib/lua-console.svelte";
+  import { runConfig, isLuaFile } from "$lib/run-config.svelte";
   import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import BinaryPlaceholder from "$lib/components/BinaryPlaceholder.svelte";
 
@@ -112,6 +115,10 @@
         // (model studio::edit Refactoring); the rename widget renders here.
         refactorExtensions(path),
         renameRequestFacet.of((request) => openRename(path, request)),
+        // Breakpoint gutter + current-execution-line highlight (debugger),
+        // only for Lua scripts (the only runnable/debuggable files); synced
+        // from the debug-session store by the $effect below.
+        ...(isLuaFile(path) ? [debuggerExtension(path)] : []),
         themeComp.of(app.cm),
         langComp.of(languageFor(name)),
         langIntelComp.of(langIntelFor(path)),
@@ -173,8 +180,21 @@
     app.setBufferFormatter(() =>
       view ? runFormat(view, null) : Promise.resolve(),
     );
+    // Right-click the breakpoint gutter → open an inline condition editor.
+    setConditionHandler((path, line, x, y) => {
+      const rect = host.getBoundingClientRect();
+      conditionBox = {
+        path,
+        line,
+        value: debug.conditionFor(path, line),
+        x: x - rect.left,
+        y: y - rect.top,
+      };
+      queueMicrotask(() => conditionInput?.focus());
+    });
     return () => {
       app.setBufferFormatter(null);
+      setConditionHandler(null);
       view?.destroy();
     };
   });
@@ -221,6 +241,7 @@
       parkCurrent();
       shownPath = path;
       view.setState(parked);
+      syncDebugView(view, path);
       // Restore scroll after the swapped-in state has been measured/laid
       // out, not synchronously against stale geometry.
       const scrollTop = parkedScroll.get(path) ?? 0;
@@ -267,6 +288,7 @@
         return;
       }
       view.setState(freshState(path, name, load.text));
+      syncDebugView(view, path);
       app.onDocLoaded(path, load.text);
       applyPendingJump();
     })();
@@ -295,6 +317,15 @@
     view?.dispatch({ effects: themeComp.reconfigure(cm) });
   });
 
+  // Keep the active editor's breakpoint gutter + current-execution-line in sync
+  // with the debug session. Touch the reactive fields so this re-runs on any
+  // breakpoint toggle, pause, or step (and on tab switch via app.filePath).
+  $effect(() => {
+    const path = app.filePath;
+    const deps = [debug.breakpoints, debug.status, debug.frame, debug.topLocals];
+    if (view && path && deps) syncDebugView(view, path);
+  });
+
   // The active tab when it's binary — drives the placeholder overlay (model
   // BinaryFileShowsPlaceholder). Null for loading/text tabs.
   const binaryDoc = $derived(
@@ -314,6 +345,28 @@
     busy: boolean;
   } | null>(null);
   let renameInput = $state<HTMLInputElement | undefined>();
+
+  // Inline breakpoint-condition editor (opened from the gutter right-click).
+  let conditionBox = $state<{
+    path: string;
+    line: number;
+    value: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  let conditionInput = $state<HTMLInputElement | undefined>();
+
+  async function submitCondition() {
+    if (!conditionBox) return;
+    const { path, line, value } = conditionBox;
+    conditionBox = null;
+    await debug.setCondition(path, line, value);
+    view?.focus();
+  }
+  function cancelCondition() {
+    conditionBox = null;
+    view?.focus();
+  }
 
   function openRename(path: string, request: RenameRequest) {
     if (!view) return;
@@ -457,10 +510,21 @@
         >
           Find Usages
         </ContextMenu.Item>
-        <ContextMenu.Separator />
-        <ContextMenu.Item onSelect={runActiveInDcs} data-testid="ctx-run-in-dcs">
-          Run in DCS
-        </ContextMenu.Item>
+        {#if isLuaFile(app.filePath)}
+          <ContextMenu.Separator />
+          <ContextMenu.Item
+            onSelect={() => app.filePath && runConfig.runFileTarget(app.filePath)}
+            data-testid="ctx-run-file"
+          >
+            Run '{app.fileName}'
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            onSelect={() => app.filePath && runConfig.debugFileTarget(app.filePath)}
+            data-testid="ctx-debug-file"
+          >
+            Debug '{app.fileName}'
+          </ContextMenu.Item>
+        {/if}
       {/if}
     </ContextMenu.Content>
   </ContextMenu.Root>
@@ -502,6 +566,35 @@
           {renameBox.error}
         </div>
       {/if}
+    </div>
+  {/if}
+  {#if conditionBox}
+    <!-- Inline breakpoint-condition editor (gutter right-click). Enter saves,
+         Escape cancels; an empty value clears the condition. -->
+    <div
+      class="absolute z-20 flex flex-col gap-0.5"
+      style="left: {Math.max(conditionBox.x, 4)}px; top: {conditionBox.y}px"
+      data-testid="condition-widget"
+    >
+      <span class="rounded-t bg-popover px-1.5 text-[10px] text-muted-foreground">
+        Breakpoint condition
+      </span>
+      <input
+        bind:this={conditionInput}
+        bind:value={conditionBox.value}
+        placeholder="e.g. i == 3"
+        class="w-56 rounded border border-border bg-popover px-2 py-1 font-mono text-xs shadow-md outline-none ring-1 ring-primary/40"
+        onkeydown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void submitCondition();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            cancelCondition();
+          }
+        }}
+        onblur={() => void submitCondition()}
+      />
     </div>
   {/if}
 </div>

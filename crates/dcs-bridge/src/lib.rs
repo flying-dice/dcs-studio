@@ -1,8 +1,14 @@
+mod debug;
+mod facade;
+mod file;
 mod json;
 mod jsonrpc;
 mod logger;
 mod lua_utils;
 mod module_config;
+mod sqlite;
+mod surface;
+mod toml_codec;
 
 use log::LevelFilter::Warn;
 use log::{error, info, LevelFilter};
@@ -18,10 +24,10 @@ use std::env;
 use std::path::PathBuf;
 
 #[mlua::lua_module]
-pub fn dcs_bridge(lua: &Lua) -> LuaResult<LuaTable> {
+pub fn dcs_studio(lua: &Lua) -> LuaResult<LuaTable> {
     let module_config: ModuleConfig = lua
         .globals()
-        .get::<ModuleConfig>("DCS_BRIDGE")
+        .get::<ModuleConfig>("DCS_STUDIO")
         .unwrap_or_default();
 
     let logger_level: LevelFilter = module_config.logger_level.unwrap_or(Warn);
@@ -33,12 +39,18 @@ pub fn dcs_bridge(lua: &Lua) -> LuaResult<LuaTable> {
 
     let exports = lua.create_table()?;
 
-    exports.set("name", "dcs-bridge")?;
-    exports.set("version", env!("CARGO_PKG_VERSION"))?;
+    // Register every binding through the facade and capture its `.d.lua` type
+    // surface (name/version are set as constants inside `build`).
+    let doc = surface::build(lua, &exports, env!("CARGO_PKG_VERSION"))?;
 
-    json::inject_module(lua, &exports)?;
-    logger::inject_module(lua, &exports)?;
-    jsonrpc::inject_module(lua, &exports)?;
+    // `emit_dlua()` returns the generated EmmyLua definitions for this module,
+    // so the IDE can drop a fresh `types/dcs_studio.d.lua` into a project. The
+    // text is rendered once at load and handed back verbatim.
+    let dlua = dcs_studio_project::luadef::emit_dlua(&doc);
+    exports.set(
+        "emit_dlua",
+        lua.create_function(move |_, ()| Ok(dlua.clone()))?,
+    )?;
 
     Ok(exports)
 }
@@ -67,17 +79,17 @@ pub fn init_config(file: PathBuf, level: LevelFilter) -> mlua::Result<()> {
 
 fn get_logger_file_path(lua: &Lua) -> LuaResult<PathBuf> {
     if let Ok(writedir) = get_lfs_writedir(lua) {
-        return Ok(PathBuf::from(writedir).join("Logs/dcs_bridge.log"));
+        return Ok(PathBuf::from(writedir).join("Logs/dcs_studio.log"));
     }
 
     if let Ok(current_dir) = env::current_dir() {
-        return Ok(current_dir.join("dcs_bridge.log"));
+        return Ok(current_dir.join("dcs_studio.log"));
     }
 
-    Ok("./dcs_bridge.log".into())
+    Ok("./dcs_studio.log".into())
 }
 
-fn get_lfs_writedir(lua: &Lua) -> LuaResult<String> {
+pub(crate) fn get_lfs_writedir(lua: &Lua) -> LuaResult<String> {
     lua.globals()
         .get::<LuaTable>("lfs")?
         .get::<LuaFunction>("writedir")?

@@ -5,7 +5,7 @@ description: Work with DCS locally — deploy the dcs-bridge DLL, launch/control
 
 # DCS local development mode
 
-There is **one bridge**: the `dcs-bridge` crate builds `dcs_bridge.dll`, loaded by the `DcsStudio.lua` GameGUI hook — the same artifacts the dcs-studio app installs for end users (`crates/app/src/inject.rs`). Claude uses this same bridge to control DCS; the `eval` RPC method is the control surface. Everything below was verified live on this machine (2026-06-10, DCS 2.9.26.23303).
+There is **one bridge**: the `dcs-bridge` crate (package name unchanged) builds `dcs_studio.dll`, loaded by the `DcsStudio.lua` GameGUI hook — the same artifacts the dcs-studio app installs for end users (`crates/app/src/inject.rs`). Claude uses this same bridge to control DCS; the `eval` RPC method is the control surface. Everything below was verified live on this machine (2026-06-10, DCS 2.9.26.23303).
 
 ## Machine facts
 
@@ -15,10 +15,10 @@ There is **one bridge**: the `dcs-bridge` crate builds `dcs_bridge.dll`, loaded 
 | Executable | `<install>\bin\DCS.exe` |
 | Write dir | `C:\Users\jonat\Saved Games\DCS.openbeta` |
 | Hook (deployed) | `<writedir>\Scripts\Hooks\DcsStudio.lua` |
-| DLL (deployed) | `<writedir>\Mods\tech\DcsStudio\bin\dcs_bridge.dll` |
+| DLL (deployed) | `<writedir>\Mods\tech\DcsStudio\bin\dcs_studio.dll` |
 | Hook (source of truth) | `crates/dcs-bridge/deploy/Scripts/Hooks/DcsStudio.lua` (also embedded into the app via `include_str!` in `inject.rs`) |
 | DCS log | `<writedir>\Logs\dcs.log` (fresh each launch; hook lines tagged `DCS-STUDIO`) |
-| Bridge log | `<writedir>\Logs\dcs_bridge.log` (written by the DLL, truncated each load) |
+| Bridge log | `<writedir>\Logs\dcs_studio.log` (written by the DLL, truncated each load) |
 | Version/modules | `<install>\autoupdate.cfg` (JSON) |
 
 ## Setup: build + deploy
@@ -41,7 +41,7 @@ Start-Process "D:\Program Files\Eagle Dynamics\DCS World OpenBeta\bin\DCS.exe" -
 Invoke-RestMethod "http://127.0.0.1:25569/health"   # {"name":"dcs-bridge","status":"OK","version":"0.1.0"}
 ```
 
-If health never comes up: check `dcs.log` for `DCS-STUDIO` lines (hook load failure), then `dcs_bridge.log` (server/port failure). Port 12080 belongs to the user's dcs-fiddle hook — unrelated.
+If health never comes up: check `dcs.log` for `DCS-STUDIO` lines (hook load failure), then `dcs_studio.log` (server/port failure). Port 12080 belongs to the user's dcs-fiddle hook — unrelated.
 
 ## Drive it
 
@@ -93,7 +93,7 @@ No `id` → notification, returns immediately; the process is gone within ~15 s 
 2. Shut down DCS if running → `deploy.ps1` → launch with `--no-launcher`
 3. Poll `/health` until OK (≤5 min)
 4. Exercise the changed surface via `/rpc` (and `/ws` for dcs-bridge-client changes)
-5. On failure read `dcs_bridge.log` first (Rust side), then `dcs.log` `DCS-STUDIO` lines (Lua side)
+5. On failure read `dcs_studio.log` first (Rust side), then `dcs.log` `DCS-STUDIO` lines (Lua side)
 6. Teardown via the `DCS.exitProcess()` eval
 
 Never leave DCS running after tests, and don't touch the user's other hooks (`dcs-fiddle-*`, `TacviewGameGUI`) or `Config\` in the write dir.

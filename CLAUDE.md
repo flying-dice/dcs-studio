@@ -65,7 +65,9 @@ constants only take non-negative primitive literals (JSON-RPC codes live in docs
 | `model/lspcore.pds` | Workspace + query layer (`crates/dcs-lua-lsp-core`) |
 | `model/fmt.pds` | Deterministic Lua formatter face (`crates/dcs-lua-fmt`, SPEC.md §7, decisions/006) |
 | `model/ide.pds` | Wasm `IdeSession` edge (`crates/dcs-lua-ide`) — unwired from the app by #32; the engine's wasm-bindgen surface |
-| `model/dcs/bridge.pds` | `Dcs` system: GameGUI hook, JSON-RPC server/router (`crates/dcs-bridge`) |
+| `model/dcs/bridge.pds` | `Dcs` system: GameGUI hook, JSON-RPC server/router, and the expanded `dcs_studio.dll` runtime surface — `json`/`toml` serde, `file` (guarded write-root dumps), `sqlite` (bundled), plus a self-describing `.d.lua` facade (`crates/dcs-bridge`) |
+| `model/dcs/debug.pds` | `BreakpointRegistry` + `PauseController` — the in-sim Lua debugger the IDE drives over the bridge (`crates/dcs-bridge/src/debug.rs`, scoped `debug.sethook` line hook + pause/step pump) |
+| `model/studio/debug.pds` | `DebugController` — the IDE's Lua debugger controller; the app's own Debug panel is the only front-end (no external editor), driving the in-sim debugger over bridge `eval`/`debug_*` (`src/lib/debug-session.svelte.ts`, `src/lib/components/DebugPanel.svelte`) |
 
 ## Architecture
 
@@ -74,8 +76,9 @@ Two processes joined by WebSocket JSON-RPC on `ws://127.0.0.1:25569/ws`:
 - **Editor**: SvelteKit frontend (`src/`) inside a Tauri shell (`crates/app`), which
   embeds `crates/dcs-bridge-client` (reconnecting WS client, string ids only — the
   server's serde rejects numeric ids).
-- **In-DCS bridge**: `crates/dcs-bridge` builds `dcs_bridge.dll` (mlua cdylib +
-  actix WS server), loaded by the GameGUI hook
+- **In-DCS runtime**: `crates/dcs-bridge` (package name unchanged) builds
+  `dcs_studio.dll` (mlua cdylib + actix WS server — the full DCS Studio runtime,
+  not just the bridge listener), loaded by the GameGUI hook
   `crates/dcs-bridge/deploy/Scripts/Hooks/DcsStudio.lua`. Requests queue and are
   drained once per simulation frame — frames fire at the main menu too, so RPCs
   answer from boot; a mission is live only when the pong's `dcs_time` > 0.
@@ -217,6 +220,6 @@ use the `dcs-dev` skill.
 
 - **Lua linking**: `.cargo/config.toml` pins `LUA_LIB`/`LUA_LIB_NAME` to
   `crates/dcs-bridge/lua5.1` so the DLL links DCS's own `lua.dll`. Without it,
-  cargo silently links `lua51.dll` and `require("dcs_bridge")` fails inside DCS.
+  cargo silently links `lua51.dll` and `require("dcs_studio")` fails inside DCS.
 - **JSON-RPC ids are strings**: a numeric id kills the server's WS read task.
 - A DLL locked by a running DCS cannot be overwritten — injection surfaces this.

@@ -296,7 +296,7 @@ async fn handle_text_frame(message: String, session: &Session, data: &Data<Mutex
 #[get("/health")]
 async fn get_health() -> Json<Health> {
     let health = Health {
-        name: "dcs-bridge".to_string(),
+        name: "dcs-studio".to_string(),
         status: "OK".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     };

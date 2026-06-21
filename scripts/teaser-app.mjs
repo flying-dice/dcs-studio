@@ -1,16 +1,16 @@
 // Launch the real Tauri app for the teaser recorder: `tauri dev` with WebView2
-// remote debugging on :9222 + `DCS_OPEN` pointed at the teaser fixture project
-// (the app's startup seam opens it without the native folder picker, which
-// automation can't click). Unlike scripts/e2e-app.mjs it does NOT redirect
-// DCS_SAVED_GAMES — the teaser records against the developer's REAL DCS, so the
-// live REPL results and the DCS Log viewer show real data.
+// remote debugging on :9222. The teaser starts on the landing page and CREATES a
+// new project (the spec bypasses the native folder picker via the
+// window.__dcsPickDir__ seam), so there is no DCS_OPEN here. Unlike
+// scripts/e2e-app.mjs it does NOT redirect DCS_SAVED_GAMES — the teaser records
+// against the developer's REAL DCS, so the REPL + DCS Log viewer show real data.
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
 
 process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222";
-process.env.DCS_OPEN ??= resolve("e2e/fixtures/teaser-mod");
 
-const child = spawn("pnpm", ["tauri", "dev"], {
+// --release: run the optimized release build (not the debug dev build), still
+// served by vite on :1420 so the CDP attach + spec are unchanged.
+const child = spawn("pnpm", ["tauri", "dev", "--release"], {
   stdio: "inherit",
   shell: true,
   env: process.env,

@@ -11,6 +11,7 @@
   import { createDir, writeTextFile, deleteToTrash } from "$lib/api";
   import { createEntry } from "$lib/tree-actions";
   import { app } from "$lib/state.svelte";
+  import FileTree from "$lib/components/FileTree.svelte";
 
   const DIRNAME = "dcs-tree-lab";
   let ready = $state(false);
@@ -42,8 +43,18 @@
         await createDir(base, base, DIRNAME);
         await writeTextFile(aPath, "local a = 1\n");
         await writeTextFile(bPath, "local b = 2\n");
+        // A nested folder so the suite can prove a refresh preserves expanded
+        // subfolders (the keyed-each reconciliation, not a teardown).
+        await createDir(root, root, "sub");
+        await writeTextFile(join(join(root, "sub"), "nested.lua"), "local n = 3\n");
         app.rootPath = root;
         app.openFile(aPath, "a.lua");
+        // Focus-neutral refresh hook: the real SWR poll bumps treeVersion on a
+        // timer (no focus change). A test that clicks a button to refresh would
+        // instead blur an open create box (its click-away commit), so drive the
+        // refresh through this hook to mimic the poll faithfully.
+        (window as unknown as { __refreshTree__?: () => void }).__refreshTree__ = () =>
+          app.refreshTree();
         ready = true;
       } catch (error) {
         errorText = error instanceof Error ? error.message : String(error);
@@ -122,8 +133,25 @@
     >
       new file
     </button>
+    <button
+      class="rounded border px-2 py-0.5"
+      data-testid="refresh-tree"
+      onclick={() => app.refreshTree()}
+    >
+      refresh tree
+    </button>
+    <!-- Stands in for the surrounding IDE (editor, panels) that steals focus the
+         moment a tree box opens — the genuine-UI condition the lab otherwise
+         lacks. A test focuses this to prove the box does NOT close on blur. -->
+    <input class="rounded border px-2 py-0.5" data-testid="focus-thief" placeholder="thief" />
   </div>
   <div class="text-xs" data-testid="open-files">{openNames}</div>
   <div class="text-xs" data-testid="active-file">{activeName}</div>
   <pre class="shrink-0 overflow-auto rounded border p-2 text-xs" data-testid="error">{errorText}</pre>
+  <!-- The REAL FileTree component, so the suite can drive its context menus
+       (per-node + root/empty-space) end to end. Sized so there is empty space
+       below the seeded nodes to right-click. -->
+  <div class="h-64 w-72 overflow-auto rounded border" data-testid="tree-host">
+    <FileTree />
+  </div>
 </div>

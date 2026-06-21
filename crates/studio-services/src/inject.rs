@@ -12,7 +12,11 @@ const HOOK_SRC: &str = include_str!(concat!(
     "/../dcs-bridge/deploy/Scripts/Hooks/DcsStudio.lua"
 ));
 const HOOK_REL: &str = "Scripts/Hooks/DcsStudio.lua";
-const DLL_REL: &str = "Mods/tech/DcsStudio/bin/dcs_bridge.dll";
+const DLL_REL: &str = "Mods/tech/DcsStudio/bin/dcs_studio.dll";
+/// Pre-rebrand DLL name (the bridge was `dcs_bridge.dll` before it grew into
+/// the full DCS Studio runtime). Removed on inject/eject so a stale artifact
+/// is never left loadable beside the current one.
+const LEGACY_DLL_REL: &str = "Mods/tech/DcsStudio/bin/dcs_bridge.dll";
 
 /// A candidate DCS write dir under `%USERPROFILE%\Saved Games`.
 #[derive(serde::Serialize)]
@@ -53,12 +57,12 @@ fn source_dll_path() -> Option<PathBuf> {
     let exe_dir = exe.parent()?;
     let candidates = [
         // Packaged app / DLL built with the same profile as the app.
-        exe_dir.join("dcs_bridge.dll"),
-        // Dev: app runs from target/debug, bridge built --release.
-        exe_dir.join("../release/dcs_bridge.dll"),
+        exe_dir.join("dcs_studio.dll"),
+        // Dev: app runs from target/debug, DLL built --release.
+        exe_dir.join("../release/dcs_studio.dll"),
         // Extra fallbacks for nested target layouts.
-        exe_dir.join("../../release/dcs_bridge.dll"),
-        exe_dir.join("../debug/dcs_bridge.dll"),
+        exe_dir.join("../../release/dcs_studio.dll"),
+        exe_dir.join("../debug/dcs_studio.dll"),
     ];
     candidates.into_iter().find(|p| p.is_file())
 }
@@ -159,7 +163,7 @@ pub fn injection_status(write_dir: &str) -> InjectionStatus {
 /// Install (or update) the bridge DLL + hook into `write_dir`.
 pub fn inject(write_dir: &str) -> Result<InjectionStatus, String> {
     let source_dll = source_dll_path().ok_or_else(|| {
-        "Bridge DLL not built — run `cargo build -p dcs-bridge --release`".to_string()
+        "DCS Studio DLL not built — run `cargo build -p dcs-bridge --release`".to_string()
     })?;
 
     let dll_dest = Path::new(write_dir).join(DLL_REL);
@@ -185,6 +189,10 @@ pub fn inject(write_dir: &str) -> Result<InjectionStatus, String> {
     std::fs::write(&hook_dest, HOOK_SRC)
         .map_err(|e| format!("Failed to write '{}': {}", hook_dest.display(), e))?;
 
+    // Drop a pre-rebrand dcs_bridge.dll left beside the new artifact, so the
+    // hook never has a stale module to load. Best-effort: absence is fine.
+    let _ = std::fs::remove_file(Path::new(write_dir).join(LEGACY_DLL_REL));
+
     Ok(status_for(write_dir))
 }
 
@@ -193,7 +201,8 @@ pub fn eject(write_dir: &str) -> Result<InjectionStatus, String> {
     let dll_dest = Path::new(write_dir).join(DLL_REL);
     let hook_dest = Path::new(write_dir).join(HOOK_REL);
 
-    for dest in [&dll_dest, &hook_dest] {
+    let legacy_dll = Path::new(write_dir).join(LEGACY_DLL_REL);
+    for dest in [&dll_dest, &hook_dest, &legacy_dll] {
         if let Err(e) = std::fs::remove_file(dest) {
             if e.kind() != std::io::ErrorKind::NotFound {
                 return Err(format!("Failed to remove '{}': {}", dest.display(), e));
@@ -210,7 +219,7 @@ pub fn eject(write_dir: &str) -> Result<InjectionStatus, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalise_eol;
+    use super::{normalise_eol, DLL_REL, LEGACY_DLL_REL};
 
     #[test]
     fn eol_normalisation_makes_crlf_and_lf_hooks_compare_equal() {
@@ -219,5 +228,16 @@ mod tests {
             normalise_eol("line one\nline two\n")
         );
         assert_ne!(normalise_eol("a\nb"), normalise_eol("a\nc"));
+    }
+
+    #[test]
+    fn installs_the_rebranded_dll_and_cleans_up_the_legacy_one() {
+        // The artifact rebranded dcs_bridge.dll -> dcs_studio.dll; the install
+        // dest and the legacy-cleanup target must track that rename.
+        assert!(DLL_REL.ends_with("dcs_studio.dll"));
+        assert!(LEGACY_DLL_REL.ends_with("dcs_bridge.dll"));
+        // Both live under the same Mods/tech/DcsStudio/bin folder.
+        assert!(DLL_REL.starts_with("Mods/tech/DcsStudio/bin/"));
+        assert!(LEGACY_DLL_REL.starts_with("Mods/tech/DcsStudio/bin/"));
     }
 }

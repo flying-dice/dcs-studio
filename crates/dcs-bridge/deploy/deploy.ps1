@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Builds dcs_bridge.dll and installs it + the DcsStudio.lua GameGUI hook into the
+Builds dcs_studio.dll and installs it + the DcsStudio.lua GameGUI hook into the
 DCS Saved Games write dir. Idempotent: safe to re-run after every rebuild.
 
 .PARAMETER WriteDir
@@ -31,7 +31,7 @@ finally {
     Pop-Location
 }
 
-$dll = Join-Path $repoRoot "target\release\dcs_bridge.dll"
+$dll = Join-Path $repoRoot "target\release\dcs_studio.dll"
 if (-not (Test-Path $dll)) { throw "Build succeeded but '$dll' was not found" }
 
 # 2. Locate the DCS write dir.
@@ -56,14 +56,21 @@ $hooksDir = Join-Path $WriteDir "Scripts\Hooks"
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 New-Item -ItemType Directory -Force -Path $hooksDir | Out-Null
 
-$dllTarget = Join-Path $binDir "dcs_bridge.dll"
+$dllTarget = Join-Path $binDir "dcs_studio.dll"
+$legacyDll = Join-Path $binDir "dcs_bridge.dll"
 $hookSource = Join-Path $PSScriptRoot "Scripts\Hooks\DcsStudio.lua"
 $hookTarget = Join-Path $hooksDir "DcsStudio.lua"
 
 Copy-Item -Path $dll -Destination $dllTarget -Force
 Write-Host "Copied $dll -> $dllTarget"
 
+# Drop a pre-rebrand dcs_bridge.dll so the hook can't load a stale module.
+if (Test-Path $legacyDll) {
+    Remove-Item -Path $legacyDll -Force
+    Write-Host "Removed legacy $legacyDll"
+}
+
 Copy-Item -Path $hookSource -Destination $hookTarget -Force
 Write-Host "Copied $hookSource -> $hookTarget"
 
-Write-Host "Done. Restart DCS to (re)load the bridge; it listens on ws://127.0.0.1:25569/ws."
+Write-Host "Done. Restart DCS to (re)load the DCS Studio DLL; it listens on ws://127.0.0.1:25569/ws."

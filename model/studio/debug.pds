@@ -1,0 +1,62 @@
+//! studio::debug — the IDE's Lua debugger controller. The dcs-studio app's own
+//! Debug panel is the only front-end (no external editor / wire protocol): it
+//! drives the in-sim debugger (dcs::debug) over the bridge. Each editor action
+//! becomes a bridge call — a breakpoint change `eval`s a `dcs_studio.debug.*`
+//! expression; run/state/continue forward the `debug_*` RPC methods.
+//!
+//! Scope: the request→bridge translation is implemented (the IDE store
+//! `src/lib/debug-session.svelte.ts` + the Debug panel). The richer capabilities
+//! (full call stack, expandable variables, evaluate, conditional breakpoints,
+//! pause) build on dcs::debug::PauseController.
+
+/// A setBreakpoints request: the source path and its full breakpoint line set
+/// (the editor replaces the whole set for a source each time).
+public data SetBreakpointsRequest { source: string, lines: number[] }
+
+/// One JSON-RPC call to make over the bridge: the method and the Lua `code`
+/// it evals (for the breakpoint-registry calls).
+public data BridgeCall { method: string, code: string }
+
+/// The IDE debugger controller: an editor action in, a bridge call out.
+public container DebugController for studio::core::Studio {
+  /// Translate a breakpoint change into the bridge eval that updates the
+  /// sim-side registry (dcs::debug::BreakpointRegistry.SetBreakpoints).
+  SetBreakpoints(request: studio::debug::SetBreakpointsRequest): studio::debug::BridgeCall {
+    code = string from self.RenderSetBreakpoints(request.source, request.lines)
+    call = studio::debug::BridgeCall from { "eval", code }
+    return call
+  }
+
+  /// Render the `dcs_studio.debug.set_breakpoints(...)` Lua expression, quoting
+  /// the source so a path cannot break out of the string literal.
+  RenderSetBreakpoints(source: string, lines: number[]): string;
+
+  /// Translate "clear all" into the bridge eval that clears the registry, so a
+  /// stopped debug session leaves no state behind.
+  ClearBreakpoints(): studio::debug::BridgeCall {
+    code = string from self.RenderClear()
+    call = studio::debug::BridgeCall from { "eval", code }
+    return call
+  }
+
+  /// Render the `dcs_studio.debug.clear_breakpoints()` Lua expression.
+  RenderClear(): string;
+
+  /// Evaluate `expr` in the selected paused frame — powers the Watches pane and
+  /// the debug console (forwards debug_eval).
+  Evaluate(frame: number, expr: string): dcs::bridge::Json;
+
+  /// Request a manual break-all while a run is in flight (forwards debug_pause).
+  Pause(): void;
+
+  /// Set (or, with an empty cond, clear) a breakpoint's condition (forwards
+  /// debug.set_condition).
+  SetCondition(source: string, line: number, cond: string): void;
+}
+
+/// The IDE turns a breakpoint change into a registry update over the bridge.
+feature SetBreakpointsReachesTheRegistry for studio::core::Studio {
+  given "the IDE Debug panel with a breakpoint set on a line"
+  when "it sends the breakpoint change"
+  then "the controller evals dcs_studio.debug.set_breakpoints with that source and its lines"
+}

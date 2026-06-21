@@ -1,10 +1,11 @@
 <script lang="ts">
   import { readDir, type DirEntry } from "$lib/api";
   import { app } from "$lib/state.svelte";
-  import { runFile } from "$lib/lua-console.svelte";
+  import { runConfig, isLuaFile } from "$lib/run-config.svelte";
   import { cn, errorMessage } from "$lib/utils.js";
   import { fileIconFor, FOLDER_ICON } from "$lib/file-icons";
   import FileIcon from "./FileIcon.svelte";
+  import TreeCreateInput from "./TreeCreateInput.svelte";
   import { ChevronRight } from "@lucide/svelte";
   import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import {
@@ -18,6 +19,7 @@
     targetDir,
   } from "$lib/tree-actions";
   import Self from "./TreeNode.svelte";
+  import { untrack } from "svelte";
 
   let { entry, depth = 0 }: { entry: DirEntry; depth?: number } = $props();
 
@@ -29,6 +31,7 @@
   // Transient inline-edit state for the context-menu actions.
   let renaming = $state(false);
   let renameValue = $state("");
+  let renameInputEl = $state<HTMLInputElement | null>(null);
   let creating = $state<"file" | "folder" | null>(null);
   let createValue = $state("");
   // Surfaced action failure (rename collision, create error) — cleared on the
@@ -36,7 +39,13 @@
   let actionError = $state<string | null>(null);
 
   async function loadChildren() {
-    loading = true;
+    // Only show the loading placeholder on the FIRST load. A refresh (a
+    // treeVersion bump from a mutation or the SWR poll) must update `children`
+    // in place: swapping in the "loading…" branch would unmount the keyed
+    // {#each}, destroying child TreeNodes — collapsing expanded subfolders and
+    // tearing down any open inline create box. Reassigning the array instead
+    // lets the keyed each reconcile by path and preserve that state.
+    if (!loaded) loading = true;
     try {
       children = await readDir(entry.path);
       loaded = true;
@@ -75,10 +84,18 @@
     node.select();
   }
 
+  // An inline box (rename / new file / new folder) can't mount while the
+  // context menu is still open: bits-ui's focus scope traps focus, so the
+  // autofocused input is immediately blurred (firing its commit-on-blur and
+  // tearing it back down). A menu pick only records the intent here; the
+  // box opens from the menu's onCloseAutoFocus (`applyPending`), once the
+  // focus scope has released.
+  let pendingAction: { type: "rename" } | { type: "create"; kind: "file" | "folder" } | null = null;
+
   function startRename() {
     actionError = null;
     renameValue = entry.name;
-    renaming = true;
+    pendingAction = { type: "rename" };
   }
 
   async function commitRename() {
@@ -95,12 +112,41 @@
   async function startCreate(kind: "file" | "folder") {
     actionError = null;
     createValue = "";
-    creating = kind;
+    pendingAction = { type: "create", kind };
+    // Expand a folder now (while the menu closes) so the box has a place to
+    // appear; the `creating` flag itself flips in applyPending.
     if (entry.is_dir && !expanded) {
       expanded = true;
       if (!loaded && !loading) await loadChildren();
     }
   }
+
+  function applyPending() {
+    const p = pendingAction;
+    pendingAction = null;
+    if (!p) return;
+    if (p.type === "rename") renaming = true;
+    else creating = p.kind;
+  }
+
+  // While the rename box is open, suspend the SWR poll and commit only on a
+  // genuine outside pointer press — never on blur. The box is blurred
+  // programmatically (context-menu focus scope, tree re-render, the IDE
+  // grabbing focus); a blur-commit would close it before the user can type.
+  $effect(() => {
+    if (!renaming) return;
+    untrack(() => app.beginTreeEdit());
+    const onPointerDown = (e: PointerEvent) => {
+      if (renameInputEl && !renameInputEl.contains(e.target as Node)) {
+        void commitRename();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      app.endTreeEdit();
+    };
+  });
 
   async function commitCreate() {
     const kind = creating;
@@ -142,6 +188,7 @@
 {#if renaming}
   <!-- svelte-ignore a11y_autofocus -->
   <input
+    bind:this={renameInputEl}
     class="h-[22px] w-full rounded-md border border-primary/50 bg-input px-1 text-[13px] outline-none"
     style={indent(depth) + "; padding-left: " + (depth * 14 + 26) + "px"}
     data-testid="tree-rename-input"
@@ -153,13 +200,10 @@
         void commitRename();
       } else if (e.key === "Escape") {
         e.preventDefault();
-        // Reset to the original name so the ensuing blur-commit is a no-op
-        // (Escape cancels; clicking away commits the typed name).
-        renameValue = entry.name;
+        // Cancel without committing (no rename).
         renaming = false;
       }
     }}
-    onblur={() => void commitRename()}
   />
 {:else}
   <ContextMenu.Root>
@@ -187,13 +231,29 @@
         <span class="truncate">{entry.name}</span>
       </div>
     </ContextMenu.Trigger>
-    <ContextMenu.Content class="w-56" data-testid="tree-context-menu">
-      {#if !entry.is_dir}
+    <!-- Open the inline box only once the menu has closed and released its
+         focus scope (see `pendingAction`); preventDefault keeps focus off the
+         trigger so the box's autofocus wins. -->
+    <ContextMenu.Content
+      class="w-56"
+      data-testid="tree-context-menu"
+      onCloseAutoFocus={(e) => {
+        e.preventDefault();
+        applyPending();
+      }}
+    >
+      {#if !entry.is_dir && isLuaFile(entry.path)}
         <ContextMenu.Item
-          onSelect={() => void runFile(entry.path).catch((e) => (actionError = errorMessage(e)))}
-          data-testid="tree-run-in-dcs"
+          onSelect={() => runConfig.runFileTarget(entry.path)}
+          data-testid="tree-run-file"
         >
-          Run in DCS
+          Run '{entry.name}'
+        </ContextMenu.Item>
+        <ContextMenu.Item
+          onSelect={() => runConfig.debugFileTarget(entry.path)}
+          data-testid="tree-debug-file"
+        >
+          Debug '{entry.name}'
         </ContextMenu.Item>
         <ContextMenu.Separator />
       {/if}
@@ -222,25 +282,12 @@
 {/if}
 
 {#if creating && (!entry.is_dir || expanded)}
-  <!-- svelte-ignore a11y_autofocus -->
-  <input
-    class="h-[22px] w-full rounded-md border border-primary/50 bg-input px-1 text-[13px] outline-none"
-    style="padding-left: {createDepth * 14 + 26}px"
-    data-testid="tree-create-input"
-    placeholder={creating === "file" ? "filename" : "folder name"}
+  <TreeCreateInput
+    kind={creating}
     bind:value={createValue}
-    use:autofocus
-    onkeydown={(e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        void commitCreate();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        // Cancel: clearing `creating` makes the ensuing blur-commit a no-op.
-        creating = null;
-      }
-    }}
-    onblur={() => void commitCreate()}
+    paddingLeft={createDepth * 14 + 26}
+    oncommit={() => void commitCreate()}
+    oncancel={() => (creating = null)}
   />
 {/if}
 

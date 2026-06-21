@@ -31,6 +31,18 @@ function killApp(app) {
   }
 }
 
+// Kill any stale app holding the dev ports (a prior run that didn't fully clean
+// up) so tauri dev binds 1420 fresh instead of us attaching to the old instance.
+spawnSync(
+  "powershell",
+  [
+    "-NoProfile",
+    "-Command",
+    "foreach($p in 1420,9222){Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue|%{Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue}};Get-Process dcs-studio -ErrorAction SilentlyContinue|Stop-Process -Force -ErrorAction SilentlyContinue",
+  ],
+  { stdio: "ignore" },
+);
+
 // 1) Bring the app up FIRST so ffmpeg never films the cargo build.
 console.log("[teaser] launching the app (tauri dev + CDP) — the first build can take a few minutes...");
 const app = spawn("node", ["scripts/teaser-app.mjs"], { stdio: "inherit", shell: true });
@@ -44,7 +56,7 @@ async function cdpReady() {
     return false;
   }
 }
-const deadline = Date.now() + 360_000;
+const deadline = Date.now() + 600_000; // release compile can be slow the first time
 while (!(await cdpReady())) {
   if (Date.now() > deadline) {
     console.error("[teaser] app CDP endpoint never came up — aborting.");
@@ -55,22 +67,27 @@ while (!(await cdpReady())) {
 }
 await new Promise((r) => setTimeout(r, 3000)); // let the window paint
 
-// Keep the IDE maximized + in front (and DCS minimized) for the whole take, so
-// DCS — launched windowed mid-take — never covers the studio.
+// Keep the IDE sized to 1920x1080 at (0,0) + in front (DCS minimized) for the
+// whole take, so the capture is exactly that window region and DCS — launched
+// windowed mid-take — never covers the studio.
 const focus = spawn(
   "powershell",
   ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/teaser-focus.ps1"],
   { stdio: "ignore" },
 );
 focus.on("error", () => {});
+await new Promise((r) => setTimeout(r, 1500)); // let the focus loop place + size the window
 
-// 2) Capture the app window. Title capture keeps the frame to the IDE; set
-//    TEASER_WINDOW=desktop to grab the whole screen instead.
-const input = WINDOW === "desktop" ? "desktop" : `title=${WINDOW}`;
-console.log(`[teaser] recording "${input}" -> ${VIDEO}`);
+// 2) Capture the 1920x1080 IDE window region (the focus loop pins it to that
+//    rect at the top-left). Set TEASER_WINDOW=desktop to grab the whole screen.
+console.log(`[teaser] recording 1920x1080 @ (0,0) -> ${VIDEO}`);
+const grab =
+  WINDOW === "desktop"
+    ? ["-i", "desktop"]
+    : ["-offset_x", "0", "-offset_y", "0", "-video_size", "1920x1080", "-i", "desktop"];
 const ff = spawn(
   FFMPEG,
-  ["-y", "-f", "gdigrab", "-framerate", "30", "-i", input, "-pix_fmt", "yuv420p", VIDEO],
+  ["-y", "-f", "gdigrab", "-framerate", "30", ...grab, "-pix_fmt", "yuv420p", VIDEO],
   { stdio: ["pipe", "inherit", "inherit"] },
 );
 ff.on("error", (e) => console.error("[teaser] ffmpeg failed to start (PATH? pass FFMPEG=<path>):", e.message));

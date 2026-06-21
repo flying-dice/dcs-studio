@@ -18,7 +18,7 @@ use studio_mcp::{Session, handle};
 
 /// Every tool the surface advertises, in registry order — an accidental drop
 /// or rename of any tool fails the `tools/list` assertion below.
-const FULL_TOOL_SURFACE: [&str; 25] = [
+const FULL_TOOL_SURFACE: [&str; 34] = [
     "init_project",
     "check",
     "build",
@@ -44,6 +44,15 @@ const FULL_TOOL_SURFACE: [&str; 25] = [
     "lua_hover",
     "lua_complete",
     "lua_definition",
+    "debug_set_breakpoints",
+    "debug_breakpoints",
+    "debug_clear_breakpoints",
+    "debug_run",
+    "debug_state",
+    "debug_expand",
+    "debug_eval",
+    "debug_pause",
+    "debug_continue",
 ];
 
 fn temp_dir(tag: &str) -> PathBuf {

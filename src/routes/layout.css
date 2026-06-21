@@ -138,6 +138,48 @@
 	padding-left: 1px;
 }
 
+/* Debugger: breakpoint gutter, breakpoint dots, current-line arrow + highlight
+   (IntelliJ-style). The gutter is clickable to toggle a breakpoint. */
+.cm-breakpoint-gutter {
+	width: 14px;
+	cursor: pointer;
+}
+.cm-breakpoint-gutter:hover {
+	background: color-mix(in oklch, var(--destructive) 12%, transparent);
+}
+.cm-breakpoint {
+	display: inline-block;
+	width: 10px;
+	height: 10px;
+	margin: 3px 2px 0;
+	border-radius: 9999px;
+	background: var(--destructive);
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--destructive) 40%, transparent);
+}
+.cm-debug-arrow {
+	display: inline-block;
+	margin-left: 1px;
+	font-size: 10px;
+	line-height: 1.4;
+	color: oklch(0.72 0.17 145); /* execution-point green */
+}
+/* Outrank the .cm-activeLine override above (both classes land on the same
+   .cm-line when the cursor sits on the paused line): higher specificity +
+   !important so the execution-point green wins. */
+.cm-editor .cm-line.cm-debug-current-line {
+	background: color-mix(in oklch, oklch(0.72 0.17 145) 16%, transparent) !important;
+}
+/* Inline values: dimmed locals shown at the end of the paused execution line. */
+.cm-inline-values {
+	margin-left: 2rem;
+	padding: 0 0.4rem;
+	border-radius: 0.25rem;
+	font-style: italic;
+	color: color-mix(in oklch, oklch(0.72 0.17 145) 80%, var(--muted-foreground));
+	background: color-mix(in oklch, oklch(0.72 0.17 145) 10%, transparent);
+	opacity: 0.85;
+}
+
 /* ===========================================================================
    CodeMirror chrome — shadcn skin
    ---------------------------------------------------------------------------
@@ -338,6 +380,17 @@
 .cm-editor.cm-focused .cm-selectionBackground,
 .cm-editor .cm-selectionBackground {
 	background-color: var(--cm-selection) !important;
+}
+
+/* --- active line: keep it at the bottom of the highlight stack ------------- */
+/* thememirror paints .cm-activeLine with each theme's (often opaque)
+   lineHighlight colour, which would cover the selection layer (drawn behind
+   .cm-content) and the debug current-line highlight on the cursor's line.
+   Re-apply it as a translucent wash (--cm-line-highlight from chromeVars) so
+   both read through. !important beats thememirror's injected StyleModule. */
+.cm-editor .cm-activeLine,
+.cm-editor .cm-activeLineGutter {
+	background-color: var(--cm-line-highlight) !important;
 }
 
 /* --- cursor: sticky ease-in glide on position change ---------------------- */

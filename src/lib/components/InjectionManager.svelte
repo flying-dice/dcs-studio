@@ -263,7 +263,7 @@
         </Button>
         {#if !status.source_available}
           <p class="text-[11px] leading-snug text-amber-500">
-            Build the bridge: cargo build -p dcs-bridge --release
+            Build the DCS Studio DLL: cargo build -p dcs-bridge --release
           </p>
         {/if}
         {#if anythingInstalled}

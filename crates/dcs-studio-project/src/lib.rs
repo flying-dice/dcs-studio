@@ -24,6 +24,7 @@
 pub mod detect;
 pub mod install;
 pub mod logging;
+pub mod luadef;
 pub mod manifest;
 pub mod mcp;
 pub mod process;

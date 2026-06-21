@@ -168,6 +168,88 @@ public container McpServer for studio::core::Studio {
     return Ok(result.value)
   }
 
+  /// debug_set_breakpoints — set the in-sim debugger's breakpoints for a source
+  /// by evaling the registry update the controller renders (studio::debug). The
+  /// full set replaces that source's previous breakpoints.
+  public DebugSetBreakpoints(source: string, lines: number[]): Result<dcs::bridge::Json, studio::link::CallError> {
+    self.EnsureLink()
+    request = studio::debug::SetBreakpointsRequest from { source, lines }
+    call = studio::debug::BridgeCall from studio::debug::DebugController.SetBreakpoints(request)
+    payload = dcs::bridge::Json from { call.code }
+    result = Result<dcs::bridge::Json, studio::link::CallError> from studio::link::DcsLink.Forward(call.method, Some(payload))
+    if (result.isErr) {
+      return Err(result.error)
+    }
+    return Ok(result.value)
+  }
+
+  /// debug_run — run a Lua chunk under the scoped line-hook debugger (dcs::debug),
+  /// pausing at breakpoints set for `source`. Forwards the debug_run method.
+  public DebugRun(source: string, code: string): Result<dcs::bridge::Json, studio::link::CallError> {
+    self.EnsureLink()
+    params = dcs::bridge::Json from { source, code }
+    result = Result<dcs::bridge::Json, studio::link::CallError> from studio::link::DcsLink.Forward("debug_run", Some(params))
+    if (result.isErr) {
+      return Err(result.error)
+    }
+    return Ok(result.value)
+  }
+
+  /// debug_state — whether the debugger is paused, and the stopped frame snapshot.
+  public DebugState(): Result<dcs::bridge::Json, studio::link::CallError> {
+    self.EnsureLink()
+    result = Result<dcs::bridge::Json, studio::link::CallError> from studio::link::DcsLink.Forward("debug_state", None)
+    if (result.isErr) {
+      return Err(result.error)
+    }
+    return Ok(result.value)
+  }
+
+  /// debug_expand — expand a scope/variable ref from the pause snapshot into
+  /// its child variables (lazy table inspection). Forwards the debug_expand
+  /// method.
+  public DebugExpand(handle: number): Result<dcs::bridge::Json, studio::link::CallError> {
+    self.EnsureLink()
+    params = dcs::bridge::Json from { handle }
+    result = Result<dcs::bridge::Json, studio::link::CallError> from studio::link::DcsLink.Forward("debug_expand", Some(params))
+    if (result.isErr) {
+      return Err(result.error)
+    }
+    return Ok(result.value)
+  }
+
+  /// debug_eval — evaluate an expression in a paused frame (watches/console).
+  /// Forwards the debug_eval method.
+  public DebugEval(frame: number, expr: string): Result<dcs::bridge::Json, studio::link::CallError> {
+    self.EnsureLink()
+    params = dcs::bridge::Json from { frame, expr }
+    result = Result<dcs::bridge::Json, studio::link::CallError> from studio::link::DcsLink.Forward("debug_eval", Some(params))
+    if (result.isErr) {
+      return Err(result.error)
+    }
+    return Ok(result.value)
+  }
+
+  /// debug_pause — request a manual break-all. Forwards the debug_pause method.
+  public DebugPause(): Result<dcs::bridge::Json, studio::link::CallError> {
+    self.EnsureLink()
+    result = Result<dcs::bridge::Json, studio::link::CallError> from studio::link::DcsLink.Forward("debug_pause", None)
+    if (result.isErr) {
+      return Err(result.error)
+    }
+    return Ok(result.value)
+  }
+
+  /// debug_continue — resume a debugger paused at a breakpoint.
+  public DebugContinue(): Result<dcs::bridge::Json, studio::link::CallError> {
+    self.EnsureLink()
+    result = Result<dcs::bridge::Json, studio::link::CallError> from studio::link::DcsLink.Forward("debug_continue", None)
+    if (result.isErr) {
+      return Err(result.error)
+    }
+    return Ok(result.value)
+  }
+
   /// detect_installs — Saved Games write dirs, plain DCS first.
   public DetectInstalls(): studio::inject::DcsInstall[] {
     installs = studio::inject::DcsInstall[] from studio::inject::Injector.DetectInstalls()

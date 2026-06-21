@@ -86,6 +86,11 @@ export function chromeVars(theme: EditorTheme): Record<string, string> {
 
   return {
     "--cm-selection": selection,
+    // A translucent active-line wash: mixes the theme's own foreground, so it's
+    // a light wash on dark themes and a dark wash on light. Kept translucent so
+    // the selection layer (drawn behind .cm-content) and the debug current-line
+    // highlight read through it — see the .cm-activeLine override in layout.css.
+    "--cm-line-highlight": mix(fg, "transparent", 93),
     "--background": canvas,
     "--foreground": fg,
     "--card": bg,

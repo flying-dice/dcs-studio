@@ -19,6 +19,8 @@
   import Structure from "$lib/components/Structure.svelte";
   import Todos from "$lib/components/Todos.svelte";
   import Usages from "$lib/components/Usages.svelte";
+  import DebugPanel from "$lib/components/DebugPanel.svelte";
+  import RunWidget from "$lib/components/RunWidget.svelte";
   import Editor from "$lib/components/Editor.svelte";
   import EditorTabs from "$lib/components/EditorTabs.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
@@ -27,8 +29,8 @@
   import PanelResizeHandle from "$lib/components/PanelResizeHandle.svelte";
   import { lang } from "$lib/lang/intel.svelte";
   import { mcp } from "$lib/mcp.svelte";
-  import { runFile, runViewInDcs } from "$lib/lua-console.svelte";
-  import { editorViewFor } from "$lib/lang/codemirror";
+  import { debug } from "$lib/debug-session.svelte";
+  import { runConfig } from "$lib/run-config.svelte";
   import { cn } from "$lib/utils.js";
 
   import { Button } from "$lib/components/ui/button/index.js";
@@ -51,6 +53,7 @@
     ListTodo,
     ScrollText,
     FolderOpen,
+    RefreshCw,
     Boxes,
     Sun,
     Moon,
@@ -58,7 +61,6 @@
     Hammer,
     PackageCheck,
     PackageMinus,
-    Play,
     Bug,
     Settings,
     Palette,
@@ -113,8 +115,19 @@
     { id: "usages", label: "Usages", icon: Search },
     { id: "todos", label: "Todos", icon: ListTodo },
     { id: "output", label: "Output", icon: ScrollText },
+    { id: "debug", label: "Debug", icon: Bug },
     { id: "dcslog", label: "DCS Log", icon: FileClock },
   ];
+
+  // The Run menu + ⇧F10 / ⇧F9 act on the SELECTED run configuration (the
+  // RunWidget's), defaulting to "Current File" (model/studio/debug.pds).
+  function runActive() {
+    runConfig.run();
+  }
+
+  function startDebug() {
+    runConfig.debug();
+  }
 
   const labelFor = (list: Tool[], id: string | null) =>
     list.find((t) => t.id === id)?.label ?? "";
@@ -177,18 +190,21 @@
     {
       label: "Run",
       items: [
-        { label: "Run", shortcut: "⇧F10" },
-        { label: "Debug", shortcut: "⇧F9" },
-        { label: "Build Project", shortcut: "⌘F9" },
+        { label: "Run", shortcut: "⇧F10", action: runActive },
+        { label: "Debug", shortcut: "⇧F9", action: startDebug },
+        {
+          label: "Build Project",
+          shortcut: "⌘F9",
+          action: () => {
+            if (app.rootPath) {
+              void build.start(app.rootPath);
+              openOutput();
+            }
+          },
+        },
       ],
     },
     { label: "Help", items: [{ label: "About DCS Studio" }] },
-  ];
-
-  // Top-right IDE controls (placeholder, no actions wired yet).
-  const controls: { icon: LucideIcon; label: string }[] = [
-    { icon: Play, label: "Run" },
-    { icon: Bug, label: "Debug" },
   ];
 
   function openOutput() {
@@ -200,6 +216,15 @@
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
       app.saveFile();
+      return;
+    }
+    // Run (⇧F10) / Debug (⇧F9) — match the Run menu + toolbar.
+    if (e.shiftKey && e.key === "F10") {
+      e.preventDefault();
+      runActive();
+    } else if (e.shiftKey && e.key === "F9") {
+      e.preventDefault();
+      startDebug();
     }
   }
 </script>
@@ -363,8 +388,12 @@
         {/if}
       </div>
 
-      <!-- Top-right controls: Search · Build/Install/Uninstall · Run/Debug · Quick settings -->
+      <!-- Top-right controls: Run config · Search · Build/Install/Uninstall · Quick settings -->
       <div class="flex items-center gap-0.5">
+        <!-- Run configuration widget (WebStorm-style: config selector + Run /
+             Debug / Stop), in the app's top toolbar. -->
+        <RunWidget />
+        <Separator orientation="vertical" class="mx-1 !h-4" />
         {@render headerBtn(Search, "Search")}
         <Separator orientation="vertical" class="mx-1 !h-4" />
         {@render actionBtn(
@@ -385,10 +414,6 @@
           installer.uninstalling || !app.rootPath || !installer.status?.installed,
           installer.uninstalling,
         )}
-        <Separator orientation="vertical" class="mx-1 !h-4" />
-        {#each controls as c (c.label)}
-          {@render headerBtn(c.icon, c.label)}
-        {/each}
         <Separator orientation="vertical" class="mx-1 !h-4" />
 
         <GithubAuth />
@@ -481,15 +506,27 @@
                   : labelFor(leftTools, app.leftTool)}
               </span>
               {#if app.leftTool === "project"}
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  class="text-muted-foreground hover:text-foreground"
-                  title="Open Folder"
-                  onclick={() => app.openFolder()}
-                >
-                  <FolderOpen />
-                </Button>
+                <div class="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    class="text-muted-foreground hover:text-foreground"
+                    title="Refresh"
+                    data-testid="tree-refresh"
+                    onclick={() => app.refreshTree()}
+                  >
+                    <RefreshCw />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    class="text-muted-foreground hover:text-foreground"
+                    title="Open Folder"
+                    onclick={() => app.openFolder()}
+                  >
+                    <FolderOpen />
+                  </Button>
+                </div>
               {/if}
             </div>
             <div class="min-h-0 flex-1">
@@ -516,29 +553,6 @@
             class="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-border/60 px-2"
           >
             <EditorTabs />
-            {#if app.filePath}
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                class="ml-auto shrink-0 text-muted-foreground hover:text-foreground"
-                title="Run in DCS (Ctrl+Enter)"
-                aria-label="Run in DCS"
-                data-testid="editor-run-in-dcs"
-                onclick={() => {
-                  const p = app.filePath;
-                  if (!p) return;
-                  // Same gesture as the editor's Ctrl+Enter: selection, else the
-                  // whole file. A live editor view carries the selection; a
-                  // binary tab has none, so run its content (surfacing a read
-                  // failure rather than dropping it, like the file-tree action).
-                  const view = editorViewFor(p);
-                  if (view) runViewInDcs(view);
-                  else void runFile(p).catch((e) => console.error("Run in DCS failed:", e));
-                }}
-              >
-                <Play />
-              </Button>
-            {/if}
           </div>
           <div class="min-h-0 flex-1">
             {#if app.filePath}
@@ -597,6 +611,8 @@
                 <Usages />
               {:else if app.bottomTool === "todos"}
                 <Todos />
+              {:else if app.bottomTool === "debug"}
+                <DebugPanel />
               {:else if app.bottomTool === "output"}
                 <BuildOutput />
               {:else if app.bottomTool === "terminal"}
@@ -694,6 +710,25 @@
           DCS: connected · in menu{#if app.dcsLatencyMs != null}&nbsp;· {app.dcsLatencyMs}ms{/if}
         {/if}
       </span>
+      {#if debug.status !== "idle"}
+        <Separator orientation="vertical" class="!h-3" />
+        <!-- Debug session: amber = running, green pulsing = paused. -->
+        <button
+          class="flex shrink-0 items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground hover:text-foreground"
+          onclick={() => {
+            if (app.bottomTool !== "debug") app.toggleTool("bottom", "debug");
+          }}
+          title="Open the Debug panel"
+        >
+          <span
+            class={cn(
+              "size-1.5 rounded-full",
+              debug.status === "paused" ? "animate-pulse bg-emerald-500" : "bg-amber-500",
+            )}
+          ></span>
+          {debug.status === "paused" ? "Debug: paused" : "Debug: running"}
+        </button>
+      {/if}
       <Separator orientation="vertical" class="!h-3" />
       <!-- MCP server: click opens setup help for wiring an editor (issue #39).
            dot = green serving, red bind error, grey not started yet. -->

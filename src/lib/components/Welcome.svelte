@@ -2,6 +2,7 @@
   import { goto } from "$app/navigation";
   import { app } from "$lib/state.svelte";
   import { pickFolder, pathExists } from "$lib/api";
+  import { homeDir, join } from "@tauri-apps/api/path";
   import { TEMPLATES } from "$lib/templates";
   import { EDITOR_THEMES, editorThemeById } from "$lib/themes";
   import { cn } from "$lib/utils.js";
@@ -47,9 +48,24 @@
     location && name.trim() ? `${location}${sep}${name.trim()}` : null,
   );
 
-  function startNew() {
+  // Project location defaults to the last one used (cached), else ~/DCSStudio —
+  // so most projects need no folder-picking. The scaffold create_dir_all's the
+  // parent, so ~/DCSStudio is made on first use.
+  const LOCATION_CACHE = "dcs-studio:last-project-location";
+  async function defaultLocation(): Promise<string> {
+    const cached = localStorage.getItem(LOCATION_CACHE);
+    if (cached) return cached;
+    try {
+      return await join(await homeDir(), "DCSStudio");
+    } catch {
+      return "";
+    }
+  }
+
+  async function startNew() {
     mode = "new";
     error = null;
+    location = await defaultLocation();
     queueMicrotask(() => nameInput?.focus());
   }
 
@@ -70,6 +86,7 @@
     creating = true;
     error = null;
     try {
+      localStorage.setItem(LOCATION_CACHE, location); // remember for next time
       await app.createProject(location, name.trim(), templateId);
       // On success the app swaps to the IDE; nothing more to do here.
     } catch (e) {
