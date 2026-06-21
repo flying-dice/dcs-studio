@@ -77,6 +77,24 @@ describe("remapBookmarkLines (edit-tolerant anchoring)", () => {
     expect(r.lineText(4)).toBe("three");
   });
 
+  it("rides to its code when a newline is inserted at the marked line's start", () => {
+    // mark L2 ("two"), press Enter at column 0 of "two" → the mark binds to the
+    // code that FOLLOWS (mapPos assoc +1), riding to L3; assoc -1 would strand
+    // it on the freshly-inserted blank line.
+    const r = remap(DOC, [2], { from: 4, insert: "\n" });
+    expect(r.lines).toEqual([3]);
+    expect(r.lineText(3)).toBe("two");
+  });
+
+  it("dedupes when two adjacent marks collapse onto the same line", () => {
+    // mark L2 + L3, delete "two\nthree\n" → both ride to the following code
+    // ("four") and the re-map normalizes the [2, 2] collapse to a single entry,
+    // so the panel paints one row, not a duplicate.
+    const r = remap(DOC, [2, 3], { from: 4, to: 14 });
+    expect(r.lines).toEqual([2]);
+    expect(r.lineText(2)).toBe("four");
+  });
+
   it("leaves marks untouched on a change-free transaction", () => {
     // an annotation-only transaction (docChanged false) must not move marks.
     const tr = EditorState.create({ doc: DOC }).update({});
