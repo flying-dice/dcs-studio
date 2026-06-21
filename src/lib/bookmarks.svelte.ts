@@ -8,18 +8,24 @@
 // and file-saved (re-anchor); the panel and the editor gutter read `entries`.
 // Unlike Todos there is no workspace scan and nothing in Rust — bookmarks are
 // explicit user marks held client-side, never written into the source.
+//
+// The stateful shell only: the runes-free transforms (toggle/remove/splice
+// re-anchor, the persistence parse) live in bookmark-util.ts so they unit-test
+// in plain Node — this file holds the $state, the project key, and the
+// localStorage I/O.
 
 import { canonicalPath } from "./paths";
 import { writeLocalStorage } from "./local-storage";
+import {
+  type Bookmark,
+  parsePersisted,
+  toggleBookmark,
+  removeBookmark,
+  syncFileBookmarks,
+  linesForPath,
+} from "./bookmark-util";
 
-/** One bookmark: a file, its 1-based line, and a snippet of that line's text
- *  (re-derived on save while open; the last-saved text once closed) — the
- *  panel's row label. */
-export interface Bookmark {
-  path: string;
-  line: number;
-  snippet: string;
-}
+export type { Bookmark } from "./bookmark-util";
 
 /** localStorage key for a project's marks: keyed by the CANONICAL root path so
  *  one project's bucket never splits on Windows drive-letter / separator
@@ -27,38 +33,11 @@ export interface Bookmark {
 const KEY_PREFIX = "dcs.bookmarks:";
 const keyFor = (root: string): string => `${KEY_PREFIX}${canonicalPath(root)}`;
 
-/** Longest snippet kept — a marked minified line must not bloat the bucket. */
-const SNIPPET_MAX = 200;
-
-/** The stored/displayed snippet for a line: trimmed, capped. */
-export function snippetOf(text: string): string {
-  const trimmed = text.trim();
-  return trimmed.length > SNIPPET_MAX ? trimmed.slice(0, SNIPPET_MAX) : trimmed;
-}
-
-function byPathThenLine(a: Bookmark, b: Bookmark): number {
-  return a.path.localeCompare(b.path) || a.line - b.line;
-}
-
 /** Read a project's persisted marks; an absent or corrupt bucket restores
  *  nothing (model `ReadPersisted` — never fails the panel). */
 function readPersisted(key: string): Bookmark[] {
   if (typeof localStorage === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(key);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(
-        (b): b is Bookmark =>
-          typeof b?.path === "string" &&
-          typeof b?.line === "number" &&
-          typeof b?.snippet === "string",
-      )
-      .sort(byPathThenLine);
-  } catch {
-    return [];
-  }
+  return parsePersisted(localStorage.getItem(key));
 }
 
 export class BookmarkStore {
@@ -83,25 +62,20 @@ export class BookmarkStore {
 
   /** All bookmarked lines for `path` — the editor gutter's marks. */
   linesFor(path: string): number[] {
-    return this.entries.filter((b) => b.path === path).map((b) => b.line);
+    return linesForPath(this.entries, path);
   }
 
   /** Toggle the mark on `path:line` (model `ToggleBookmark`): add carrying
    *  `snippet`, or remove if already marked. Persisted immediately — an
    *  explicit user mark is not contingent on a later save. */
   toggle(path: string, line: number, snippet: string): void {
-    const has = this.entries.some((b) => b.path === path && b.line === line);
-    this.entries = has
-      ? this.entries.filter((b) => !(b.path === path && b.line === line))
-      : [...this.entries, { path, line, snippet }].sort(byPathThenLine);
+    this.entries = toggleBookmark(this.entries, path, line, snippet);
     this.persist();
   }
 
   /** Remove a single mark (model `RemoveBookmark`). */
   remove(path: string, line: number): void {
-    this.entries = this.entries.filter(
-      (b) => !(b.path === path && b.line === line),
-    );
+    this.entries = removeBookmark(this.entries, path, line);
     this.persist();
   }
 
@@ -115,9 +89,7 @@ export class BookmarkStore {
    *  SPLICE — drop only `path`'s old marks, insert the re-mapped ones, leave
    *  every other file's marks untouched. */
   syncFile(path: string, marks: { line: number; snippet: string }[]): void {
-    const kept = this.entries.filter((b) => b.path !== path);
-    const fresh = marks.map((m) => ({ path, line: m.line, snippet: m.snippet }));
-    this.entries = [...kept, ...fresh].sort(byPathThenLine);
+    this.entries = syncFileBookmarks(this.entries, path, marks);
     this.persist();
   }
 

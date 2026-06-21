@@ -7,18 +7,16 @@
 
 import { EditorView, gutter, GutterMarker } from "@codemirror/view";
 import { StateEffect, StateField, type Extension } from "@codemirror/state";
-import { bookmarks, snippetOf } from "$lib/bookmarks.svelte";
+import { bookmarks } from "$lib/bookmarks.svelte";
+import {
+  snippetOf,
+  normalizeBookmarkLines,
+  remapBookmarkLines,
+} from "$lib/bookmark-util";
 
 /** Replace the marked lines from the store — syncBookmarkView pushes this on a
  *  tab switch or an external store change (panel remove / clear / load). */
 const setBookmarkLines = StateEffect.define<number[]>();
-
-/** Drop out-of-range lines, dedupe, sort — the bookmark field's invariant. */
-function normalizeBookmarkLines(lines: number[], docLines: number): number[] {
-  const kept = new Set<number>();
-  for (const ln of lines) if (ln >= 1 && ln <= docLines) kept.add(ln);
-  return [...kept].sort((a, b) => a - b);
-}
 
 /** The set of bookmarked 1-based line numbers in this view, re-mapped through
  *  every edit so a mark rides its code instead of pointing at whatever slid
@@ -30,17 +28,12 @@ const bookmarkField = StateField.define<number[]>({
   update(value, tr) {
     let lines = value;
     if (tr.docChanged && lines.length) {
-      // Map each marked line's start position through the change set (assoc +1
-      // so the mark binds to the code that follows), then resolve back to a
-      // line number — the bookmark follows inserts/deletes above it.
-      const startDoc = tr.startState.doc;
-      const mapped: number[] = [];
-      for (const ln of lines) {
-        if (ln < 1 || ln > startDoc.lines) continue;
-        const pos = tr.changes.mapPos(startDoc.line(ln).from, 1);
-        mapped.push(tr.state.doc.lineAt(pos).number);
-      }
-      lines = normalizeBookmarkLines(mapped, tr.state.doc.lines);
+      lines = remapBookmarkLines(
+        lines,
+        tr.changes,
+        tr.startState.doc,
+        tr.state.doc,
+      );
     }
     for (const e of tr.effects) {
       if (e.is(setBookmarkLines))

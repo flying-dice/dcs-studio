@@ -124,7 +124,9 @@ public container Bookmarks for studio::core::Studio {
   MergeMarks(kept: studio::bookmarks::Bookmark[], fresh: studio::bookmarks::Bookmark[]): studio::bookmarks::Bookmark[];
 
   /// Read a project's persisted marks from localStorage by its canonical key
-  /// (an absent or corrupt bucket restores nothing — never fails the panel).
+  /// (an absent or corrupt bucket restores nothing — never fails the panel; an
+  /// entry whose line is not a positive integer is dropped, never painting a
+  /// phantom panel row).
   ReadPersisted(key: string): studio::bookmarks::Bookmark[];
 
   /// Hand the live set to the UI: the panel groups it by file with a snippet
