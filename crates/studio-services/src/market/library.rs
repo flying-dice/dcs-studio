@@ -229,6 +229,18 @@ pub fn install(owner: &str, name: &str) -> Result<dcs_studio_project::InstallRep
     install_with(crate::github::current_token().as_deref(), owner, name)
 }
 
+/// Refuse to install a library (a repo carrying `dcs-studio-library`) into DCS.
+/// Pure (the topics are injected) so the defence-in-depth decision is unit-tested
+/// without a live `get_repo` round-trip (issue #48).
+fn refuse_library(topics: &[String], owner: &str, name: &str) -> Result<(), String> {
+    if topics.iter().any(|t| t == dcs_studio_project::LIBRARY_TOPIC) {
+        return Err(format!(
+            "{owner}/{name} is a dcs-studio library — add it as a dependency (lua-cargo), not install it into DCS"
+        ));
+    }
+    Ok(())
+}
+
 /// The testable core of [`install`]: the session token is injected.
 fn install_with(
     token: Option<&str>,
@@ -240,12 +252,10 @@ fn install_with(
     };
     // Defence in depth (issue #48): a library is never installable into DCS, even
     // via a direct call that bypassed the product page's hidden Install button.
+    // The topic is the authoritative source, re-fetched server-side here; the
+    // refusal decision is the pure [`refuse_library`] seam (unit-tested).
     let repo = super::get_repo(owner, name, token)?;
-    if repo.topics.iter().any(|t| t == dcs_studio_project::LIBRARY_TOPIC) {
-        return Err(format!(
-            "{owner}/{name} is a dcs-studio library — add it as a dependency (lua-cargo), not install it into DCS"
-        ));
-    }
+    refuse_library(&repo.topics, owner, name)?;
     let roots = resolve_roots()?;
     let payload_url = find_payload_asset(owner, name, token)?;
     let bytes = fetch_asset_bytes(&payload_url, token)?;
@@ -302,6 +312,19 @@ mod tests {
         // The install core takes the session token, so the sign-in gate is
         // exercised without touching the global keyring (model `Library.Install`).
         assert_eq!(install_with(None, "octocat", "cool-mod").unwrap_err(), SIGN_IN_REQUIRED);
+    }
+
+    #[test]
+    fn install_refuses_a_library_repo_defence_in_depth() {
+        // A repo carrying the library topic is refused (the seam the install path
+        // calls after re-fetching topics server-side) — feature
+        // LibraryIsNeverInstallable's Layer 2.
+        let lib_topics = vec!["dcs-studio".to_string(), "dcs-studio-library".to_string()];
+        let err = refuse_library(&lib_topics, "flying-dice", "mylib").unwrap_err();
+        assert!(err.contains("library"), "clear refusal: {err}");
+        // A non-library repo passes the guard.
+        let mod_topics = vec!["dcs-studio".to_string()];
+        assert!(refuse_library(&mod_topics, "octocat", "cool-mod").is_ok());
     }
 
     #[test]

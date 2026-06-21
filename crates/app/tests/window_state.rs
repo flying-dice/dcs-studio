@@ -14,7 +14,7 @@
 use serde_json::Value;
 
 const CONF: &str = include_str!("../tauri.conf.json");
-const CARGO: &str = include_str!("../Cargo.toml");
+const LIB_RS: &str = include_str!("../src/lib.rs");
 
 #[test]
 fn config_default_window_is_the_documented_restore_fallback() {
@@ -32,12 +32,17 @@ fn config_default_window_is_the_documented_restore_fallback() {
 }
 
 #[test]
-fn window_state_plugin_is_wired_so_geometry_persists() {
-    // Save/restore exists only because this plugin is a dependency + registered
-    // (registration is asserted by review in !8; this pins the dependency so a
-    // drop — which would silently disable persistence — fails CI).
+fn window_state_plugin_is_registered_on_the_builder() {
+    // Save/restore exists only because the plugin is REGISTERED on the Tauri
+    // builder. Assert the actual `.plugin(tauri_plugin_window_state::…)` call in
+    // lib.rs — not merely the Cargo dependency — so unwiring it (the silent way
+    // to disable persistence) fails CI, not just deleting the dep.
+    let registered = LIB_RS
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .any(|l| l.contains(".plugin(tauri_plugin_window_state::"));
     assert!(
-        CARGO.contains("tauri-plugin-window-state"),
-        "the window-state plugin must stay a dependency"
+        registered,
+        "tauri_plugin_window_state must be registered on the builder in lib.rs"
     );
 }

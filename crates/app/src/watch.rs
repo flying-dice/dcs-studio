@@ -37,8 +37,13 @@ const IGNORED_SEGMENTS: &[&str] = &[
     ".cache",
 ];
 
-fn is_ignored(path: &str) -> bool {
-    path.split(['/', '\\'])
+/// Whether a changed path is build/VCS noise — judged on the part BELOW the
+/// watch root only. Matching the absolute path would wrongly kill the entire
+/// watch when the project itself lives under a noise-named ancestor (e.g. a repo
+/// checked out into `…/build/…` or `~/.cache/…`).
+fn is_ignored(path: &str, root: &str) -> bool {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    rel.split(['/', '\\'])
         .any(|seg| IGNORED_SEGMENTS.contains(&seg))
 }
 
@@ -56,12 +61,13 @@ pub fn watch_start(
     app: AppHandle,
     state: tauri::State<'_, WatchState>,
 ) -> Result<(), String> {
+    let root = normalize(&path);
     let mut debouncer = new_debouncer(DEBOUNCE, move |res: DebounceEventResult| {
         let Ok(events) = res else { return };
         let paths: Vec<String> = events
             .into_iter()
             .map(|e| normalize(&e.path.to_string_lossy()))
-            .filter(|p| !is_ignored(p))
+            .filter(|p| !is_ignored(p, &root))
             .collect();
         if !paths.is_empty() {
             let _ = app.emit("fs://changed", &paths);
@@ -94,19 +100,34 @@ mod tests {
     use super::is_ignored;
 
     #[test]
-    fn ignores_build_and_vcs_noise_anywhere_in_the_path() {
-        assert!(is_ignored(r"C:\proj\target\debug\x.rs"));
-        assert!(is_ignored("/proj/.git/index"));
-        assert!(is_ignored(r"C:\proj\node_modules\pkg\i.js"));
-        assert!(is_ignored("/proj/.lua-cargo/deps/moose/m.lua"));
+    fn ignores_build_and_vcs_noise_below_the_root() {
+        let root = r"C:\proj";
+        assert!(is_ignored(r"C:\proj\target\debug\x.rs", root));
+        assert!(is_ignored(r"C:\proj\.git\index", root));
+        assert!(is_ignored(r"C:\proj\node_modules\pkg\i.js", root));
+        assert!(is_ignored("/proj/.lua-cargo/deps/moose/m.lua", "/proj"));
     }
 
     #[test]
     fn keeps_real_workspace_files() {
-        assert!(!is_ignored(r"C:\proj\src\main.lua"));
-        assert!(!is_ignored("/proj/mission/unit-db.tsv"));
+        let root = r"C:\proj";
+        assert!(!is_ignored(r"C:\proj\src\main.lua", root));
+        assert!(!is_ignored("/proj/mission/unit-db.tsv", "/proj"));
         // A file merely NAMED like a noise dir (not a path segment) is kept.
-        assert!(!is_ignored(r"C:\proj\src\target-list.lua"));
+        assert!(!is_ignored(r"C:\proj\src\target-list.lua", root));
+    }
+
+    #[test]
+    fn a_noise_named_ancestor_of_the_root_does_not_kill_the_watch() {
+        // The PROJECT lives under a `build/` (or `.cache/`) ancestor — only the
+        // part BELOW the watch root is judged, so real files are still emitted.
+        let root = r"C:\work\build\my-mod";
+        assert!(!is_ignored(r"C:\work\build\my-mod\src\main.lua", root), "real file kept");
+        assert!(!is_ignored(r"C:\work\build\my-mod\mission.lua", root));
+        // Noise BELOW the root is still ignored.
+        assert!(is_ignored(r"C:\work\build\my-mod\target\x", root));
+        // Unix flavour.
+        assert!(!is_ignored("/home/u/.cache/proj/src/a.lua", "/home/u/.cache/proj"));
     }
 
     #[test]

@@ -117,7 +117,12 @@
       const tag = product.release_tag ?? "";
       // Escape interpolated values for a TOML basic string — a git tag may
       // legally contain `"`, which would otherwise inject into CargoLua.toml.
-      const line = `{ github = "${tomlStr(slug)}", tag = "${tomlStr(tag)}" }`;
+      // OMIT `tag` when the library has no release: an empty tag would lock to
+      // `tag = ""` → `git checkout ""` → RefNotFound. None → the default branch,
+      // which is the right source for a topic-only library with no tagged release.
+      const line = tag
+        ? `{ github = "${tomlStr(slug)}", tag = "${tomlStr(tag)}" }`
+        : `{ github = "${tomlStr(slug)}" }`;
 
       let toml = "";
       try {

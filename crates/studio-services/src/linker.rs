@@ -73,49 +73,75 @@ fn link_file(link_path: &Path, target: &Path) -> Result<(), String> {
     symlink_file_elevated(link_path, target)
 }
 
-/// Create a file symlink through an ELEVATED `mklink` (one UAC prompt) — the
+/// Create a file symlink through ELEVATED PowerShell (one UAC prompt) — the
 /// cross-volume fallback when Developer Mode is off.
 #[cfg(windows)]
 fn symlink_file_elevated(link_path: &Path, target: &Path) -> Result<(), String> {
-    let command = elevated_mklink_command(
+    let command = elevated_symlink_command(
         &link_path.display().to_string(),
         &target.display().to_string(),
-    )?;
-    let out = std::process::Command::new("powershell")
+    );
+    std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &command])
         .output()
         .map_err(|e| format!("symlink elevation could not launch: {e}"))?;
-    // The link's creation is the sole, authoritative success check — elevated
-    // exit codes are unreliable across the UAC boundary. It cannot false-positive:
-    // `link()` (the only path here) verified the destination was absent on entry,
-    // so any link present now was made by this mklink.
-    if link_path.symlink_metadata().is_ok() {
-        return Ok(());
+    // Authoritative success check: the link exists AND resolves to the intended
+    // target. read_link (vs a bare existence check) defeats a false success from
+    // a foreign/redirected link — and from any elevated command that created a
+    // DIFFERENT link than asked. A wrong link is removed, never adopted as ours.
+    match std::fs::read_link(link_path) {
+        Ok(got) if same_file(&got, target) => Ok(()),
+        Ok(other) => {
+            let _ = std::fs::remove_file(link_path);
+            Err(format!(
+                "elevated symlink pointed at {} not {} — removed",
+                other.display(),
+                target.display()
+            ))
+        }
+        Err(e) => Err(format!(
+            "cross-volume symlink needs privilege; the UAC elevation was declined or failed ({e}). Enable Windows Developer Mode to link without a prompt."
+        )),
     }
-    Err(format!(
-        "cross-volume symlink needs privilege; the UAC elevation was declined or mklink failed ({}). Enable Windows Developer Mode to link without a prompt.",
-        String::from_utf8_lossy(&out.stderr).trim()
-    ))
 }
 
-/// The PowerShell command that creates a file symlink with one UAC prompt:
-/// `Start-Process cmd /C mklink` elevated (`-Verb RunAs`), waiting for it. Pure
-/// (no IO) so the quoting/escaping is unit-tested without actually elevating.
-/// Returns Err for a path containing `"` (illegal in a Windows filename anyway),
-/// which would break out of cmd's quoting — the content-store path is influenced
-/// by the downloaded `.zip`'s entry names, so reject it rather than escape it.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn elevated_mklink_command(link: &str, target: &str) -> Result<String, String> {
-    if link.contains('"') || target.contains('"') {
-        return Err("refusing to link a path containing a double-quote".to_string());
+/// Whether a symlink's recorded target resolves to the same file as `target`.
+#[cfg(windows)]
+fn same_file(link_target: &Path, target: &Path) -> bool {
+    match (std::fs::canonicalize(link_target), std::fs::canonicalize(target)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => link_target == target,
     }
-    // `mklink "<link>" "<target>"` (no flag = a FILE symlink). The paths are
-    // double-quoted for cmd; the whole arg string is single-quoted for
-    // PowerShell, so any `'` in a path is doubled to stay inside that string.
-    let inner = format!("/C mklink \"{link}\" \"{target}\"").replace('\'', "''");
-    Ok(format!(
-        "Start-Process -FilePath cmd.exe -ArgumentList '{inner}' -Verb RunAs -Wait -WindowStyle Hidden"
-    ))
+}
+
+/// Base64 (UTF-16LE) of a `New-Item -ItemType <kind> -Path … -Target …` script
+/// for PowerShell `-EncodedCommand`. Because the script is base64-encoded,
+/// NOTHING in the paths reaches a shell parser — no `cmd` `%VAR%` expansion, no
+/// PowerShell `$`/quote expansion, no quoting breakout. Inside the script the
+/// paths are single-quoted PS literals (only `'` doubled). Pure → unit-tested.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn encoded_new_item(kind: &str, link: &str, target: &str) -> String {
+    use base64::Engine as _;
+    let lit = |s: &str| format!("'{}'", s.replace('\'', "''"));
+    let script = format!(
+        "New-Item -ItemType {kind} -Path {} -Target {} -ErrorAction Stop | Out-Null",
+        lit(link),
+        lit(target),
+    );
+    let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    base64::engine::general_purpose::STANDARD.encode(utf16)
+}
+
+/// The PowerShell command that creates a file symlink with one UAC prompt: an
+/// elevated `Start-Process` running the base64 `New-Item` script. The outer
+/// (un-elevated) command embeds only the base64 blob (alphanumeric + `/ + =` —
+/// no quote/expansion hazards). Pure → unit-tested without elevating.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn elevated_symlink_command(link: &str, target: &str) -> String {
+    let encoded = encoded_new_item("SymbolicLink", link, target);
+    format!(
+        "Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','{encoded}' -Verb RunAs -Wait -WindowStyle Hidden"
+    )
 }
 
 #[cfg(not(windows))]
@@ -143,57 +169,77 @@ fn same_volume(link_path: &Path, target: &Path) -> bool {
     }
 }
 
-/// Create a directory junction via `mklink /J` (a `cmd` builtin) — junctions to
-/// local dirs need no elevation, unlike `symlink_dir`.
+/// Create a directory junction via PowerShell `New-Item -ItemType Junction`
+/// (no elevation needed for a junction) — NOT `cmd mklink`, so a `%VAR%` in a
+/// manifest-derived path can never be expanded/injected by the shell.
 #[cfg(windows)]
 fn junction(link_path: &Path, target: &Path) -> Result<(), String> {
-    let out = std::process::Command::new("cmd")
-        .args(["/C", "mklink", "/J"])
-        .arg(link_path)
-        .arg(target)
+    let encoded = encoded_new_item(
+        "Junction",
+        &link_path.display().to_string(),
+        &target.display().to_string(),
+    );
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
         .output()
-        .map_err(|e| format!("mklink: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "junction failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        .map_err(|e| format!("junction launch failed: {e}"))?;
+    // Success = the junction resolves to the intended target (not a redirected
+    // or foreign link). link() verified the dest was absent on entry.
+    if same_file(link_path, target) {
+        return Ok(());
     }
-    Ok(())
+    Err(format!(
+        "junction failed: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    ))
 }
 
-// The elevated-mklink command construction is pure, so it is tested on every
-// platform (the actual UAC elevation is not unit-testable).
+// The command construction is pure, so it is tested on every platform (the
+// actual UAC elevation is not unit-testable).
 #[cfg(test)]
 mod cmd_tests {
-    use super::elevated_mklink_command;
+    use super::{elevated_symlink_command, encoded_new_item};
+    use base64::Engine as _;
+
+    fn decode(b64: &str) -> String {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(b64).expect("base64");
+        let utf16: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        String::from_utf16(&utf16).expect("utf16")
+    }
 
     #[test]
-    fn elevated_mklink_command_quotes_paths_and_elevates() {
-        let cmd = elevated_mklink_command(r"C:\a b\link.lua", r"D:\store\real.lua").expect("ok");
+    fn encoded_new_item_keeps_shell_metachars_out_of_any_parser() {
+        // Paths with cmd/PS expansion hazards must NOT survive as live syntax:
+        // the whole New-Item is base64-encoded, and inside it the paths are
+        // single-quoted PS literals (so %VAR%, $env, ", & are all inert data).
+        let b64 = encoded_new_item("SymbolicLink", r"C:\a %APPDATA% & $env\l.lua", r"D:\t.lua");
+        // base64 itself carries none of the dangerous characters.
+        for bad in ["%APPDATA%", "$env", "&", "\""] {
+            assert!(!b64.contains(bad), "encoded blob leaks {bad:?}: {b64}");
+        }
+        let script = decode(&b64);
+        assert!(script.contains("New-Item -ItemType SymbolicLink"));
+        // The path is present only as a single-quoted literal, verbatim.
+        assert!(
+            script.contains(r"'C:\a %APPDATA% & $env\l.lua'"),
+            "literal single-quoted path: {script}"
+        );
+    }
+
+    #[test]
+    fn encoded_new_item_doubles_single_quotes() {
+        let script = decode(&encoded_new_item("Junction", r"C:\o'brien\d", r"D:\s"));
+        assert!(script.contains("o''brien"), "single quote doubled: {script}");
+    }
+
+    #[test]
+    fn elevated_symlink_command_wraps_the_encoded_script_in_a_uac_start_process() {
+        let cmd = elevated_symlink_command(r"C:\l.lua", r"D:\t.lua");
         assert!(cmd.contains("-Verb RunAs"), "elevates via UAC: {cmd}");
         assert!(cmd.contains("-Wait"), "waits for the elevated process: {cmd}");
-        assert!(
-            cmd.contains(r#"mklink "C:\a b\link.lua" "D:\store\real.lua""#),
-            "mklink with double-quoted paths (handles spaces): {cmd}"
-        );
-    }
-
-    #[test]
-    fn elevated_mklink_command_escapes_single_quotes_for_powershell() {
-        // A `'` in a path must not break out of the PowerShell single-quoted arg.
-        let cmd = elevated_mklink_command(r"C:\o'brien\l.lua", r"D:\t.lua").expect("ok");
-        assert!(cmd.contains("o''brien"), "single quote doubled: {cmd}");
-    }
-
-    #[test]
-    fn elevated_mklink_command_rejects_a_double_quote_in_a_path() {
-        // A `"` would close cmd's quoting and inject — reject rather than escape.
-        assert!(
-            elevated_mklink_command("C:\\a\"b\\l.lua", r"D:\t.lua").is_err(),
-            "double-quote path rejected"
-        );
-        assert!(elevated_mklink_command(r"C:\l.lua", "D:\\t\"x.lua").is_err());
+        assert!(cmd.contains("-EncodedCommand"), "passes the script base64-encoded: {cmd}");
+        // No `cmd`, no `mklink`, no `%` — the whole injection surface is gone.
+        assert!(!cmd.contains("mklink") && !cmd.contains('%'), "no cmd/mklink/%: {cmd}");
     }
 }
 

@@ -23,6 +23,7 @@ import {
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import { canonicalPath } from "./paths";
+import { reconcileBuffer, fsKey } from "./workspace-util";
 import { dcsLink } from "./dcs-link.svelte";
 import { fileWatcher } from "./file-watcher.svelte";
 import { lang } from "./lang/intel.svelte";
@@ -472,10 +473,12 @@ class AppState {
    */
   async onFsChanged(paths: string[]): Promise<void> {
     this.refreshTree();
-    const changed = new Set(paths.map((p) => canonicalPath(p)));
+    // fsKey unifies the watcher's path form with the tree's identity (separators
+    // / `\\?\` / drive-case), so a change can't silently miss its open buffer.
+    const changed = new Set(paths.map(fsKey));
     const reload: string[] = [];
     for (const doc of this.openFiles) {
-      if (doc.kind !== "text" || !changed.has(canonicalPath(doc.path))) continue;
+      if (doc.kind !== "text" || !changed.has(fsKey(doc.path))) continue;
       let load;
       try {
         load = await classifyAndRead(doc.path);
@@ -483,17 +486,19 @@ class AppState {
         continue; // gone/unreadable — the tree refresh reflects a deletion
       }
       if (load.kind !== "text") continue;
-      if (load.text === doc.savedText) {
-        doc.diskChanged = false; // disk matches our baseline (e.g. reverted) → not stale
-        continue;
-      }
-      if (doc.docText === doc.savedText) {
-        doc.savedText = load.text;
-        doc.docText = load.text;
-        doc.diskChanged = false;
-        reload.push(doc.path);
-      } else {
-        doc.diskChanged = true; // dirty: warn, don't overwrite the user's edits
+      switch (reconcileBuffer(doc.savedText, doc.docText, load.text)) {
+        case "reload":
+          doc.savedText = load.text;
+          doc.docText = load.text;
+          doc.diskChanged = false;
+          reload.push(doc.path);
+          break;
+        case "stale":
+          doc.diskChanged = true; // dirty: warn, don't overwrite the user's edits
+          break;
+        case "noop":
+          doc.diskChanged = false; // disk matches our baseline (our save / a revert)
+          break;
       }
     }
     if (reload.length) this.reloaded = { tick: this.reloaded.tick + 1, paths: reload };

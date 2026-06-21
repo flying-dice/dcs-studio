@@ -77,6 +77,20 @@ impl Selector {
             Self::DefaultBranch => None,
         }
     }
+
+    /// A stable lockfile representation (`tag:1.0`, `branch:main`, `rev:abc`,
+    /// `default`) so a manifest change to the selector invalidates the locked
+    /// rev on the next resolve (the locked commit is only honoured when the
+    /// manifest still asks for the same thing).
+    #[must_use]
+    pub fn spec(&self) -> String {
+        match self {
+            Self::Branch(s) => format!("branch:{s}"),
+            Self::Tag(s) => format!("tag:{s}"),
+            Self::Rev(s) => format!("rev:{s}"),
+            Self::DefaultBranch => "default".to_string(),
+        }
+    }
 }
 
 /// One normalized dependency: a GitHub `owner/repo` plus its ref selector.
@@ -185,6 +199,7 @@ pub fn parse(text: &str) -> Result<CargoManifest, CargoError> {
 
     let mut dependencies = BTreeMap::new();
     for (name, raw_dep) in raw.dependencies {
+        validate_dep_name(&name)?;
         let dep = raw_dep.normalize(&name)?;
         dependencies.insert(name, dep);
     }
@@ -194,6 +209,26 @@ pub fn parse(text: &str) -> Result<CargoManifest, CargoError> {
         dependencies,
         bundle: raw.bundle,
     })
+}
+
+/// A dependency name becomes a vendor directory (`.lua-cargo/deps/<name>`), so it
+/// must be a single SAFE path component — reject separators, `..`, and anything
+/// outside `[A-Za-z0-9._-]` so a hostile `[dependencies]` key cannot make the
+/// resolver clone/write outside the cache (path traversal).
+fn validate_dep_name(name: &str) -> Result<(), CargoError> {
+    let safe = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if !safe {
+        return Err(CargoError::Manifest(format!(
+            "dependency name {name:?} must be a safe path component ([A-Za-z0-9._-], no '..' or separators)"
+        )));
+    }
+    Ok(())
 }
 
 /// Read and parse `<root>/CargoLua.toml`.
@@ -324,6 +359,24 @@ d = { branch = "main" }
         )
         .unwrap_err();
         assert!(matches!(err, CargoError::Manifest(_)));
+    }
+
+    #[test]
+    fn a_traversal_dependency_name_is_rejected() {
+        // The name becomes the vendor dir; a separator/`..` would let a clone
+        // write outside `.lua-cargo/deps/`.
+        for bad in ["../evil", "..", ".", "a/b", "a\\b", "foo/../bar", "x/.."] {
+            let text = format!(
+                "[package]\nname = \"x\"\n[dependencies]\n\"{bad}\" = {{ github = \"a/b\" }}\n"
+            );
+            assert!(
+                matches!(parse(&text), Err(CargoError::Manifest(_))),
+                "dep name {bad:?} should be rejected"
+            );
+        }
+        // A normal name passes.
+        let ok = "[package]\nname = \"x\"\n[dependencies]\nmoose-lib = { github = \"a/b\" }\n";
+        assert!(parse(ok).is_ok());
     }
 
     #[test]

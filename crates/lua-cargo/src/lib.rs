@@ -19,7 +19,7 @@
 // Test code is exempt from the production safety lints — indexing into
 // known-shape fixtures and `panic!` on bad setup are idiomatic there (the same
 // exemption the engine crates take; clippy.toml already exempts unwrap/expect).
-#![cfg_attr(test, allow(clippy::indexing_slicing, clippy::panic))]
+#![cfg_attr(test, allow(clippy::indexing_slicing, clippy::panic, clippy::print_stderr, clippy::print_stdout))]
 
 pub mod bundle;
 pub mod git;

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::manifest::{self, CargoManifest, Dependency, Selector};
+use crate::manifest::{self, CargoManifest, Dependency};
 use crate::{CargoError, git};
 
 /// The per-project vendor cache, relative to the project root.
@@ -22,12 +22,15 @@ const VENDOR_REL: &str = ".lua-cargo/deps";
 /// The lockfile name.
 const LOCK_FILE: &str = "CargoLua.lock";
 
-/// One row of `CargoLua.lock`: the dependency name, its `owner/repo`, and the
-/// resolved HEAD SHA.
+/// One row of `CargoLua.lock`: the dependency name, its `owner/repo`, the
+/// requested selector (so a manifest change invalidates the lock), and the
+/// resolved HEAD SHA the next build checks out exactly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LockEntry {
     pub name: String,
     pub github: String,
+    #[serde(default)]
+    pub selector: String,
     pub rev: String,
 }
 
@@ -80,6 +83,7 @@ pub fn resolve(root: &Path) -> Result<ResolveReport, CargoError> {
         entries.push(LockEntry {
             name: name.clone(),
             github: dep.github(),
+            selector: dep.selector.spec(),
             rev,
         });
     }
@@ -102,18 +106,21 @@ fn vendor_one(
     let dir = vendor_dir.join(name);
     let exists = dir.join(".git").is_dir();
 
-    let pinned = matches!(dep.selector, Selector::Tag(_) | Selector::Rev(_));
-    let locked_rev = prior.deps.iter().find(|d| d.name == name).map(|d| &d.rev);
+    // The lock is honoured ONLY when the manifest still asks for the same thing
+    // (same owner/repo + same selector); a manifest edit invalidates it and
+    // re-resolves. This makes a build reproducible across machines — the LOCKED
+    // commit is checked out even if the tag/branch moved upstream.
+    let locked_rev = prior
+        .deps
+        .iter()
+        .find(|d| d.name == name && d.github == dep.github() && d.selector == dep.selector.spec())
+        .map(|d| d.rev.clone());
 
-    // A pinned dep already vendored and locked needs no git work — a tag/rev
-    // never moves. Verify the on-disk HEAD still matches the lock; if it does,
-    // short-circuit.
-    if exists && pinned {
-        if let Some(want) = locked_rev {
-            if let Ok(head) = git::rev_parse_head(&dir) {
-                if &head == want {
-                    return Ok(head);
-                }
+    // Already at the locked commit → no git work.
+    if exists {
+        if let Some(rev) = &locked_rev {
+            if git::rev_parse_head(&dir).ok().as_deref() == Some(rev.as_str()) {
+                return Ok(rev.clone());
             }
         }
     }
@@ -128,11 +135,16 @@ fn vendor_one(
         git::clone(&dep.clone_url(), &dir)?;
     }
 
-    // Check out the selector. The default branch has no concrete name — its
-    // fetch already moved `origin/HEAD`, so we resolve through it.
-    match dep.selector.refname() {
-        Some(refname) => git::checkout(&dir, refname)?,
-        None => git::checkout(&dir, "origin/HEAD")?,
+    match &locked_rev {
+        // Lock present + manifest unchanged → the exact locked commit.
+        Some(rev) => git::checkout(&dir, rev)?,
+        // First resolve (or a changed manifest) → resolve the selector; the SHA
+        // we capture becomes the new lock. The default branch has no concrete
+        // name — the fetch refreshed `origin/HEAD`, so resolve through it.
+        None => match dep.selector.refname() {
+            Some(refname) => git::checkout(&dir, refname)?,
+            None => git::checkout(&dir, "origin/HEAD")?,
+        },
     }
 
     git::rev_parse_head(&dir)
@@ -274,6 +286,42 @@ mod tests {
         assert_eq!(report2.entries[0].rev, entry.rev);
         let after = std::fs::read(project.0.join(LOCK_FILE)).unwrap();
         assert_eq!(before, after, "re-resolve deterministic");
+    }
+
+    #[test]
+    fn resolve_enforces_the_locked_sha_when_the_tag_moves() {
+        if !git::git_available() {
+            return;
+        }
+        let fixture = make_fixture_repo("1.0.0");
+        let fixture_url = url_for(&fixture.0);
+
+        let project = TempTree::new("locked");
+        project.write(
+            "CargoLua.toml",
+            "[package]\nname = \"p\"\n[dependencies]\ndep = { github = \"local/dep\", tag = \"1.0.0\" }\n",
+        );
+        let vendor = project.0.join(VENDOR_REL).join("dep");
+        std::fs::create_dir_all(vendor.parent().unwrap()).unwrap();
+        git_in(&project.0, &["clone", "-q", &fixture_url, vendor.to_str().unwrap()]);
+
+        // First resolve pins the lock to the tag's commit A.
+        let locked_a = resolve(&project.0).expect("resolve").entries[0].rev.clone();
+
+        // Upstream MOVES the tag to a new commit B (the supply-chain hazard) and
+        // the checkout drifts onto it.
+        fixture.write("init.lua", "return 2\n");
+        git_in(&fixture.0, &["add", "-A"]);
+        git_in(&fixture.0, &["commit", "-q", "-m", "second"]);
+        git_in(&fixture.0, &["tag", "-f", "1.0.0"]);
+        git_in(&vendor, &["fetch", "-q", "--tags", "--force", "origin"]);
+        git_in(&vendor, &["checkout", "-q", "1.0.0"]);
+        assert_ne!(git::rev_parse_head(&vendor).unwrap(), locked_a, "drifted to the moved tag B");
+
+        // Re-resolve must restore the LOCKED commit A, not the moved tag's B.
+        let second = resolve(&project.0).expect("re-resolve");
+        assert_eq!(second.entries[0].rev, locked_a, "lock honoured despite the moved tag");
+        assert_eq!(git::rev_parse_head(&vendor).unwrap(), locked_a, "checkout restored to A");
     }
 
     /// A `file://` URL for a local path (forward slashes; git accepts it).
