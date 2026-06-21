@@ -520,6 +520,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The canonical-prefix arm of `within_root` — not the lexical guard — is
+    /// what refuses a path that lexically stays under the root but resolves
+    /// outside through a symlink. Unix-only (symlink creation needs
+    /// `std::os::unix`). Mutation-proof: neuter the `canonicalize` check in
+    /// `within_root` and this test goes red where `paths_escaping_…` (lexical
+    /// `..`/absolute cases only) stays green.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_escape_out_of_the_root_is_refused() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("symlink");
+        // A real database OUTSIDE the root, in a sibling temp dir.
+        let outside = root.parent().expect("parent").join(format!(
+            "studio-services-db-symlink-out-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        seed(&outside.join("secret.db"), "CREATE TABLE t (id INTEGER);");
+
+        // A symlink under the root pointing at the outside dir: the query path
+        // `<root>/link/secret.db` lexically stays under root (no `..`, not
+        // absolute), so only the canonical check can refuse it.
+        let link = root.join("link");
+        symlink(&outside, &link).expect("symlink");
+        let escape = link.join("secret.db").to_string_lossy().into_owned();
+
+        assert!(
+            tables_under(&root, &escape).is_err(),
+            "a symlinked escape out of the root must be refused"
+        );
+        assert!(
+            query_under(&root, &escape, "SELECT 1", 100).is_err(),
+            "symlinked escape refused on query too"
+        );
+
+        let _ = std::fs::remove_dir_all(&outside);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn missing_file_is_an_error_not_a_panic() {
         let root = temp_root("missing");

@@ -12,6 +12,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import { Generation } from "./database-gen";
 import {
   defaultQuery,
   messageOf,
@@ -57,35 +58,35 @@ export class DatabaseBrowser {
   loadingTables = $state(false);
   running = $state(false);
 
-  // Two generation counters keep independent lifecycles from stranding each
-  // other's in-flight flags: the file list (discovery) is bumped by `refresh`;
+  // Two generation guards keep independent lifecycles from stranding each
+  // other's in-flight flags: the file list (discovery) is begun by `refresh`;
   // the opened-database lifecycle (tables/query) by `select`/`run`/`openTable`/
   // `clearSelection`. A Refresh mid-query must not orphan `running`, nor a
-  // re-select orphan `loadingTables`.
-  private discoverGen = 0;
-  private selectionGen = 0;
+  // re-select orphan `loadingTables`. (Supersession contract: `./database-gen`.)
+  private discoverGen = new Generation();
+  private selectionGen = new Generation();
 
   /** Discover databases under the write root (model `RefreshDatabases`). A
    *  failure leaves the list empty — non-fatal, the panel just shows nothing. */
   async refresh(): Promise<void> {
-    const generation = ++this.discoverGen;
+    const generation = this.discoverGen.begin();
     this.discovering = true;
     try {
       const writeDir = await this.db.writeDir();
-      if (generation === this.discoverGen) this.writeDir = writeDir;
+      if (this.discoverGen.isCurrent(generation)) this.writeDir = writeDir;
       const files = await this.db.discover();
-      if (generation === this.discoverGen) this.files = files;
+      if (this.discoverGen.isCurrent(generation)) this.files = files;
     } catch (error) {
       console.error("database discovery failed:", error);
-      if (generation === this.discoverGen) this.files = [];
+      if (this.discoverGen.isCurrent(generation)) this.files = [];
     } finally {
-      if (generation === this.discoverGen) this.discovering = false;
+      if (this.discoverGen.isCurrent(generation)) this.discovering = false;
     }
   }
 
   /** Open a database and list its tables (model `OpenDatabase`). */
   async select(path: string): Promise<void> {
-    const generation = ++this.selectionGen;
+    const generation = this.selectionGen.begin();
     this.running = false; // a new selection supersedes any in-flight query
     this.selected = path;
     this.tables = [];
@@ -95,12 +96,12 @@ export class DatabaseBrowser {
     this.loadingTables = true;
     try {
       const tables = await this.db.tables(path);
-      if (generation !== this.selectionGen) return;
+      if (!this.selectionGen.isCurrent(generation)) return;
       this.tables = tables;
     } catch (error) {
-      if (generation === this.selectionGen) this.error = messageOf(error);
+      if (this.selectionGen.isCurrent(generation)) this.error = messageOf(error);
     } finally {
-      if (generation === this.selectionGen) this.loadingTables = false;
+      if (this.selectionGen.isCurrent(generation)) this.loadingTables = false;
     }
   }
 
@@ -118,27 +119,27 @@ export class DatabaseBrowser {
     const path = this.selected;
     const sql = this.sql.trim();
     if (path === null || sql === "") return;
-    const generation = ++this.selectionGen;
+    const generation = this.selectionGen.begin();
     this.loadingTables = false; // a run supersedes an in-flight table load
     this.running = true;
     this.error = null;
     try {
       const result = await this.db.query(path, sql);
-      if (generation !== this.selectionGen) return;
+      if (!this.selectionGen.isCurrent(generation)) return;
       this.result = result;
     } catch (error) {
-      if (generation !== this.selectionGen) return;
+      if (!this.selectionGen.isCurrent(generation)) return;
       this.error = messageOf(error);
       this.result = null;
     } finally {
-      if (generation === this.selectionGen) this.running = false;
+      if (this.selectionGen.isCurrent(generation)) this.running = false;
     }
   }
 
   /** Back to the database list, dropping the opened database's state and
    *  superseding any in-flight tables/query call. */
   clearSelection(): void {
-    this.selectionGen += 1;
+    this.selectionGen.supersede();
     this.selected = null;
     this.tables = [];
     this.sql = "";
@@ -150,8 +151,8 @@ export class DatabaseBrowser {
 
   /** Forget everything (project closed or switched). */
   reset(): void {
-    this.discoverGen += 1;
-    this.selectionGen += 1;
+    this.discoverGen.supersede();
+    this.selectionGen.supersede();
     this.writeDir = null;
     this.files = [];
     this.selected = null;
