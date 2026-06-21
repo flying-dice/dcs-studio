@@ -113,8 +113,20 @@ impl LanguageServer for Backend {
             tracing::warn!("initialized with no root — nothing to walk");
             return;
         };
-        let files = dcs_studio_project::sources::collect(&root);
-        tracing::info!(root = %root.display(), files = files.len(), "workspace walk");
+        // Vendored dependency roots are the one exception to the dot-dir skip:
+        // `.lua-cargo/deps/<name>` is walked too, so completion/hover/diagnostics
+        // reach dep modules. A missing or malformed `CargoLua.toml` simply
+        // yields no extra roots — dependency indexing is opt-in by manifest.
+        let extra_roots: Vec<PathBuf> = lua_cargo::resolve::vendored_roots(&root)
+            .map(|roots| roots.into_values().collect())
+            .unwrap_or_default();
+        let files = dcs_studio_project::sources::collect(&root, &extra_roots);
+        tracing::info!(
+            root = %root.display(),
+            files = files.len(),
+            vendored = extra_roots.len(),
+            "workspace walk"
+        );
         {
             let mut walked = self.walked.lock().unwrap_or_else(PoisonError::into_inner);
             for (path, _) in &files {

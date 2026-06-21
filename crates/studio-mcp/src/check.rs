@@ -17,7 +17,10 @@ pub struct Report {
 pub fn run(root: &Path) -> Report {
     use std::fmt::Write as _;
 
-    let files = dcs_studio_project::sources::collect(root);
+    // No extra roots: `check` deliberately does not index vendored
+    // `.lua-cargo/deps` — dep code carries its own lint noise. Editor
+    // intelligence (lua-analyzer) opts those roots in; the CLI/MCP gate does not.
+    let files = dcs_studio_project::sources::collect(root, &[]);
     let mut workspace = Workspace::new();
     for (path, text) in &files {
         workspace.set_source(path, text);
