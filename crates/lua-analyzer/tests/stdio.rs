@@ -58,6 +58,44 @@ fn lsp_read_until(reader: &mut BufReader<impl Read>, predicate: impl Fn(&Value) 
     panic!("expected message never arrived");
 }
 
+/// Read non-empty `publishDiagnostics` notifications until one whose URI ends
+/// with each suffix has arrived; returns them in `suffixes` order. The boot
+/// walk publishes per file in filesystem-walk order, so a test needing several
+/// files' diagnostics must capture them order-independently — waiting for a
+/// fixed order with successive `lsp_read_until` calls deadlocks on filesystems
+/// whose readdir yields the other file first (each call discards the publishes
+/// it is not waiting for).
+fn read_publishes_for(reader: &mut BufReader<impl Read>, suffixes: &[&str]) -> Vec<Value> {
+    let mut found: Vec<Option<Value>> = vec![None; suffixes.len()];
+    for _ in 0..100 {
+        if found.iter().all(Option::is_some) {
+            break;
+        }
+        let message = lsp_read(reader);
+        if message.get("method") != Some(&json!("textDocument/publishDiagnostics")) {
+            continue;
+        }
+        let uri = message["params"]["uri"].as_str().unwrap_or_default().to_string();
+        let nonempty = message["params"]["diagnostics"]
+            .as_array()
+            .is_some_and(|diags| !diags.is_empty());
+        if !nonempty {
+            continue;
+        }
+        for (slot, suffix) in found.iter_mut().zip(suffixes) {
+            if slot.is_none() && uri.ends_with(suffix) {
+                *slot = Some(message);
+                break;
+            }
+        }
+    }
+    found
+        .into_iter()
+        .zip(suffixes)
+        .map(|(slot, suffix)| slot.unwrap_or_else(|| panic!("no diagnostics published for {suffix:?}")))
+        .collect()
+}
+
 #[test]
 fn initialize_walk_publishes_parse_and_type_diagnostics() {
     let root = temp_dir("lsp");
@@ -93,29 +131,19 @@ fn initialize_walk_publishes_parse_and_type_diagnostics() {
         &mut child,
         &json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
     );
-    // The parse error in broken.lua.
-    let parse_publish = lsp_read_until(&mut reader, |m| {
-        m.get("method") == Some(&json!("textDocument/publishDiagnostics"))
-            && m["params"]["uri"].as_str().is_some_and(|u| u.ends_with("broken.lua"))
-            && !m["params"]["diagnostics"].as_array().unwrap().is_empty()
-    });
+    // The boot walk publishes broken.lua's parse error and typed.lua's type
+    // error in filesystem-walk order; capture both regardless of which lands
+    // first (the type error is the bug that motivated lua-analyzer — checks
+    // must reach the editor over real LSP, not just the browser wasm path).
+    let publishes = read_publishes_for(&mut reader, &["broken.lua", "typed.lua"]);
     assert!(
-        parse_publish["params"]["diagnostics"][0]["code"]
+        publishes[0]["params"]["diagnostics"][0]["code"]
             .as_str()
             .unwrap()
             .starts_with("LUA-E"),
     );
-
-    // The type error in typed.lua — surfaced over the real LSP, the bug that
-    // motivated lua-analyzer: type checks must reach the editor, not just the
-    // browser wasm path.
-    let type_publish = lsp_read_until(&mut reader, |m| {
-        m.get("method") == Some(&json!("textDocument/publishDiagnostics"))
-            && m["params"]["uri"].as_str().is_some_and(|u| u.ends_with("typed.lua"))
-            && !m["params"]["diagnostics"].as_array().unwrap().is_empty()
-    });
     assert_eq!(
-        type_publish["params"]["diagnostics"][0]["code"],
+        publishes[1]["params"]["diagnostics"][0]["code"],
         json!("param-type-mismatch")
     );
 
@@ -312,6 +340,70 @@ fn inlay_hints_carry_inferred_signature_types() {
         labels.iter().filter(|l| **l == ": string").count(),
         2,
         "expected two `: string` hints; got {labels:?}"
+    );
+
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 99, "method": "shutdown"}),
+    );
+    lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(99)));
+    lsp_send(&mut child, &json!({"jsonrpc": "2.0", "method": "exit"}));
+    assert!(child.wait().expect("exit").success());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn initialize_walk_indexes_vendored_dependencies() {
+    let root = temp_dir("vendored");
+    // A CargoLua.toml declaring one dependency, vendored on disk under the
+    // dot-prefixed `.lua-cargo/deps` cache the plain workspace walk skips.
+    std::fs::write(
+        root.join("CargoLua.toml"),
+        "[package]\nname = \"p\"\n[dependencies]\nmoose = { github = \"flying-dice/moose\" }\n",
+    )
+    .expect("seed manifest");
+    let dep_dir = root.join(".lua-cargo").join("deps").join("moose");
+    std::fs::create_dir_all(&dep_dir).expect("vendor dir");
+    // The dep declares a global; the project calls it. Only an indexed dep
+    // resolves that call to the vendored file (globals are workspace-wide), so
+    // a successful go-to-definition is proof the vendor tree was walked.
+    std::fs::write(dep_dir.join("init.lua"), "function MooseHelper()\nend\n").expect("seed dep");
+    std::fs::write(root.join("main.lua"), "MooseHelper()\n").expect("seed main");
+
+    let mut child = lua_analyzer()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn lua-analyzer");
+    let mut reader = BufReader::new(child.stdout.take().expect("stdout piped"));
+
+    let root_uri = format!("file:///{}", root.display().to_string().replace('\\', "/"));
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"processId": null, "rootUri": root_uri, "capabilities": {}}}),
+    );
+    lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(1)));
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
+    );
+
+    // Go-to-definition on the `MooseHelper()` call jumps INTO the vendored dep.
+    let main_uri = format!("{root_uri}/main.lua");
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 21, "method": "textDocument/definition",
+                "params": {"textDocument": {"uri": main_uri},
+                           "position": {"line": 0, "character": 0}}}),
+    );
+    let def = lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(21)));
+    let target = def["result"]["uri"].as_str().unwrap_or_default();
+    assert!(
+        target.contains("moose") && target.ends_with("init.lua"),
+        "definition did not resolve into the vendored dep: {}",
+        def["result"]
     );
 
     lsp_send(

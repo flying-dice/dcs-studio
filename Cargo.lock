@@ -3371,6 +3371,7 @@ dependencies = [
  "dcs-lua-lsp-core",
  "dcs-lua-syntax",
  "dcs-studio-project",
+ "lua-cargo",
  "serde_json",
  "tokio",
  "tower-lsp",

@@ -105,6 +105,13 @@ public container DependencyResolver for studio::core::Studio {
 
   /// Capture each checkout's HEAD and write the name-sorted `CargoLua.lock`.
   WriteLock(root: string): studio::cargolua::ResolveReport;
+
+  /// The on-disk roots of the currently vendored dependencies — the
+  /// `CargoLua.toml` deps whose `.lua-cargo/deps/<name>` checkout exists. Both
+  /// the bundler's module search and the editor's workspace walk read this: the
+  /// editor adds these dot-prefixed roots to its analyzed source set so dep
+  /// modules get completion/hover/diagnostics (see `VendoredDepsAreIndexed`).
+  public VendoredRoots(root: string): string[];
 }
 
 /// Amalgamates an entry script's require graph into one self-contained file.
@@ -156,6 +163,17 @@ feature LockfileMakesResolveReproducible for studio::cargolua::DependencyResolve
   when "the same project is resolved on another machine"
   then "each dependency checks out the exact rev recorded in the lock"
   and "the lock is written name-sorted so its bytes are deterministic"
+}
+
+/// Vendored deps are part of the editor's analyzed source set, even though they
+/// live under the dot-prefixed `.lua-cargo/deps` cache the workspace walk
+/// otherwise skips — so a dependency's modules get completion, hover, and
+/// diagnostics like first-party code.
+feature VendoredDepsAreIndexed for studio::cargolua::DependencyResolver {
+  given "a project with a dependency vendored under .lua-cargo/deps"
+  when "the workspace is analyzed"
+  then "the dep's modules are collected into the analyzed source set"
+  but "the dot-prefixed vendor cache is otherwise skipped like .git and target"
 }
 
 /// The bundler folds the whole require graph into one file.
