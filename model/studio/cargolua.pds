@@ -1,0 +1,175 @@
+//! studio::cargolua — a Cargo-shaped toolchain for DCS Lua mods (issue #48
+//! Part A). Two halves joined under `CargoLua.toml`: a git dependency manager
+//! that vendors `github = "owner/repo"` deps (pinned by branch/tag/rev) into a
+//! per-project cache and records resolved SHAs in `CargoLua.lock`, and a
+//! require-graph bundler that amalgamates an entry script plus every reachable
+//! `require("mod")` into one self-contained Lua 5.1 file. Dependency fetching
+//! shells out to the installed `git` (clone/fetch/checkout/rev-parse) — one
+//! mechanism, no embedded git; bundling reads sources verbatim and rewrites no
+//! AST, wrapping each module in a function behind a `__require` shim.
+
+/// The marker selecting which git ref a dependency pins to. Cargo's rule: at
+/// most one of branch/tag/rev; none given means the remote's default branch.
+public data Selector { kind: string, ref: string }
+
+/// One resolved dependency: a GitHub `owner/repo` plus its ref selector.
+public data Dependency { owner: string, repo: string, selector: studio::cargolua::Selector }
+
+/// One `[[bundle]]` target: the amalgamation output `name` grown from `path`.
+public data BundleTarget { name: string, path: string }
+
+/// The parsed `CargoLua.toml`: package metadata, named dependencies, and the
+/// bundle targets. Tolerant — unknown keys are ignored.
+public data CargoManifest { name: string, version: string, bundle: studio::cargolua::BundleTarget[] }
+
+/// One row of `CargoLua.lock`: the dependency name, its `owner/repo`, and the
+/// resolved HEAD SHA — sorted by name so the lockfile is deterministic.
+public data LockEntry { name: string, github: string, rev: string }
+
+/// The outcome of a resolve: the lock rows and the vendor directory deps were
+/// checked out under.
+public data ResolveReport { entries: studio::cargolua::LockEntry[], vendorDir: string }
+
+/// The outcome of a bundle: the emitted file, the module names amalgamated, and
+/// any requires that resolved to neither a local module nor a vendored dep
+/// (DCS built-ins / host-provided — warnings, never failures).
+public data BundleReport { output: string, modules: string[], warnings: string[] }
+
+/// A toolchain failure (git absent, a clone/fetch failure, an unresolvable ref,
+/// a missing bundle entry, a malformed manifest).
+public data CargoError { message: string }
+
+/// The installed `git` binary, shelled to via a no-console-window command — a
+/// black-box external system. gix has no production push and one mechanism is
+/// simpler; the resolver only reads, so clone/fetch/checkout/rev-parse suffice.
+public system Git {
+  /// Whether `git --version` succeeds — git absent fails resolve closed (and
+  /// gates the resolve tests in code).
+  public GitAvailable(): bool;
+
+  /// Clone `url` into `dir` (first vendor of a dependency).
+  public Clone(url: string, dir: string): Result<void, studio::cargolua::CargoError>;
+
+  /// Fetch updates into an existing checkout at `dir` (refresh a branch tip or
+  /// learn a newly pushed tag/rev on re-resolve).
+  public Fetch(dir: string): Result<void, studio::cargolua::CargoError>;
+
+  /// Check out `refname` (a branch, tag, or rev) in the checkout at `dir`.
+  public Checkout(dir: string, refname: string): Result<void, studio::cargolua::CargoError>;
+
+  /// The HEAD SHA of the checkout at `dir` (`git rev-parse HEAD`) — the rev
+  /// captured into the lockfile.
+  public RevParse(dir: string): Result<string, studio::cargolua::CargoError>;
+}
+
+/// Vendors a project's git dependencies and writes the lockfile.
+public container DependencyResolver for studio::core::Studio {
+  /// Resolve the project at `root`: parse `CargoLua.toml`, vendor each
+  /// dependency into `<root>/.lua-cargo/deps/<name>` (clone if absent, else
+  /// fetch), check out its selector, capture HEAD, and write a name-sorted
+  /// `CargoLua.lock`. Pinned deps (tag/rev) already satisfied by the lock and
+  /// on-disk checkout are a no-op; branch/default-branch deps re-fetch the tip.
+  #[manual]
+  public Resolve(root: string): Result<studio::cargolua::ResolveReport, studio::cargolua::CargoError> {
+    manifest = Result<studio::cargolua::CargoManifest, studio::cargolua::CargoError> from self.ReadManifest(root)
+    if (manifest.isErr) {
+      return Err(manifest.error)
+    }
+    available = bool from studio::cargolua::Git.GitAvailable()
+    if (!available) {
+      missing = studio::cargolua::CargoError from { "git not found on PATH" }
+      return Err(missing)
+    }
+    cloned = Result<void, studio::cargolua::CargoError> from self.VendorAll(root)
+    if (cloned.isErr) {
+      return Err(cloned.error)
+    }
+    checkedOut = Result<void, studio::cargolua::CargoError> from self.CheckoutAll(root)
+    if (checkedOut.isErr) {
+      return Err(checkedOut.error)
+    }
+    report = studio::cargolua::ResolveReport from self.WriteLock(root)
+    return Ok(report)
+  }
+
+  /// Parse `<root>/CargoLua.toml`; a missing or malformed manifest is an error.
+  ReadManifest(root: string): Result<studio::cargolua::CargoManifest, studio::cargolua::CargoError>;
+
+  /// Clone (or fetch) every dependency into the vendor cache. A failed clone is
+  /// a clone-failed error.
+  VendorAll(root: string): Result<void, studio::cargolua::CargoError>;
+
+  /// Check out each dependency's selector; a ref that does not exist is a
+  /// ref-not-found error.
+  CheckoutAll(root: string): Result<void, studio::cargolua::CargoError>;
+
+  /// Capture each checkout's HEAD and write the name-sorted `CargoLua.lock`.
+  WriteLock(root: string): studio::cargolua::ResolveReport;
+}
+
+/// Amalgamates an entry script's require graph into one self-contained file.
+public container Bundler for studio::core::Studio {
+  /// Bundle every `[[bundle]]` of the project at `root`: from each entry script
+  /// walk the `require("mod")` graph (resolving `a.b` to `a/b.lua` or
+  /// `a/b/init.lua` under the entry dir, the project, `<root>/src`, and each
+  /// vendored dep), wrap every reached module's source verbatim behind a
+  /// `__require` shim, and emit one Lua 5.1 file to `<root>/dist/<name>`.
+  /// Requires that resolve to nothing are collected as warnings, not failures.
+  #[manual]
+  public BundleAll(root: string): Result<studio::cargolua::BundleReport, studio::cargolua::CargoError> {
+    manifest = Result<studio::cargolua::CargoManifest, studio::cargolua::CargoError> from self.ReadManifest(root)
+    if (manifest.isErr) {
+      return Err(manifest.error)
+    }
+    entryFound = bool from self.EntryExists(root)
+    if (!entryFound) {
+      missing = studio::cargolua::CargoError from { "bundle entry not found" }
+      return Err(missing)
+    }
+    report = studio::cargolua::BundleReport from self.Amalgamate(root)
+    return Ok(report)
+  }
+
+  /// Parse `<root>/CargoLua.toml`; a missing or malformed manifest is an error.
+  ReadManifest(root: string): Result<studio::cargolua::CargoManifest, studio::cargolua::CargoError>;
+
+  /// Whether every `[[bundle]]` entry path exists on disk.
+  EntryExists(root: string): bool;
+
+  /// Walk the require graph from each entry, wrap modules behind the
+  /// `__require` shim, emit the file, and collect unresolved requires as
+  /// warnings.
+  Amalgamate(root: string): studio::cargolua::BundleReport;
+}
+
+/// A pinned ref resolves the same every run.
+feature GitRefPinnedResolve for studio::cargolua::DependencyResolver {
+  given "a dependency pinned to a tag or rev already vendored and in the lock"
+  when "the project is resolved again"
+  then "the checkout is left untouched and the captured rev is unchanged"
+  but "a branch dependency re-fetches and may advance to the branch tip"
+}
+
+/// The lockfile makes resolution reproducible across machines.
+feature LockfileMakesResolveReproducible for studio::cargolua::DependencyResolver {
+  given "a resolved project with a CargoLua.lock"
+  when "the same project is resolved on another machine"
+  then "each dependency checks out the exact rev recorded in the lock"
+  and "the lock is written name-sorted so its bytes are deterministic"
+}
+
+/// The bundler folds the whole require graph into one file.
+feature BundleAmalgamatesRequireGraph for studio::cargolua::Bundler {
+  given "an entry script that requires local modules and vendored deps"
+  when "the project is bundled"
+  then "every reachable module is wrapped behind a single __require shim"
+  and "the emitted file returns the entry module and runs standalone"
+}
+
+/// Bundling never executes project code and stays in the sandbox.
+feature SandboxSafeBundle for studio::cargolua::Bundler {
+  given "an entry script whose require graph reaches host-only modules"
+  when "the project is bundled"
+  then "module sources are copied verbatim with no AST rewrite or execution"
+  and "requires that resolve to nothing become warnings, not failures"
+}

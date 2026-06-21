@@ -15,9 +15,11 @@ pub async fn publish_can() -> Result<bool, String> {
 }
 
 /// Share the project at `root` to GitHub (create repo, tag `dcs-studio`, push).
+/// `asLibrary` additionally tags the repo `dcs-studio-library` (issue #48) — a
+/// dependency-only library, not installable into DCS.
 #[tauri::command]
-pub async fn publish_share(root: String) -> Result<RepoInfo, String> {
-    tauri::async_runtime::spawn_blocking(move || studio_services::publish::share(&root))
+pub async fn publish_share(root: String, as_library: bool) -> Result<RepoInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || studio_services::publish::share(&root, as_library))
         .await
         .map_err(|e| format!("share task failed: {e}"))?
 }

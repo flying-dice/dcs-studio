@@ -25,7 +25,7 @@ public data RepoRef { owner: string, name: string, description: string, htmlUrl:
 /// the repo's topics minus the `dcs-studio` marker; `repoUrl`/`avatarUrl`/`stars`
 /// drive the card. Installability (a `dcs-studio.toml` release asset) is resolved
 /// at download time, not here, so a repo without one still lists.
-public data MarketListing { repo: string, name: string, author: string, description: string, labels: string[], repoUrl: string, avatarUrl: string, stars: number }
+public data MarketListing { repo: string, name: string, author: string, description: string, labels: string[], repoUrl: string, avatarUrl: string, stars: number, isLibrary: bool }
 
 /// A discovery failure (search transport, rate limit with no cache, not signed in).
 public data MarketError { message: string }
@@ -42,7 +42,7 @@ public data InstallEntry { source: string, dest: string }
 /// release's assets + total download size, and the install plan parsed from the
 /// `dcs-studio.toml` release asset. `installable` is true only when that asset is
 /// present; otherwise `installs` is empty and the README still shows.
-public data ProductDetail { repo: string, name: string, author: string, description: string, repoUrl: string, avatarUrl: string, stars: number, readme: Option<string>, releaseTag: Option<string>, releaseUrl: Option<string>, assets: studio::market::ReleaseAsset[], downloadSize: number, installable: bool, installs: studio::market::InstallEntry[] }
+public data ProductDetail { repo: string, name: string, author: string, description: string, repoUrl: string, avatarUrl: string, stars: number, readme: Option<string>, releaseTag: Option<string>, releaseUrl: Option<string>, assets: studio::market::ReleaseAsset[], downloadSize: number, installable: bool, installs: studio::market::InstallEntry[], isLibrary: bool }
 
 /// What an install pass placed on disk.
 public data InstallReport { copied: number, files: string[] }
@@ -139,7 +139,10 @@ public container Registry for studio::core::Studio {
 
   /// Assemble the product: fetch the repo, README, and latest release; sum the
   /// asset sizes; and when the release carries a `dcs-studio.toml` asset, fetch +
-  /// parse it into the install plan (source → dest) and mark it installable.
+  /// parse it into the install plan (source → dest) and mark it installable —
+  /// EXCEPT a library (carrying `dcs-studio-library`), which is forced
+  /// non-installable regardless of the manifest asset (issue #48: you bundle a
+  /// library as a dependency, you don't install it into the sim).
   BuildProduct(owner: string, name: string, token: string): Result<studio::market::ProductDetail, studio::market::MarketError>;
 }
 
@@ -148,8 +151,12 @@ public container Library for studio::core::Studio {
   /// Install a discovered mod (sign-in gated): download the release's payload
   /// (`.zip` asset), unpack it to a content store, and place each `[[install]]`
   /// rule by LINKING its destination to the store source — a junction for a
-  /// directory, a hard link for a same-volume file, a symlink otherwise; never a
-  /// copy. The two hard rules still hold: a source must exist in the payload, and
+  /// directory, a hard link for a same-volume file, a symlink otherwise (and if
+  /// that cross-volume symlink needs privilege on Windows, a one-shot elevated
+  /// PowerShell `New-Item -SymbolicLink` fallback via UAC — base64-encoded so a
+  /// manifest path can't inject, link verified to point at the store source);
+  /// never a copy. The two hard rules still hold: a
+  /// source must exist in the payload, and
   /// each dest must resolve under a whitelisted root (the studio::installer
   /// guard). Records a ledger of placed links for uninstall.
   #[manual]
@@ -159,12 +166,27 @@ public container Library for studio::core::Studio {
       refused = studio::market::MarketError from self.SignInRequired()
       return Err(refused)
     }
+    // Defence in depth (issue #48): a library is never installable into DCS,
+    // even via a direct call that bypassed the product page's hidden Install.
+    library = bool from self.IsLibrary(owner, name, token.value)
+    if (library) {
+      blocked = studio::market::MarketError from self.LibraryNotInstallable(owner, name)
+      return Err(blocked)
+    }
     staged = Result<string, studio::market::MarketError> from self.DownloadPayload(owner, name, token.value)
     if (staged.isErr) {
       return Err(staged.error)
     }
     return self.DeployAndRecord(owner, name, staged.value)
   }
+
+  /// Whether the repo carries the `dcs-studio-library` topic — a `GetRepo` REST
+  /// query (the authoritative topic source), so the guard costs one round-trip
+  /// per install (acceptable: install is already network-heavy and infrequent).
+  IsLibrary(owner: string, name: string, token: string): bool;
+
+  /// The "this is a library — add it as a dependency, don't install it" refusal.
+  LibraryNotInstallable(owner: string, name: string): studio::market::MarketError;
 
   /// The logged-in user's token, or None when signed out.
   AuthToken(): Option<string>;
@@ -235,6 +257,14 @@ feature ProductWithoutManifestIsNotInstallable for studio::market::Registry {
   when "its product page is opened"
   then "the README and repo details still show"
   but "the mod is marked not installable and the install plan is empty"
+}
+
+/// A library is discoverable + add-as-dependency but never installable into DCS.
+feature LibraryIsNeverInstallable for studio::market::Registry {
+  given "a discovered repo carrying the `dcs-studio-library` topic, even with a manifest asset"
+  when "its listing and product page are built"
+  then "it is flagged a library and forced non-installable"
+  and "a direct Install call is refused as defence in depth"
 }
 
 /// Installing downloads the release payload and LINKS it into the DCS roots.

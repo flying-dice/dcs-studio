@@ -8,6 +8,8 @@
   import { marketplace } from "$lib/marketplace.svelte";
   import { app } from "$lib/state.svelte";
   import { renderMarkdown } from "$lib/lang/markdown";
+  import { readTextFile, writeTextFile } from "$lib/api";
+  import { errorMessage } from "$lib/utils";
   import GithubAuth from "$lib/components/GithubAuth.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
@@ -27,6 +29,8 @@
     Download,
     Check,
     Trash2,
+    Library,
+    Plus,
   } from "@lucide/svelte";
 
   const owner = $derived($page.params.owner ?? "");
@@ -43,6 +47,99 @@
   });
 
   const installed = $derived(product ? marketplace.isInstalled(product.repo) : false);
+
+  // ── "Add as dependency" (#48): write the library into CargoLua.toml ──
+  let depBusy = $state(false);
+  let depNotice = $state<{ ok: boolean; text: string } | null>(null);
+
+  /** Derive a Lua-ident-ish dependency key from the repo name: lowercase, with
+   * non-alphanumerics collapsed to `_`, and a leading digit prefixed so it's a
+   * valid identifier. */
+  function depKey(name: string): string {
+    const k = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    if (!k) return "dep";
+    return /^[0-9]/.test(k) ? `_${k}` : k;
+  }
+
+  /** Escape a value for a TOML basic string: drop control chars, then escape
+   * backslash and double-quote (so a `"` in a tag can't break out). */
+  function tomlStr(s: string): string {
+    let out = "";
+    for (const ch of s) {
+      const c = ch.codePointAt(0) ?? 0;
+      if (c < 0x20) continue; // drop control chars
+      if (ch === "\\") out += "\\\\";
+      else if (ch === '"') out += '\\"';
+      else out += ch;
+    }
+    return out;
+  }
+
+  /** Insert/replace the `<key> = {...}` line under `[dependencies]`, adding the
+   * section (and a `[package]`/`[dependencies]` skeleton for a fresh file). */
+  function upsertDependency(toml: string, key: string, line: string): string {
+    const entry = `${key} = ${line}`;
+    const lines = toml.split(/\r?\n/);
+    // Find the [dependencies] section header.
+    const depIdx = lines.findIndex((l) => /^\s*\[dependencies\]\s*(#.*)?$/.test(l));
+    if (depIdx === -1) {
+      const body = toml.replace(/\s*$/, "");
+      const prefix = body ? `${body}\n\n` : "";
+      return `${prefix}[dependencies]\n${entry}\n`;
+    }
+    // Within the section (until the next `[`), find an existing `<key> =`.
+    const keyRe = new RegExp(`^\\s*${key}\\s*=`);
+    for (let i = depIdx + 1; i < lines.length; i++) {
+      if (/^\s*\[/.test(lines[i])) break; // next section
+      if (keyRe.test(lines[i])) {
+        lines[i] = entry;
+        return lines.join("\n");
+      }
+    }
+    lines.splice(depIdx + 1, 0, entry);
+    return lines.join("\n");
+  }
+
+  async function addAsDependency(): Promise<void> {
+    if (depBusy || !product || !app.rootPath) return;
+    depBusy = true;
+    depNotice = null;
+    try {
+      const sep = app.rootPath.includes("\\") ? "\\" : "/";
+      const path = `${app.rootPath.replace(/[\\/]+$/, "")}${sep}CargoLua.toml`;
+      // owner/name comes from product.repo ("owner/name").
+      const slug = product.repo;
+      const name = product.name;
+      const key = depKey(name);
+      const tag = product.release_tag ?? "";
+      // Escape interpolated values for a TOML basic string — a git tag may
+      // legally contain `"`, which would otherwise inject into CargoLua.toml.
+      // OMIT `tag` when the library has no release: an empty tag would lock to
+      // `tag = ""` → `git checkout ""` → RefNotFound. None → the default branch,
+      // which is the right source for a topic-only library with no tagged release.
+      const line = tag
+        ? `{ github = "${tomlStr(slug)}", tag = "${tomlStr(tag)}" }`
+        : `{ github = "${tomlStr(slug)}" }`;
+
+      let toml = "";
+      try {
+        toml = await readTextFile(path);
+      } catch {
+        // Absent file → minimal skeleton.
+        toml = `[package]\nname = "${tomlStr(name)}"\n\n[dependencies]\n`;
+      }
+      const next = upsertDependency(toml, key, line);
+      await writeTextFile(path, next);
+      depNotice = { ok: true, text: `Added ${key} to CargoLua.toml.` };
+    } catch (error) {
+      depNotice = { ok: false, text: errorMessage(error) };
+    } finally {
+      depBusy = false;
+    }
+  }
 
   function formatBytes(n: number): string {
     if (n <= 0) return "—";
@@ -140,9 +237,46 @@
 
         <!-- ── Aside: install action + plan + size ── -->
         <aside class="flex flex-col gap-4">
-          <!-- Install / Installed -->
+          <!-- Install / Installed / Add as dependency (library) -->
           <div class="rounded-xl border border-border bg-card p-3">
-            {#if !product.installable}
+            {#if product.is_library}
+              <div class="flex items-center gap-1.5 text-[12px] font-medium" data-testid="product-library">
+                <Library class="size-4 text-muted-foreground" /> Library
+              </div>
+              <Button
+                size="sm"
+                class="mt-2 w-full gap-1.5"
+                disabled={depBusy || !app.rootPath}
+                onclick={addAsDependency}
+                data-testid="product-add-dependency"
+              >
+                {#if depBusy}
+                  <LoaderCircle class="size-3.5 animate-spin" /> Adding…
+                {:else}
+                  <Plus class="size-3.5" /> Add as dependency
+                {/if}
+              </Button>
+              {#if app.rootPath}
+                <p class="mt-1.5 text-[11px] text-muted-foreground">
+                  Adds <span class="font-mono">{depKey(product.name)}</span> to your project's
+                  <span class="font-mono">CargoLua.toml</span> — a dependency-only library, not installed into DCS.
+                </p>
+              {:else}
+                <p class="mt-1.5 text-[11px] text-amber-600 dark:text-amber-500" data-testid="product-no-project">
+                  Open a project first to add this as a dependency.
+                </p>
+              {/if}
+              {#if depNotice}
+                <p
+                  class={depNotice.ok
+                    ? "mt-2 text-[11px] text-emerald-600 dark:text-emerald-500"
+                    : "mt-2 text-[11px] text-destructive"}
+                  data-testid="product-dependency-notice"
+                >
+                  {depNotice.text}
+                </p>
+              {/if}
+            {:else if !product.installable}
               <p class="text-[12px] text-amber-600 dark:text-amber-500" data-testid="product-cannot-install">
                 Not installable — this release ships no <span class="font-mono">dcs-studio.toml</span>.
               </p>

@@ -66,15 +66,20 @@ public system GitLocal {
 /// Shares projects to GitHub and publishes their releases.
 public container Publisher for studio::core::Studio {
   /// Share the project at `root`: ensure a write-scoped token, plan the repo from
-  /// the manifest, create it, tag it `dcs-studio` (so the Marketplace finds it),
-  /// init + commit locally, wire `origin`, and push. Returns the new repo.
+  /// the manifest, create it, tag it `dcs-studio` (so the Marketplace finds it) —
+  /// and `dcs-studio-library` too when `asLibrary` (a publish-time choice, no
+  /// manifest field; issue #48) — init + commit locally, wire `origin`, and push.
   #[manual]
-  public Share(root: string): Result<studio::publish::RepoInfo, studio::publish::PublishError> {
+  public Share(root: string, asLibrary: bool): Result<studio::publish::RepoInfo, studio::publish::PublishError> {
     token = Result<string, studio::publish::PublishError> from self.PublishToken()
     if (token.isErr) {
       return Err(token.error)
     }
-    plan = studio::publish::RepoPlan from self.PlanRepo(root)
+    planned = Result<studio::publish::RepoPlan, studio::publish::PublishError> from self.PlanRepo(root, asLibrary)
+    if (planned.isErr) {
+      return Err(planned.error)
+    }
+    plan = studio::publish::RepoPlan from planned.value
     created = Result<studio::publish::RepoInfo, studio::publish::PublishError> from studio::publish::GitHubWrite.CreateRepo(plan.name, plan.description, token.value)
     if (created.isErr) {
       return Err(created.error)
@@ -127,8 +132,9 @@ public container Publisher for studio::core::Studio {
   PublishToken(): Result<string, studio::publish::PublishError>;
 
   /// The repo plan from the project manifest: name, description, topics (always
-  /// including `dcs-studio`), and the initial commit message.
-  PlanRepo(root: string): studio::publish::RepoPlan;
+  /// `dcs-studio`, plus `dcs-studio-library` when `asLibrary`), and the initial
+  /// commit message. Errs if the manifest can't be loaded.
+  PlanRepo(root: string, asLibrary: bool): Result<studio::publish::RepoPlan, studio::publish::PublishError>;
 
   /// The GitHub repo the project's `origin` remote points at (it must already be
   /// shared).

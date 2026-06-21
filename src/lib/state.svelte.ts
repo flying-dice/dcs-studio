@@ -15,12 +15,17 @@ import {
   deleteToTrash,
   githubSession,
   githubSignOut,
+  classifyAndRead,
+  watchStart,
+  watchStop,
   type GithubSession,
 } from "./api";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import { canonicalPath } from "./paths";
+import { reconcileBuffer, fsKey } from "./workspace-util";
 import { dcsLink } from "./dcs-link.svelte";
+import { fileWatcher } from "./file-watcher.svelte";
 import { lang } from "./lang/intel.svelte";
 import { saveWithFormat } from "./save-format";
 import { todos } from "./todos.svelte";
@@ -104,6 +109,9 @@ export interface OpenDoc {
   savedText: string;
   kind: "loading" | "text" | "binary";
   binarySize?: number;
+  /** The file changed on disk while this buffer had unsaved edits (issue #40) —
+   * the editor surfaces a stale-buffer banner offering reload-or-keep. */
+  diskChanged?: boolean;
 }
 
 /**
@@ -272,6 +280,12 @@ class AppState {
     return dcsLink.init();
   }
 
+  /** Subscribe to workspace fs-change events (issue #40). Called once from the
+   * root layout, alongside initDcs. */
+  initWatcher(): Promise<void> {
+    return fileWatcher.init((paths) => void this.onFsChanged(paths));
+  }
+
   // Which tool window is open in each stripe (null = collapsed)
   leftTool = $state<string | null>("project");
   rightTool = $state<string | null>(null);
@@ -348,6 +362,10 @@ class AppState {
       this.activePath = null;
       this.leftTool = "project";
       this.remember(path, this.rootName);
+      // Watch the workspace so the tree + buffers stay in sync (issue #40);
+      // replaces any prior watch. Fire-and-forget — non-fatal if it can't start,
+      // but log so a non-live tree isn't a silent mystery.
+      void watchStart(path).catch((e) => console.error("watch start failed:", e));
       // Project-opened announcement: mount the workspace into the language
       // engine (model/studio/lang.pds MountWorkspace). Fire-and-forget — an
       // engine failure is non-fatal and surfaces in the status bar.
@@ -388,6 +406,7 @@ class AppState {
       this.rootName = "";
       this.openFiles = [];
       this.activePath = null;
+      void watchStop().catch((e) => console.error("watch stop failed:", e));
       this.projectOps.resetWorkspace();
       todos.reset();
     } finally {
@@ -436,6 +455,78 @@ class AppState {
   /** Mark `paths`' parked editor buffers stale so they reload from disk. */
   evictBuffers(paths: string[]) {
     this.evicted = { tick: this.evicted.tick + 1, paths };
+  }
+
+  /**
+   * Buffer-reload signal (issue #40): a file changed on disk and its CLEAN
+   * buffer's text was refreshed in the store — the editor re-applies it to the
+   * live view (active tab) or drops the parked state (inactive). Distinct from
+   * `evicted` (rename) so the two effects don't clobber each other.
+   */
+  reloaded = $state<{ tick: number; paths: string[] }>({ tick: 0, paths: [] });
+
+  /**
+   * Reconcile open buffers with disk after an `fs://changed` batch. Refreshes
+   * the file tree, then for each open text doc whose file changed: a CLEAN
+   * buffer reloads silently; a DIRTY one is flagged stale (never clobbered). A
+   * change matching `savedText` (e.g. our own save) is a no-op.
+   */
+  async onFsChanged(paths: string[]): Promise<void> {
+    this.refreshTree();
+    // fsKey unifies the watcher's path form with the tree's identity (separators
+    // / `\\?\` / drive-case), so a change can't silently miss its open buffer.
+    const changed = new Set(paths.map(fsKey));
+    const reload: string[] = [];
+    for (const doc of this.openFiles) {
+      if (doc.kind !== "text" || !changed.has(fsKey(doc.path))) continue;
+      let load;
+      try {
+        load = await classifyAndRead(doc.path);
+      } catch {
+        continue; // gone/unreadable — the tree refresh reflects a deletion
+      }
+      if (load.kind !== "text") continue;
+      switch (reconcileBuffer(doc.savedText, doc.docText, load.text)) {
+        case "reload":
+          doc.savedText = load.text;
+          doc.docText = load.text;
+          doc.diskChanged = false;
+          reload.push(doc.path);
+          break;
+        case "stale":
+          doc.diskChanged = true; // dirty: warn, don't overwrite the user's edits
+          break;
+        case "noop":
+          doc.diskChanged = false; // disk matches our baseline (our save / a revert)
+          break;
+      }
+    }
+    if (reload.length) this.reloaded = { tick: this.reloaded.tick + 1, paths: reload };
+  }
+
+  /** Reload `path`'s buffer from disk, discarding unsaved edits (the stale-buffer
+   * banner's Reload action). */
+  async reloadFromDisk(path: string): Promise<void> {
+    const doc = this.openFiles.find((f) => f.path === path);
+    if (!doc) return;
+    let load;
+    try {
+      load = await classifyAndRead(path);
+    } catch {
+      return;
+    }
+    if (load.kind !== "text") return;
+    doc.savedText = load.text;
+    doc.docText = load.text;
+    doc.diskChanged = false;
+    this.reloaded = { tick: this.reloaded.tick + 1, paths: [path] };
+  }
+
+  /** Dismiss the stale-buffer banner, keeping the user's edits (the next save
+   * overwrites the on-disk change). */
+  dismissDiskChanged(path: string): void {
+    const doc = this.openFiles.find((f) => f.path === path);
+    if (doc) doc.diskChanged = false;
   }
 
   /**
@@ -742,6 +833,9 @@ class AppState {
           const text = doc.docText;
           await this.writeFile(doc.path, text);
           doc.savedText = text;
+          // Saving resolves any external-change conflict (the user chose to
+          // overwrite disk), so the stale-buffer banner clears (issue #40).
+          doc.diskChanged = false;
           // Saved-file rescan for the Todos panel (model/studio/todos.pds
           // RefreshFile): splices only this file's entries.
           void todos.refreshFile(doc.path);

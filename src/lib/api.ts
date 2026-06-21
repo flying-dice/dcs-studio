@@ -40,6 +40,19 @@ export function writeTextFile(path: string, contents: string): Promise<void> {
   return invoke<void>("write_text_file", { path, contents });
 }
 
+/** Start the recursive workspace fs watcher on `path` (issue #40). Replaces any
+ * prior watch. A no-op in the browser (no Tauri backend). */
+export function watchStart(path: string): Promise<void> {
+  if (!isTauri()) return Promise.resolve();
+  return invoke<void>("watch_start", { path });
+}
+
+/** Stop the workspace fs watcher. A no-op in the browser. */
+export function watchStop(): Promise<void> {
+  if (!isTauri()) return Promise.resolve();
+  return invoke<void>("watch_stop");
+}
+
 /** A formatting outcome (model `fmt::Formatted`). */
 export interface FormatResult {
   /** The formatted source, or the input unchanged when `guard_tripped`. */
@@ -438,6 +451,7 @@ export interface MarketListing {
   repo_url: string;
   avatar_url: string;
   stars: number;
+  is_library: boolean;
 }
 
 /**
@@ -482,6 +496,7 @@ export interface ProductDetail {
   assets: ProductAsset[];
   download_size: number;
   installable: boolean;
+  is_library: boolean;
   installs: InstallEntry[];
 }
 
@@ -534,9 +549,10 @@ export function publishCan(): Promise<boolean> {
 }
 
 /** Share the project at `root` to GitHub: create the repo, tag `dcs-studio`,
- * init/commit/push. Requires a publish-scoped token. */
-export function publishShare(root: string): Promise<RepoInfo> {
-  return invoke<RepoInfo>("publish_share", { root });
+ * init/commit/push. Requires a publish-scoped token. `asLibrary` marks the repo
+ * as a dependency-only library (not installable from the Marketplace). */
+export function publishShare(root: string, asLibrary: boolean): Promise<RepoInfo> {
+  return invoke<RepoInfo>("publish_share", { root, asLibrary });
 }
 
 /** Publish a release for the shared project at `root` (uploads `dcs-studio.toml`

@@ -86,11 +86,12 @@ class PublishStore {
     }
   }
 
-  /** Share the open project at `root` to GitHub. */
-  async share(root: string): Promise<void> {
+  /** Share the open project at `root` to GitHub. `asLibrary` marks it as a
+   * dependency-only library (not installable from the Marketplace). */
+  async share(root: string, asLibrary = false): Promise<void> {
     this.repo = null;
     await this.#run(async () => {
-      this.repo = await publishShare(root);
+      this.repo = await publishShare(root, asLibrary);
     });
   }
 

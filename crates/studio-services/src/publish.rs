@@ -15,7 +15,7 @@ use std::process::Command;
 use serde::Deserialize;
 
 use crate::github_http::{self, API_BASE};
-use dcs_studio_project::{DISCOVERY_TOPIC, MANIFEST_FILE};
+use dcs_studio_project::{DISCOVERY_TOPIC, LIBRARY_TOPIC, MANIFEST_FILE};
 
 const UPLOADS_BASE: &str = "https://uploads.github.com";
 /// The branch the initial commit is pushed to (model `DEFAULT_BRANCH`).
@@ -81,21 +81,29 @@ fn slugify(name: &str) -> String {
 
 /// The repo plan for a project named `project_name` (pure; the topic always
 /// includes `dcs-studio`).
-fn plan_for(project_name: &str) -> RepoPlan {
+fn plan_for(project_name: &str, as_library: bool) -> RepoPlan {
     let slug = slugify(project_name);
     let name = if slug.is_empty() { "dcs-mod".to_string() } else { slug };
+    // A library carries BOTH topics: it's still a discoverable dcs-studio repo,
+    // additionally marked as a dependency-only library (issue #48).
+    let mut topics = vec![DISCOVERY_TOPIC.to_string()];
+    if as_library {
+        topics.push(LIBRARY_TOPIC.to_string());
+    }
     RepoPlan {
         name,
         description: format!("{project_name} — a DCS World mod built with DCS Studio"),
-        topics: vec![DISCOVERY_TOPIC.to_string()],
+        topics,
         commit_message: "Initial commit (DCS Studio)".to_string(),
     }
 }
 
 /// The repo plan from the project's `dcs-studio.toml` (model `Registry.PlanRepo`).
-pub fn plan_repo(root: &Path) -> Result<RepoPlan, String> {
+/// `as_library` (a publish-time choice, no manifest field) tags the repo as a
+/// dependency-only library.
+pub fn plan_repo(root: &Path, as_library: bool) -> Result<RepoPlan, String> {
     let manifest = dcs_studio_project::manifest::load(root)?;
-    Ok(plan_for(&manifest.project.name))
+    Ok(plan_for(&manifest.project.name, as_library))
 }
 
 // --- GitHub write REST (model GitHubWrite) ----------------------------------
@@ -368,14 +376,14 @@ fn publish_token() -> Result<String, String> {
 /// Share the project at `root` to GitHub (model `Publisher.Share`): create the
 /// repo, tag it `dcs-studio`, init/commit/push. The caller ensures the token
 /// carries `public_repo` first (the UI escalates the scope).
-pub fn share(root: &str) -> Result<RepoInfo, String> {
+pub fn share(root: &str, as_library: bool) -> Result<RepoInfo, String> {
     let root = Path::new(root);
     let token = publish_token()?;
     // Resolve the signed-in identity ONCE at the entry and thread it down, so the
     // commit identity and the existing-repo (422) lookup don't each reach into
     // the keyring deep in the flow.
     let login = crate::github::current_session().map(|s| s.login);
-    let plan = plan_repo(root)?;
+    let plan = plan_repo(root, as_library)?;
     let repo = create_repo(&plan.name, &plan.description, &token, login.as_deref())?;
     set_topics(&repo, &plan.topics, &token)?;
     init_and_commit(root, &plan.commit_message, login.as_deref())?;
@@ -516,11 +524,20 @@ mod tests {
 
     #[test]
     fn plan_always_tags_dcs_studio_and_falls_back_to_a_name() {
-        let plan = plan_for("My Script Mod");
+        let plan = plan_for("My Script Mod", false);
         assert_eq!(plan.name, "my-script-mod");
         assert!(plan.topics.contains(&"dcs-studio".to_string()));
+        // A non-library is NOT tagged as a library.
+        assert!(!plan.topics.contains(&"dcs-studio-library".to_string()));
         // An unusable name still yields a valid repo slug.
-        assert_eq!(plan_for("???").name, "dcs-mod");
+        assert_eq!(plan_for("???", false).name, "dcs-mod");
+    }
+
+    #[test]
+    fn library_publish_adds_the_library_topic_alongside_discovery() {
+        let plan = plan_for("My Lib", true);
+        assert!(plan.topics.contains(&"dcs-studio".to_string()), "still discoverable");
+        assert!(plan.topics.contains(&"dcs-studio-library".to_string()), "marked a library");
     }
 
     #[test]

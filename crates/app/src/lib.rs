@@ -21,6 +21,7 @@ mod packages_cmd;
 mod startup;
 mod term;
 mod todos_cmd;
+mod watch;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -55,6 +56,7 @@ pub fn run() {
         .manage(lsp::LspHosts::default())
         .manage(build::BuildState::default())
         .manage(term::TermRegistry::default())
+        .manage(watch::WatchState::default())
         // Single-flight + cancel guard for the GitHub device-flow poll loop
         // (issue #11): lets the sign-in modal's Cancel/reopen actually stop the
         // fire-and-forget loop so it never persists or emits after cancel.
@@ -146,6 +148,8 @@ pub fn run() {
             term::term_default_shell,
             todos_cmd::scan_todos,
             todos_cmd::scan_file_todos,
+            watch::watch_start,
+            watch::watch_stop,
             mission::dcs_detect_mission_scripts,
             mission::dcs_mission_script_status,
             mission::dcs_mission_script_set,

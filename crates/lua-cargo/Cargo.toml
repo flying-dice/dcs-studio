@@ -1,0 +1,42 @@
+# lua-cargo — a Cargo-shaped toolchain for DCS Lua mods (issue #48 Part A):
+# a git dependency manager (`github = "owner/repo"` vendored + locked) and a
+# require-graph bundler/amalgamator. Lean by design: it does NOT depend on
+# dcs-studio-project; the one shared helper (quiet_command) is copied into git.rs.
+#
+# Edition 2021 to match the service crates; the engine crates' pedantic lints
+# are deliberately NOT taken — just the workspace safety set below.
+[package]
+name = "lua-cargo"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "lua_cargo"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lua-cargo"
+path = "src/main.rs"
+
+[lints.clippy]
+# Safety / no-shortcuts (production): `unwrap`/`expect`/panic → a propagated
+# `Result`, a safe fallback, or a guarded precondition. Pedantic intentionally
+# NOT taken; test `unwrap`/`expect`/`dbg` exempt via clippy.toml.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+indexing_slicing = "warn"
+clone_on_copy = "warn"
+needless_borrow = "warn"
+needless_lifetimes = "warn"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+dcs-lua-syntax = { path = "../dcs-lua-syntax" }
