@@ -26,6 +26,7 @@ pub mod operands;
 pub mod param_infer;
 pub mod references;
 pub mod rename;
+pub mod requires;
 pub mod resolve;
 pub mod symbols;
 pub mod ty_table;

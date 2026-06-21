@@ -70,4 +70,18 @@ pub mod codes {
     /// An `---@expect` directive named a lint that did not fire in its scope
     /// (the analog of rustc's `unfulfilled_lint_expectations`).
     pub const UNFULFILLED_EXPECTATION: &str = "unfulfilled-lint-expectation";
+
+    /// A `require("mod")` resolved to no analyzed file under the project's
+    /// search roots. WARNING by default, never an error: a host / DCS built-in
+    /// (`socket`, `os`, the sim's globals) legitimately resolves to nothing and
+    /// is left to the runtime `require`. Suppress a known one with
+    /// `---@allow unresolved-require`. The same verdict the bundler reports.
+    pub const UNRESOLVED_REQUIRE: &str = "unresolved-require";
+
+    /// A `require("mod")` resolved to more than one analyzed file across the
+    /// search roots (e.g. a local module and a vendored dependency of the same
+    /// name). WARNING: the first in search-root order wins, the rest are
+    /// shadowed — a supply-chain hazard worth surfacing. The same verdict the
+    /// bundler reports.
+    pub const REQUIRE_SHADOWING: &str = "require-shadowing";
 }

@@ -40,3 +40,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = "0.8"
 dcs-lua-syntax = { path = "../dcs-lua-syntax" }
+# The shared require scanner + module-resolution path mapping (model
+# `studio::cargolua::ModuleResolver`), so the bundler and the editor resolve
+# `require("mod")` through the exact same code (issue #51 parity goal).
+dcs-lua-require = { path = "../dcs-lua-require" }

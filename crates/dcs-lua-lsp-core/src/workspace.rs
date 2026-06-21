@@ -3,7 +3,8 @@
 //! Per-file memoisation falls out of the shape: `set_source` re-parses
 //! exactly one file; queries read the cached [`Parsed`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 
 use dcs_lua_syntax::ast::Parsed;
 
@@ -29,6 +30,18 @@ pub struct ProfileRule {
     pub profile: String,
 }
 
+/// The project context `require("mod")` resolves against: the project root and
+/// the vendored dependency checkouts (name → `.lua-cargo/deps/<name>`), carried
+/// from mount like the profile rules and lint levels. When absent (a bare
+/// workspace with no project, e.g. a unit test or the in-page lab harness),
+/// require resolution and its diagnostics stay dormant — there are no search
+/// roots to resolve against.
+#[derive(Debug, Clone, Default)]
+pub struct Resolution {
+    pub root: PathBuf,
+    pub vendored: BTreeMap<String, PathBuf>,
+}
+
 /// Every mounted file, keyed by workspace-relative path.
 #[derive(Debug, Default)]
 pub struct Workspace {
@@ -37,6 +50,9 @@ pub struct Workspace {
     /// Per-lint levels set workspace-wide (the project's `[lints.lua]` table),
     /// resolved against inline directives when aggregating findings.
     lint_levels: HashMap<String, LintLevel>,
+    /// The project context require-resolution reads (root + vendored deps);
+    /// `None` until a host with a project sets it.
+    resolution: Option<Resolution>,
 }
 
 impl Workspace {
@@ -64,6 +80,20 @@ impl Workspace {
     #[must_use]
     pub fn lint_levels(&self) -> &HashMap<String, LintLevel> {
         &self.lint_levels
+    }
+
+    /// Set the project context require-resolution reads — the project root and
+    /// the vendored dependency checkouts, carried from mount like the profile
+    /// rules. The host computes these (`lua_cargo::resolve::vendored_roots`).
+    pub fn set_resolution(&mut self, root: PathBuf, vendored: BTreeMap<String, PathBuf>) {
+        self.resolution = Some(Resolution { root, vendored });
+    }
+
+    /// The project context for require-resolution, or `None` for a workspace
+    /// with no project — where require resolution and its diagnostics are inert.
+    #[must_use]
+    pub fn resolution(&self) -> Option<&Resolution> {
+        self.resolution.as_ref()
     }
 
     /// Create or replace one file; a content-identical update is a no-op.

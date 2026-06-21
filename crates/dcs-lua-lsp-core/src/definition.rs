@@ -23,6 +23,11 @@ pub struct Location {
 /// whitespace, keywords, or identifiers that resolve to nothing.
 #[must_use]
 pub fn definition(workspace: &Workspace, path: &str, offset: u32) -> Option<Location> {
+    // A `require("mod")` string resolves to its module file (issue #51); an
+    // identifier resolves through the scope chain. The cursor is in at most one.
+    if let Some(location) = crate::requires::require_definition(workspace, path, offset) {
+        return Some(location);
+    }
     let (decl_path, span) = resolved_name(workspace, path, offset)?;
     Some(Location {
         path: decl_path,

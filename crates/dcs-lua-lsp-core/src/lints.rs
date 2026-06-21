@@ -44,11 +44,16 @@ impl LintLevel {
     }
 }
 
-/// Every levelled type lint and its built-in default.
+/// Every levelled lint and its built-in default. The type lints plus the
+/// require-resolution lints — both `unresolved-require` and `require-shadowing`
+/// default to `warn`: a host/DCS built-in legitimately resolves to nothing, so
+/// they must never hard-error unless a project opts in (`deny`/`forbid`).
 const LINTS: &[(&str, LintLevel)] = &[
     (codes::ARGUMENT_TYPE_MISMATCH, LintLevel::Deny),
     (codes::OPERATOR_TYPE_MISMATCH, LintLevel::Warn),
     (codes::ARGUMENT_USAGE_MISMATCH, LintLevel::Warn),
+    (codes::UNRESOLVED_REQUIRE, LintLevel::Warn),
+    (codes::REQUIRE_SHADOWING, LintLevel::Warn),
 ];
 
 /// Parse a `[lints.lua]` string map (`name -> "level"`) into resolved levels,

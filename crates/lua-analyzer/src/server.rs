@@ -117,9 +117,8 @@ impl LanguageServer for Backend {
         // `.lua-cargo/deps/<name>` is walked too, so completion/hover/diagnostics
         // reach dep modules. A missing or malformed `CargoLua.toml` simply
         // yields no extra roots — dependency indexing is opt-in by manifest.
-        let extra_roots: Vec<PathBuf> = lua_cargo::resolve::vendored_roots(&root)
-            .map(|roots| roots.into_values().collect())
-            .unwrap_or_default();
+        let vendored = lua_cargo::resolve::vendored_roots(&root).unwrap_or_default();
+        let extra_roots: Vec<PathBuf> = vendored.values().cloned().collect();
         let files = dcs_studio_project::sources::collect(&root, &extra_roots);
         tracing::info!(
             root = %root.display(),
@@ -143,6 +142,11 @@ impl LanguageServer for Backend {
             workspace.set_lint_levels(dcs_lua_lsp_core::lints::levels_from_strings(
                 &dcs_studio_project::manifest::lua_lint_levels(&root),
             ));
+            // The project context for `require("mod")` resolution: the root and
+            // the vendored deps the analyzer just walked. With this set, the
+            // shared finding set gains unresolved-require/shadowing findings and
+            // go-to-def/hover resolve requires into `.lua-cargo/deps` (issue #51).
+            workspace.set_resolution(root.clone(), vendored);
             // One shared aggregation for the whole walk, not one per file.
             let by_file = findings_by_file(&workspace);
             files

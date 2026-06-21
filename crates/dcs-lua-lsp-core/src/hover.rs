@@ -26,6 +26,11 @@ pub struct HoverInfo {
 /// or identifiers that resolve to nothing.
 #[must_use]
 pub fn hover(workspace: &Workspace, path: &str, offset: u32) -> Option<HoverInfo> {
+    // A `require("mod")` string hovers as where it resolves (issue #51); the
+    // rest of this function cards the identifier under the cursor.
+    if let Some(card) = crate::requires::require_hover(workspace, path, offset) {
+        return Some(card);
+    }
     let entry = workspace.file(path)?;
     let (decl_path, decl) = match ident_at(&entry.parsed, offset)? {
         Ident::Decl(decl) => (path.to_string(), decl),

@@ -24,7 +24,6 @@
 pub mod bundle;
 pub mod git;
 pub mod manifest;
-pub mod requires;
 pub mod resolve;
 
 use std::fmt;

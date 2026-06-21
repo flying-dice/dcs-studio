@@ -1,6 +1,6 @@
-//! The require scanner (model `studio::cargolua`). Lexes Lua with
-//! `dcs-lua-syntax` and walks the trivia-free token stream for module
-//! references in any of Lua's `require` call forms:
+//! The require scanner. Lexes Lua with `dcs-lua-syntax` and walks the
+//! trivia-free token stream for module references in any of Lua's `require`
+//! call forms:
 //!
 //! - `require("x")` / `require('x')`
 //! - `require "x"` / `require 'x'` (parens-free string-literal call)
@@ -13,15 +13,40 @@
 //! *inside* a string literal is a single `Str` token, not a `Name`.
 
 use dcs_lua_syntax::lexer::lex;
+use dcs_lua_syntax::span::Span;
 use dcs_lua_syntax::token::{Token, TokenKind};
 
+/// One `require("mod")` reference: the module name and the span of its
+/// string-literal argument — the anchor for go-to-definition hit-testing and
+/// for placing an unresolved/shadowing diagnostic under the required name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequireRef {
+    pub module: String,
+    pub span: Span,
+}
+
 /// Scan `src` for the module names it `require`s, in source order, deduplicated
-/// (first occurrence wins).
+/// (first occurrence wins) — the bundler's graph walk needs each module once.
 #[must_use]
 pub fn scan_requires(src: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for req in scan_require_refs(src) {
+        if !found.iter().any(|m| m == &req.module) {
+            found.push(req.module);
+        }
+    }
+    found
+}
+
+/// Scan `src` for EVERY `require("mod")` reference with the span of its string
+/// argument — the editor needs each occurrence (a module required twice gets
+/// go-to-definition and diagnostics at both sites). Source order, not
+/// deduplicated.
+#[must_use]
+pub fn scan_require_refs(src: &str) -> Vec<RequireRef> {
     let lexed = lex(src);
     let tokens = &lexed.tokens;
-    let mut found: Vec<String> = Vec::new();
+    let mut found: Vec<RequireRef> = Vec::new();
 
     for (i, token) in tokens.iter().enumerate() {
         if token.kind != TokenKind::Name {
@@ -55,8 +80,8 @@ pub fn scan_requires(src: &str) -> Vec<String> {
             // A require of "" is never a real module (it also catches an
             // unterminated/empty long bracket the lexer recovered) — drop it so
             // it doesn't become a spurious unresolved-require warning.
-            if !name.is_empty() && !found.iter().any(|m| m == &name) {
-                found.push(name);
+            if !name.is_empty() {
+                found.push(RequireRef { module: name, span: arg.span });
             }
         }
     }
@@ -125,6 +150,10 @@ fn decode_string(lexeme: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn modules(src: &str) -> Vec<String> {
+        scan_require_refs(src).into_iter().map(|r| r.module).collect()
+    }
+
     #[test]
     fn paren_double_quote_form() {
         assert_eq!(scan_requires(r#"local m = require("util")"#), vec!["util"]);
@@ -165,31 +194,44 @@ mod tests {
 
     #[test]
     fn require_in_comment_is_ignored() {
-        assert_eq!(
-            scan_requires("-- require(\"y\")\nlocal x = 1"),
-            Vec::<String>::new()
-        );
-        assert_eq!(
-            scan_requires("--[[ require(\"y\") ]]\nlocal x = 1"),
-            Vec::<String>::new()
-        );
+        assert_eq!(modules("-- require(\"y\")\nlocal x = 1"), Vec::<String>::new());
+        assert_eq!(modules("--[[ require(\"y\") ]]\nlocal x = 1"), Vec::<String>::new());
     }
 
     #[test]
     fn require_inside_a_string_is_ignored() {
-        assert_eq!(
-            scan_requires(r#"local s = "require('y')""#),
-            Vec::<String>::new()
-        );
+        assert_eq!(modules(r#"local s = "require('y')""#), Vec::<String>::new());
     }
 
     #[test]
     fn multiple_requires_dedup_in_order() {
-        let src = r#"
-local a = require("a")
-local b = require("b")
-local a2 = require("a")
-"#;
+        let src = "local a = require(\"a\")\nlocal b = require(\"b\")\nlocal a2 = require(\"a\")\n";
         assert_eq!(scan_requires(src), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn refs_keep_every_occurrence_with_arg_spans() {
+        // `scan_requires` dedups; `scan_require_refs` keeps both occurrences,
+        // each spanning its own string-literal argument (quotes included).
+        let src = "require(\"a\")\nrequire(\"a\")\n";
+        let refs = scan_require_refs(src);
+        assert_eq!(refs.len(), 2, "{refs:?}");
+        assert_eq!(refs[0].module, "a");
+        assert_eq!(refs[1].module, "a");
+        // The span covers the `"a"` literal of the first require.
+        assert_eq!(&src[refs[0].span.start as usize..refs[0].span.end as usize], "\"a\"");
+        // …and the second occurrence is on the next line.
+        assert!(refs[1].span.start > refs[0].span.end);
+    }
+
+    #[test]
+    fn ref_span_covers_parenless_and_long_bracket_args() {
+        let refs = scan_require_refs("require 'util'");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(&"require 'util'"[refs[0].span.start as usize..refs[0].span.end as usize], "'util'");
+
+        let lb = scan_require_refs("require[==[util.sub]==]");
+        assert_eq!(lb.len(), 1);
+        assert_eq!(lb[0].module, "util.sub");
     }
 }
