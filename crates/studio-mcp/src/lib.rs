@@ -646,6 +646,15 @@ fn debug_tool_specs() -> Vec<Value> {
             "inputSchema": { "type": "object", "properties": {} }
         }),
         json!({
+            "name": "debug_inspect",
+            "description": "Evaluate a Lua expression against the LIVE sim (global env, no breakpoint) and return its value preview + type + an expandable ref to drill in with debug_expand. The interactive object explorer.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "expr": { "type": "string", "description": "Lua expression to evaluate" } },
+                "required": ["expr"]
+            }
+        }),
+        json!({
             "name": "debug_continue",
             "description": "Resume a debugger paused at a breakpoint. `mode` selects continue (default) or a step: \"step_over\", \"step_into\", \"step_out\".",
             "inputSchema": {
@@ -669,6 +678,14 @@ fn debug_tools(session: &Session, name: &str, args: &Value) -> Option<Result<Val
         "debug_eval" => Some(debug_eval_tool(session, args)),
         "debug_pause" => Some(Ok(forward_to_dcs(session, "debug_pause", None))),
         "debug_stop" => Some(Ok(forward_to_dcs(session, "debug_stop", None))),
+        "debug_inspect" => match require_str(args, "expr", "debug_inspect") {
+            Ok(expr) => Some(Ok(forward_to_dcs(
+                session,
+                "debug_inspect",
+                Some(json!({ "expr": expr })),
+            ))),
+            Err(e) => Some(Err(e)),
+        },
         "debug_continue" => {
             let params = args
                 .get("mode")

@@ -20,6 +20,7 @@
   import Todos from "$lib/components/Todos.svelte";
   import Usages from "$lib/components/Usages.svelte";
   import DebugPanel from "$lib/components/DebugPanel.svelte";
+  import InspectConsole from "$lib/components/InspectConsole.svelte";
   import RunWidget from "$lib/components/RunWidget.svelte";
   import Editor from "$lib/components/Editor.svelte";
   import EditorTabs from "$lib/components/EditorTabs.svelte";
@@ -62,6 +63,7 @@
     PackageCheck,
     PackageMinus,
     Bug,
+    Telescope,
     Settings,
     Palette,
     Syringe,
@@ -116,6 +118,7 @@
     { id: "todos", label: "Todos", icon: ListTodo },
     { id: "output", label: "Output", icon: ScrollText },
     { id: "debug", label: "Debug", icon: Bug },
+    { id: "inspect", label: "Inspect", icon: Telescope },
     { id: "dcslog", label: "DCS Log", icon: FileClock },
   ];
 
@@ -613,6 +616,8 @@
                 <Todos />
               {:else if app.bottomTool === "debug"}
                 <DebugPanel />
+              {:else if app.bottomTool === "inspect"}
+                <InspectConsole />
               {:else if app.bottomTool === "output"}
                 <BuildOutput />
               {:else if app.bottomTool === "terminal"}

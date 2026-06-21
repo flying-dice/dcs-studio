@@ -54,6 +54,11 @@ public container DebugController for studio::core::Studio {
   /// finishes via polling when the running flag drops.
   Stop(): void;
 
+  /// Evaluate `expr` against the live sim and return its value with an
+  /// expandable ref — the interactive object explorer, available with no debug
+  /// session (forwards debug_inspect; the result tree drills in via debug_expand).
+  Inspect(expr: string): dcs::bridge::Json;
+
   /// Set (or, with an empty cond, clear) a breakpoint's condition (forwards
   /// debug.set_condition).
   SetCondition(source: string, line: number, cond: string): void;

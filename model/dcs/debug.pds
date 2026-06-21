@@ -77,10 +77,11 @@ container PauseController for dcs::bridge::Dcs {
   /// provides debug.getupvalue (DCS's hooks env strips it).
   Snapshot(): dcs::bridge::Json;
 
-  /// Expand a scope or variable ref captured at the current pause into its
-  /// child variables — lazy table inspection (tables expand on demand rather
-  /// than serialized up front). Refs are valid only for the pause that minted
-  /// them; cleared on resume.
+  /// Expand a scope or variable ref into its child variables — lazy table
+  /// inspection (tables expand on demand rather than serialized up front). A
+  /// ref routes by range to its registry: the per-pause snapshot registry
+  /// (cleared on resume) or the persistent inspection registry (Inspect;
+  /// cleared by ClearInspection).
   Expand(handle: number): dcs::bridge::Json;
 
   /// Drain RPC while paused until a resume/step arrives or the safety timeout
@@ -99,6 +100,25 @@ container PauseController for dcs::bridge::Dcs {
   /// the run's pcall catches and reports as a clean stop, not a failure). The
   /// only way to end a runaway/infinite-loop run, which has no natural end.
   RequestStop(): void;
+
+  /// Evaluate `expr` against the live global (hooks) environment — NOT a frame,
+  /// so it needs no pause/breakpoint — and register the result in a PERSISTENT
+  /// inspection registry (distinct from Snapshot's per-pause one: these refs
+  /// survive resume, so an interactive console keeps its prior results
+  /// explorable). Returns the value preview + an expandable ref, drilled into
+  /// lazily via Expand. Powers the ad-hoc object explorer.
+  Inspect(expr: string): Result<dcs::bridge::Json, dcs::bridge::LuaError>;
+
+  /// Drop every inspection ref, releasing the held values.
+  ClearInspection(): void;
+}
+
+/// The object explorer works against the live sim with no breakpoint.
+feature InspectWithoutBreakpoint for dcs::bridge::Dcs {
+  given "a live bridge with no debug session running"
+  when "the IDE inspects an expression"
+  then "the value is evaluated in the global env and returned with an expandable ref"
+  and "the ref survives across calls until the inspection registry is cleared"
 }
 
 /// Breakpoints set by the IDE are honoured by the registry.

@@ -195,6 +195,22 @@ class DebugSession {
     }
   }
 
+  /** Evaluate `expr` against the live sim (global env) for ad-hoc exploration —
+   * no breakpoint needed. The result's ref expands lazily via `expand` against
+   * the persistent inspection registry. */
+  async inspect(expr: string): Promise<EvalResult> {
+    try {
+      return (await dcsCall("debug_inspect", { expr })) as EvalResult;
+    } catch (e) {
+      return { ok: false, err: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /** Release every inspection ref held in the sim (the explorer's registry). */
+  clearInspection(): void {
+    void dcsCall("debug_inspect_clear").catch(() => {});
+  }
+
   /** Request a manual break-all (stops at the next line of debugged code). */
   pause(): void {
     if (this.status === "running") void dcsCall("debug_pause").catch(() => {});

@@ -54,11 +54,15 @@ local started, err = pcall(function()
   local MAX_TABLE_CHILDREN = 1000 -- cap children returned/previewed for one table
   local MAX_REFS = 100000 -- per-pause ref ceiling so a cyclic/huge tree can't pin unbounded memory
 
-  -- Variable handle registry, kept alive across RPC calls FOR THE DURATION OF A
-  -- PAUSE so the editor can expand tables lazily (debug_expand). Each ref maps
-  -- to a captured value or a captured scope; cleared on resume so nothing is
-  -- pinned. `debug_run`'s snapshot and the `debug_expand` method share it.
-  local dbg = { vars = {}, n = 0 }
+  -- Refs above this are inspection refs (the persistent object-explorer
+  -- registry); below it are per-pause snapshot refs. debug_expand routes by it.
+  local INSPECT_BASE = 2000000000
+
+  -- Two handle registries, both mapping ref → captured value/scope and inspected
+  -- lazily via debug_expand. `vars` is the PER-PAUSE registry (snapshot fills it,
+  -- cleared on resume). `inspect` is the PERSISTENT object-explorer registry
+  -- (debug_inspect fills it; survives across calls until debug_inspect_clear).
+  local dbg = { vars = {}, n = 0, inspect = {}, inspect_n = 0 }
 
   local function dbg_register(descriptor)
     -- Ceiling: a cyclic/huge table tree (e.g. expanding _G._G…) must not mint
@@ -67,6 +71,14 @@ local started, err = pcall(function()
     dbg.n = dbg.n + 1
     dbg.vars[dbg.n] = descriptor
     return dbg.n
+  end
+
+  -- Register into the persistent inspection registry, returning an offset ref.
+  local function dbg_register_inspect(descriptor)
+    if dbg.inspect_n >= MAX_REFS then return 0 end
+    dbg.inspect_n = dbg.inspect_n + 1
+    dbg.inspect[dbg.inspect_n] = descriptor
+    return INSPECT_BASE + dbg.inspect_n
   end
 
   -- A short, single-line preview of a value for the variables tree.
@@ -99,11 +111,13 @@ local started, err = pcall(function()
     return type(v) == "table"
   end
 
-  -- One variables-tree entry; `ref` 0 means a leaf (not expandable).
-  local function dbg_var(name, value)
+  -- One variables-tree entry; `ref` 0 means a leaf (not expandable). `register`
+  -- selects the registry (per-pause or persistent inspection) so a child table's
+  -- ref lands in the same one as its parent.
+  local function dbg_var(name, value, register)
     local ref = 0
     if dbg_expandable(value) then
-      ref = dbg_register({ kind = "value", value = value })
+      ref = register({ kind = "value", value = value })
     end
     return { name = name, type = type(value), value = dbg_preview(value), ref = ref }
   end
@@ -372,23 +386,32 @@ local started, err = pcall(function()
     return { ran = true }
   end)
 
-  -- Lazily expand a variable/scope ref captured at the current pause: a scope
-  -- yields its variables; a table value yields its children (each with its own
-  -- ref if itself expandable). Only valid while paused.
+  -- Lazily expand a variable/scope ref: a scope yields its variables; a table
+  -- value yields its children (each with its own ref if itself expandable). The
+  -- ref routes by range to the per-pause registry or the persistent inspection
+  -- registry, and children land in the same one as their parent.
   router:add_method("debug_expand", function(params)
-    local d = dbg.vars[params.ref]
+    local ref = params.ref or 0
+    local registry, register
+    if ref >= INSPECT_BASE then
+      registry, register = dbg.inspect, dbg_register_inspect
+      ref = ref - INSPECT_BASE
+    else
+      registry, register = dbg.vars, dbg_register
+    end
+    local d = registry[ref]
     if not d then
       return { variables = {} }
     end
     local out = {}
     if d.kind == "scope" then
       for _, item in ipairs(d.items) do
-        table.insert(out, dbg_var(item.name, item.value))
+        table.insert(out, dbg_var(item.name, item.value, register))
       end
     elseif d.kind == "value" and type(d.value) == "table" then
       local count = 0
       for k, v in pairs(d.value) do
-        table.insert(out, dbg_var(tostring(k), v))
+        table.insert(out, dbg_var(tostring(k), v, register))
         count = count + 1
         if count >= MAX_TABLE_CHILDREN then
           table.insert(out, { name = "…", type = "string", value = "(truncated)", ref = 0 })
@@ -397,6 +420,36 @@ local started, err = pcall(function()
       end
     end
     return { variables = out }
+  end)
+
+  -- Evaluate `expr` against the live global (hooks) environment and register the
+  -- result for lazy exploration — the interactive object explorer, no pause or
+  -- breakpoint needed. The ref survives across calls until debug_inspect_clear.
+  router:add_method("debug_inspect", function(params)
+    local expr = params.expr or ""
+    local f, err = loadstring("return " .. expr)
+    if not f then
+      f, err = loadstring(expr)
+    end
+    if not f then
+      return { ok = false, err = err or "compile error" }
+    end
+    local ok, res = pcall(f)
+    if not ok then
+      return { ok = false, err = tostring(res) }
+    end
+    local ref = 0
+    if dbg_expandable(res) then
+      ref = dbg_register_inspect({ kind = "value", value = res })
+    end
+    return { ok = true, type = type(res), value = dbg_preview(res), ref = ref }
+  end)
+
+  -- Drop every inspection ref, releasing the held values.
+  router:add_method("debug_inspect_clear", function()
+    dbg.inspect = {}
+    dbg.inspect_n = 0
+    return { ok = true }
   end)
 
   -- Evaluate an expression in a paused frame's environment (watches + the debug

@@ -250,6 +250,18 @@ public container McpServer for studio::core::Studio {
     return Ok(result.value)
   }
 
+  /// debug_inspect — evaluate `expr` against the live sim, returning an
+  /// expandable ref (the object explorer, no breakpoint needed). Forwards it.
+  public DebugInspect(expr: string): Result<dcs::bridge::Json, studio::link::CallError> {
+    self.EnsureLink()
+    params = dcs::bridge::Json from { expr }
+    result = Result<dcs::bridge::Json, studio::link::CallError> from studio::link::DcsLink.Forward("debug_inspect", Some(params))
+    if (result.isErr) {
+      return Err(result.error)
+    }
+    return Ok(result.value)
+  }
+
   /// debug_continue — resume a debugger paused at a breakpoint.
   public DebugContinue(): Result<dcs::bridge::Json, studio::link::CallError> {
     self.EnsureLink()
