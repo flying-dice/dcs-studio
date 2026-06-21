@@ -3,16 +3,20 @@
 	import { onMount } from "svelte";
 	import { app } from "$lib/state.svelte";
 	import { mcp } from "$lib/mcp.svelte";
+	import { notifications } from "$lib/notifications.svelte";
 	import { editorThemeById, chromeVars } from "$lib/themes";
 
 	let { children } = $props();
 
-	// Start listening for the Rust-side DCS link events (status bar feed), and
-	// snapshot the IDE-hosted MCP server status (issue #39) for the status bar.
+	// Start listening for the Rust-side DCS link events (status bar feed),
+	// snapshot the IDE-hosted MCP server status (issue #39) for the status bar,
+	// and arm the notification center's event listeners (issue #56) so events
+	// are captured even before the panel is ever opened.
 	onMount(() => {
 		app.initDcs();
 		void app.initWatcher();
 		void mcp.refresh();
+		void notifications.init();
 	});
 
 	// The selected editor theme drives the whole UI. We (a) toggle `.dark` so

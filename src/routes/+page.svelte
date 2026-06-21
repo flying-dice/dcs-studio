@@ -18,6 +18,7 @@
   import Terminal from "$lib/components/Terminal.svelte";
   import Structure from "$lib/components/Structure.svelte";
   import Todos from "$lib/components/Todos.svelte";
+  import Notifications from "$lib/components/Notifications.svelte";
   import DatabasePanel from "$lib/components/Database.svelte";
   import Recipes from "$lib/components/Recipes.svelte";
   import Usages from "$lib/components/Usages.svelte";
@@ -32,6 +33,7 @@
   import PanelResizeHandle from "$lib/components/PanelResizeHandle.svelte";
   import { lang } from "$lib/lang/intel.svelte";
   import { mcp } from "$lib/mcp.svelte";
+  import { notifications } from "$lib/notifications.svelte";
   import { debug } from "$lib/debug-session.svelte";
   import { runConfig } from "$lib/run-config.svelte";
   import { recipes } from "$lib/recipes.svelte";
@@ -265,11 +267,21 @@
               onclick={() => toggle(t.id)}
               class={cn(
                 "text-muted-foreground hover:text-foreground",
+                t.id === "notifications" && "relative",
                 active === t.id &&
                   "bg-card text-primary ring-1 ring-foreground/10 shadow-sm hover:bg-card hover:text-primary",
               )}
             >
               <Icon />
+              {#if t.id === "notifications" && notifications.unreadCount > 0}
+                <span
+                  class="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-primary px-0.5 font-mono text-[9px] font-semibold leading-none text-primary-foreground"
+                  data-testid="notifications-badge"
+                  aria-label={`${notifications.unreadCount} unread notifications`}
+                >
+                  {notifications.unreadCount > 99 ? "99+" : notifications.unreadCount}
+                </span>
+              {/if}
             </Button>
           {/snippet}
         </Tooltip.Trigger>
@@ -605,6 +617,8 @@
                 />
               {:else if app.rightTool === "recipes"}
                 <Recipes />
+              {:else if app.rightTool === "notifications"}
+                <Notifications />
               {:else}
                 {@render placeholder(labelFor(rightTools, app.rightTool))}
               {/if}
