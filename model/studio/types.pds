@@ -5,21 +5,27 @@
 //! DumpGlobals); this is the studio-side orchestration and its guards.
 //!
 //! Recorded decisions (the guards): the link must be live or the sync fails
-//! closed ("start DCS first"); generated files land ONLY under `types/generated/`
-//! and never clobber a hand-written `types/*.d.lua`; every write is lexically
-//! confined under the project, the same containment the bridge applies to sim
-//! writes (`dcs::bridge::Files` StaysUnderRoot); and each file carries a version
-//! stamp so drift is judged against the RUNNING build, never bytes on disk.
+//! closed ("start DCS first"); the sync writes ONE fixed file (`GENERATED_FILE`)
+//! under `types/generated/` — a constant path, never derived from sim data,
+//! disjoint from the top-level `types/*.d.lua` a project hand-writes, so a sync
+//! structurally cannot clobber a hand-written stub. There is no sim-chosen path
+//! segment to confine here, unlike the bridge's `dcs::bridge::Files` writes whose
+//! destinations come from sim Lua; containment there is a guard, here it is the
+//! constant. And the file carries a version stamp so drift is judged against the
+//! RUNNING build, never bytes on disk.
 //!
 //! Scope note (issue #50): this delivers authoritative hover + diagnostics from
 //! the running sim. The `autocomplete` half of the goal needs a completion query
 //! the engine does not have yet — a dependent engine ticket this issue is blocked
 //! on for that capability; the generated `.d.lua` powers hover the moment it lands.
 
-/// Where synced `.d.lua` is written, relative to the project root. Generated
-/// files live UNDER here and nowhere else, so a hand-written `types/*.d.lua`
-/// (the golden `dcs_studio` stub a new project scaffolds) is never overwritten.
-public constant GENERATED_DIR = "types/generated"
+/// The single `.d.lua` a sync writes, relative to the project root. A fixed,
+/// internal path — never derived from sim data — under `types/generated/`, a
+/// directory disjoint from the top-level `types/*.d.lua` a project hand-writes
+/// (the golden `dcs_studio` stub a new project scaffolds). Because the target is
+/// this constant, a sync can only ever land here and never overwrites a
+/// hand-written stub.
+public constant GENERATED_FILE = "types/generated/dcs.d.lua"
 
 /// Version stamp written as a header comment into every generated file and read
 /// back to judge drift. `bridgeVersion` is the running `dcs_studio.version` (the
@@ -90,16 +96,11 @@ public container TypeSync for studio::core::Studio {
   /// concatenated into one definition text.
   PullTypeDefs(): Result<dcs::bridge::TypeDefs, studio::types::TypeSyncError>;
 
-  /// Whether `path` stays under GENERATED_DIR within the project — no `..`,
-  /// absolute, or drive-prefixed segment that could escape it. The same lexical
-  /// containment the bridge applies to sim writes (`dcs::bridge::Files`), reused
-  /// so a sync can only ever write inside `types/generated/`.
-  StaysUnderGenerated(path: string): bool;
-
-  /// Prepend the TypeStamp as a header comment to `defs` and write it under
-  /// GENERATED_DIR. The target is refused unless StaysUnderGenerated holds, so a
-  /// hand-written `types/*.d.lua` is structurally unreachable; an IO failure
-  /// surfaces as a TypeSyncError.
+  /// Prepend the TypeStamp as a header comment to `defs` and write the result to
+  /// the fixed `GENERATED_FILE`. The target is that constant — there is no
+  /// sim-derived path segment — so the write lands under `types/generated/` by
+  /// construction and a hand-written `types/*.d.lua` is structurally unreachable.
+  /// An IO failure surfaces as a TypeSyncError.
   WriteGenerated(stamp: studio::types::TypeStamp, defs: dcs::bridge::TypeDefs): Result<studio::types::SyncResult, studio::types::TypeSyncError>;
 
   /// Signal the language layer to re-mount the workspace index so the freshly
