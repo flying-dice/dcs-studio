@@ -793,3 +793,24 @@ feature ExternalDeleteOfOpenFileKeepsTab for studio::core::Workbench {
   then "the file tree drops it but the editor tab and its buffer remain"
   and "saving the tab recreates the file from the buffer"
 }
+
+/// The Recipes panel (issue #49 Part B) is a static, searchable catalog of DCS
+/// Lua snippets — content/UI with no disclosed business logic: the catalog and
+/// its category/search filter are pure data and a pure function, and the card
+/// actions delegate to the Lua console and the clipboard. Modeled only as these
+/// features, per the issue's "no disclosed body" note.
+feature RecipesRunInConsole for studio::core::Workbench {
+  given "the Recipes panel is open"
+  when "the developer runs a recipe"
+  then "its Lua snippet runs in the console against the live sim (RunLua) and the console is revealed"
+  but "Copy places the snippet on the clipboard instead of running it"
+}
+
+/// The Database panel's empty state deep-links into the Recipes SQLite category,
+/// so a developer with no databases yet is one click from the snippets that
+/// create them.
+feature DatabaseEmptyStateDeepLinksToRecipes for studio::core::Workbench {
+  given "the Database panel shows its empty state with no databases discovered"
+  when "the developer follows the Browse SQLite recipes link"
+  then "the Recipes panel opens focused on the SQLite category"
+}

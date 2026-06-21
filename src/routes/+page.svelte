@@ -19,6 +19,7 @@
   import Structure from "$lib/components/Structure.svelte";
   import Todos from "$lib/components/Todos.svelte";
   import DatabasePanel from "$lib/components/Database.svelte";
+  import Recipes from "$lib/components/Recipes.svelte";
   import Usages from "$lib/components/Usages.svelte";
   import DebugPanel from "$lib/components/DebugPanel.svelte";
   import InspectConsole from "$lib/components/InspectConsole.svelte";
@@ -33,6 +34,7 @@
   import { mcp } from "$lib/mcp.svelte";
   import { debug } from "$lib/debug-session.svelte";
   import { runConfig } from "$lib/run-config.svelte";
+  import { recipes } from "$lib/recipes.svelte";
   import { cn } from "$lib/utils.js";
 
   import { Button } from "$lib/components/ui/button/index.js";
@@ -48,6 +50,7 @@
     ListTree,
     Bookmark,
     Database,
+    BookOpen,
     Bell,
     Sparkles,
     SquareTerminal,
@@ -108,6 +111,7 @@
     { id: "publish", label: "Publish", icon: Rocket },
     { id: "mission", label: "Mission", icon: ShieldOff },
     { id: "database", label: "Database", icon: Database },
+    { id: "recipes", label: "Recipes", icon: BookOpen },
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "ai", label: "Assistant", icon: Sparkles },
   ];
@@ -188,6 +192,7 @@
       items: [
         { label: "Project", action: () => app.toggleTool("left", "project") },
         { label: "Database", action: () => app.toggleTool("right", "database") },
+        { label: "Recipes", action: () => app.toggleTool("right", "recipes") },
         { label: "Terminal", action: () => app.toggleTool("bottom", "terminal") },
       ],
     },
@@ -593,10 +598,13 @@
                 </ScrollArea>
               {:else if app.rightTool === "database"}
                 <DatabasePanel
-                  onOpenRecipes={rightTools.some((t) => t.id === "recipes")
-                    ? () => app.toggleTool("right", "recipes")
-                    : undefined}
+                  onOpenRecipes={() => {
+                    recipes.focusCategory("sqlite");
+                    app.toggleTool("right", "recipes");
+                  }}
                 />
+              {:else if app.rightTool === "recipes"}
+                <Recipes />
               {:else}
                 {@render placeholder(labelFor(rightTools, app.rightTool))}
               {/if}
