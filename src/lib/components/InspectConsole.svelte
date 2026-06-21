@@ -6,7 +6,7 @@
   // inspection registry. Each entry stays explorable until you clear.
   import { debug, type EvalResult } from "$lib/debug-session.svelte";
   import VariableNode from "./VariableNode.svelte";
-  import { Telescope, CornerDownLeft, Trash2 } from "@lucide/svelte";
+  import { Telescope, CornerDownLeft, Trash2, Search, X } from "@lucide/svelte";
 
   interface Entry {
     id: number;
@@ -15,6 +15,7 @@
   }
 
   let input = $state("");
+  let search = $state("");
   let log = $state<Entry[]>([]);
   let nextId = 0;
   let history: string[] = [];
@@ -56,10 +57,25 @@
   <div class="flex shrink-0 items-center gap-1 border-b border-border/60 px-2 py-1">
     <Telescope class="size-3 text-muted-foreground" />
     <span class="text-[11px] text-muted-foreground">Inspect</span>
-    <span class="text-[10px] text-muted-foreground/50">live sim — no breakpoint needed</span>
+    <!-- Search filters keys/values within the explored trees (sorted server-side). -->
+    <div class="relative ml-auto flex items-center">
+      <Search class="pointer-events-none absolute left-1.5 size-3 text-muted-foreground/60" />
+      <input
+        bind:value={search}
+        placeholder="search keys/values…"
+        class="h-5 w-40 rounded border border-border/60 bg-input/40 pl-6 pr-5 font-mono text-[11px] outline-none focus:ring-1 focus:ring-primary/40"
+      />
+      {#if search}
+        <button
+          class="absolute right-1 text-muted-foreground/60 hover:text-foreground"
+          onclick={() => (search = "")}
+          aria-label="Clear search"><X class="size-3" /></button
+        >
+      {/if}
+    </div>
     {#if log.length > 0}
       <button
-        class="ml-auto flex items-center gap-1 text-[10px] text-muted-foreground/60 hover:text-foreground"
+        class="flex items-center gap-1 text-[10px] text-muted-foreground/60 hover:text-foreground"
         onclick={clear}><Trash2 class="size-3" />clear</button
       >
     {/if}
@@ -72,7 +88,14 @@
       </div>
       <div class="pb-1 pl-2">
         {#if e.result.ok && (e.result.ref ?? 0) > 0}
-          <VariableNode name="=" type={e.result.type} value={e.result.value} vref={e.result.ref ?? 0} />
+          <VariableNode
+            name="="
+            type={e.result.type}
+            value={e.result.value}
+            vref={e.result.ref ?? 0}
+            filter={search}
+            autoExpandFilter={true}
+          />
         {:else if e.result.ok}
           <div class="flex items-baseline gap-2 pl-2">
             <span class="text-foreground">{e.result.value}</span>

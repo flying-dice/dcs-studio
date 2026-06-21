@@ -16,6 +16,7 @@
     ArrowUpToLine,
     Bug,
     Circle,
+    Search,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
   import { debug, pathOf, baseName } from "$lib/debug-session.svelte";
@@ -32,6 +33,7 @@
   const frame = $derived(debug.frame);
 
   let view = $state<"debug" | "breakpoints">("debug");
+  let varSearch = $state("");
 
   const fileOf = (source: string): string => baseName(pathOf(source));
 
@@ -175,15 +177,28 @@
           <WatchesPane />
         </div>
         <div class="flex min-h-0 flex-1 flex-col">
-          <div class="shrink-0 border-b border-border/60 px-2 py-1 text-[11px] text-muted-foreground">
-            Variables
+          <div class="flex shrink-0 items-center gap-1 border-b border-border/60 px-2 py-1">
+            <span class="text-[11px] text-muted-foreground">Variables</span>
+            <div class="relative ml-auto flex items-center">
+              <Search class="pointer-events-none absolute left-1.5 size-3 text-muted-foreground/60" />
+              <input
+                bind:value={varSearch}
+                placeholder="search…"
+                class="h-5 w-28 rounded border border-border/60 bg-input/40 pl-6 pr-1.5 font-mono text-[11px] outline-none focus:ring-1 focus:ring-primary/40"
+              />
+            </div>
           </div>
           <div class="min-h-0 flex-1">
             <ScrollArea class="h-full">
               {#if paused && frame}
                 {#key `${debug.pauseSeq}:${debug.selectedFrame}`}
                   {#each frame.scopes as scope (scope.name)}
-                    <VariableNode name={scope.name} vref={scope.ref} />
+                    <VariableNode
+                      name={scope.name}
+                      vref={scope.ref}
+                      filter={varSearch}
+                      autoExpandFilter={true}
+                    />
                   {/each}
                 {/key}
               {:else}

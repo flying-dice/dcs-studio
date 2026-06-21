@@ -12,12 +12,19 @@
     value = undefined,
     vref,
     depth = 0,
+    filter = "",
+    autoExpandFilter = false,
   }: {
     name: string;
     type?: string;
     value?: string;
     vref: number;
     depth?: number;
+    // A search term: children are filtered to those whose name or value match.
+    filter?: string;
+    // When a filter is active, auto-open this node (used for tree roots) so
+    // results show without a manual expand. Not passed to children (no cascade).
+    autoExpandFilter?: boolean;
   } = $props();
 
   let expanded = $state(false);
@@ -26,16 +33,37 @@
   let children = $state<DebugVariable[]>([]);
 
   const expandable = $derived(vref > 0);
+  const term = $derived(filter.trim().toLowerCase());
+  // Filter this node's loaded children by name or value (a shallow, per-level
+  // match over what's loaded — drilling deeper applies the filter there too).
+  const shown = $derived(
+    term
+      ? children.filter(
+          (c) => c.name.toLowerCase().includes(term) || (c.value ?? "").toLowerCase().includes(term),
+        )
+      : children,
+  );
+
+  async function fetchChildren() {
+    if (loaded || loading) return;
+    loading = true;
+    children = await debug.expand(vref);
+    loaded = true;
+    loading = false;
+  }
+
+  // Open a tree root when a search becomes active, so matches appear at once.
+  $effect(() => {
+    if (term && autoExpandFilter && expandable && !loaded && !loading) {
+      expanded = true;
+      void fetchChildren();
+    }
+  });
 
   async function toggle() {
     if (!expandable) return;
     expanded = !expanded;
-    if (expanded && !loaded && !loading) {
-      loading = true;
-      children = await debug.expand(vref);
-      loaded = true;
-      loading = false;
-    }
+    if (expanded) await fetchChildren();
   }
 </script>
 
@@ -67,16 +95,16 @@
 </div>
 
 {#if expanded && loaded}
-  {#if children.length === 0}
+  {#if shown.length === 0}
     <div
       class="py-0.5 text-[11px] text-muted-foreground/60"
       style="padding-left: {(depth + 1) * 12 + 22}px"
     >
-      (empty)
+      {term ? "(no matches)" : "(empty)"}
     </div>
   {:else}
-    {#each children as c, i (c.name + ":" + i)}
-      <Self name={c.name} type={c.type} value={c.value} vref={c.ref} depth={depth + 1} />
+    {#each shown as c, i (c.name + ":" + i)}
+      <Self name={c.name} type={c.type} value={c.value} vref={c.ref} depth={depth + 1} {filter} />
     {/each}
   {/if}
 {/if}

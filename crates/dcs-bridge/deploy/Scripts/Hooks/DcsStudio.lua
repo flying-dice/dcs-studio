@@ -409,14 +409,31 @@ local started, err = pcall(function()
         table.insert(out, dbg_var(item.name, item.value, register))
       end
     elseif d.kind == "value" and type(d.value) == "table" then
-      local count = 0
-      for k, v in pairs(d.value) do
-        table.insert(out, dbg_var(tostring(k), v, register))
-        count = count + 1
-        if count >= MAX_TABLE_CHILDREN then
-          table.insert(out, { name = "…", type = "string", value = "(truncated)", ref = 0 })
+      -- Collect up to the cap, then SORT for a stable, readable order (pairs()
+      -- is hash order): numeric keys ascending first (so arrays stay 1,2,3),
+      -- then string keys alphabetically.
+      local keys, truncated = {}, false
+      for k in pairs(d.value) do
+        if #keys >= MAX_TABLE_CHILDREN then
+          truncated = true
           break
         end
+        table.insert(keys, k)
+      end
+      table.sort(keys, function(a, b)
+        local na, nb = type(a) == "number", type(b) == "number"
+        if na ~= nb then return na end -- numbers before strings
+        if na then return a < b end
+        -- Case-insensitive alphabetical, with the raw key as a stable tiebreak.
+        local la, lb = string.lower(tostring(a)), string.lower(tostring(b))
+        if la ~= lb then return la < lb end
+        return tostring(a) < tostring(b)
+      end)
+      for _, k in ipairs(keys) do
+        table.insert(out, dbg_var(tostring(k), d.value[k], register))
+      end
+      if truncated then
+        table.insert(out, { name = "…", type = "string", value = "(truncated)", ref = 0 })
       end
     end
     return { variables = out }
