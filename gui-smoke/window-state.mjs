@@ -27,6 +27,9 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 
 const APP = process.env.TAURI_APP ?? "./target/debug/dcs-studio";
+// CI installs tauri-driver under a non-PATH CARGO_HOME and exports its resolved
+// absolute path; fall back to the bare name for a local run (driver on PATH).
+const DRIVER = process.env.TAURI_DRIVER ?? "tauri-driver";
 const PORT = Number(process.env.TAURI_DRIVER_PORT ?? 4444);
 const BASE = `http://127.0.0.1:${PORT}`;
 // tauri-plugin-window-state persists under the app config dir keyed by the
@@ -64,7 +67,7 @@ const endSession = (sid) => rpc("DELETE", `/session/${sid}`).catch(() => {});
 const near = (a, target, slack = 60) => Math.abs(a - target) <= slack;
 
 async function main() {
-  const driver = spawn("tauri-driver", ["--port", String(PORT)], {
+  const driver = spawn(DRIVER, ["--port", String(PORT)], {
     stdio: ["ignore", "inherit", "inherit"],
   });
   const fail = [];
