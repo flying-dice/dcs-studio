@@ -11,9 +11,6 @@ pub use dcs_bridge_client::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcRespo
 
 pub const JSON_RPC_METHOD_NOT_FOUND: i32 = -32601;
 pub const JSON_RPC_INTERNAL_ERROR: i32 = -32603;
-// const JSON_RPC_PARSE_ERROR: i32 = -32700;
-// const JSON_RPC_INVALID_REQUEST: i32 = -32600;
-// const JSON_RPC_INVALID_PARAMS: i32 = -32602;
 
 /// Register the `jsonrpc` sub-namespace: the `JsonRpcServer` and
 /// `JsonRpcRouter` userdata proxies, with their `.d.lua` types recorded.

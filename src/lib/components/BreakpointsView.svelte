@@ -2,13 +2,9 @@
   // Manage every breakpoint across the workspace: jump to it, edit its
   // condition (a conditional breakpoint pauses only when the expression is
   // truthy), or remove it.
-  import { debug } from "$lib/debug-session.svelte";
+  import { debug, baseName } from "$lib/debug-session.svelte";
   import { app } from "$lib/state.svelte";
   import { X, Circle } from "@lucide/svelte";
-
-  function fileOf(path: string): string {
-    return path.split(/[\\/]/).pop() ?? path;
-  }
 
   interface Row {
     path: string;
@@ -36,7 +32,7 @@
     await debug.setCondition(r.path, r.line, editValue);
   }
   function reveal(r: Row) {
-    app.openFile(r.path, fileOf(r.path), { line: r.line, col: 1 });
+    app.openFile(r.path, baseName(r.path), { line: r.line, col: 1 });
   }
 </script>
 
@@ -57,7 +53,7 @@
             class="shrink-0 font-mono text-[12px] hover:underline"
             onclick={() => reveal(r)}
           >
-            {fileOf(r.path)}:{r.line}
+            {baseName(r.path)}:{r.line}
           </button>
           <div class="min-w-0 flex-1">
             {#if editing === `${r.path}:${r.line}`}

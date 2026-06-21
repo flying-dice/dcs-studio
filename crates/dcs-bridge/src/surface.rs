@@ -146,6 +146,34 @@ mod tests {
         );
     }
 
+    /// `json.safe_encode` coerces sim-unsafe values (NaN → null, non-UTF-8
+    /// lossy) to a JSON string instead of erroring or panicking — the
+    /// `SafeEncodeNeverPanics` guarantee. Pins the None / coercion arms in
+    /// `lua_utils::serialize_lua_to_json` (neutering either changes this output).
+    #[test]
+    #[ignore = "needs lua.dll on the runtime path"]
+    fn safe_encode_coerces_unsafe_values() {
+        let (lua, exports, _doc) = built();
+        let json: LuaTable = exports.get("json").expect("json sub");
+        let safe: mlua::Function = json.get("safe_encode").expect("json.safe_encode");
+
+        // NaN → null: serde_json::Number::from_f64 returns None for NaN, which
+        // must fall back to null rather than unwrap-panic the serializer.
+        let t = lua.create_table().expect("t");
+        t.set("x", f64::NAN).expect("set nan");
+        let (text, err): (Option<String>, Option<String>) =
+            safe.call(&t).expect("safe_encode nan");
+        assert!(err.is_none(), "safe_encode nan err: {err:?}");
+        assert_eq!(text.expect("json"), "{\"x\":null}");
+
+        // A non-UTF-8 byte string is decoded lossily — still a string, no error.
+        let bytes = lua.create_string(b"\xff\xfe").expect("bytes");
+        let (text, err): (Option<String>, Option<String>) =
+            safe.call(bytes).expect("safe_encode bytes");
+        assert!(err.is_none(), "safe_encode bytes err: {err:?}");
+        assert!(text.is_some(), "expected a lossy JSON string");
+    }
+
     /// `file.write_text` writes under a faked `lfs.writedir()` and refuses a
     /// path that climbs out of the write root.
     #[test]

@@ -2,7 +2,7 @@
 //! through the binding facade.
 
 use crate::facade::{p, p_opt, r_named, Sub};
-use crate::lua_utils::serialize_lua_to_json;
+use crate::lua_utils::{opt_bool, serialize_lua_to_json, to_json_string};
 use log::debug;
 use mlua::prelude::{LuaTable, LuaValue};
 use mlua::{IntoLuaMulti, Lua, LuaSerdeExt, Result};
@@ -18,15 +18,7 @@ pub fn register(sub: &mut Sub) -> Result<()> {
          output. Returns (nil, err) when the value is not representable \
          (NaN/Inf, a function, …).",
         |lua: &Lua, (lua_value, opts): (LuaValue, Option<LuaTable>)| {
-            let pretty = opts
-                .and_then(|t| t.get::<Option<bool>>("pretty").ok().flatten())
-                .unwrap_or(false);
-            let encoded = if pretty {
-                serde_json::to_string_pretty(&lua_value)
-            } else {
-                serde_json::to_string(&lua_value)
-            };
-            match encoded {
+            match to_json_string(&lua_value, opt_bool(&opts, "pretty")) {
                 Ok(json_string) => json_string.into_lua_multi(lua),
                 Err(e) => (LuaValue::Nil, e.to_string()).into_lua_multi(lua),
             }

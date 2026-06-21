@@ -52,8 +52,14 @@ function sourceId(path: string): string {
   return `=${path}`;
 }
 
-function pathOf(source: string): string {
+/** The path embedded in a sim-side source id ("=path" → "path"). */
+export function pathOf(source: string): string {
   return source.startsWith("=") ? source.slice(1) : source;
+}
+
+/** The file name (last path segment) of a path. */
+export function baseName(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
 }
 
 /** Render a Lua string literal, escaping the embedding hazards. */
@@ -92,6 +98,9 @@ class DebugSession {
 
   #poll: ReturnType<typeof setInterval> | null = null;
   #lastJump = "";
+  /** The sim's pause counter at the last refresh — a new value means a distinct
+   * stop (even re-pausing on the same line), so the variable view must refresh. */
+  #lastPauseId = -1;
   /** Whether this session has been observed paused/running at least once — so a
    * transient "not running yet" at startup never ends it prematurely, and a
    * dropped `running` flag after activity reliably ends it. */
@@ -124,6 +133,21 @@ class DebugSession {
     this.topLocals = localsScope ? await this.expand(localsScope.ref) : [];
   }
 
+  /** Eval `require("dcs_studio").debug.<method>(<args>)` over the bridge — the one
+   * place the module-path prefix lives, so it can't drift across call sites. */
+  #debugEval(method: string, args: string): Promise<unknown> {
+    return dcsCall("eval", {
+      code: `return require("dcs_studio").debug.${method}(${args})`,
+    });
+  }
+
+  /** Drop the paused-frame state on a paused→running transition (one place, so a
+   * field added here is cleared on both resume and the running poll). */
+  #clearPausedState(): void {
+    this.frames = [];
+    this.topLocals = [];
+  }
+
   /** Lazily expand a scope/variable ref at the current pause → its children. */
   async expand(ref: number): Promise<DebugVariable[]> {
     if (ref <= 0) return [];
@@ -154,10 +178,7 @@ class DebugSession {
 
   async #pushBreakpoints(path: string): Promise<void> {
     const lines = this.breakpoints[path] ?? [];
-    const code = `return require("dcs_studio").debug.set_breakpoints(${luaStr(
-      sourceId(path),
-    )}, {${lines.join(", ")}})`;
-    await dcsCall("eval", { code });
+    await this.#debugEval("set_breakpoints", `${luaStr(sourceId(path))}, {${lines.join(", ")}}`);
   }
 
   /** The condition on `path:line`, or "" if none. */
@@ -180,10 +201,9 @@ class DebugSession {
 
   async #pushCondition(path: string, line: number, cond: string): Promise<void> {
     const arg = cond ? `, ${luaStr(cond)}` : "";
-    const code = `return require("dcs_studio").debug.set_condition(${luaStr(
-      sourceId(path),
-    )}, ${line}${arg})`;
-    await dcsCall("eval", { code }).catch(() => {});
+    await this.#debugEval("set_condition", `${luaStr(sourceId(path))}, ${line}${arg}`).catch(
+      () => {},
+    );
   }
 
   /** Evaluate `expr` in the selected frame (watches + the debug console). */
@@ -231,6 +251,7 @@ class DebugSession {
     this.status = "running";
     this.activeSource = sourceId(path);
     this.#lastJump = "";
+    this.#lastPauseId = -1;
     this.#sawActive = false;
     app.bottomTool = "debug";
     await this.#pushBreakpoints(path).catch(() => {});
@@ -276,32 +297,43 @@ class DebugSession {
     const paused = (state as { paused?: boolean })?.paused === true;
     if (paused) {
       let frames: DebugFrame[] = [];
+      let pauseId = 0;
+      let condError: string | undefined;
       try {
         const snap = JSON.parse((state as { snapshot: string }).snapshot) as {
           frames?: DebugFrame[];
+          pause_id?: number;
+          cond_error?: string;
         };
         frames = snap.frames ?? [];
+        pauseId = snap.pause_id ?? 0;
+        condError = snap.cond_error;
       } catch {
         frames = [];
       }
       const top = frames[0];
-      // Reveal the stopped line — but only when it MOVES, so the caret isn't
-      // yanked back every poll while we sit on one breakpoint. A new stop also
-      // resets frame selection + the variable-tree cache (refs are stale).
-      const key = top ? `${top.source}:${top.line}` : "";
       this.frames = frames;
       this.status = "paused";
       this.#sawActive = true;
-      if (key !== this.#lastJump) {
-        this.#lastJump = key;
+      this.error = condError ?? null; // surface a fail-open conditional error
+      // A new stop (distinct pause_id) refreshes the variables/inline values —
+      // even when re-pausing on the SAME line in a loop, whose handle-refs are
+      // freshly minted and whose values changed.
+      if (pauseId !== this.#lastPauseId) {
+        this.#lastPauseId = pauseId;
         this.selectedFrame = 0;
         this.pauseSeq += 1;
+        void this.#fetchTopLocals();
+      }
+      // Reveal the stopped line only when it MOVES, so the caret isn't yanked
+      // back every poll while we sit on one breakpoint.
+      const jump = top ? `${top.source}:${top.line}` : "";
+      if (jump !== this.#lastJump) {
+        this.#lastJump = jump;
         if (top) {
           const p = pathOf(top.source);
-          app.openFile(p, p.split(/[\\/]/).pop() ?? p, { line: top.line, col: 1 });
+          app.openFile(p, baseName(p), { line: top.line, col: 1 });
         }
-        // Fetch the top frame's locals for inline values at the execution line.
-        void this.#fetchTopLocals();
       }
     } else {
       // Not paused: either running between breakpoints, or the session ended.
@@ -311,10 +343,7 @@ class DebugSession {
       const st = state as { running?: boolean; error?: string };
       if (st.running === true) {
         this.#sawActive = true;
-        if (this.status === "paused") {
-          this.frames = [];
-          this.topLocals = [];
-        }
+        if (this.status === "paused") this.#clearPausedState();
         this.status = "running";
       } else if (this.#sawActive) {
         if (st.error) this.error = String(st.error);
@@ -325,8 +354,7 @@ class DebugSession {
 
   #resume(mode: string): void {
     if (this.status !== "paused") return;
-    this.frames = [];
-    this.topLocals = [];
+    this.#clearPausedState();
     this.status = "running";
     this.#lastJump = "";
     void dcsCall("debug_continue", { mode }).catch(() => {});
@@ -349,9 +377,7 @@ class DebugSession {
    * completion (which ends the session). */
   stop(): void {
     if (this.activeSource) {
-      void dcsCall("eval", {
-        code: `return require("dcs_studio").debug.clear_breakpoints()`,
-      }).catch(() => {});
+      void this.#debugEval("clear_breakpoints", "").catch(() => {});
     }
     if (this.status === "paused") this.#resume("continue");
   }
@@ -364,6 +390,7 @@ class DebugSession {
     this.selectedFrame = 0;
     this.activeSource = null;
     this.#lastJump = "";
+    this.#lastPauseId = -1;
     this.#sawActive = false;
   }
 

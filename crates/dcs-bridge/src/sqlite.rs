@@ -102,9 +102,10 @@ impl UserData for Db {
                 match params {
                     Some(t) => {
                         let vals = to_sql_params(&t)?;
-                        conn.execute(&sql, rusqlite::params_from_iter(vals))
-                            .map(|n| i64::try_from(n).unwrap_or(-1))
-                            .map_err(|e| e.to_string())
+                        let n = conn
+                            .execute(&sql, rusqlite::params_from_iter(vals))
+                            .map_err(|e| e.to_string())?;
+                        i64::try_from(n).map_err(|_| "rows-affected exceeds i64".to_string())
                     }
                     None => conn.execute_batch(&sql).map(|()| 0).map_err(|e| e.to_string()),
                 }
@@ -141,23 +142,24 @@ impl UserData for Db {
                 }
                 Ok((cols, out))
             })();
-            match result {
-                Ok((cols, rows)) => {
-                    let arr = match lua.create_table() {
-                        Ok(t) => t,
-                        Err(e) => return (LuaValue::Nil, e.to_string()).into_lua_multi(lua),
-                    };
-                    for (ri, row) in rows.into_iter().enumerate() {
-                        let t = lua.create_table()?;
-                        for (ci, v) in row.into_iter().enumerate() {
-                            if let Some(name) = cols.get(ci) {
-                                t.set(name.as_str(), sql_to_lua(lua, v)?)?;
-                            }
+            // Build the row array fallibly so a table-allocation failure surfaces
+            // as the same (nil, err) tuple as every other arm, not a bare error.
+            let built = result.and_then(|(cols, rows)| {
+                let arr = lua.create_table().map_err(|e| e.to_string())?;
+                for (ri, row) in rows.into_iter().enumerate() {
+                    let t = lua.create_table().map_err(|e| e.to_string())?;
+                    for (ci, v) in row.into_iter().enumerate() {
+                        if let Some(name) = cols.get(ci) {
+                            let cell = sql_to_lua(lua, v).map_err(|e| e.to_string())?;
+                            t.set(name.as_str(), cell).map_err(|e| e.to_string())?;
                         }
-                        arr.set(ri + 1, t)?;
                     }
-                    arr.into_lua_multi(lua)
+                    arr.set(ri + 1, t).map_err(|e| e.to_string())?;
                 }
+                Ok(arr)
+            });
+            match built {
+                Ok(arr) => arr.into_lua_multi(lua),
                 Err(e) => (LuaValue::Nil, format!("sqlite.query: {e}")).into_lua_multi(lua),
             }
         });

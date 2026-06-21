@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, clippy::print_stdout, clippy::print_stderr, clippy::needless_pass_by_value)] // integration test crate: test code, exempt from the production safety lints
+
 //! Live debugger-over-MCP round against a running DCS bridge. Gated on
 //! `DCS_DEBUG_LIVE` (and a reachable bridge on 25569) so it never runs in normal
 //! CI — it needs the in-sim `dcs_studio` debugger. Drives the full
@@ -72,8 +74,7 @@ fn debug_over_mcp_drives_a_full_round() {
     let locals_ref = top["scopes"]
         .as_array()
         .and_then(|s| s.iter().find(|sc| sc["name"] == json!("Locals")))
-        .map(|sc| sc["ref"].as_u64().unwrap_or(0))
-        .unwrap_or(0);
+        .map_or(0, |sc| sc["ref"].as_u64().unwrap_or(0));
     assert!(locals_ref > 0, "Locals scope has a ref: {top}");
 
     // Lazily expand the Locals scope through MCP and find `x = 41`.

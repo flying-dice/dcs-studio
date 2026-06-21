@@ -18,7 +18,7 @@
     Circle,
   } from "@lucide/svelte";
   import type { Component } from "svelte";
-  import { debug } from "$lib/debug-session.svelte";
+  import { debug, pathOf, baseName } from "$lib/debug-session.svelte";
   import { app } from "$lib/state.svelte";
   import VariableNode from "./VariableNode.svelte";
   import WatchesPane from "./WatchesPane.svelte";
@@ -33,10 +33,7 @@
 
   let view = $state<"debug" | "breakpoints">("debug");
 
-  function fileOf(source: string): string {
-    const p = source.startsWith("=") ? source.slice(1) : source;
-    return p.split(/[\\/]/).pop() ?? p;
-  }
+  const fileOf = (source: string): string => baseName(pathOf(source));
 
   const statusText = $derived.by(() => {
     if (debug.status === "idle") return "No active session";
@@ -50,8 +47,8 @@
     debug.selectFrame(index);
     const f = debug.frames[index];
     if (f) {
-      const p = f.source.startsWith("=") ? f.source.slice(1) : f.source;
-      app.openFile(p, p.split(/[\\/]/).pop() ?? p, { line: f.line, col: 1 });
+      const p = pathOf(f.source);
+      app.openFile(p, baseName(p), { line: f.line, col: 1 });
     }
   }
 </script>

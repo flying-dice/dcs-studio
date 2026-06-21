@@ -251,8 +251,14 @@ container Files for dcs::bridge::Dcs {
     return Ok
   }
 
-  /// Sim-safe JSON encode (NaN/Inf → null, non-UTF-8 lossy); never raises.
+  /// Sim-safe JSON encode (NaN/Inf → null, non-UTF-8 lossy). Returns Err only
+  /// for a value with no representation (a function/userdata at the top); never
+  /// panics, so an inspected sim value can't crash the sim.
   EncodeJson(table: dcs::bridge::Json): Result<string, dcs::bridge::FileError>;
+
+  /// The dump format for `path`: an explicit override, else inferred from the
+  /// extension — ".json" → json, ".csv" → csv, anything else → text.
+  InferFormat(path: string, override: Option<string>): string;
 
   /// Serialize `table` sim-safely and Write it as JSON to `path`. The escape
   /// and IO arms are Write's; a value that cannot be encoded is the added
@@ -268,6 +274,11 @@ container Files for dcs::bridge::Dcs {
     }
     return Ok
   }
+
+  /// Write `value` to `path` choosing the encoder by InferFormat: json (sim-safe
+  /// EncodeJson), csv (an array-of-arrays — else an Err), or text (scalar
+  /// stringified). The escape + IO arms are Write's.
+  Dump(path: string, value: dcs::bridge::Json, format: Option<string>): Result<void, dcs::bridge::FileError>;
 }
 
 /// A SQLite failure (open, SQL syntax, a busy lock). Surfaced to Lua as
@@ -323,6 +334,11 @@ container Sqlite for dcs::bridge::Dcs {
 
   /// Run a query, returning its rows as JSON — an array of column-keyed objects.
   Query(handle: dcs::bridge::SqliteHandle, sql: string, params: Option<dcs::bridge::Json>): Result<dcs::bridge::Json, dcs::bridge::SqlError>;
+
+  /// Run `callback` inside BEGIN: COMMIT if it returns, ROLLBACK if it raises
+  /// (the raised error is surfaced). The callback uses the captured handle, so
+  /// its Exec/Query re-enter without a double borrow.
+  Transaction(handle: dcs::bridge::SqliteHandle, callback: dcs::bridge::Json): Result<bool, dcs::bridge::SqlError>;
 }
 
 /// The bridge answers before any mission is loaded.

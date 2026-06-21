@@ -322,8 +322,14 @@
   // breakpoint toggle, pause, or step (and on tab switch via app.filePath).
   $effect(() => {
     const path = app.filePath;
-    const deps = [debug.breakpoints, debug.status, debug.frame, debug.topLocals];
-    if (view && path && deps) syncDebugView(view, path);
+    // Touch exactly the reactive sources syncDebugView reads, so Svelte re-runs
+    // this when any change: breakpoints (gutter), frames + status (current
+    // line), topLocals (inline values).
+    void debug.breakpoints;
+    void debug.frames;
+    void debug.status;
+    void debug.topLocals;
+    if (view && path) syncDebugView(view, path);
   });
 
   // The active tab when it's binary — drives the placeholder overlay (model

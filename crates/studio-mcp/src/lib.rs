@@ -564,6 +564,13 @@ fn lua_string(s: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+/// Forward `require("dcs_studio").debug.<method>(<args>)` over the live DCS link —
+/// the one place the module path lives on the MCP side.
+fn forward_debug_call(session: &Session, method: &str, args: &str) -> Value {
+    let code = format!("return require(\"dcs_studio\").debug.{method}({args})");
+    forward_to_dcs(session, "eval", Some(json!({ "code": code })))
+}
+
 fn debug_tool_specs() -> Vec<Value> {
     vec![
         json!({
@@ -649,37 +656,12 @@ fn debug_tool_specs() -> Vec<Value> {
 fn debug_tools(session: &Session, name: &str, args: &Value) -> Option<Result<Value, ToolError>> {
     match name {
         "debug_set_breakpoints" => Some(debug_set_breakpoints_tool(session, args)),
-        "debug_breakpoints" => Some(Ok(forward_to_dcs(
-            session,
-            "eval",
-            Some(json!({ "code": "return require(\"dcs_studio\").debug.breakpoints()" })),
-        ))),
-        "debug_clear_breakpoints" => Some(Ok(forward_to_dcs(
-            session,
-            "eval",
-            Some(json!({ "code": "return require(\"dcs_studio\").debug.clear_breakpoints()" })),
-        ))),
+        "debug_breakpoints" => Some(Ok(forward_debug_call(session, "breakpoints", ""))),
+        "debug_clear_breakpoints" => Some(Ok(forward_debug_call(session, "clear_breakpoints", ""))),
         "debug_run" => Some(debug_run_tool(session, args)),
         "debug_state" => Some(Ok(forward_to_dcs(session, "debug_state", None))),
-        "debug_expand" => match require_u32(args, "ref", "debug_expand") {
-            Ok(ref_id) => Some(Ok(forward_to_dcs(
-                session,
-                "debug_expand",
-                Some(json!({ "ref": ref_id })),
-            ))),
-            Err(e) => Some(Err(e)),
-        },
-        "debug_eval" => match require_str(args, "expr", "debug_eval") {
-            Ok(expr) => {
-                let frame = args.get("frame").and_then(Value::as_u64).unwrap_or(0);
-                Some(Ok(forward_to_dcs(
-                    session,
-                    "debug_eval",
-                    Some(json!({ "frame": frame, "expr": expr })),
-                )))
-            }
-            Err(e) => Some(Err(e)),
-        },
+        "debug_expand" => Some(debug_expand_tool(session, args)),
+        "debug_eval" => Some(debug_eval_tool(session, args)),
         "debug_pause" => Some(Ok(forward_to_dcs(session, "debug_pause", None))),
         "debug_continue" => {
             let params = args
@@ -705,11 +687,22 @@ fn debug_set_breakpoints_tool(session: &Session, args: &Value) -> Result<Value, 
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join(", ");
-    let code = format!(
-        "return require(\"dcs_studio\").debug.set_breakpoints({}, {{{lines}}})",
-        lua_string(source)
-    );
-    Ok(forward_to_dcs(session, "eval", Some(json!({ "code": code }))))
+    Ok(forward_debug_call(
+        session,
+        "set_breakpoints",
+        &format!("{}, {{{lines}}}", lua_string(source)),
+    ))
+}
+
+fn debug_expand_tool(session: &Session, args: &Value) -> Result<Value, ToolError> {
+    let ref_id = require_u32(args, "ref", "debug_expand")?;
+    Ok(forward_to_dcs(session, "debug_expand", Some(json!({ "ref": ref_id }))))
+}
+
+fn debug_eval_tool(session: &Session, args: &Value) -> Result<Value, ToolError> {
+    let expr = require_str(args, "expr", "debug_eval")?;
+    let frame = args.get("frame").and_then(Value::as_u64).unwrap_or(0);
+    Ok(forward_to_dcs(session, "debug_eval", Some(json!({ "frame": frame, "expr": expr }))))
 }
 
 fn debug_run_tool(session: &Session, args: &Value) -> Result<Value, ToolError> {

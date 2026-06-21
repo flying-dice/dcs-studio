@@ -113,6 +113,15 @@ fn resume_slot<T>(f: impl FnOnce(&mut Option<String>) -> T) -> T {
     f(&mut guard)
 }
 
+/// Reset all pause/resume/break-all state. Called at the start of a debug_run so
+/// a stale manual-pause (`PAUSE_REQ`), resume request, or pause snapshot from a
+/// prior session can't bleed into the new one (a phantom break on line 1).
+pub(crate) fn reset_session() {
+    PAUSE_REQ.store(false, Ordering::Relaxed);
+    resume_slot(|r| *r = None);
+    pause_slot(|p| *p = None);
+}
+
 /// Record that execution is paused at a breakpoint, with `snapshot` (a JSON
 /// string of source/line/locals). Clears any stale resume request.
 pub(crate) fn set_paused(snapshot: String) {
@@ -151,8 +160,9 @@ pub fn register(sub: &mut Sub) -> Result<()> {
          list clears the source). Returns the number set. Called by the IDE \
          debugger when breakpoints change.",
         |lua: &Lua, (source, lines): (String, Vec<u32>)| {
-            let count = set_breakpoints(&source, &lines);
-            i64::try_from(count).unwrap_or(-1).into_lua_multi(lua)
+            // usize → Lua integer; mlua errors (never panics) if it somehow
+            // exceeded i64, which a breakpoint count never will.
+            set_breakpoints(&source, &lines).into_lua_multi(lua)
         },
     )?;
 
@@ -301,6 +311,18 @@ pub fn register(sub: &mut Sub) -> Result<()> {
         &[r_named("boolean", "pause")],
         "Whether a break-all was requested since the last call (consumed by the hook).",
         |lua: &Lua, ()| take_pause().into_lua_multi(lua),
+    )?;
+
+    sub.func(
+        "reset_session",
+        &[],
+        &[],
+        "Clear all pause/resume/break-all state. Called by the hook at the start \
+         of a debug_run so a stale request from a prior session can't bleed in.",
+        |lua: &Lua, ()| {
+            reset_session();
+            ().into_lua_multi(lua)
+        },
     )?;
 
     Ok(())

@@ -60,7 +60,13 @@ container BreakpointRegistry for dcs::bridge::Dcs {
 /// after an auto-continue timeout, so a vanished debugger can never freeze the
 /// sim forever.
 container PauseController for dcs::bridge::Dcs {
-  /// The Lua line hook: on each line, pause if a breakpoint is set here.
+  /// The Lua line hook, deciding whether to pause on each line, in order:
+  /// (1) a breakpoint here pauses — but a CONDITIONAL breakpoint pauses only
+  /// when its expression is truthy in the stopped frame, and a condition that
+  /// fails to compile or raises fails OPEN (pauses and surfaces the error,
+  /// rather than silently never stopping); (2) else a pending manual break-all
+  /// pauses; (3) else a pending step pauses by stack-depth relative to the
+  /// stepped-from frame — into: always; over: depth <= start; out: depth < start.
   OnLine(source: string, line: number): void;
 
   /// Snapshot the paused stack for the editor, serialized sim-safely so an
@@ -96,6 +102,14 @@ feature BreakpointRegistered for dcs::bridge::Dcs {
   when "it sets breakpoints for a source file over the bridge"
   then "the registry reports those lines as pause points"
   and "an empty set for that source clears them"
+}
+
+/// A breakpoint condition that errors fails open — visible, never silently skipped.
+feature ConditionErrorFailsOpen for dcs::bridge::Dcs {
+  given "a conditional breakpoint whose expression fails to compile or raises"
+  when "the line hook reaches that line"
+  then "it pauses (fail-open) rather than silently continuing"
+  and "the condition error is carried in the snapshot"
 }
 
 /// A detached debugger never freezes the sim.

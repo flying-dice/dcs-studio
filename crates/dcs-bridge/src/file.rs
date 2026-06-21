@@ -11,7 +11,7 @@
 
 use crate::facade::{p, p_opt, r_named, Sub};
 use crate::get_lfs_writedir;
-use crate::lua_utils::serialize_lua_to_json;
+use crate::lua_utils::{opt_bool, opt_str, serialize_lua_to_json, to_json_string};
 use dcs_studio_project::install::stays_under;
 use mlua::prelude::{LuaTable, LuaValue};
 use mlua::{IntoLuaMulti, Lua, Result};
@@ -40,19 +40,6 @@ fn write_bytes(path: &Path, bytes: &[u8], append: bool) -> std::io::Result<()> {
         .truncate(!append)
         .open(path)?;
     f.write_all(bytes)
-}
-
-/// `opts.<key>` as a bool, defaulting to false.
-fn opt_bool(opts: &Option<LuaTable>, key: &str) -> bool {
-    opts.as_ref()
-        .and_then(|t| t.get::<Option<bool>>(key).ok().flatten())
-        .unwrap_or(false)
-}
-
-/// `opts.<key>` as a string, if present.
-fn opt_str(opts: &Option<LuaTable>, key: &str) -> Option<String> {
-    opts.as_ref()
-        .and_then(|t| t.get::<Option<String>>(key).ok().flatten())
 }
 
 /// Render one CSV cell value as text (only scalars; other types become empty).
@@ -94,12 +81,19 @@ fn encode_csv(rows: &LuaTable) -> std::result::Result<String, String> {
 /// Sim-safe JSON encode of a Lua value (NaN/Inf → null, non-UTF-8 lossy).
 fn encode_json(value: &LuaValue, pretty: bool) -> std::result::Result<String, String> {
     let json = serialize_lua_to_json(value).ok_or("value is not JSON-serializable")?;
-    if pretty {
-        serde_json::to_string_pretty(&json)
+    to_json_string(&json, pretty).map_err(|e| e.to_string())
+}
+
+/// Infer the dump format from a path's extension (.json / .csv / else text).
+fn infer_format(path: &str) -> &'static str {
+    let lower = path.to_lowercase();
+    if lower.ends_with(".json") {
+        "json"
+    } else if lower.ends_with(".csv") {
+        "csv"
     } else {
-        serde_json::to_string(&json)
+        "text"
     }
-    .map_err(|e| e.to_string())
 }
 
 /// Register the `file.*` write helpers on `sub`.
@@ -167,16 +161,7 @@ pub fn register(sub: &mut Sub) -> Result<()> {
          the extension (.json / .csv / anything else = text), or `opts.format` \
          (\"json\" | \"csv\" | \"text\").",
         |lua: &Lua, (path, value, opts): (String, LuaValue, Option<LuaTable>)| {
-            let format = opt_str(&opts, "format").unwrap_or_else(|| {
-                let lower = path.to_lowercase();
-                if lower.ends_with(".json") {
-                    "json".to_string()
-                } else if lower.ends_with(".csv") {
-                    "csv".to_string()
-                } else {
-                    "text".to_string()
-                }
-            });
+            let format = opt_str(&opts, "format").unwrap_or_else(|| infer_format(&path).to_string());
             let encoded = match format.as_str() {
                 "json" => encode_json(&value, opt_bool(&opts, "pretty")),
                 "csv" => match value {

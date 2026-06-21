@@ -50,6 +50,9 @@ local started, err = pcall(function()
   -- the sim forever. In Lua 5.1 the hook is disabled while it runs, so the
   -- pump's own lines never re-trigger it.
   local DEBUG_IDLE_SECONDS = 30 -- auto-continue after this long with no client polling
+  local DRAIN_INTERVAL_SECONDS = 0.05 -- max sim stall between RPC drains during a run
+  local MAX_TABLE_CHILDREN = 1000 -- cap children returned/previewed for one table
+  local MAX_REFS = 100000 -- per-pause ref ceiling so a cyclic/huge tree can't pin unbounded memory
 
   -- Variable handle registry, kept alive across RPC calls FOR THE DURATION OF A
   -- PAUSE so the editor can expand tables lazily (debug_expand). Each ref maps
@@ -58,6 +61,9 @@ local started, err = pcall(function()
   local dbg = { vars = {}, n = 0 }
 
   local function dbg_register(descriptor)
+    -- Ceiling: a cyclic/huge table tree (e.g. expanding _G._G…) must not mint
+    -- refs unboundedly. Past the cap, return 0 → the value renders as a leaf.
+    if dbg.n >= MAX_REFS then return 0 end
     dbg.n = dbg.n + 1
     dbg.vars[dbg.n] = descriptor
     return dbg.n
@@ -76,6 +82,9 @@ local started, err = pcall(function()
       local count = 0
       for _ in pairs(v) do
         count = count + 1
+        if count > MAX_TABLE_CHILDREN then
+          return "table (" .. MAX_TABLE_CHILDREN .. "+)"
+        end
       end
       return "table (" .. count .. ")"
     elseif t == "function" or t == "userdata" or t == "thread" then
@@ -99,48 +108,70 @@ local started, err = pcall(function()
     return { name = name, type = type(value), value = dbg_preview(value), ref = ref }
   end
 
-  -- Evaluate `expr` (an expression, else a statement) against an environment
-  -- that resolves names through the frame's captured locals → upvalues → _G,
-  -- using setfenv (present in DCS's hooks env). Returns (ok, value-or-error).
-  local function eval_expr(locals, upvals, expr)
-    local f = loadstring("return " .. expr)
-    if not f then
-      f = loadstring(expr)
-    end
-    if not f then
-      return false, "compile error"
-    end
-    local proxy = setmetatable({}, {
-      __index = function(_, k)
-        if locals then
-          local v = locals[k]
-          if v ~= nil then return v end
-        end
-        if upvals then
-          local v = upvals[k]
-          if v ~= nil then return v end
-        end
-        return _G[k]
-      end,
-    })
-    setfenv(f, proxy)
-    return pcall(f)
-  end
-
-  -- The current frame's locals as a name→value map (innermost wins), captured
-  -- live at `level` for the conditional-breakpoint check at the hook.
-  local function live_locals(level)
-    local m = {}
+  -- Collect a frame's named locals at `level` into the ordered list (for the
+  -- variables scope) plus a name→value map and a name→true PRESENCE set. The
+  -- presence set is what lets a local holding `nil`/`false` be distinguished
+  -- from an absent name, so it shadows a same-named global correctly. Skips the
+  -- `(*temporary)` slots. One definition for the snapshot and the condition check.
+  local function collect_locals(level)
+    -- `level` is the target frame as seen from collect_locals's CALLER; add 1
+    -- because debug.getlocal here runs one frame deeper (inside this function).
+    level = level + 1
+    local list, map, present = {}, {}, {}
     local i = 1
     while true do
       local n, v = debug.getlocal(level, i)
       if not n then break end
       if string.sub(n, 1, 1) ~= "(" then
-        m[n] = v
+        table.insert(list, { name = n, value = v })
+        map[n] = v
+        present[n] = true
       end
       i = i + 1
     end
-    return m
+    return list, map, present
+  end
+
+  -- Collect a function's upvalues (where the host provides debug.getupvalue —
+  -- DCS's hooks env strips it) into list + map + presence set, like collect_locals.
+  local function collect_upvalues(func)
+    local list, map, present = {}, {}, {}
+    if debug.getupvalue and func then
+      local j = 1
+      while true do
+        local n, v = debug.getupvalue(func, j)
+        if not n then break end
+        table.insert(list, { name = n, value = v })
+        map[n] = v
+        present[n] = true
+        j = j + 1
+      end
+    end
+    return list, map, present
+  end
+
+  -- Evaluate `expr` (an expression, else a statement) against an environment
+  -- that resolves names through the frame's captured locals → upvalues → _G,
+  -- using setfenv (present in DCS's hooks env). `env` is { locals, locals_present,
+  -- upvals, upvals_present } from collect_locals/collect_upvalues. Returns
+  -- (ok, value-or-error) — the real loadstring/runtime error, never a generic one.
+  local function eval_expr(env, expr)
+    local f, err = loadstring("return " .. expr)
+    if not f then
+      f, err = loadstring(expr)
+    end
+    if not f then
+      return false, err or "compile error"
+    end
+    local proxy = setmetatable({}, {
+      __index = function(_, k)
+        if env.locals_present and env.locals_present[k] then return env.locals[k] end
+        if env.upvals_present and env.upvals_present[k] then return env.upvals[k] end
+        return _G[k]
+      end,
+    })
+    setfenv(f, proxy)
+    return pcall(f)
   end
 
   router:add_method("debug_run", function(params)
@@ -173,83 +204,89 @@ local started, err = pcall(function()
     local function snapshot(base)
       dbg.vars = {}
       dbg.n = 0
-      dbg.envs = {} -- per-frame { locals = map, upvals = map } for evaluate-in-frame
+      dbg.envs = {} -- per-frame eval env (locals/upvals + presence) for debug_eval
       local frames = {}
       local level = base
       while true do
         local info = debug.getinfo(level, "nSlf")
         if not info then break end
         if info.what == "C" then break end -- the pcall boundary: stop
-        local locals = {}
-        local locals_map = {}
-        local i = 1
-        while true do
-          local n, v = debug.getlocal(level, i)
-          if not n then break end
-          if string.sub(n, 1, 1) ~= "(" then -- skip (*temporary) slots
-            table.insert(locals, { name = n, value = v })
-            locals_map[n] = v
-          end
-          i = i + 1
-        end
+        local idx = #frames -- 0-based; the env and the frame share this one key
+        local locals, locals_map, locals_present = collect_locals(level)
         local scopes = {
           { name = "Locals", ref = dbg_register({ kind = "scope", items = locals }) },
         }
-        local upvals_map = {}
-        -- DCS's hooks environment strips debug.getupvalue, so the Upvalues
-        -- scope only appears where the host actually provides it.
-        if debug.getupvalue and info.func then
-          local upvals = {}
-          local j = 1
-          while true do
-            local n, v = debug.getupvalue(info.func, j)
-            if not n then break end
-            table.insert(upvals, { name = n, value = v })
-            upvals_map[n] = v
-            j = j + 1
-          end
+        local upvals, upvals_map, upvals_present = collect_upvalues(info.func)
+        -- The Upvalues scope only appears where the host provides getupvalue
+        -- (DCS's hooks env strips it) — i.e. when collect_upvalues found any.
+        if #upvals > 0 then
           table.insert(scopes, { name = "Upvalues", ref = dbg_register({ kind = "scope", items = upvals }) })
         end
-        dbg.envs[#frames] = { locals = locals_map, upvals = upvals_map }
-        if #frames == 0 then -- globals once, on the top frame; expanded lazily
+        dbg.envs[idx] = {
+          locals = locals_map,
+          locals_present = locals_present,
+          upvals = upvals_map,
+          upvals_present = upvals_present,
+        }
+        if idx == 0 then -- globals once, on the top frame; expanded lazily
           table.insert(scopes, { name = "Globals", ref = dbg_register({ kind = "value", value = _G }) })
         end
         local name = info.name
         if not name then
           name = (info.what == "main") and "main chunk" or "?"
         end
-        table.insert(frames, {
-          index = #frames,
+        frames[idx + 1] = {
+          index = idx,
           source = info.source,
           line = info.currentline,
           name = name,
           scopes = scopes,
-        })
+        }
         level = level + 1
       end
-      return bridge.json.safe_encode({ frames = frames })
+      -- pause_id: a monotonic stop counter so the editor refreshes variables on
+      -- EVERY distinct stop (incl. re-pausing on the same line in a loop), not
+      -- only when the line moves. cond_error: a conditional-breakpoint error,
+      -- surfaced rather than silently swallowed.
+      return bridge.json.safe_encode({ frames = frames, pause_id = dbg.pause_id, cond_error = dbg.cond_error })
     end
 
     local hook = function(_, line)
-      local info = debug.getinfo(2, "S")
+      local info = debug.getinfo(2, "nSlf")
       local src = (info and info.source) or source
       local depth = cur_depth()
       -- Throttled RPC drain DURING the run, so a manual Pause (and live state
       -- queries) are delivered even while the chunk holds the sim thread. The
       -- hook is disabled while it runs, so this re-entrant drain is safe.
       local now = os.clock()
-      if (now - last_drain) > 0.05 then
+      if (now - last_drain) > DRAIN_INTERVAL_SECONDS then
         last_drain = now
         server:process_rpc(router)
       end
       local hit = false
       if bridge.debug.should_pause(src, line) then
-        -- A conditional breakpoint pauses only when its expression is truthy in
-        -- the stopped frame (level 3: live_locals(1) <- hook(2) <- debugged(3)).
         local cond = bridge.debug.condition_at(src, line)
         if cond and cond ~= "" then
-          local ok, val = eval_expr(live_locals(3), nil, cond)
-          hit = (ok and val) and true or false
+          -- Evaluate the condition in the stopped frame. From the hook, the
+          -- debugged frame is level 2 (getinfo(2) above); collect_locals takes
+          -- that caller-relative level. Resolve its locals AND upvalues.
+          local _, lmap, lpresent = collect_locals(2)
+          local _, umap, upresent = collect_upvalues(info and info.func)
+          local ok, val = eval_expr({
+            locals = lmap,
+            locals_present = lpresent,
+            upvals = umap,
+            upvals_present = upresent,
+          }, cond)
+          if not ok then
+            -- A broken condition fails OPEN: pause and surface the error, rather
+            -- than silently never stopping (which reads as "code path not hit").
+            dbg.cond_error = "breakpoint condition error: " .. tostring(val)
+            hit = true
+          else
+            dbg.cond_error = nil
+            hit = val and true or false
+          end
         else
           hit = true
         end
@@ -269,12 +306,13 @@ local started, err = pcall(function()
       end
       if hit then
         step_mode = nil
+        dbg.pause_id = (dbg.pause_id or 0) + 1 -- distinct-stop id (drives editor refresh)
         -- snapshot from level 3: the chunk frame is snapshot(1) <- hook(2) <- chunk(3).
         bridge.debug.set_paused(snapshot(3))
         local mode = nil
         dbg.last_ping = os.clock() -- the editor just requested this stop; it's alive
         repeat
-          server:process_rpc(router) -- keep answering RPC while paused (bumps last_ping)
+          server:process_rpc(router) -- a debug_state during this drain refreshes last_ping
           mode = bridge.debug.take_resume()
           if not mode and (os.clock() - dbg.last_ping) > DEBUG_IDLE_SECONDS then
             mode = "continue" -- the editor stopped polling (gone): don't freeze forever
@@ -304,6 +342,11 @@ local started, err = pcall(function()
     -- client's per-call timeout would otherwise fire on a long run or pause.
     dbg.running = true
     dbg.error = nil
+    dbg.cond_error = nil
+    dbg.pause_id = 0
+    -- Clear any stale break-all / resume / pause from a prior session so it
+    -- can't phantom-break this run on its first line.
+    bridge.debug.reset_session()
     dbg.last_ping = os.clock()
     debug.sethook(hook, "l")
     local ran_ok, run_err = pcall(chunk)
@@ -334,7 +377,7 @@ local started, err = pcall(function()
       for k, v in pairs(d.value) do
         table.insert(out, dbg_var(tostring(k), v))
         count = count + 1
-        if count >= 1000 then
+        if count >= MAX_TABLE_CHILDREN then
           table.insert(out, { name = "…", type = "string", value = "(truncated)", ref = 0 })
           break
         end
@@ -351,7 +394,7 @@ local started, err = pcall(function()
     if not env then
       return { ok = false, err = "no active frame" }
     end
-    local ok, res = eval_expr(env.locals, env.upvals, params.expr or "")
+    local ok, res = eval_expr(env, params.expr or "")
     if not ok then
       return { ok = false, err = tostring(res) }
     end

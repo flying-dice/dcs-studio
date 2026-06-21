@@ -33,7 +33,7 @@ impl Logger {
 }
 
 impl UserData for Logger {
-    fn add_methods<'lua, M: UserDataMethods<Self>>(methods: &mut M) {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_function("new", |_lua: &Lua, ns: String| Ok(Logger::new(ns)));
 
         methods.add_meta_method(LuaMetaMethod::ToString, |_: &Lua, this, (): ()| {
@@ -65,20 +65,22 @@ impl UserData for Logger {
 /// Register the `logger` sub-namespace: the level free functions and the
 /// `Logger` userdata proxy, with their `.d.lua` types recorded.
 pub fn register(sub: &mut Sub) -> Result<()> {
-    type LevelFn = fn(&Lua, (String, Option<String>)) -> Result<()>;
-    let levels: [(&str, &str, LevelFn); 4] = [
-        ("debug", "Log a message at debug level.", debug),
-        ("info", "Log a message at info level.", info),
-        ("warn", "Log a message at warn level.", warn),
-        ("error", "Log a message at error level.", error),
+    let levels: [(&str, &str, log::Level); 4] = [
+        ("debug", "Log a message at debug level.", log::Level::Debug),
+        ("info", "Log a message at info level.", log::Level::Info),
+        ("warn", "Log a message at warn level.", log::Level::Warn),
+        ("error", "Log a message at error level.", log::Level::Error),
     ];
-    for (name, doc, f) in levels {
+    for (name, doc, level) in levels {
         sub.func(
             name,
             &[p("msg", "string"), p_opt("ns", "string")],
             &[],
             doc,
-            f,
+            move |_lua: &Lua, (msg, ns): (String, Option<String>)| {
+                log_at(level, &msg, ns.as_deref());
+                Ok(())
+            },
         )?;
     }
 
@@ -98,34 +100,11 @@ pub fn register(sub: &mut Sub) -> Result<()> {
     Ok(())
 }
 
-fn debug(_: &Lua, (msg, ns): (String, Option<String>)) -> Result<()> {
+/// Log `msg` at `level`, to the namespaced `target` when `ns` is given. One body
+/// for all four level free functions.
+fn log_at(level: log::Level, msg: &str, ns: Option<&str>) {
     match ns {
-        Some(namespace) => debug!(target: &namespace, "{}", msg),
-        None => debug!("{}", msg),
+        Some(namespace) => log::log!(target: namespace, level, "{}", msg),
+        None => log::log!(level, "{}", msg),
     }
-    Ok(())
-}
-
-fn info(_: &Lua, (msg, ns): (String, Option<String>)) -> Result<()> {
-    match ns {
-        Some(namespace) => info!(target: &namespace, "{}", msg),
-        None => info!("{}", msg),
-    }
-    Ok(())
-}
-
-fn warn(_: &Lua, (msg, ns): (String, Option<String>)) -> Result<()> {
-    match ns {
-        Some(namespace) => warn!(target: &namespace, "{}", msg),
-        None => warn!("{}", msg),
-    }
-    Ok(())
-}
-
-fn error(_: &Lua, (msg, ns): (String, Option<String>)) -> Result<()> {
-    match ns {
-        Some(namespace) => error!(target: &namespace, "{}", msg),
-        None => error!("{}", msg),
-    }
-    Ok(())
 }

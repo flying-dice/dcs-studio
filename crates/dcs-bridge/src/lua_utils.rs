@@ -2,6 +2,29 @@ use log::{debug, warn};
 use mlua::prelude::{LuaTable, LuaValue};
 use serde_json::Value;
 
+/// Serialize any `Serialize` value to a JSON string, pretty or compact — the one
+/// place the pretty/compact fork lives (shared by `json` and `file`).
+pub fn to_json_string<T: serde::Serialize>(value: &T, pretty: bool) -> serde_json::Result<String> {
+    if pretty {
+        serde_json::to_string_pretty(value)
+    } else {
+        serde_json::to_string(value)
+    }
+}
+
+/// `opts.<key>` as a bool, defaulting to false (shared opts reader).
+pub fn opt_bool(opts: &Option<LuaTable>, key: &str) -> bool {
+    opts.as_ref()
+        .and_then(|t| t.get::<Option<bool>>(key).ok().flatten())
+        .unwrap_or(false)
+}
+
+/// `opts.<key>` as a string, if present (shared opts reader).
+pub fn opt_str(opts: &Option<LuaTable>, key: &str) -> Option<String> {
+    opts.as_ref()
+        .and_then(|t| t.get::<Option<String>>(key).ok().flatten())
+}
+
 /**
  * Check if a Lua table is an array by checking if it has contiguous integer keys starting from 1.
  */
