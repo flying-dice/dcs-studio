@@ -58,8 +58,8 @@ public container TypeSync for studio::core::Studio {
   /// "Sync types from DCS" — the single developer action. Refuses when the link
   /// is not live (fail-closed: nothing is written, and the error tells the
   /// developer to start DCS). Otherwise: read the running version stamp, pull the
-  /// `dcs_studio` module types and the introspected DCS API, write them under
-  /// `types/generated/` behind the containment guard, and trigger a re-index.
+  /// `dcs_studio` module types and the introspected DCS API, write them to the
+  /// fixed `GENERATED_FILE` under `types/generated/`, and trigger a re-index.
   public Sync(): Result<studio::types::SyncResult, studio::types::TypeSyncError> {
     live = bool from self.LinkLive()
     if (!live) {
