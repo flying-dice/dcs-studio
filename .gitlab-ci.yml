@@ -107,6 +107,48 @@ web:
     - pnpm check
     - pnpm test:unit
 
+# GUI smoke (issues #24 + #7): drive the REAL built Tauri app through
+# tauri-driver under Xvfb — the window-state save/restore round-trip the
+# headless unit tests (crates/app/tests/window_state.rs) can only assert at the
+# config level. WebKitWebDriver (the `webkit2gtk-driver` package) is the
+# platform WebDriver tauri-driver proxies to; the smoke (gui-smoke/) speaks raw
+# W3C WebDriver over fetch — no npm deps. `allow_failure` while the GUI harness
+# beds in on the shared runner — it must never block a merge on flake, but its
+# log surfaces a real save/restore regression.
+gui-smoke:
+  stage: test
+  image: rust:1.92
+  cache:
+    key: rust-app-$CI_COMMIT_REF_SLUG # share the app job's tauri/webkit artifacts
+    paths:
+      - .cargo/registry
+      - target
+    policy: pull
+  variables:
+    TAURI_APP: $CI_PROJECT_DIR/target/debug/dcs-studio
+    # webkit2gtk renders headlessly under Xvfb only with compositing/DMABUF off
+    # (no GPU on the shared runner) — verified in a local rust:1.92 container.
+    WEBKIT_DISABLE_COMPOSITING_MODE: "1"
+    WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+  script:
+    - apt-get update -qq
+    # The Tauri webkit stack + the WebDriver (`webkit2gtk-driver` = WebKitWebDriver) + a virtual display.
+    - apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev pkg-config webkit2gtk-driver xvfb curl
+    - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    - apt-get install -y -qq nodejs
+    - npm i -g pnpm@9
+    - pnpm install --frozen-lockfile
+    - pnpm build # the frontend → build/, which the app binary embeds (frontendDist)
+    - cargo build -p lua-analyzer
+    - 'TRIPLE=$(rustc -vV | sed -n "s/^host: //p")'
+    - mkdir -p crates/app/binaries
+    - cp target/debug/lua-analyzer "crates/app/binaries/lua-analyzer-$TRIPLE"
+    - cargo build -p dcs-studio # the runnable app binary (frontend embedded)
+    - cargo install tauri-driver --locked
+    # The smoke speaks raw W3C WebDriver over fetch — no npm deps, just node.
+    - xvfb-run -a node gui-smoke/window-state.mjs
+  allow_failure: true
+
 # NOTE: there is no `e2e` job here any more. The language e2e suite
 # (`pnpm test:lang`, e2e-lang/) was retargeted by issue #32 to drive the
 # real packaged app over WebView2 CDP — Windows-only — so it cannot run on
