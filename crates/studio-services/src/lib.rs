@@ -13,6 +13,7 @@
 // there (unwrap/expect/dbg are exempted via clippy.toml).
 #![cfg_attr(test, allow(clippy::indexing_slicing, clippy::panic, clippy::print_stderr))]
 
+pub mod database;
 pub mod fs;
 pub mod github;
 mod github_http;

@@ -5456,6 +5456,7 @@ dependencies = [
  "dirs",
  "keyring",
  "portable-pty",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",

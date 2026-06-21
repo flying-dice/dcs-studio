@@ -18,6 +18,7 @@
   import Terminal from "$lib/components/Terminal.svelte";
   import Structure from "$lib/components/Structure.svelte";
   import Todos from "$lib/components/Todos.svelte";
+  import DatabasePanel from "$lib/components/Database.svelte";
   import Usages from "$lib/components/Usages.svelte";
   import DebugPanel from "$lib/components/DebugPanel.svelte";
   import InspectConsole from "$lib/components/InspectConsole.svelte";
@@ -590,6 +591,12 @@
                 <ScrollArea class="h-full">
                   <Structure path={app.filePath} />
                 </ScrollArea>
+              {:else if app.rightTool === "database"}
+                <DatabasePanel
+                  onOpenRecipes={rightTools.some((t) => t.id === "recipes")
+                    ? () => app.toggleTool("right", "recipes")
+                    : undefined}
+                />
               {:else}
                 {@render placeholder(labelFor(rightTools, app.rightTool))}
               {/if}

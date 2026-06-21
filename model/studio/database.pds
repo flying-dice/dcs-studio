@@ -1,0 +1,185 @@
+//! studio::database — the Database tool window (issue #49 Part A): a
+//! read-only browser over the SQLite files the in-DCS `dcs_studio.dll`
+//! writes under `lfs.writedir()`. The IDE never writes these DBs — it
+//! opens them `SQLITE_OPEN_READ_ONLY` (WAL lets it read while DCS still
+//! holds the file, and it works when DCS is off).
+//!
+//! Three business rules are load-bearing and each has a feature:
+//! 1. every browsed path stays under the resolved write root (no escape
+//! via absolute paths, `..`, or a drive change);
+//! 2. the connection is read-only — a write statement fails and leaves
+//! the DB untouched;
+//! 3. query results are capped — a result over `ROW_CAP` rows is
+//! truncated and flagged, so a runaway `SELECT` can't flood the grid.
+//!
+//! The reader itself runs in Rust (`studio-services::database`, reached
+//! through thin Tauri commands); this container owns when it runs, what
+//! the panel shows, and the three guards above.
+
+/// The maximum number of rows a single query returns to the panel. A
+/// result larger than this is truncated to `ROW_CAP` rows and flagged
+/// `capped` so the grid can show "showing N (capped)".
+public constant ROW_CAP = 1000
+
+/// One discovered SQLite file under the write root. `sizeBytes` is the
+/// on-disk size; `name` is the file name for the list, `path` its
+/// absolute location.
+public data DatabaseFile { path: string, name: string, sizeBytes: number }
+
+/// One table in an opened database, with its shape. `columnCount` and
+/// `rowCount` are read once when the database is opened so the panel can
+/// show counts without a second round-trip.
+public data TableInfo { name: string, columnCount: number, rowCount: number }
+
+/// One result row — the cells as display strings (blobs elided, nulls
+/// rendered as empty), aligned to `QueryResult.columns`.
+public data Row { cells: string[] }
+
+/// The outcome of a query: the column headers, the rows, the number of
+/// rows returned, and whether the result was capped at `ROW_CAP`.
+public data QueryResult { columns: string[], rows: studio::database::Row[], rowCount: number, capped: bool }
+
+/// A database error surfaced to the panel — a guard refusal, a failed
+/// read-only open, or a SQL/engine error. One human-readable message.
+public data DbError { message: string }
+
+/// Read-only SQLite browser behind the Database tool window. Discovery
+/// runs when a project opens; opening a database lists its tables;
+/// running a query returns capped rows. Every path is guarded to stay
+/// under the write root, and every connection is opened read-only.
+public container DatabaseBrowser for studio::core::Studio {
+  /// Rescan when a workspace opens: resolve the DCS write root, discover
+  /// every SQLite file under it, and publish the list. No write root (or
+  /// a failed discovery) is non-fatal — the panel just shows nothing.
+  #[onevent(studio::core::ProjectOpened)]
+  public RefreshDatabases(opened: studio::core::ProjectOpened): void {
+    root = Option<string> from self.ResolveWriteDir()
+    if (root.isNone) {
+      self.PublishDatabases(self.NoDatabases())
+      return
+    }
+    found = Result<studio::database::DatabaseFile[], studio::database::DbError> from self.DiscoverUnder(root.value)
+    if (found.isErr) {
+      self.PublishDatabases(self.NoDatabases())
+      return
+    }
+    self.PublishDatabases(found.value)
+  }
+
+  /// Open a database and list its tables. Guard first — a path that
+  /// escapes the write root is refused before any file is touched. Then
+  /// open read-only (a failed open is an error, not a panic), then read
+  /// the table list with column and row counts.
+  #[manual]
+  public OpenDatabase(path: string): Result<studio::database::TableInfo[], studio::database::DbError> {
+    guarded = bool from self.StaysUnderWriteRoot(path)
+    if (!guarded) {
+      return Err(self.EscapeError(path))
+    }
+    opened = Result<void, studio::database::DbError> from self.OpenReadOnly(path)
+    if (opened.isErr) {
+      return Err(opened.error)
+    }
+    tables = Result<studio::database::TableInfo[], studio::database::DbError> from self.ReadTables(path)
+    if (tables.isErr) {
+      return Err(tables.error)
+    }
+    return Ok(tables.value)
+  }
+
+  /// Run a query against a database and return its rows. Guard the path,
+  /// open read-only (so a write statement fails here, never mutating the
+  /// DB), execute, surface any SQL error, then cap: a result over
+  /// `ROW_CAP` rows is truncated and flagged so the grid stays bounded.
+  #[manual]
+  public RunQuery(path: string, sql: string): Result<studio::database::QueryResult, studio::database::DbError> {
+    guarded = bool from self.StaysUnderWriteRoot(path)
+    if (!guarded) {
+      return Err(self.EscapeError(path))
+    }
+    opened = Result<void, studio::database::DbError> from self.OpenReadOnly(path)
+    if (opened.isErr) {
+      return Err(opened.error)
+    }
+    executed = Result<studio::database::QueryResult, studio::database::DbError> from self.RunReadOnlySql(path, sql)
+    if (executed.isErr) {
+      return Err(executed.error)
+    }
+    result = studio::database::QueryResult from executed.value
+    if (result.rowCount > studio::database::ROW_CAP) {
+      return Ok(self.CapToLimit(result))
+    }
+    return Ok(result)
+  }
+
+  /// Resolve the DCS Saved Games write root (`lfs.writedir()`), if one is
+  /// detectable on this machine.
+  ResolveWriteDir(): Option<string>;
+
+  /// Walk the write root for SQLite files, sorted by name. Only files
+  /// under the root are returned — discovery never reaches outside it.
+  DiscoverUnder(root: string): Result<studio::database::DatabaseFile[], studio::database::DbError>;
+
+  /// Whether `path` resolves to a location under the write root — rejects
+  /// absolute escapes, `..` traversal, and drive changes, and (when the path
+  /// resolves on disk) collapses symlinks via a canonical-prefix check.
+  StaysUnderWriteRoot(path: string): bool;
+
+  /// Open the database at `path` read-only to confirm it is a readable
+  /// SQLite file; an unreadable or non-SQLite file is an `Err`.
+  OpenReadOnly(path: string): Result<void, studio::database::DbError>;
+
+  /// Read the table list (name, column count, row count) from an opened
+  /// read-only database.
+  ReadTables(path: string): Result<studio::database::TableInfo[], studio::database::DbError>;
+
+  /// Execute `sql` against a read-only connection and collect the result rows.
+  /// The realisation streams, stopping just past `ROW_CAP`, so the cap arm in
+  /// `RunQuery` can flag truncation without materialising the rest. A write
+  /// statement or malformed SQL fails here as an `Err`.
+  RunReadOnlySql(path: string, sql: string): Result<studio::database::QueryResult, studio::database::DbError>;
+
+  /// Build the guard-refusal error for a path that escaped the write root.
+  EscapeError(path: string): studio::database::DbError;
+
+  /// Truncate an over-cap result to `ROW_CAP` rows and flag it `capped`.
+  /// Coalesced into the streaming read in the realisation
+  /// (`studio-services::database::run_query`).
+  CapToLimit(result: studio::database::QueryResult): studio::database::QueryResult;
+
+  /// Hand the discovered databases to the UI: the panel lists them with
+  /// sizes; its empty state deep-links the Recipes SQLite category.
+  PublishDatabases(files: studio::database::DatabaseFile[]): void;
+
+  /// The empty list published when there is no write root or discovery
+  /// fails.
+  NoDatabases(): studio::database::DatabaseFile[];
+}
+
+/// The IDE only ever reads these databases — a write statement is
+/// rejected by the read-only connection and changes nothing.
+feature DatabaseBrowseIsReadOnly for studio::database::DatabaseBrowser {
+  given "a database file under the write root with a known row"
+  when "the developer runs a write statement against it (INSERT/UPDATE/DELETE)"
+  then "the query returns a DbError"
+  and "re-reading the database shows the row unchanged"
+}
+
+/// Browsing stays inside the write root — discovery never lists outside
+/// it, and opening a path that escapes it is refused before any file is
+/// touched.
+feature DiscoverStaysUnderWriteRoot for studio::database::DatabaseBrowser {
+  given "SQLite files both under the write root and outside it"
+  when "the panel discovers databases"
+  then "only the files under the write root are listed"
+  and "opening a path that escapes the write root returns a DbError"
+}
+
+/// Query results are bounded — a query returning more than ROW_CAP rows
+/// is truncated and flagged so the grid never floods.
+feature QueryRowsCapped for studio::database::DatabaseBrowser {
+  given "a database with more than ROW_CAP rows in a table"
+  when "the developer runs SELECT * over that table"
+  then "exactly ROW_CAP rows are returned"
+  and "the result is flagged capped"
+}
