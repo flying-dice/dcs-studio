@@ -19,6 +19,7 @@
   import Structure from "$lib/components/Structure.svelte";
   import Todos from "$lib/components/Todos.svelte";
   import Notifications from "$lib/components/Notifications.svelte";
+  import Bookmarks from "$lib/components/Bookmarks.svelte";
   import DatabasePanel from "$lib/components/Database.svelte";
   import Recipes from "$lib/components/Recipes.svelte";
   import Usages from "$lib/components/Usages.svelte";
@@ -555,6 +556,8 @@
                 <ScrollArea class="h-full">
                   <FileTree />
                 </ScrollArea>
+              {:else if app.leftTool === "bookmarks"}
+                <Bookmarks />
               {:else}
                 {@render placeholder(labelFor(leftTools, app.leftTool))}
               {/if}

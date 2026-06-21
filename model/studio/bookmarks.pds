@@ -1,0 +1,175 @@
+//! studio::bookmarks — the Bookmarks tool window (issue #58): lightweight,
+//! personal file:line marks a developer ties to meaningful spots in the
+//! codebase (the mission-start hook, a spawn table, a require being chased).
+//! Marks are toggled from the editor gutter, listed in the left-rail panel
+//! grouped by file with a snippet, navigate the editor on click, and persist
+//! per project across reloads.
+//!
+//! Two business decisions live here, both called out as hard parts in the
+//! issue:
+//!
+//! 1. PERSISTENCE KEYING. Bookmarks are user UI state, not source, so they
+//! live in localStorage alongside panel sizes and recents — keyed by the
+//! project's CANONICAL root path (the same identity the editor dedups
+//! tabs on), or Windows drive-letter / separator variance would split one
+//! project's marks across two buckets.
+//!
+//! 2. EDIT-TOLERANT ANCHORING. A bare line number drifts the moment a line
+//! is inserted above it. While a file is OPEN its marks ride the editor's
+//! edits (re-mapped through CodeMirror transactions, the gutter-DOM
+//! plumbing); on SAVE the re-mapped lines and freshly read snippets are
+//! written back here. A CLOSED file's marks can't ride edits, so they
+//! keep their last-saved line — the explicitly documented drift limit.
+
+/// One bookmark: a file, the 1-based line it marks, and a snippet of that
+/// line's text (re-derived on save while open; the last-saved text once the
+/// file is closed) — the panel's row label.
+public data Bookmark { path: string, line: number, snippet: string }
+
+/// The per-project bookmark set behind the left-rail Bookmarks panel. A
+/// separate singleton from `app` (same reason as `todos` and `lang`): the
+/// dependency points one way — core announces project-opened and file-saved;
+/// the panel and the editor gutter read the marks here. Unlike Todos there is
+/// no workspace scan — bookmarks are explicit user marks held client-side and
+/// persisted to localStorage, never written into the source.
+public container Bookmarks for studio::core::Studio {
+  /// Restore the opened project's marks: key by the CANONICAL root path — the
+  /// same identity the editor dedups tabs on — and publish that project's
+  /// persisted set, so reopening a project shows its marks and switching
+  /// projects never bleeds one project's marks into another.
+  #[onevent(studio::core::ProjectOpened)]
+  public LoadProject(opened: studio::core::ProjectOpened): void {
+    key = string from studio::core::Workbench.CanonicalPath(opened.path)
+    restored = studio::bookmarks::Bookmark[] from self.ReadPersisted(key)
+    self.PublishBookmarks(restored)
+  }
+
+  /// Toggle the mark on `path:line` (the gutter gesture): an unmarked line
+  /// gains a bookmark carrying its current snippet, a marked one loses it.
+  /// Persisted immediately — an explicit user mark is not contingent on a
+  /// later save.
+  #[manual]
+  public ToggleBookmark(path: string, line: number, snippet: string): void {
+    marked = bool from self.HasBookmark(path, line)
+    if (marked) {
+      self.RemoveAt(path, line)
+    } else {
+      added = studio::bookmarks::Bookmark from { path, line, snippet }
+      self.Insert(added)
+    }
+    self.Persist()
+  }
+
+  /// Remove a single mark from the panel (or by toggling its gutter off) and
+  /// persist the smaller set.
+  #[manual]
+  public RemoveBookmark(path: string, line: number): void {
+    self.RemoveAt(path, line)
+    self.Persist()
+  }
+
+  /// Clear every mark for the open project (the panel's clear-all) and persist
+  /// the now-empty set.
+  #[manual]
+  public ClearBookmarks(): void {
+    self.DiscardAll()
+    self.Persist()
+  }
+
+  /// A bookmark navigates to its spot: the file opens and the caret lands on
+  /// the bookmarked line, scrolled into view — the same open+jump the Todos
+  /// and Problems rows use.
+  #[manual]
+  public OpenBookmark(mark: studio::bookmarks::Bookmark): void {
+    studio::core::Workbench.OpenFile(mark.path)
+    self.JumpToLine(mark)
+  }
+
+  /// Re-anchor one file's marks after it is saved — the edit-tolerant
+  /// anchoring contract. While the file was open its marks rode the editor's
+  /// edits (a line inserted above a bookmark shifted it down with its code),
+  /// so on save the re-mapped lines and their freshly read snippets REPLACE
+  /// exactly that file's stored marks: a splice, never a wholesale replace —
+  /// every other file's marks are untouched.
+  #[manual]
+  public RemapFileBookmarks(path: string, marks: studio::bookmarks::Bookmark[]): void {
+    kept = studio::bookmarks::Bookmark[] from self.DropFile(path)
+    self.PublishBookmarks(self.MergeMarks(kept, marks))
+    self.Persist()
+  }
+
+  /// Forget the live set when the project closes — the panel clears, the next
+  /// project's LoadProject repopulates it.
+  #[manual]
+  public Reset(): void {
+    self.DiscardAll()
+  }
+
+  /// Whether `path:line` is currently bookmarked — the toggle add/remove test.
+  HasBookmark(path: string, line: number): bool;
+
+  /// Drop the mark on `path:line` from the live set (no-op if absent).
+  RemoveAt(path: string, line: number): void;
+
+  /// Add a mark to the live set, kept in path-then-line order.
+  Insert(mark: studio::bookmarks::Bookmark): void;
+
+  /// Empty the live set (clear-all and project close).
+  DiscardAll(): void;
+
+  /// The live set minus `path`'s marks — the keep side of the save splice.
+  DropFile(path: string): studio::bookmarks::Bookmark[];
+
+  /// Merge kept and re-mapped marks back into path-then-line order.
+  MergeMarks(kept: studio::bookmarks::Bookmark[], fresh: studio::bookmarks::Bookmark[]): studio::bookmarks::Bookmark[];
+
+  /// Read a project's persisted marks from localStorage by its canonical key
+  /// (an absent or corrupt bucket restores nothing — never fails the panel).
+  ReadPersisted(key: string): studio::bookmarks::Bookmark[];
+
+  /// Hand the live set to the UI: the panel groups it by file with a snippet
+  /// and a count, the editor gutter dots the marked lines.
+  PublishBookmarks(marks: studio::bookmarks::Bookmark[]): void;
+
+  /// Serialize the live set under the canonical project key established at
+  /// load (localStorage write — per-project keying is the decision; the JSON
+  /// serialization itself is plumbing).
+  Persist(): void;
+
+  /// Place the editor caret on the mark's line and scroll it into view.
+  JumpToLine(mark: studio::bookmarks::Bookmark): void;
+}
+
+/// Bookmarks survive a reload and never bleed across projects.
+feature BookmarksPersistPerProject for studio::bookmarks::Bookmarks {
+  given "the developer has bookmarked lines in project A"
+  when "they reopen project A later"
+  then "those bookmarks are restored, keyed by A's canonical root path"
+  but "opening a different project B shows only B's bookmarks, never A's"
+}
+
+/// A bookmark in an open file rides edits above it and is re-anchored on save —
+/// the central correctness risk (line drift) made explicit, not left implicit.
+feature BookmarkSurvivesEditsWhileOpen for studio::bookmarks::Bookmarks {
+  given "a line is bookmarked in an open file"
+  when "the developer inserts several lines above it and saves"
+  then "the bookmark still points at the originally marked line, not the shifted-down code"
+  and "its persisted line and snippet reflect the new position"
+}
+
+/// Toggling a marked line again removes the bookmark, from the panel and from
+/// persistence.
+feature ToggleRemovesBookmark for studio::bookmarks::Bookmarks {
+  given "a line is bookmarked"
+  when "the developer toggles the same line again from the gutter"
+  then "the bookmark disappears from the panel"
+  and "it is gone from persistence after a reload"
+}
+
+/// Clicking a bookmark navigates the editor to its spot.
+feature BookmarkClickNavigatesEditor for studio::bookmarks::Bookmarks {
+  given "the Bookmarks panel lists a mark in a file that is not open"
+  when "the developer clicks it"
+  then "that file opens in the editor"
+  and "the caret lands on the bookmarked line, scrolled into view"
+}
