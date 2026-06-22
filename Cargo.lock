@@ -1469,10 +1469,18 @@ name = "dcs-lua-lsp-core"
 version = "0.1.0"
 dependencies = [
  "cucumber",
+ "dcs-lua-require",
  "dcs-lua-syntax",
  "serde",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "dcs-lua-require"
+version = "0.1.0"
+dependencies = [
+ "dcs-lua-syntax",
 ]
 
 [[package]]
@@ -3382,6 +3390,7 @@ dependencies = [
 name = "lua-cargo"
 version = "0.1.0"
 dependencies = [
+ "dcs-lua-require",
  "dcs-lua-syntax",
  "serde",
  "serde_json",

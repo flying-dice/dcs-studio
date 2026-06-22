@@ -1,0 +1,35 @@
+# dcs-lua-require — the shared require-resolution contract (issue #51 pillar 2):
+# the module-name → file path mapping (`SearchRoots`) and the `require("mod")`
+# scanner, lifted out of lua-cargo's bundler so the EDITOR and the BUNDLER
+# resolve through the exact same code — a require resolves to the same file in
+# both, or it is unresolved in both (the parity goal). Deliberately lean: it
+# depends only on dcs-lua-syntax (the lexer the scanner reads) and std; the
+# path mapping is IO-agnostic — existence is supplied by the caller's predicate
+# (on-disk for the bundler, workspace membership for the editor).
+[package]
+name = "dcs-lua-require"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "dcs_lua_require"
+path = "src/lib.rs"
+
+[lints.clippy]
+# Safety / no-shortcuts (production), matching lua-cargo: pedantic intentionally
+# NOT taken; test unwrap/expect/panic exempt via clippy.toml.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+indexing_slicing = "warn"
+clone_on_copy = "warn"
+needless_borrow = "warn"
+needless_lifetimes = "warn"
+
+[dependencies]
+dcs-lua-syntax = { path = "../dcs-lua-syntax" }

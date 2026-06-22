@@ -12,6 +12,11 @@ path = "src/lib.rs"
 
 [dependencies]
 dcs-lua-syntax = { path = "../dcs-lua-syntax" }
+# The shared require scanner + module-resolution path mapping. The engine
+# resolves `require("mod")` through the SAME code the lua-cargo bundler uses, so
+# editor and bundler agree on where a module lives (issue #51 parity). Pure —
+# the engine supplies workspace membership as the existence predicate (no I/O).
+dcs-lua-require = { path = "../dcs-lua-require" }
 serde = { version = "1", features = ["derive"] }
 # Facade only (wasm-safe); native binaries install the subscriber.
 tracing = { workspace = true }

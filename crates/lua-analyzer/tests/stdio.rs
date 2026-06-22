@@ -415,3 +415,93 @@ fn initialize_walk_indexes_vendored_dependencies() {
     assert!(child.wait().expect("exit").success());
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn requires_resolve_into_deps_and_warn_on_unresolved_and_shadowing() {
+    // Pillar 2 (issue #51) end-to-end over real stdio: go-to-definition on a
+    // `require("dep")` jumps into the vendored checkout the bundler would
+    // amalgamate, and unresolved / shadowing requires reach the editor as
+    // warnings — the same verdict the bundler reports (the parity goal).
+    let root = temp_dir("requires");
+    std::fs::write(
+        root.join("CargoLua.toml"),
+        "[package]\nname = \"p\"\n[dependencies]\nmoose = { github = \"a/moose\" }\nshared = { github = \"a/shared\" }\n",
+    )
+    .expect("seed manifest");
+    std::fs::create_dir_all(root.join("src")).expect("src dir");
+    let moose = root.join(".lua-cargo").join("deps").join("moose");
+    let shared = root.join(".lua-cargo").join("deps").join("shared");
+    std::fs::create_dir_all(&moose).expect("moose dir");
+    std::fs::create_dir_all(&shared).expect("shared dir");
+    std::fs::write(moose.join("init.lua"), "return {}\n").expect("seed moose");
+    std::fs::write(shared.join("init.lua"), "return \"vendored\"\n").expect("seed vendored shared");
+    // Entry: a local module (clean), a vendored dep (clean, the goto target), a
+    // name present BOTH locally and vendored (shadowing), and a host module that
+    // resolves nowhere (unresolved — never an error).
+    std::fs::write(
+        root.join("src").join("main.lua"),
+        "local u = require(\"util\")\nlocal m = require(\"moose\")\nlocal s = require(\"shared\")\nlocal net = require(\"socket\")\nreturn u\n",
+    )
+    .expect("seed main");
+    std::fs::write(root.join("src").join("util.lua"), "return {}\n").expect("seed util");
+    std::fs::write(root.join("src").join("shared.lua"), "return \"local\"\n").expect("seed local shared");
+
+    let mut child = lua_analyzer()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn lua-analyzer");
+    let mut reader = BufReader::new(child.stdout.take().expect("stdout piped"));
+
+    let root_uri = format!("file:///{}", root.display().to_string().replace('\\', "/"));
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"processId": null, "rootUri": root_uri, "capabilities": {}}}),
+    );
+    lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(1)));
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
+    );
+
+    // The boot walk publishes main.lua's require findings: socket unresolved,
+    // shared shadowed — and nothing for the cleanly-resolved util / moose.
+    let publishes = read_publishes_for(&mut reader, &["main.lua"]);
+    let codes: Vec<&str> = publishes[0]["params"]["diagnostics"]
+        .as_array()
+        .expect("diagnostics array")
+        .iter()
+        .filter_map(|d| d["code"].as_str())
+        .collect();
+    assert!(codes.contains(&"unresolved-require"), "missing unresolved warning: {codes:?}");
+    assert!(codes.contains(&"require-shadowing"), "missing shadowing warning: {codes:?}");
+    assert_eq!(codes.len(), 2, "only socket + shared warn; util + moose resolve clean: {codes:?}");
+
+    // Go-to-definition on the `require("moose")` string jumps INTO the vendored
+    // checkout — the exact file the bundler would pull in.
+    let main_uri = format!("{root_uri}/src/main.lua");
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 31, "method": "textDocument/definition",
+                "params": {"textDocument": {"uri": main_uri},
+                           "position": {"line": 1, "character": 20}}}),
+    );
+    let def = lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(31)));
+    let target = def["result"]["uri"].as_str().unwrap_or_default();
+    assert!(
+        target.ends_with("moose/init.lua") && target.contains(".lua-cargo"),
+        "require did not resolve into the vendored dep: {}",
+        def["result"]
+    );
+
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 99, "method": "shutdown"}),
+    );
+    lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(99)));
+    lsp_send(&mut child, &json!({"jsonrpc": "2.0", "method": "exit"}));
+    assert!(child.wait().expect("exit").success());
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -32,6 +32,12 @@ pub fn findings_by_file(workspace: &Workspace) -> HashMap<String, Vec<Diagnostic
     for (path, diagnostic) in check_types(workspace) {
         by_path.entry(path).or_default().push(diagnostic);
     }
+    // The require half: unresolved / shadowing findings, sharing the bundler's
+    // resolution so the editor's verdict matches the bundle's (issue #51). Inert
+    // until a host sets the project context (`Workspace::set_resolution`).
+    for (path, diagnostic) in crate::requires::check_requires(workspace) {
+        by_path.entry(path).or_default().push(diagnostic);
+    }
     // Resolve each lint's level per file — inline `---@allow`/`warn`/`deny`/
     // `expect` directives over the project's `[lints.lua]` over the built-in
     // default — dropping `allow`ed findings, re-severitying the rest, and

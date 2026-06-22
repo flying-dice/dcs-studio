@@ -1,7 +1,9 @@
 //! The require-graph bundler/amalgamator (model `studio::cargolua::Bundler`).
 //! From each `[[bundle]]` entry, walk the `require("mod")` graph
-//! ([`crate::requires`]), resolve each module name to a file under the search
-//! roots, and emit ONE self-contained Lua 5.1 file behind a `__require` shim.
+//! ([`dcs_lua_require::scan_requires`]), resolve each module name to a file
+//! under the shared [`SearchRoots`] (the same mapping the editor resolves
+//! through — issue #51 parity), and emit ONE self-contained Lua 5.1 file behind
+//! a `__require` shim.
 //!
 //! Each module's source is embedded as a STRING LITERAL (byte-for-byte) and
 //! instantiated with `load()` at require time (the luabundle model). Embedding
@@ -16,8 +18,9 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use dcs_lua_require::{SearchRoots, scan_requires};
+
 use crate::manifest::{self, BundleTarget};
-use crate::requires::scan_requires;
 use crate::{CargoError, resolve};
 
 /// The outcome of a bundle: the emitted file, the module names amalgamated
@@ -83,7 +86,9 @@ fn bundle_one(
             if modules.contains_key(&req) || stack.iter().any(|(n, _)| n == &req) {
                 continue;
             }
-            let hits = search.resolve_all(&req);
+            // On disk: a candidate exists when it is a readable file. The editor
+            // passes workspace membership instead — same roots, same verdict.
+            let hits = search.resolve_all(&req, |p| p.is_file());
             if let Some(found) = hits.first() {
                 if hits.len() > 1 {
                     let others: Vec<String> =
@@ -124,75 +129,6 @@ fn bundle_one(
         modules: modules.into_keys().collect(),
         warnings,
     })
-}
-
-/// The directories a module name is resolved against, in priority order.
-struct SearchRoots {
-    roots: Vec<PathBuf>,
-}
-
-impl SearchRoots {
-    fn new(root: &Path, entry_path: &Path, vendored: &BTreeMap<String, PathBuf>) -> Self {
-        let mut roots = Vec::new();
-        if let Some(dir) = entry_path.parent() {
-            roots.push(dir.to_path_buf());
-        }
-        roots.push(root.to_path_buf());
-        roots.push(root.join("src"));
-        // The vendor parent, so a dep named `moose` resolves as the bare module
-        // `moose` to `.lua-cargo/deps/moose/init.lua` (the dep's package root).
-        if let Some(dep_root) = vendored.values().next() {
-            if let Some(parent) = dep_root.parent() {
-                roots.push(parent.to_path_buf());
-            }
-        }
-        for dep_root in vendored.values() {
-            roots.push(dep_root.clone());
-            roots.push(dep_root.join("src"));
-            roots.push(dep_root.join("lua"));
-        }
-        // De-dup while preserving order.
-        let mut seen = Vec::new();
-        roots.retain(|r| {
-            if seen.contains(r) {
-                false
-            } else {
-                seen.push(r.clone());
-                true
-            }
-        });
-        Self { roots }
-    }
-
-    /// Every DISTINCT file a module name `a.b` resolves to across the search
-    /// roots (`a/b.lua` or `a/b/init.lua`), de-duped by canonical path and in
-    /// search-root order. The first is chosen; more than one is a collision the
-    /// caller surfaces as a shadowing warning (a supply-chain hazard — a local
-    /// file silently overriding a vendored dep, or vice versa).
-    fn resolve_all(&self, module: &str) -> Vec<PathBuf> {
-        let rel = module.replace('.', "/");
-        let mut hits: Vec<PathBuf> = Vec::new();
-        let mut canon_seen: Vec<PathBuf> = Vec::new();
-        let mut push = |p: PathBuf| {
-            let key = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
-            if !canon_seen.contains(&key) {
-                canon_seen.push(key);
-                hits.push(p);
-            }
-        };
-        for base in &self.roots {
-            let flat = base.join(format!("{rel}.lua"));
-            if flat.is_file() {
-                push(flat);
-                continue;
-            }
-            let init = base.join(&rel).join("init.lua");
-            if init.is_file() {
-                push(init);
-            }
-        }
-        hits
-    }
 }
 
 /// Derive the entry module name from its project-relative path: drop a `.lua`

@@ -117,11 +117,11 @@ public container DependencyResolver for studio::core::Studio {
 /// Amalgamates an entry script's require graph into one self-contained file.
 public container Bundler for studio::core::Studio {
   /// Bundle every `[[bundle]]` of the project at `root`: from each entry script
-  /// walk the `require("mod")` graph (resolving `a.b` to `a/b.lua` or
-  /// `a/b/init.lua` under the entry dir, the project, `<root>/src`, and each
-  /// vendored dep), wrap every reached module's source verbatim behind a
-  /// `__require` shim, and emit one Lua 5.1 file to `<root>/dist/<name>`.
-  /// Requires that resolve to nothing are collected as warnings, not failures.
+  /// walk the `require("mod")` graph (resolving each module name through the
+  /// shared `studio::cargolua::ModuleResolver`, the same authority the editor
+  /// uses), wrap every reached module's source verbatim behind a `__require`
+  /// shim, and emit one Lua 5.1 file to `<root>/dist/<name>`. Requires that
+  /// resolve to nothing are collected as warnings, not failures.
   #[manual]
   public BundleAll(root: string): Result<studio::cargolua::BundleReport, studio::cargolua::CargoError> {
     manifest = Result<studio::cargolua::CargoManifest, studio::cargolua::CargoError> from self.ReadManifest(root)
@@ -143,10 +143,49 @@ public container Bundler for studio::core::Studio {
   /// Whether every `[[bundle]]` entry path exists on disk.
   EntryExists(root: string): bool;
 
-  /// Walk the require graph from each entry, wrap modules behind the
+  /// Walk the require graph from each entry, resolving each `require` through
+  /// the shared `studio::cargolua::ModuleResolver`, wrap modules behind the
   /// `__require` shim, emit the file, and collect unresolved requires as
   /// warnings.
   Amalgamate(root: string): studio::cargolua::BundleReport;
+}
+
+/// The module-name → file resolver shared by the editor and the bundler — the
+/// single authority on where `require("a.b")` lives. Lifted out of the bundler
+/// so editor intelligence and the amalgamation agree: a require resolves to the
+/// same file in both, or is unresolved in both. The path mapping is the only
+/// logic; whether a candidate file "exists" is supplied by the caller (on disk
+/// for the bundler, a mounted workspace file for the editor — the analyzer walks
+/// exactly the trees the bundler reads, so the two sets agree).
+public container ModuleResolver for studio::core::Studio {
+  /// Resolve `module` ("a.b") for a `require` appearing in `fromFile`, within
+  /// the project at `root`: every analyzed file the name maps to under the
+  /// search roots, in priority order. The FIRST is the one chosen (and the one
+  /// the bundler amalgamates); more than one is a shadowing collision; none is
+  /// an unresolved require left to the host `require` — a warning, never an
+  /// error. Editor and bundler both call this, so a require resolves to the same
+  /// file in both (the parity contract).
+  #[manual]
+  public Resolve(root: string, fromFile: string, module: string): string[] {
+    roots = string[] from self.SearchRoots(root, fromFile)
+    hits = string[] from self.HitsInOrder(roots, module)
+    return hits
+  }
+
+  /// The directories `module` is resolved against, in priority order, de-duped:
+  /// the requiring file's own directory, the project root, `<root>/src`, the
+  /// vendor parent (so a bare `require("moose")` finds
+  /// `.lua-cargo/deps/moose/init.lua`), then each vendored dependency root and
+  /// its `src`/`lua`. The editor passes the OPEN file as `fromFile`, the bundler
+  /// the `[[bundle]]` entry — the ONLY difference between them, so a project
+  /// module or a vendored dependency resolves identically regardless of which
+  /// file requires it.
+  SearchRoots(root: string, fromFile: string): string[];
+
+  /// For each root in priority order, map `module` "a.b" to `a/b.lua` then
+  /// `a/b/init.lua`; every candidate that is an analyzed file is a hit, de-duped
+  /// by path, order preserved. The first hit is chosen, the rest are shadows.
+  HitsInOrder(roots: string[], module: string): string[];
 }
 
 /// A pinned ref resolves the same every run.
@@ -168,7 +207,8 @@ feature LockfileMakesResolveReproducible for studio::cargolua::DependencyResolve
 /// Vendored deps are part of the editor's analyzed source set, even though they
 /// live under the dot-prefixed `.lua-cargo/deps` cache the workspace walk
 /// otherwise skips — so a dependency's modules get completion, hover, and
-/// diagnostics like first-party code.
+/// cross-file resolution like first-party code. Their OWN require-diagnostics are
+/// suppressed, though (see [`studio::cargolua::VendoredDepFilesAreNotLinted`]).
 feature VendoredDepsAreIndexed for studio::cargolua::DependencyResolver {
   given "a project with a dependency vendored under .lua-cargo/deps"
   when "the workspace is analyzed"
@@ -190,4 +230,48 @@ feature SandboxSafeBundle for studio::cargolua::Bundler {
   when "the project is bundled"
   then "module sources are copied verbatim with no AST rewrite or execution"
   and "requires that resolve to nothing become warnings, not failures"
+}
+
+/// The editor and the bundler resolve every require through the same search
+/// roots and the same first-hit rule, so the editor's verdict matches the
+/// bundle's. The worst outcome — "resolves in the editor but not in the
+/// bundle" — cannot occur, because there is one resolver, not two.
+feature EditorBundlerResolutionParity for studio::cargolua::ModuleResolver {
+  given "a require for a project module or a vendored dependency"
+  when "the editor resolves it from the open file and the bundler from the entry"
+  then "both choose the same file — the first hit in the same priority order"
+  but "a require that resolves nowhere is unresolved in both, never one only"
+}
+
+/// The first hit in search-root order wins; any others are shadows the caller
+/// surfaces (a local file overriding a vendored dep, or vice versa — a supply-
+/// chain hazard worth flagging).
+feature FirstHitWinsRestShadow for studio::cargolua::ModuleResolver {
+  given "a module name that maps to a file under more than one search root"
+  when "the name is resolved"
+  then "the hit in the highest-priority root is chosen"
+  and "every other hit is reported as a shadowing collision"
+}
+
+/// A require that maps to no analyzed file is a host / DCS built-in — a warning
+/// left to the runtime `require`, never an error (or every host module like
+/// `socket` and the sim globals would false-error).
+feature UnresolvedRequireIsAWarning for studio::cargolua::ModuleResolver {
+  given "a require whose name maps to no file under any search root"
+  when "the name is resolved"
+  then "the result is empty and the require is reported as a warning"
+  but "it is never an error — the host require resolves it at runtime"
+}
+
+/// A dependency carries its own internal requires — host modules and its own
+/// siblings — that legitimately resolve to nothing in THIS project; linting them
+/// would flood the editor with a dependency's noise (a MOOSE-class dep emits
+/// dozens). So unresolved/shadowing diagnostics located IN a vendored file are
+/// suppressed. The user's own requires of a dependency still resolve and still
+/// warn where warranted — only findings inside the `.lua-cargo` cache are dropped.
+feature VendoredDepFilesAreNotLinted for studio::cargolua::ModuleResolver {
+  given "a project with a dependency vendored under .lua-cargo"
+  when "the editor sweeps requires for unresolved and shadowing diagnostics"
+  then "a finding located in a vendored dependency file is suppressed"
+  but "the user's own requires of the dependency still resolve and warn as usual"
 }
