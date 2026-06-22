@@ -145,7 +145,19 @@ gui-smoke:
     - cp target/debug/lua-analyzer "crates/app/binaries/lua-analyzer-$TRIPLE"
     - cargo build -p dcs-studio # the runnable app binary (frontend embedded)
     - cargo install tauri-driver --locked
-    # The smoke speaks raw W3C WebDriver over fetch — no npm deps, just node.
+    # CARGO_HOME is $CI_PROJECT_DIR/.cargo, so the driver lands in .cargo/bin —
+    # NOT on the PATH the Node `spawn` lookup sees under xvfb-run. Resolve its
+    # absolute path + verify it is an executable (fail loud here with a clear
+    # message, not an opaque ENOENT at spawn time). tauri-driver is pico-args,
+    # NOT clap — it has no --version flag, so check the file, never run a flag.
+    # webkit2gtk-driver ships WebKitWebDriver on PATH (/usr/bin), which is what
+    # tauri-driver itself looks up; confirm it resolves too so a missing platform
+    # driver also fails clearly.
+    - 'export TAURI_DRIVER="$(command -v tauri-driver || echo "${CARGO_HOME:-$HOME/.cargo}/bin/tauri-driver")"'
+    - 'test -x "$TAURI_DRIVER" || { echo "FATAL: tauri-driver missing at $TAURI_DRIVER — cargo install failed"; exit 1; }'
+    - 'command -v WebKitWebDriver || { echo "FATAL: WebKitWebDriver missing — webkit2gtk-driver did not install"; exit 1; }'
+    # The smoke spawns $TAURI_DRIVER (exported above), not the bare name; raw
+    # W3C WebDriver over fetch — no npm deps, just node.
     - xvfb-run -a node gui-smoke/window-state.mjs
   allow_failure: true
 
