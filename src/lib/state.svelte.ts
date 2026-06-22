@@ -120,6 +120,22 @@ export interface ProjectOps {
   resetWorkspace(): void;
 }
 
+/**
+ * The editor's command surface for the application menu (Edit → Undo / Redo /
+ * Cut / Copy / Paste, issue #59). The active CodeMirror view is component-local
+ * to Editor.svelte; rather than leak the raw view into global state, the editor
+ * registers these thin commands on mount and clears them on destroy. The menu
+ * dispatches through here and never touches CodeMirror — the mirror of the
+ * `setBufferFormatter` seam.
+ */
+export interface EditorCommandBus {
+  undo(): void;
+  redo(): void;
+  cut(): void;
+  copy(): void;
+  paste(): void;
+}
+
 const RECENTS_KEY = "dcs.recents";
 const RECENTS_MAX = 8;
 
@@ -223,6 +239,17 @@ class AppState {
   // FormatBeforeSave: no buffer → unchanged). Held here so EVERY save entry
   // point (editor ⌘S, global ⌘S, File → Save) reformats identically.
   private formatActiveBuffer: (() => Promise<void>) | null = null;
+
+  // The editor's command surface for the Edit menu (issue #59). Registered by
+  // the editor on mount, cleared (`null`) on destroy; absent when no editor is
+  // mounted, so the Edit menu items disable (see `canEdit`).
+  private editorBus = $state<EditorCommandBus | null>(null);
+
+  // Whether the active editor has a non-empty selection (issue #59). The editor
+  // reports this on every selection change and on each tab swap; Cut / Copy gate
+  // on it (see `canCopy`) so the menu matches the editor's own context menu —
+  // never an enabled item that silently does nothing on a collapsed cursor.
+  private editorHasSelection = $state(false);
 
   /** The active tab's record, if any file is open. */
   get activeDoc(): OpenDoc | null {
@@ -811,6 +838,69 @@ class AppState {
    */
   setBufferFormatter(format: (() => Promise<void>) | null) {
     this.formatActiveBuffer = format;
+  }
+
+  /**
+   * Register the editor's command surface for the Edit menu (issue #59). The
+   * editor sets this on mount and clears it (`null`) on destroy — the mirror of
+   * setBufferFormatter.
+   */
+  setEditorCommands(bus: EditorCommandBus | null) {
+    this.editorBus = bus;
+    // Editor gone → no selection to act on (mirror of canEdit's bus gate).
+    if (!bus) this.editorHasSelection = false;
+  }
+
+  /**
+   * Report the active editor's selection state (the editor's update listener
+   * on every selection change, and the tab-swap effect). Drives `canCopy`; a
+   * state swap doesn't fire the update listener, so the editor reports it there
+   * explicitly.
+   */
+  setEditorSelection(hasSelection: boolean) {
+    this.editorHasSelection = hasSelection;
+  }
+
+  /**
+   * Whether the Edit menu's editor commands can act: a text editor is mounted
+   * and its active tab is editable text. Binary / still-loading tabs and the
+   * no-file state disable Undo / Redo / Cut / Copy / Paste. Gated on the active
+   * doc being editable text rather than DOM focus on purpose — opening the menu
+   * moves focus off the editor, so a focus test would disable the very command
+   * the user just reached for.
+   */
+  get canEdit(): boolean {
+    return this.editorBus !== null && this.activeDoc?.kind === "text";
+  }
+
+  /**
+   * Whether Edit → Cut / Copy can act: an editable text editor is active AND it
+   * has a non-empty selection. Cut / Copy on a collapsed cursor are no-ops — the
+   * editor's own context menu disables them the same way (Editor.svelte) — so
+   * the menu disables them rather than offer a click that does nothing (issue
+   * #59). Paste stays on `canEdit`: you can always paste into text.
+   */
+  get canCopy(): boolean {
+    return this.canEdit && this.editorHasSelection;
+  }
+
+  // Edit-menu dispatchers (issue #59). Each is a no-op unless an editable text
+  // editor is active — the menu items are disabled then, but the guard also
+  // covers the keyboard / edge paths so a stray dispatch can never NPE.
+  editUndo() {
+    if (this.canEdit) this.editorBus?.undo();
+  }
+  editRedo() {
+    if (this.canEdit) this.editorBus?.redo();
+  }
+  editCut() {
+    if (this.canEdit) this.editorBus?.cut();
+  }
+  editCopy() {
+    if (this.canEdit) this.editorBus?.copy();
+  }
+  editPaste() {
+    if (this.canEdit) this.editorBus?.paste();
   }
 
   /**

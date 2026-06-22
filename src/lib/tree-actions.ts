@@ -4,8 +4,15 @@
 // delete route through `app` (they follow/close open tabs); create and
 // duplicate are pure fs + a tree refresh.
 
-import { createFile, createDir, duplicatePath, type DirEntry } from "./api";
+import {
+  createFile,
+  createDir,
+  duplicatePath,
+  readDir,
+  type DirEntry,
+} from "./api";
 import { app } from "./state.svelte";
+import { nextUntitledName } from "./new-file";
 import { revealInExplorer } from "./reveal";
 
 /** The open workspace root every mutation is scoped to. */
@@ -74,6 +81,26 @@ export async function createEntry(
   } else {
     await createDir(root(), parentDir, trimmed);
     app.refreshTree();
+  }
+}
+
+/**
+ * File → New File (⌘N, issue #59): create a uniquely-named file at the workspace
+ * root and open it, reusing the tree's own create-and-open path (`createEntry`).
+ * `create_file` (Rust) refuses an existing target, so the name is chosen against
+ * the current root entries. A no-op outside a project; an fs failure (a race on
+ * the name, an IO error) is logged, never thrown — the menu has no toast surface,
+ * the same posture as the app's other fire-and-forget fs failures.
+ */
+export async function newRootFile(): Promise<void> {
+  const r = app.rootPath;
+  if (!r) return;
+  try {
+    const siblings = await readDir(r);
+    const name = nextUntitledName(new Set(siblings.map((e) => e.name)));
+    await createEntry(r, "file", name);
+  } catch (e) {
+    console.error("New File failed:", e);
   }
 }
 

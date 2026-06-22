@@ -10,6 +10,7 @@
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
   import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import { copyPath } from "$lib/tree-actions";
+  import { APP_VERSION } from "$lib/version";
 
   import {
     Boxes,
@@ -437,7 +438,7 @@
 
   <!-- ── Bottom frame ── -->
   <footer class="reveal relative z-20 flex shrink-0 items-center justify-between px-8 pb-6 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70" style="--d:360ms">
-    <span>v0.1.0</span>
+    <span>v{APP_VERSION}</span>
     <span>⌘N new · ⌘O open</span>
   </footer>
 </div>
