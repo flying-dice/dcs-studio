@@ -241,6 +241,44 @@ export class LangIntel {
     }
   }
 
+  /**
+   * Re-index after a dependency fetch (model
+   * `studio::cargolua::FetchReindexesWithoutReopen`): the hosted lua-analyzer
+   * walks vendored `.lua-cargo/deps` only at initialize, and a same-root remount
+   * is a no-op — so restart JUST the dcs-lua engine and re-mount its sources,
+   * which re-walks the now-larger dependency tree. Other engines (rust-analyzer)
+   * are left untouched so their findings aren't disturbed. Non-fatal: a failed
+   * re-index surfaces in the status chip and the IDE works on.
+   */
+  async reindex(root: string): Promise<void> {
+    const provider = this.providers().find((p) => p.id === "dcs-lua");
+    if (!provider?.restart) return;
+    this.providerStatuses = {
+      ...this.providerStatuses,
+      [provider.id]: "loading",
+    };
+    try {
+      await provider.restart();
+      this.observePush(provider); // idempotent; survives the reconnect
+      const sources = await this.collectSources(root);
+      const mine = sources.filter((f) =>
+        provider.extensions.some((ext) => f.path.toLowerCase().endsWith(ext)),
+      );
+      await provider.mount(mine, this.profileRules(root), root);
+      this.providerStatuses = {
+        ...this.providerStatuses,
+        [provider.id]: provider.status ?? "ready",
+      };
+    } catch (error) {
+      this.providerStatuses = {
+        ...this.providerStatuses,
+        [provider.id]: "failed",
+      };
+      console.error("re-index failed:", error);
+    }
+    await this.refreshProblems();
+  }
+
   /** Clear findings and status when the workspace closes. */
   reset(): void {
     this.mountGeneration += 1;

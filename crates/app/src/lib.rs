@@ -2,6 +2,7 @@
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod build;
+mod cargolua;
 mod database_cmd;
 mod dcs;
 mod format;
@@ -56,6 +57,7 @@ pub fn run() {
         .manage(dcs::DcsState::default())
         .manage(lsp::LspHosts::default())
         .manage(build::BuildState::default())
+        .manage(cargolua::CargoLuaState::default())
         .manage(term::TermRegistry::default())
         .manage(watch::WatchState::default())
         // Single-flight + cancel guard for the GitHub device-flow poll loop
@@ -102,6 +104,8 @@ pub fn run() {
             build::build_project,
             build::toolchain_status,
             build::rust_analyzer_path,
+            cargolua::lua_cargo_fetch,
+            cargolua::lua_cargo_bundle,
             install_cmd::install_project,
             format::format_source,
             install_cmd::install_status,

@@ -9,6 +9,7 @@
   import BuildOutput from "$lib/components/BuildOutput.svelte";
   import InjectionManager from "$lib/components/InjectionManager.svelte";
   import PackagesManager from "$lib/components/PackagesManager.svelte";
+  import DependenciesManager from "$lib/components/DependenciesManager.svelte";
   import PublishManager from "$lib/components/PublishManager.svelte";
   import LuaConsole from "$lib/components/LuaConsole.svelte";
   import LogViewer from "$lib/components/LogViewer.svelte";
@@ -63,6 +64,7 @@
     FolderOpen,
     RefreshCw,
     Boxes,
+    Package,
     Sun,
     Moon,
     Search,
@@ -111,6 +113,7 @@
     { id: "structure", label: "Structure", icon: ListTree },
     { id: "inject", label: "Inject", icon: Syringe },
     { id: "packages", label: "Packages", icon: Boxes },
+    { id: "dependencies", label: "Dependencies", icon: Package },
     { id: "publish", label: "Publish", icon: Rocket },
     { id: "mission", label: "Mission", icon: ShieldOff },
     { id: "database", label: "Database", icon: Database },
@@ -603,6 +606,8 @@
                 <InjectionManager />
               {:else if app.rightTool === "packages"}
                 <PackagesManager />
+              {:else if app.rightTool === "dependencies"}
+                <DependenciesManager />
               {:else if app.rightTool === "publish"}
                 <PublishManager />
               {:else if app.rightTool === "mission"}

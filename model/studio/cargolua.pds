@@ -188,6 +188,86 @@ public container ModuleResolver for studio::core::Studio {
   HitsInOrder(roots: string[], module: string): string[];
 }
 
+/// How an IDE fetch or bundle run ended — a success flag and a one-line summary
+/// for the Dependencies panel's status (mirrors `studio::build::BuildOutcome`,
+/// but a CargoError already carries the failure detail, so this only summarises
+/// the happy path: "N dependencies fetched", "bundle.lua written (M modules)").
+public data CargoLuaOutcome { succeeded: bool, summary: string }
+
+/// The IDE's lua-cargo task runner — the desktop-app face over the
+/// `DependencyResolver` and `Bundler` (mirrors `studio::build::Builder`, which
+/// is the IDE+CLI face over cargo). Fetch and bundle run one at a time, stream
+/// progress to the Dependencies panel live, and a fetch re-indexes on success so
+/// freshly vendored modules light up without reopening the project. The CLI
+/// reaches the resolver/bundler directly; this container is the IDE orchestration
+/// the panel and the Marketplace "Add as dependency" flow drive.
+public container CargoLuaTasks for studio::core::Studio {
+  /// Fetch the project's dependencies from the IDE: refuse if a task is already
+  /// running, resolve (vendor + lock) streaming each dependency to the panel as
+  /// it lands, then re-index so the new modules resolve/complete/hover at once.
+  /// A resolver failure (git absent, clone/ref failure, malformed manifest) is
+  /// the error verbatim — the panel shows it, the IDE stays responsive.
+  #[manual]
+  public Fetch(root: string): Result<studio::cargolua::CargoLuaOutcome, studio::cargolua::CargoError> {
+    busy = bool from self.IsBusy()
+    if (busy) {
+      contended = studio::cargolua::CargoError from { "a dependency task is already running" }
+      return Err(contended)
+    }
+    resolved = Result<studio::cargolua::ResolveReport, studio::cargolua::CargoError> from self.RunResolve(root)
+    if (resolved.isErr) {
+      return Err(resolved.error)
+    }
+    self.Reindex(root)
+    done = studio::cargolua::CargoLuaOutcome from { true, "dependencies fetched" }
+    return Ok(done)
+  }
+
+  /// Bundle the project's `[[bundle]]` targets from the IDE: refuse if a task is
+  /// already running, then amalgamate streaming each emitted module and each
+  /// unresolved-require warning to the panel. Unlike fetch, bundling touches no
+  /// dependency tree, so it does not re-index.
+  #[manual]
+  public Bundle(root: string): Result<studio::cargolua::CargoLuaOutcome, studio::cargolua::CargoError> {
+    busy = bool from self.IsBusy()
+    if (busy) {
+      contended = studio::cargolua::CargoError from { "a dependency task is already running" }
+      return Err(contended)
+    }
+    bundled = Result<studio::cargolua::BundleReport, studio::cargolua::CargoError> from self.RunBundle(root)
+    if (bundled.isErr) {
+      return Err(bundled.error)
+    }
+    done = studio::cargolua::CargoLuaOutcome from { true, "bundle written" }
+    return Ok(done)
+  }
+
+  /// Whether a fetch or bundle is in flight — one lua-cargo task at a time per
+  /// app (mirrors the build runner's single-flight guard), so two runs can never
+  /// interleave their panel output or race the vendor cache.
+  IsBusy(): bool;
+
+  /// Run the resolver against `root` (delegates to
+  /// `studio::cargolua::DependencyResolver.Resolve`), forwarding each vendored
+  /// dependency and its captured rev to `StreamLine` as it resolves.
+  RunResolve(root: string): Result<studio::cargolua::ResolveReport, studio::cargolua::CargoError>;
+
+  /// Run the bundler against `root` (delegates to
+  /// `studio::cargolua::Bundler.BundleAll`), forwarding each amalgamated module
+  /// and each unresolved-require warning to `StreamLine`.
+  RunBundle(root: string): Result<studio::cargolua::BundleReport, studio::cargolua::CargoError>;
+
+  /// Append one line to the Dependencies panel's output, live.
+  StreamLine(line: string): void;
+
+  /// Re-index the workspace after a successful fetch so newly vendored modules
+  /// resolve, complete, and hover without reopening the project. This is the
+  /// dedicated post-fetch signal — the routine fs watcher deliberately skips
+  /// `.lua-cargo` (its churn would flood the tree), so re-indexing is driven
+  /// here, not by a file-change event.
+  Reindex(root: string): void;
+}
+
 /// A pinned ref resolves the same every run.
 feature GitRefPinnedResolve for studio::cargolua::DependencyResolver {
   given "a dependency pinned to a tag or rev already vendored and in the lock"
@@ -274,4 +354,41 @@ feature VendoredDepFilesAreNotLinted for studio::cargolua::ModuleResolver {
   when "the editor sweeps requires for unresolved and shadowing diagnostics"
   then "a finding located in a vendored dependency file is suppressed"
   but "the user's own requires of the dependency still resolve and warn as usual"
+}
+
+/// Fetch and bundle run one at a time per app, so their panel output and the
+/// vendor cache are never raced by a second run.
+feature OneCargoLuaTaskAtATime for studio::cargolua::CargoLuaTasks {
+  given "a fetch or bundle already in flight"
+  when "another fetch or bundle is requested"
+  then "the second request is refused with a busy error"
+  and "the running task streams to the panel undisturbed"
+}
+
+/// A fetch from the IDE re-indexes on success, so a newly added dependency's
+/// modules autocomplete, hover, and resolve immediately — no project reopen.
+feature FetchReindexesWithoutReopen for studio::cargolua::CargoLuaTasks {
+  given "a project open in the editor with a dependency just added to CargoLua.toml"
+  when "the dependency is fetched from the IDE"
+  then "the workspace re-indexes once the vendored modules are on disk"
+  and "require(\"dep\") resolves and the dep's symbols complete without reopening"
+  but "the routine fs watcher still skips .lua-cargo so its churn never floods the tree"
+}
+
+/// Adding a library from the Marketplace fetches it, closing the loop in one
+/// gesture — no drop to a terminal to run the resolver by hand.
+feature AddDependencyTriggersFetch for studio::cargolua::CargoLuaTasks {
+  given "a library's product page in the Marketplace and an open project"
+  when "the developer chooses Add as dependency"
+  then "the dependency is written to CargoLua.toml and then fetched"
+  and "the Dependencies panel shows the fetch progress and its outcome"
+}
+
+/// Both runs stream their progress to the Dependencies panel as it happens, so
+/// the developer watches the vendor/amalgamation live rather than waiting blind.
+feature FetchAndBundleStreamToPanel for studio::cargolua::CargoLuaTasks {
+  given "a fetch or a bundle running from the IDE"
+  when "each dependency resolves or each module is amalgamated"
+  then "the line appears in the Dependencies panel as it happens"
+  and "the final success or failure lands in the panel"
 }
