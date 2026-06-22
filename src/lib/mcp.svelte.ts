@@ -7,6 +7,8 @@
 // `refresh()` is exposed for an explicit re-check after the modal opens.
 import { isTauri } from "@tauri-apps/api/core";
 import { mcpStatus, type McpStatus } from "./api";
+import { notifications } from "./notifications.svelte";
+import { mcpStatusNotification } from "./notifications-classify";
 
 // The fixed loopback endpoint, kept in one place on the frontend (the backend's
 // `dcs_studio_project::mcp` is the cross-language source of truth; this must
@@ -34,12 +36,19 @@ class McpState {
       this.loaded = true;
       return;
     }
+    // Boot is the one moment a port clash is news; a later modal re-check must
+    // not re-raise it (model studio::notifications McpBindFailed).
+    const firstLoad = !this.loaded;
     try {
       const status: McpStatus = await mcpStatus();
       this.running = status.running;
       this.port = status.port;
       this.url = status.url;
       this.error = status.error;
+      if (firstLoad) {
+        const note = mcpStatusNotification(status);
+        if (note) notifications.add(note);
+      }
     } catch (e) {
       this.running = false;
       this.error = String(e);

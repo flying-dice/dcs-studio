@@ -17,6 +17,12 @@ import {
   type ReleaseInfo,
 } from "./api";
 import { errorMessage } from "$lib/utils";
+import { notifications } from "./notifications.svelte";
+import {
+  publishSharedNotification,
+  publishReleasedNotification,
+  publishFailedNotification,
+} from "./notifications-classify";
 
 class PublishStore {
   busy = $state(false);
@@ -76,10 +82,20 @@ class PublishStore {
     this.busy = true;
     this.error = null;
     try {
-      await this.#ensureScope();
+      try {
+        await this.#ensureScope();
+      } catch (error) {
+        // An auth-flow abort or denial (the user cancelled, signed out, or
+        // didn't grant the scope) is surfaced by the sign-in modal and the
+        // panel's error line — it is not a publish *failure*, so it raises no
+        // notification (model studio::notifications: only genuine errors).
+        this.error = errorMessage(error);
+        return;
+      }
       await action();
     } catch (error) {
       this.error = errorMessage(error);
+      notifications.add(publishFailedNotification(this.error));
     } finally {
       this.busy = false;
       this.device = null;
@@ -92,6 +108,7 @@ class PublishStore {
     this.repo = null;
     await this.#run(async () => {
       this.repo = await publishShare(root, asLibrary);
+      notifications.add(publishSharedNotification(this.repo.full_name));
     });
   }
 
@@ -101,6 +118,7 @@ class PublishStore {
     this.release = null;
     await this.#run(async () => {
       this.release = await publishRelease(root, tag.trim());
+      notifications.add(publishReleasedNotification(this.release.tag));
     });
   }
 

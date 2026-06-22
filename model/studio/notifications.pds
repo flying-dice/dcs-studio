@@ -1,0 +1,135 @@
+//! studio::notifications — the notification center (issue #56): the transient
+//! IDE events that otherwise only flash — a build finishing, the DCS link
+//! dropping or recovering, a managed launch exiting, a publish result, the MCP
+//! server failing to bind — captured into a reviewable history with an unread
+//! badge on the right-rail bell.
+//!
+//! This node discloses only the JUDGEMENT, not the plumbing: which events
+//! become info / success / warning / error, and which are actionable (navigate
+//! on click) versus review-only. The capped history, the unread badge, and the
+//! event-listener wiring are UI plumbing that aggregates events the backend
+//! already emits (studio::build, studio::link, studio::launcher,
+//! studio::publish, studio::mcp) — that lives in the frontend store
+//! (notifications.svelte.ts), not here.
+
+/// The result of classifying one IDE event. `severity` is one of `info`,
+/// `success`, `warning`, `error` (drives the panel's severity dot); `source`
+/// tags the origin (`build`, `dcs-link`, `launch`, `publish`, `mcp`);
+/// `actionable` marks an entry that navigates on click — a failed build to the
+/// Output panel, a publish error to the Publish panel — as opposed to a
+/// review-only entry that, per the Risks note, never navigates nowhere useful.
+public data Notification { source: string, severity: string, message: string, actionable: bool }
+
+/// Classifies the transient events the IDE already emits into notifications.
+/// Each source decides here what is notification-worthy; the frontend store
+/// records the result, caps the history, and tracks the unread badge.
+public container NotificationCenter for studio::core::Studio {
+  /// A finished build (`build://done`). A failure is an actionable error that
+  /// opens the Output panel at the log; a success is a review-only success; a
+  /// no-op build (nothing to compile — not a Rust project) is not worth a
+  /// durable entry, so it classifies to nothing.
+  #[manual]
+  public ClassifyBuild(succeeded: bool, noOp: bool, exitCode: number): Option<studio::notifications::Notification> {
+    if (noOp) {
+      return None
+    }
+    if (succeeded) {
+      ok = studio::notifications::Notification from { "build", "success", "Build succeeded.", false }
+      return Some(ok)
+    }
+    failed = studio::notifications::Notification from { "build", "error", self.BuildFailedMessage(exitCode), true }
+    return Some(failed)
+  }
+
+  /// The Output-panel message for a failed build, naming the exit code.
+  BuildFailedMessage(exitCode: number): string;
+
+  /// The DCS link dropped (`dcs://disconnected`) — a warning, not an error: a
+  /// test in flight just lost its sim, and the moment is easy to miss from
+  /// another panel, so it is retained rather than left to vanish.
+  #[manual]
+  public ClassifyLinkDropped(): studio::notifications::Notification {
+    dropped = studio::notifications::Notification from { "dcs-link", "warning", "DCS link dropped.", false }
+    return dropped
+  }
+
+  /// The DCS link came up or recovered (`dcs://connected`) — a review-only
+  /// success recording the recovery.
+  #[manual]
+  public ClassifyLinkConnected(): studio::notifications::Notification {
+    up = studio::notifications::Notification from { "dcs-link", "success", "DCS link connected.", false }
+    return up
+  }
+
+  /// A managed DCS launch exited (`launch://done`) — informational.
+  #[manual]
+  public ClassifyLaunchExited(): studio::notifications::Notification {
+    exited = studio::notifications::Notification from { "launch", "info", "DCS exited.", false }
+    return exited
+  }
+
+  /// A publish or release failed — an actionable error that focuses the
+  /// Publish panel, where the developer retries.
+  #[manual]
+  public ClassifyPublishFailed(message: string): studio::notifications::Notification {
+    failed = studio::notifications::Notification from { "publish", "error", message, true }
+    return failed
+  }
+
+  /// The IDE-hosted MCP server's boot status. Only a fail-closed bind error (a
+  /// port clash the developer must resolve) is notification-worthy; a healthy
+  /// server is review-only via the status bar, so a running server classifies
+  /// to nothing — as does a not-running server with no recorded error yet (one
+  /// still coming up), since there is nothing actionable to disclose.
+  #[manual]
+  public ClassifyMcpStatus(running: bool, error: Option<string>): Option<studio::notifications::Notification> {
+    if (running) {
+      return None
+    }
+    if (error.isNone) {
+      return None
+    }
+    clash = studio::notifications::Notification from { "mcp", "error", self.McpErrorMessage(error.value), false }
+    return Some(clash)
+  }
+
+  /// The notice message for an MCP bind failure.
+  McpErrorMessage(error: string): string;
+}
+
+/// A failed build is an actionable error; a success is review-only; a no-op is
+/// not recorded at all.
+feature FailedBuildIsActionableError for studio::notifications::NotificationCenter {
+  given "the developer runs a build from the IDE"
+  when "the build fails"
+  then "an error notification is recorded"
+  and "clicking it opens the Output panel at the build log"
+  but "a successful build records a review-only success, and a no-op build records nothing"
+}
+
+/// Link drops are retained even when the developer is on another panel.
+feature LinkDropIsAWarning for studio::notifications::NotificationCenter {
+  given "the DCS link is connected and the developer is working in another panel"
+  when "the link drops mid-test"
+  then "a warning notification is recorded"
+  and "the bell's unread badge increments so the drop is never silently missed"
+  but "a reconnect records a review-only success"
+}
+
+/// Only a fail-closed MCP bind error is news; a healthy server stays silent.
+feature OnlyFailClosedMcpIsNoticed for studio::notifications::NotificationCenter {
+  given "the IDE starts its MCP server on the fixed loopback port"
+  when "the port is already taken and the server fails closed"
+  then "an error notification records the bind failure"
+  but "a server that binds and serves records nothing — the status bar already shows it"
+  but "a not-running server still coming up — no bind error recorded yet — also records nothing"
+}
+
+/// Informational events are review-only — they never send the developer
+/// somewhere useless.
+feature InformationalEventsAreReviewOnly for studio::notifications::NotificationCenter {
+  given "the notification center records events of varying severity"
+  when "the developer reviews the panel"
+  then "actionable entries (a failed build, a publish error) navigate on click"
+  but "informational entries (link connected, DCS exited, project shared) are review-only"
+}
