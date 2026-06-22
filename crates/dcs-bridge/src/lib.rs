@@ -1,6 +1,7 @@
 mod debug;
 mod facade;
 mod file;
+mod globals;
 mod json;
 mod jsonrpc;
 mod logger;
@@ -50,6 +51,16 @@ pub fn dcs_studio(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "emit_dlua",
         lua.create_function(move |_, ()| Ok(dlua.clone()))?,
+    )?;
+
+    // `dump_globals()` introspects the live DCS API in `_G` (the curated roots
+    // in `globals::CURATED_ROOTS`) and returns it as dotted `.d.lua` statements
+    // the editor indexes. Unlike `emit_dlua`, it runs per call: `_G` gains
+    // mission-state globals once a mission loads, so the dump must reflect the
+    // sim's CURRENT surface, not a snapshot taken at module load.
+    exports.set(
+        "dump_globals",
+        lua.create_function(|lua, ()| Ok(globals::dump_globals(lua)))?,
     )?;
 
     Ok(exports)
