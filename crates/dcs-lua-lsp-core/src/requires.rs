@@ -34,7 +34,18 @@ fn resolve(workspace: &Workspace, from_path: &str, module: &str) -> Vec<PathBuf>
         return Vec::new();
     };
     let roots = SearchRoots::new(&context.root, Path::new(from_path), &context.vendored);
-    roots.resolve_all(module, |candidate| is_mounted(workspace, candidate))
+    // Map each resolved candidate back to the file's ORIGINAL mounted key, so a
+    // result carries the host's path spelling (the LSP-wire identity) rather than
+    // the `/`-built candidate — the candidate is only how we located the file.
+    roots
+        .resolve_all(module, |candidate| is_mounted(workspace, candidate))
+        .iter()
+        .filter_map(|candidate| {
+            workspace
+                .file_key(&candidate.display().to_string())
+                .map(PathBuf::from)
+        })
+        .collect()
 }
 
 /// Whether `candidate` (an absolute path a search root produced) is a mounted
@@ -97,8 +108,19 @@ pub fn check_requires(workspace: &Workspace) -> Vec<(String, Diagnostic)> {
     let Some(context) = workspace.resolution() else {
         return Vec::new();
     };
+    // Vendored dependency files are not linted: a dep carries its own internal
+    // requires (host modules, its own siblings) that legitimately don't resolve
+    // in THIS project, so linting them floods the editor with a dependency's noise
+    // (a MOOSE-class dep emits dozens). The user's OWN requires of a dep still
+    // resolve and still warn where warranted; only findings located IN the
+    // `.lua-cargo` tree are suppressed (issue #51). `Path::starts_with` is
+    // component-wise, so it is separator-safe across platforms.
+    let vendored_dir = context.root.join(".lua-cargo");
     let mut findings = Vec::new();
     for (path, entry) in workspace.files() {
+        if Path::new(path).starts_with(&vendored_dir) {
+            continue;
+        }
         let roots = SearchRoots::new(&context.root, Path::new(path), &context.vendored);
         for req in scan_require_refs(&entry.source) {
             let hits = roots.resolve_all(&req.module, |candidate| is_mounted(workspace, candidate));
@@ -200,6 +222,47 @@ mod tests {
         assert_eq!(findings[0].1.severity, Severity::Warning);
         // The squiggle sits on the `"socket"` argument.
         assert_eq!(findings[0].1.span.start, at(main, "\"socket\"", 0));
+    }
+
+    #[test]
+    fn resolves_across_path_separators() {
+        // Mount files with BACKSLASH keys (as Windows `sources::collect` produces)
+        // and resolve a require whose candidate is built with `/`. Normalized
+        // keys make them match → resolves, no spurious unresolved warning (issue
+        // #51 Windows path-sep parity). Non-vacuous on POSIX: without the
+        // normalization the `\`-key and `/`-candidate diverge and `util` would
+        // warn unresolved.
+        let mut ws = Workspace::new();
+        ws.set_source(r"C:\proj\src\main.lua", "return require(\"util\")\n");
+        ws.set_source(r"C:\proj\src\util.lua", "return {}\n");
+        ws.set_resolution(PathBuf::from(r"C:\proj"), BTreeMap::new());
+        assert!(check_requires(&ws).is_empty(), "{:?}", check_requires(&ws));
+    }
+
+    #[test]
+    fn vendored_dep_files_are_not_linted() {
+        // A require INSIDE a vendored dep (its host/internal modules) is suppressed
+        // — no dependency noise — while the user's OWN unresolved require still
+        // warns (issue #51).
+        let proj = "return require(\"socket\")\n"; // user code → warns
+        let dep = "local x = require(\"ltn12\")\nreturn x\n"; // dep-internal → suppressed
+        let ws = workspace(
+            &["moose"],
+            &[
+                ("/proj/src/main.lua", proj),
+                ("/proj/.lua-cargo/deps/moose/init.lua", dep),
+            ],
+        );
+        let findings = check_requires(&ws);
+        // Exactly one — the user's `socket`, NOT the dep's `ltn12` (without the
+        // guard there would be two).
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].0, "/proj/src/main.lua", "only the project file is linted");
+        assert!(findings[0].1.message.contains("socket"), "{}", findings[0].1.message);
+        assert!(
+            !findings.iter().any(|(p, _)| p.contains(".lua-cargo")),
+            "no findings inside the vendored tree: {findings:?}"
+        );
     }
 
     #[test]

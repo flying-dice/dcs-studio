@@ -207,7 +207,8 @@ feature LockfileMakesResolveReproducible for studio::cargolua::DependencyResolve
 /// Vendored deps are part of the editor's analyzed source set, even though they
 /// live under the dot-prefixed `.lua-cargo/deps` cache the workspace walk
 /// otherwise skips — so a dependency's modules get completion, hover, and
-/// diagnostics like first-party code.
+/// cross-file resolution like first-party code. Their OWN require-diagnostics are
+/// suppressed, though (see [`studio::cargolua::VendoredDepFilesAreNotLinted`]).
 feature VendoredDepsAreIndexed for studio::cargolua::DependencyResolver {
   given "a project with a dependency vendored under .lua-cargo/deps"
   when "the workspace is analyzed"
@@ -260,4 +261,17 @@ feature UnresolvedRequireIsAWarning for studio::cargolua::ModuleResolver {
   when "the name is resolved"
   then "the result is empty and the require is reported as a warning"
   but "it is never an error — the host require resolves it at runtime"
+}
+
+/// A dependency carries its own internal requires — host modules and its own
+/// siblings — that legitimately resolve to nothing in THIS project; linting them
+/// would flood the editor with a dependency's noise (a MOOSE-class dep emits
+/// dozens). So unresolved/shadowing diagnostics located IN a vendored file are
+/// suppressed. The user's own requires of a dependency still resolve and still
+/// warn where warranted — only findings inside the `.lua-cargo` cache are dropped.
+feature VendoredDepFilesAreNotLinted for studio::cargolua::ModuleResolver {
+  given "a project with a dependency vendored under .lua-cargo"
+  when "the editor sweeps requires for unresolved and shadowing diagnostics"
+  then "a finding located in a vendored dependency file is suppressed"
+  but "the user's own requires of the dependency still resolve and warn as usual"
 }

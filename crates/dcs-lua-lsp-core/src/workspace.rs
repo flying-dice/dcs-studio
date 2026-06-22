@@ -16,6 +16,12 @@ use dcs_lua_syntax::{lexer, parser};
 /// doc runs, blank-line gaps) — one lex per edit, never per query.
 #[derive(Debug)]
 pub struct FileEntry {
+    /// The path EXACTLY as the host mounted it (native separators). Files are
+    /// looked up separator-insensitively (see [`normalize_key`]), but this
+    /// original spelling is what's returned to callers — diagnostics, go-to-def,
+    /// `files()` — so the LSP-wire path/URI identity the host round-trips is
+    /// preserved unchanged.
+    pub path: String,
     pub source: String,
     pub parsed: Parsed,
     pub trivia: Vec<SpannedTrivia>,
@@ -40,6 +46,16 @@ pub struct ProfileRule {
 pub struct Resolution {
     pub root: PathBuf,
     pub vendored: BTreeMap<String, PathBuf>,
+}
+
+/// The internal LOOKUP key for a mounted file: separators canonicalised to `/`,
+/// so a `require` candidate built with `/` (`module.replace('.', "/")`) matches
+/// a `\`-spelled mounted path on Windows — without this a DOTTED require
+/// under-resolves editor-side (issue #51 path-sep parity). This is only the
+/// lookup key; the original spelling is preserved in [`FileEntry::path`] and
+/// returned to callers, so the host's path/URI identity is never altered.
+fn normalize_key(path: &str) -> String {
+    path.replace('\\', "/")
 }
 
 /// Every mounted file, keyed by workspace-relative path.
@@ -98,9 +114,10 @@ impl Workspace {
 
     /// Create or replace one file; a content-identical update is a no-op.
     pub fn set_source(&mut self, path: &str, text: &str) {
+        let key = normalize_key(path);
         if self
             .files
-            .get(path)
+            .get(&key)
             .is_some_and(|entry| entry.source == text)
         {
             return;
@@ -109,8 +126,9 @@ impl Workspace {
         let trivia = lexed.trivia.clone();
         let parsed = parser::parse_lexed(text, lexed);
         self.files.insert(
-            path.to_string(),
+            key,
             FileEntry {
+                path: path.to_string(),
                 source: text.to_string(),
                 parsed,
                 trivia,
@@ -119,19 +137,25 @@ impl Workspace {
     }
 
     pub fn remove_source(&mut self, path: &str) {
-        self.files.remove(path);
+        self.files.remove(&normalize_key(path));
     }
 
     #[must_use]
     pub fn file(&self, path: &str) -> Option<&FileEntry> {
-        self.files.get(path)
+        self.files.get(&normalize_key(path))
     }
 
-    /// All mounted files, in arbitrary order.
+    /// The ORIGINAL mounted path for a file, looked up separator-insensitively —
+    /// lets a caller turn a constructed resolution candidate back into the real
+    /// workspace key (preserving the host's spelling) instead of a `/`-built one.
+    #[must_use]
+    pub fn file_key(&self, path: &str) -> Option<&str> {
+        self.files.get(&normalize_key(path)).map(|e| e.path.as_str())
+    }
+
+    /// All mounted files (their original paths), in arbitrary order.
     pub fn files(&self) -> impl Iterator<Item = (&str, &FileEntry)> {
-        self.files
-            .iter()
-            .map(|(path, entry)| (path.as_str(), entry))
+        self.files.values().map(|entry| (entry.path.as_str(), entry))
     }
 }
 
@@ -150,5 +174,24 @@ mod tests {
         assert!(ws.file("main.lua").unwrap().parsed.diagnostics.is_empty());
         ws.remove_source("main.lua");
         assert!(ws.file("main.lua").is_none());
+    }
+
+    #[test]
+    fn keys_are_path_separator_insensitive_but_original_spelling_is_preserved() {
+        // A file mounted with backslashes (as Windows sources::collect produces)
+        // is found by a forward-slash query and vice-versa — so a `/`-built
+        // require candidate matches a `\`-spelled mounted key (issue #51)…
+        let mut ws = Workspace::new();
+        ws.set_source(r"C:\proj\src\a.lua", "local x = 1");
+        assert!(ws.file("C:/proj/src/a.lua").is_some(), "found via forward slashes");
+        assert!(ws.file(r"C:\proj\src\a.lua").is_some(), "found via backslashes");
+        // …yet the ORIGINAL spelling is what callers get back, so the host's
+        // LSP-wire path/URI identity is never rewritten.
+        assert_eq!(ws.file_key("C:/proj/src/a.lua"), Some(r"C:\proj\src\a.lua"));
+        assert_eq!(ws.files().next().map(|(p, _)| p), Some(r"C:\proj\src\a.lua"));
+        // The same logical file across separators is one entry, not two.
+        ws.set_source("C:/proj/src/a.lua", "local x = 2");
+        assert_eq!(ws.files().count(), 1, "one logical file, not two");
+        assert!(ws.file(r"C:\proj\src\a.lua").unwrap().parsed.diagnostics.is_empty());
     }
 }
