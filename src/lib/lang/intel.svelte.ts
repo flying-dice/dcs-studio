@@ -108,6 +108,10 @@ export class LangIntel {
   // Generation counter: opening another project mid-mount invalidates the
   // older walk, so a slow first mount can never clobber the newer one.
   private mountGeneration = 0;
+  // The workspace root currently mounted — set by the latest mountWorkspace,
+  // cleared by reset. A post-fetch reindex checks it so a fetch that completes
+  // after the project was closed or switched away never re-mounts the old root.
+  private currentRoot: string | null = null;
   // Providers whose push channels are already wired — registration must
   // survive remounts without stacking duplicate callbacks.
   private readonly pushWired = new WeakSet<LanguageProvider>();
@@ -182,6 +186,7 @@ export class LangIntel {
    */
   async mountWorkspace(root: string): Promise<void> {
     const generation = ++this.mountGeneration;
+    this.currentRoot = root;
     this.engineStatus = "loading";
     try {
       const files = await this.collectSources(root);
@@ -253,29 +258,44 @@ export class LangIntel {
   async reindex(root: string): Promise<void> {
     const provider = this.providers().find((p) => p.id === "dcs-lua");
     if (!provider?.restart) return;
+    // The same race guard mountWorkspace uses. A fetch can complete
+    // seconds-to-minutes after it began, by which point the user may have closed
+    // the project or opened another — re-mounting then would resurrect the
+    // torn-down engine (silently undoing the close) or race a newer mount on the
+    // single provider instance. Bail if this root is no longer current, and
+    // re-check the generation after every await so a close/switch DURING the
+    // restart + disk walk + reconnect aborts before it mutates anything —
+    // restart() included, since it tears down whatever client is live.
+    if (root !== this.currentRoot) return;
+    const generation = this.mountGeneration;
     this.providerStatuses = {
       ...this.providerStatuses,
       [provider.id]: "loading",
     };
     try {
       await provider.restart();
+      if (generation !== this.mountGeneration) return;
       this.observePush(provider); // idempotent; survives the reconnect
       const sources = await this.collectSources(root);
+      if (generation !== this.mountGeneration) return;
       const mine = sources.filter((f) =>
         provider.extensions.some((ext) => f.path.toLowerCase().endsWith(ext)),
       );
       await provider.mount(mine, this.profileRules(root), root);
+      if (generation !== this.mountGeneration) return;
       this.providerStatuses = {
         ...this.providerStatuses,
         [provider.id]: provider.status ?? "ready",
       };
     } catch (error) {
+      if (generation !== this.mountGeneration) return;
       this.providerStatuses = {
         ...this.providerStatuses,
         [provider.id]: "failed",
       };
       console.error("re-index failed:", error);
     }
+    if (generation !== this.mountGeneration) return;
     await this.refreshProblems();
   }
 
@@ -283,6 +303,7 @@ export class LangIntel {
   reset(): void {
     this.mountGeneration += 1;
     this.outlineGeneration += 1;
+    this.currentRoot = null;
     this.diagnostics = [];
     this.engineStatus = "off";
     this.providerStatuses = {};

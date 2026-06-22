@@ -2,8 +2,9 @@
   // Test surface for the WORKSPACE MOUNT path (like /lab/lua for the lint
   // pump): a LangIntel instance walking a fake filesystem through the
   // injectable IntelFs seam. Covers what the Tauri-only fs would otherwise
-  // keep out of reach: the rapid-project-switch race guard, unreadable-file
-  // skip, and reset. This exercises LangIntel's ORCHESTRATION, not the engine,
+  // keep out of reach: the rapid-project-switch race guard, the post-fetch
+  // reindex supersession guard, unreadable-file skip, and reset. This exercises
+  // LangIntel's ORCHESTRATION, not the engine,
   // so it injects a synchronous fake provider (the same fake-seam pattern as
   // /lab/lsp and /lab/rust) — the hosted lua-analyzer cannot index an
   // in-memory fake fs.
@@ -60,12 +61,17 @@
         end_col: 1,
       }));
     return {
-      id: "fake-lua",
+      // The reindex path looks for the "dcs-lua" provider specifically, so the
+      // fake takes that id to drive the post-fetch reindex supersession spec.
+      id: "dcs-lua",
       extensions: [".lua"],
       status: "ready",
       async mount(mounted: SourceFile[]): Promise<void> {
         files = mounted;
       },
+      // Present so reindex runs (it bails on a provider without restart); the
+      // re-mount that follows re-reads sources through the same fake fs.
+      async restart(): Promise<void> {},
       async setSource(path: string, text: string): Promise<void> {
         const i = files.findIndex((f) => f.path === path);
         if (i >= 0) files[i] = { path, text };
@@ -109,6 +115,9 @@
     </button>
     <button type="button" data-testid="mount-b" onclick={() => void intel.mountWorkspace("/B")}>
       Mount B
+    </button>
+    <button type="button" data-testid="mount-reindex-a" onclick={() => void intel.reindex("/A")}>
+      Reindex A
     </button>
     <button type="button" data-testid="mount-reset" onclick={() => intel.reset()}>
       Reset

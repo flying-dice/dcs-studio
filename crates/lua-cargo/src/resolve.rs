@@ -67,6 +67,24 @@ fn read_lock(root: &Path) -> LockFile {
 /// ([`CargoError::CloneFailed`]), or an unresolvable ref
 /// ([`CargoError::RefNotFound`]).
 pub fn resolve(root: &Path) -> Result<ResolveReport, CargoError> {
+    resolve_with_progress(root, &|_| {})
+}
+
+/// Resolve every dependency of the project at `root`, streaming progress.
+///
+/// Identical to [`resolve`], but `on_progress` is called with a human-readable
+/// line as each dependency starts fetching and again as its rev is captured —
+/// so a long vendor (a MOOSE-class clone) reports live rather than landing in
+/// one frame on completion. The IDE runner forwards these to the Dependencies
+/// panel (model `CargoLuaTasks.RunResolve` → `StreamLine`).
+///
+/// # Errors
+///
+/// As [`resolve`].
+pub fn resolve_with_progress(
+    root: &Path,
+    on_progress: &dyn Fn(String),
+) -> Result<ResolveReport, CargoError> {
     let manifest = manifest::find_and_parse(root)?;
 
     if !manifest.dependencies.is_empty() && !git::git_available() {
@@ -79,10 +97,15 @@ pub fn resolve(root: &Path) -> Result<ResolveReport, CargoError> {
     let mut entries = Vec::with_capacity(manifest.dependencies.len());
     // `dependencies` is a BTreeMap, so iteration — and the lock — is name-sorted.
     for (name, dep) in &manifest.dependencies {
+        let github = dep.github();
+        // The clone/fetch is the slow, network-bound step — announce it BEFORE
+        // so the panel shows which dep is in flight, not a blank spinner.
+        on_progress(format!("fetching {name} ({github})…"));
         let rev = vendor_one(&vendor_dir, name, dep, &prior)?;
+        on_progress(format!("{name} = {github} @ {}", short_rev(&rev)));
         entries.push(LockEntry {
             name: name.clone(),
-            github: dep.github(),
+            github,
             selector: dep.selector.spec(),
             rev,
         });
@@ -94,6 +117,11 @@ pub fn resolve(root: &Path) -> Result<ResolveReport, CargoError> {
         entries,
         vendor_dir,
     })
+}
+
+/// The first 8 characters of a 40-char HEAD sha, for a compact panel line.
+fn short_rev(rev: &str) -> &str {
+    rev.get(..8).unwrap_or(rev)
 }
 
 /// Vendor one dependency and return its resolved HEAD SHA.
@@ -328,5 +356,57 @@ mod tests {
     fn url_for(path: &Path) -> String {
         let s = path.to_string_lossy().replace('\\', "/");
         format!("file:///{}", s.trim_start_matches('/'))
+    }
+
+    #[test]
+    fn resolve_with_progress_streams_each_dependency() {
+        if !git::git_available() {
+            return; // skip cleanly without git
+        }
+        let fixture = make_fixture_repo("1.0.0");
+        let fixture_url = url_for(&fixture.0);
+
+        let project = TempTree::new("stream");
+        project.write(
+            "CargoLua.toml",
+            "[package]\nname = \"p\"\n[dependencies]\ndep = { github = \"local/dep\", tag = \"1.0.0\" }\n",
+        );
+        let vendor = project.0.join(VENDOR_REL).join("dep");
+        std::fs::create_dir_all(vendor.parent().unwrap()).unwrap();
+        git_in(&project.0, &["clone", "-q", &fixture_url, vendor.to_str().unwrap()]);
+
+        let sink = std::sync::Mutex::new(Vec::<String>::new());
+        let report = resolve_with_progress(&project.0, &|line| sink.lock().unwrap().push(line))
+            .expect("resolve");
+
+        let lines = sink.lock().unwrap();
+        // A live line BEFORE the slow clone, then the captured-rev line — not the
+        // whole report in one frame on completion.
+        assert_eq!(lines.len(), 2, "fetching + resolved line: {lines:?}");
+        assert_eq!(lines[0], "fetching dep (local/dep)…");
+        assert!(
+            lines[1].starts_with("dep = local/dep @ "),
+            "captured-rev line: {:?}",
+            lines[1]
+        );
+        // The streamed sha is the report's, truncated to 8.
+        assert!(lines[1].ends_with(&report.entries[0].rev[..8]));
+    }
+
+    #[test]
+    fn resolve_with_progress_emits_nothing_for_no_deps() {
+        let project = TempTree::new("nodeps");
+        project.write("CargoLua.toml", "[package]\nname = \"p\"\n");
+        let sink = std::sync::Mutex::new(Vec::<String>::new());
+        let report = resolve_with_progress(&project.0, &|line| sink.lock().unwrap().push(line))
+            .expect("resolve");
+        assert!(report.entries.is_empty());
+        assert!(sink.lock().unwrap().is_empty(), "no deps → no stream");
+    }
+
+    #[test]
+    fn short_rev_truncates_and_tolerates_short() {
+        assert_eq!(short_rev("0123456789abcdef"), "01234567");
+        assert_eq!(short_rev("abc"), "abc");
     }
 }

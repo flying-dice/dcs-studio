@@ -252,12 +252,12 @@
               <Button
                 size="sm"
                 class="mt-2 w-full gap-1.5"
-                disabled={depBusy || !app.rootPath}
+                disabled={depBusy || !app.rootPath || cargolua.running}
                 onclick={addAsDependency}
                 data-testid="product-add-dependency"
               >
-                {#if depBusy}
-                  <LoaderCircle class="size-3.5 animate-spin" /> Adding…
+                {#if depBusy || cargolua.running}
+                  <LoaderCircle class="size-3.5 animate-spin" /> {depBusy ? "Adding…" : "Fetching…"}
                 {:else}
                   <Plus class="size-3.5" /> Add as dependency
                 {/if}

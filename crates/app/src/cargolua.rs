@@ -43,7 +43,7 @@ pub fn lua_cargo_fetch(
 ) -> Result<(), String> {
     begin(&state)?;
     run("fetch", app, root, |root, emit| {
-        Ok(fetch_summary(&lua_cargo::resolve(root)?, emit))
+        Ok(fetch_summary(&lua_cargo::resolve_with_progress(root, emit)?))
     });
     Ok(())
 }
@@ -59,7 +59,7 @@ pub fn lua_cargo_bundle(
 ) -> Result<(), String> {
     begin(&state)?;
     run("bundle", app, root, |root, emit| {
-        Ok(bundle_summary(&lua_cargo::bundle(root)?, emit))
+        Ok(bundle_summary(&lua_cargo::bundle_with_progress(root, emit)?))
     });
     Ok(())
 }
@@ -79,12 +79,22 @@ fn begin(state: &State<'_, CargoLuaState>) -> Result<(), String> {
 /// Run `work` on a worker thread, then report the outcome on `cargolua://done`
 /// and release the busy slot. `work` streams its progress through the supplied
 /// emitter and returns the panel summary on success, or a `CargoError` whose
-/// message becomes the failure summary.
+/// message becomes the failure summary. A `DoneGuard` makes "done is always
+/// emitted" hold by construction: if `work` panics (it runs the resolver/bundler
+/// in-process, unlike `build.rs` which only pumps a subprocess), the guard still
+/// releases the slot and emits a failure `done`, so the panel never wedges.
 fn run<F>(task: &'static str, app: AppHandle, root: String, work: F)
 where
     F: FnOnce(&Path, &dyn Fn(String)) -> Result<String, CargoError> + Send + 'static,
 {
     std::thread::spawn(move || {
+        // Armed until the normal path below runs; a panic in `work` unwinds past
+        // it, and Drop releases the slot + emits a failure `done`.
+        let mut guard = DoneGuard {
+            app: app.clone(),
+            task,
+            armed: true,
+        };
         let emitter = app.clone();
         let emit = move |line: String| {
             let _ = emitter.emit("cargolua://output", line);
@@ -93,6 +103,7 @@ where
             Ok(summary) => (true, summary),
             Err(error) => (false, error.to_string()),
         };
+        guard.armed = false;
         clear_busy(&app);
         let _ = app.emit(
             "cargolua://done",
@@ -105,17 +116,38 @@ where
     });
 }
 
-/// Stream each resolved dependency (`name = owner/repo @ <short-sha>`) to the
-/// panel and return the fetch summary.
-fn fetch_summary(report: &ResolveReport, emit: &dyn Fn(String)) -> String {
-    for entry in &report.entries {
-        emit(format!(
-            "{} = {} @ {}",
-            entry.name,
-            entry.github,
-            short_rev(&entry.rev)
-        ));
+/// Releases the busy slot and emits a failure `cargolua://done` if dropped while
+/// still armed — i.e. the worker panicked before its normal completion path ran.
+/// The normal path disarms it and emits the true outcome itself, so the guard is
+/// a no-op then. Without it a panic would skip both, wedging the busy flag (every
+/// later task "already running") and the panel (`running` stuck forever).
+struct DoneGuard {
+    app: AppHandle,
+    task: &'static str,
+    armed: bool,
+}
+
+impl Drop for DoneGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        clear_busy(&self.app);
+        let _ = self.app.emit(
+            "cargolua://done",
+            CargoLuaDone {
+                task: self.task,
+                succeeded: false,
+                summary: "dependency task panicked".to_string(),
+            },
+        );
     }
+}
+
+/// The one-line fetch summary for the panel status. The per-dependency lines
+/// (`name = owner/repo @ <short-sha>`) are streamed live by
+/// `lua_cargo::resolve_with_progress` as each is vendored.
+fn fetch_summary(report: &ResolveReport) -> String {
     match report.entries.len() {
         0 => "no dependencies to fetch".to_string(),
         1 => "1 dependency fetched".to_string(),
@@ -123,18 +155,15 @@ fn fetch_summary(report: &ResolveReport, emit: &dyn Fn(String)) -> String {
     }
 }
 
-/// Stream the emitted file, each amalgamated module, and each unresolved-require
-/// warning to the panel, and return the bundle summary.
-fn bundle_summary(report: &BundleReport, emit: &dyn Fn(String)) -> String {
-    if report.modules.is_empty() && report.output.as_os_str().is_empty() {
+/// The one-line bundle summary for the panel status. The written file, each
+/// amalgamated module, and each warning are streamed live by
+/// `lua_cargo::bundle_with_progress`. With no `[[bundle]]` targets the bundler
+/// amalgamates nothing, so `modules` is empty — every real target contributes
+/// at least its entry module, making an empty list the unambiguous no-op signal
+/// (the default `output` is `<root>/dist`, never empty, so it can't be one).
+fn bundle_summary(report: &BundleReport) -> String {
+    if report.modules.is_empty() {
         return "no [[bundle]] targets".to_string();
-    }
-    emit(format!("wrote {}", report.output.display()));
-    for module in &report.modules {
-        emit(format!("  + {module}"));
-    }
-    for warning in &report.warnings {
-        emit(format!("  ! {warning}"));
     }
     let modules = plural(report.modules.len(), "module");
     if report.warnings.is_empty() {
@@ -145,11 +174,6 @@ fn bundle_summary(report: &BundleReport, emit: &dyn Fn(String)) -> String {
             plural(report.warnings.len(), "warning")
         )
     }
-}
-
-/// The first 8 characters of a 40-char HEAD sha, for a compact panel line.
-fn short_rev(rev: &str) -> &str {
-    rev.get(..8).unwrap_or(rev)
 }
 
 /// `"1 module"` / `"3 modules"` — count with the singular/plural noun.
@@ -174,7 +198,6 @@ fn clear_busy(app: &AppHandle) {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use std::sync::Mutex;
 
     fn entry(name: &str, github: &str, rev: &str) -> lua_cargo::LockEntry {
         lua_cargo::LockEntry {
@@ -186,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn fetch_summary_lists_each_dep_and_counts() {
+    fn fetch_summary_counts_dependencies() {
         let report = ResolveReport {
             entries: vec![
                 entry(
@@ -198,13 +221,16 @@ mod tests {
             ],
             vendor_dir: PathBuf::from("/p/.lua-cargo/deps"),
         };
-        let sink = Mutex::new(Vec::<String>::new());
-        let emit = |line: String| sink.lock().unwrap().push(line);
-        assert_eq!(fetch_summary(&report, &emit), "2 dependencies fetched");
-        let lines = sink.lock().unwrap();
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0], "moose = FlightControl-Master/MOOSE @ 01234567");
-        assert_eq!(lines[1], "util = owner/util @ abcdef01");
+        assert_eq!(fetch_summary(&report), "2 dependencies fetched");
+    }
+
+    #[test]
+    fn fetch_summary_uses_singular_for_one_dep() {
+        let report = ResolveReport {
+            entries: vec![entry("util", "owner/util", "abcdef01")],
+            vendor_dir: PathBuf::from("/p/.lua-cargo/deps"),
+        };
+        assert_eq!(fetch_summary(&report), "1 dependency fetched");
     }
 
     #[test]
@@ -213,46 +239,44 @@ mod tests {
             entries: vec![],
             vendor_dir: PathBuf::from("/p/.lua-cargo/deps"),
         };
-        let sink = Mutex::new(Vec::<String>::new());
-        let emit = |line: String| sink.lock().unwrap().push(line);
-        assert_eq!(fetch_summary(&report, &emit), "no dependencies to fetch");
-        assert!(sink.lock().unwrap().is_empty());
+        assert_eq!(fetch_summary(&report), "no dependencies to fetch");
     }
 
     #[test]
-    fn bundle_summary_lists_modules_and_warnings() {
+    fn bundle_summary_counts_modules_and_warnings() {
         let report = BundleReport {
             output: PathBuf::from("/p/dist/main.lua"),
             modules: vec!["main".to_string(), "a.b".to_string()],
             warnings: vec!["unresolved require \"socket\"".to_string()],
         };
-        let sink = Mutex::new(Vec::<String>::new());
-        let emit = |line: String| sink.lock().unwrap().push(line);
         assert_eq!(
-            bundle_summary(&report, &emit),
+            bundle_summary(&report),
             "bundle written (2 modules, 1 warning)"
         );
-        let lines = sink.lock().unwrap();
-        assert_eq!(lines[0], "wrote /p/dist/main.lua");
-        assert_eq!(lines[1], "  + main");
-        assert_eq!(lines[2], "  + a.b");
-        assert_eq!(lines[3], "  ! unresolved require \"socket\"");
     }
 
     #[test]
-    fn bundle_summary_handles_empty_report() {
+    fn bundle_summary_one_module_no_warnings() {
         let report = BundleReport {
-            output: PathBuf::new(),
+            output: PathBuf::from("/p/dist/out.lua"),
+            modules: vec!["main".to_string()],
+            warnings: vec![],
+        };
+        assert_eq!(bundle_summary(&report), "bundle written (1 module)");
+    }
+
+    #[test]
+    fn bundle_summary_handles_no_targets() {
+        // The shape `bundle()` actually returns with no [[bundle]] targets: a
+        // non-empty default output (`<root>/dist`) and zero modules. The empty
+        // module list alone is the no-op signal — a real target always
+        // contributes at least its entry module, and the seeded output is never
+        // empty (the round-1 test fabricated an empty output `bundle()` never emits).
+        let report = BundleReport {
+            output: PathBuf::from("/p/dist"),
             modules: vec![],
             warnings: vec![],
         };
-        let emit = |_line: String| {};
-        assert_eq!(bundle_summary(&report, &emit), "no [[bundle]] targets");
-    }
-
-    #[test]
-    fn short_rev_truncates_and_tolerates_short() {
-        assert_eq!(short_rev("0123456789abcdef"), "01234567");
-        assert_eq!(short_rev("abc"), "abc");
+        assert_eq!(bundle_summary(&report), "no [[bundle]] targets");
     }
 }
