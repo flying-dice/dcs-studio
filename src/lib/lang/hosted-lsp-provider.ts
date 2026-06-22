@@ -195,6 +195,24 @@ export abstract class HostedLspProvider implements LanguageProvider {
     }
   }
 
+  /**
+   * Drop the live server so the next {@link mount} reconnects and re-initializes,
+   * re-walking the project (issue #51: re-index after a dependency fetch adds
+   * modules the server only discovers at initialize). The same teardown the
+   * project-switch path uses, plus clearing `mountedRoot` so a remount on the
+   * SAME root is no longer short-circuited. Idempotent — a no-op when not
+   * connected.
+   */
+  async restart(): Promise<void> {
+    if (this.client) {
+      await this.client.stop();
+      this.client = null;
+    }
+    // Force the next mount() to reconnect even for the same project.
+    this.mountedRoot = null;
+    this.exited = false;
+  }
+
   async setSource(path: string, text: string): Promise<void> {
     if (this.disabled) return;
     if (!this.client) {

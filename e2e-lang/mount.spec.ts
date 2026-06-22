@@ -39,6 +39,32 @@ test("an unreadable file is skipped, not fatal", async ({ page }) => {
   await expect(page.getByTestId("mount-finding")).toContainText("/B/b.lua");
 });
 
+test("a reindex superseded by reset never resurrects the closed workspace", async ({
+  page,
+}) => {
+  // Mount A and let it settle.
+  await page.getByTestId("mount-a").click();
+  await expect(page.getByTestId("mount-status")).toHaveText("status: ready", {
+    timeout: 15_000,
+  });
+  await expect(page.getByTestId("mount-finding")).toHaveCount(1);
+
+  // Kick off a re-index of A (its collectSources walk takes ~600ms), then close
+  // the workspace mid-walk. The reindex must abort, not re-mount A's findings —
+  // the exact "silently undoing the close" the generation guard prevents.
+  await page.getByTestId("mount-reindex-a").click();
+  await page.getByTestId("mount-reset").click();
+
+  await expect(page.getByTestId("mount-status")).toHaveText("status: off");
+  await expect(page.getByTestId("mount-finding")).toHaveCount(0);
+
+  // Give the superseded reindex time to resume past its awaits; it must change
+  // nothing (without the guard it would resurrect /A/a.lua here).
+  await page.waitForTimeout(1200);
+  await expect(page.getByTestId("mount-status")).toHaveText("status: off");
+  await expect(page.getByTestId("mount-finding")).toHaveCount(0);
+});
+
 test("reset clears findings and status", async ({ page }) => {
   await page.getByTestId("mount-b").click();
   await expect(page.getByTestId("mount-finding")).toHaveCount(1, {

@@ -1500,6 +1500,7 @@ dependencies = [
  "dcs-bridge-client",
  "dcs-lua-fmt",
  "dcs-studio-project",
+ "lua-cargo",
  "notify",
  "notify-debouncer-mini",
  "rmcp",

@@ -43,6 +43,24 @@ pub struct BundleReport {
 /// A missing/malformed manifest ([`CargoError::Manifest`]) or an entry path
 /// that does not exist ([`CargoError::MissingEntry`]).
 pub fn bundle(root: &Path) -> Result<BundleReport, CargoError> {
+    bundle_with_progress(root, &|_| {})
+}
+
+/// Bundle every `[[bundle]]` target of the project at `root`, streaming progress.
+///
+/// Identical to [`bundle`], but `on_progress` is called with a line as each
+/// module is amalgamated, as each unresolved/shadowing require is found, and as
+/// each target's file is written — so the panel watches the amalgamation live
+/// rather than receiving it in one frame on completion (model
+/// `CargoLuaTasks.RunBundle` → `StreamLine`).
+///
+/// # Errors
+///
+/// As [`bundle`].
+pub fn bundle_with_progress(
+    root: &Path,
+    on_progress: &dyn Fn(String),
+) -> Result<BundleReport, CargoError> {
     let manifest = manifest::find_and_parse(root)?;
     let vendored = resolve::vendored_roots(root).unwrap_or_default();
 
@@ -52,7 +70,7 @@ pub fn bundle(root: &Path) -> Result<BundleReport, CargoError> {
         warnings: Vec::new(),
     };
     for target in &manifest.bundle {
-        last = bundle_one(root, target, &vendored)?;
+        last = bundle_one(root, target, &vendored, on_progress)?;
     }
     Ok(last)
 }
@@ -62,6 +80,7 @@ fn bundle_one(
     root: &Path,
     target: &BundleTarget,
     vendored: &BTreeMap<String, PathBuf>,
+    on_progress: &dyn Fn(String),
 ) -> Result<BundleReport, CargoError> {
     let entry_path = root.join(&target.path);
     if !entry_path.is_file() {
@@ -100,6 +119,7 @@ fn bundle_one(
                         others.join(", ")
                     );
                     if !warnings.contains(&w) {
+                        on_progress(format!("  ! {w}"));
                         warnings.push(w);
                     }
                 }
@@ -107,10 +127,12 @@ fn bundle_one(
             } else {
                 let w = format!("unresolved require '{req}' — left to the host require at runtime");
                 if !warnings.contains(&w) {
+                    on_progress(format!("  ! {w}"));
                     warnings.push(w);
                 }
             }
         }
+        on_progress(format!("  + {name}"));
         modules.insert(name, src);
     }
 
@@ -122,6 +144,7 @@ fn bundle_one(
     }
     std::fs::write(&output_path, emitted)
         .map_err(|e| CargoError::Io(format!("writing bundle: {e}")))?;
+    on_progress(format!("wrote {}", output_path.display()));
 
     warnings.sort();
     Ok(BundleReport {
@@ -472,5 +495,39 @@ mod tests {
             .status()
             .expect("run luac5.1");
         assert!(status.success(), "luac5.1 -p rejected the bundle");
+    }
+
+    #[test]
+    fn bundle_with_progress_streams_modules_and_output() {
+        let tree = project_with_local_and_vendored();
+        let sink = std::sync::Mutex::new(Vec::<String>::new());
+        bundle_with_progress(&tree.0, &|line| sink.lock().unwrap().push(line)).expect("bundle");
+        let lines = sink.lock().unwrap();
+        // Each module streams as it is amalgamated…
+        assert!(lines.iter().any(|l| l == "  + util"), "util streamed: {lines:?}");
+        assert!(lines.iter().any(|l| l == "  + moose"), "moose streamed: {lines:?}");
+        assert!(lines.iter().any(|l| l == "  + src.main"), "entry streamed: {lines:?}");
+        // …and the written file is announced last.
+        assert!(
+            lines.last().is_some_and(|l| l.starts_with("wrote ") && l.ends_with("out.lua")),
+            "wrote line last: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn bundle_with_progress_streams_unresolved_warning() {
+        let tree = TempTree::new("warnstream");
+        tree.write(
+            "CargoLua.toml",
+            "[package]\nname = \"p\"\n[[bundle]]\nname = \"out.lua\"\npath = \"src/main.lua\"\n",
+        );
+        tree.write("src/main.lua", "local net = require(\"socket\")\nreturn net\n");
+        let sink = std::sync::Mutex::new(Vec::<String>::new());
+        bundle_with_progress(&tree.0, &|line| sink.lock().unwrap().push(line)).expect("bundle");
+        let lines = sink.lock().unwrap();
+        assert!(
+            lines.iter().any(|l| l.starts_with("  ! unresolved require 'socket'")),
+            "unresolved warning streamed: {lines:?}"
+        );
     }
 }

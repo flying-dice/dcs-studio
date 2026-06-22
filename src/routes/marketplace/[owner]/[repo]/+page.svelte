@@ -6,6 +6,7 @@
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import { marketplace } from "$lib/marketplace.svelte";
+  import { cargolua } from "$lib/cargolua.svelte";
   import { app } from "$lib/state.svelte";
   import { renderMarkdown } from "$lib/lang/markdown";
   import { readTextFile, writeTextFile } from "$lib/api";
@@ -133,7 +134,12 @@
       }
       const next = upsertDependency(toml, key, line);
       await writeTextFile(path, next);
-      depNotice = { ok: true, text: `Added ${key} to CargoLua.toml.` };
+      // Close the loop in one gesture: fetch immediately so the library is
+      // vendored and the editor re-indexes it — no drop to a terminal (model
+      // `studio::cargolua::AddDependencyTriggersFetch`). The Dependencies panel
+      // shows the fetch progress + outcome.
+      if (app.rootPath) void cargolua.fetch(app.rootPath);
+      depNotice = { ok: true, text: `Added ${key} to CargoLua.toml — fetching…` };
     } catch (error) {
       depNotice = { ok: false, text: errorMessage(error) };
     } finally {
@@ -246,12 +252,12 @@
               <Button
                 size="sm"
                 class="mt-2 w-full gap-1.5"
-                disabled={depBusy || !app.rootPath}
+                disabled={depBusy || !app.rootPath || cargolua.running}
                 onclick={addAsDependency}
                 data-testid="product-add-dependency"
               >
-                {#if depBusy}
-                  <LoaderCircle class="size-3.5 animate-spin" /> Adding…
+                {#if depBusy || cargolua.running}
+                  <LoaderCircle class="size-3.5 animate-spin" /> {depBusy ? "Adding…" : "Fetching…"}
                 {:else}
                   <Plus class="size-3.5" /> Add as dependency
                 {/if}

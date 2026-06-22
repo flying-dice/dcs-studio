@@ -54,6 +54,9 @@ dcs-lua-fmt = { path = "../dcs-lua-fmt" }
 studio-services = { path = "../studio-services" }
 studio-packages = { path = "../studio-packages" }
 studio-mcp = { path = "../studio-mcp" }
+# IDE fetch/bundle (issue #51): the app runs lua-cargo's resolver + bundler
+# in-process, the same toolchain the CLI uses.
+lua-cargo = { path = "../lua-cargo" }
 base64 = "0.22"
 # Workspace filesystem watcher (issue #40): a recursive notify watch with a
 # small debounce so bursts (saves, git ops) collapse into one UI refresh.

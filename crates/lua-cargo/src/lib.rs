@@ -29,11 +29,11 @@ pub mod resolve;
 use std::fmt;
 use std::path::Path;
 
-pub use bundle::{BundleReport, bundle};
+pub use bundle::{BundleReport, bundle, bundle_with_progress};
 pub use manifest::{
     BundleTarget, CargoManifest, Dependency, PackageMeta, Selector, find_and_parse, parse,
 };
-pub use resolve::{LockEntry, ResolveReport, resolve};
+pub use resolve::{LockEntry, ResolveReport, resolve, resolve_with_progress};
 
 /// A lua-cargo toolchain failure. A plain enum (no `thiserror`) carrying a
 /// human-readable message in the variants the model discloses; `Display` flattens

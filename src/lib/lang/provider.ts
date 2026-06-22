@@ -160,6 +160,15 @@ export interface LanguageProvider {
   mount(files: SourceFile[], rules: ProfileRule[], root: string): Promise<void>;
 
   /**
+   * Drop the live engine so the next {@link mount} starts a fresh one — used to
+   * re-index after the project's files changed underneath a server that only
+   * walks them at initialize (a dependency fetch adds modules under
+   * `.lua-cargo/deps`; a same-root remount alone is a no-op). Optional: in-page
+   * engines that re-read sources on mount don't need it. Idempotent.
+   */
+  restart?(): Promise<void>;
+
+  /**
    * Create or replace one source (edits, saves, generated files).
    * Resolves once the engine's findings for the file are current.
    */

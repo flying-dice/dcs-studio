@@ -229,6 +229,15 @@ export interface BuildDone {
   no_op: boolean;
 }
 
+/** How a lua-cargo fetch/bundle run ended (`cargolua://done` payload, model
+ *  `CargoLuaOutcome`): which task ran, whether it succeeded, and a one-line
+ *  summary for the panel (the `CargoError` message on failure). */
+export interface CargoLuaDone {
+  task: "fetch" | "bundle";
+  succeeded: boolean;
+  summary: string;
+}
+
 /** What an install run did. */
 export interface InstallReport {
   copied: number;
@@ -259,6 +268,25 @@ export function buildProject(root: string): Promise<void> {
 /** Probe `cargo` / `rustup` on PATH; absence is data, never an error. */
 export function toolchainStatus(): Promise<ToolchainStatus> {
   return invoke<ToolchainStatus>("toolchain_status");
+}
+
+/**
+ * Fetch the project's lua-cargo dependencies (model `CargoLuaTasks.Fetch`):
+ * vendor each git dependency into `.lua-cargo/deps` and write the lock. Resolves
+ * once the worker is spawned; progress + completion arrive as `cargolua://output`
+ * / `cargolua://done` events.
+ */
+export function luaCargoFetch(root: string): Promise<void> {
+  return invoke<void>("lua_cargo_fetch", { root });
+}
+
+/**
+ * Bundle the project's `[[bundle]]` targets (model `CargoLuaTasks.Bundle`):
+ * amalgamate each entry's require graph into one file. Same event channels as
+ * {@link luaCargoFetch}.
+ */
+export function luaCargoBundle(root: string): Promise<void> {
+  return invoke<void>("lua_cargo_bundle", { root });
 }
 
 /** Apply the project's dcs-studio.toml [[install]] rules to this machine. */
