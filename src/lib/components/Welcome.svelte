@@ -70,15 +70,6 @@
     queueMicrotask(() => nameInput?.focus());
   }
 
-  // Arrived via File → New Project… (state.welcomeIntent): open the new-project
-  // form straight away, then clear the intent so a later manual return to
-  // Welcome stays on the idle launcher. Consume-once, like app.pendingJump.
-  $effect(() => {
-    if (app.welcomeIntent !== "new") return;
-    app.welcomeIntent = null;
-    void startNew();
-  });
-
   function cancelNew() {
     mode = "idle";
     name = "";

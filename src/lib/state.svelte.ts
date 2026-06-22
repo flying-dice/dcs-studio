@@ -220,14 +220,6 @@ class AppState {
   rootPath = $state<string | null>(null);
   rootName = $state<string>("");
 
-  /**
-   * Set when the user reaches the Welcome screen via File → New Project… (issue
-   * #59): the Welcome screen reads it once and opens its new-project form, so
-   * "New Project…" is meaningfully different from a bare Close Project (which
-   * lands on the idle Welcome). Null on a plain close.
-   */
-  welcomeIntent = $state<"new" | null>(null);
-
   // Recently opened projects (most-recent first), persisted to localStorage.
   recents = $state<RecentProject[]>(loadRecents());
 
@@ -455,19 +447,6 @@ class AppState {
     } finally {
       this.switching = false;
     }
-  }
-
-  /**
-   * File → New Project… (issue #59): the scaffold flow lives on the Welcome
-   * screen (templates.ts), so a "new project" returns there with its
-   * new-project form already open — distinct from Close Project, which lands on
-   * the idle Welcome. closeProject owns the unsaved-changes guard; if the user
-   * cancels that prompt the project stays open, so the intent is disarmed.
-   */
-  async newProject(): Promise<void> {
-    this.welcomeIntent = "new";
-    await this.closeProject();
-    if (this.rootPath !== null) this.welcomeIntent = null;
   }
 
   /** How many open tabs have unsaved edits — the blast radius a project

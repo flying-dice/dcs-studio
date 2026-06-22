@@ -179,7 +179,6 @@
     {
       label: "File",
       items: [
-        { label: "New Project…", action: () => void app.newProject() },
         { label: "Open Project…", shortcut: "⌘O", action: () => app.openFolder() },
         { sep: true },
         { label: "New File", shortcut: "⌘N", action: () => void newRootFile(), testId: "menu-new-file" },
