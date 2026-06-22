@@ -1,0 +1,182 @@
+//! studio::types — live type sync (issue #50): pull authoritative `.d.lua` from
+//! the running DCS over the editor↔sim link and write it under the project, so
+//! the editor's hover and diagnostics match the EXACT loaded build with zero
+//! manual upkeep. The sim-side emit faces are `dcs::bridge::Types` (EmitDlua +
+//! DumpGlobals); this is the studio-side orchestration and its guards.
+//!
+//! Recorded decisions (the guards): the link must be live or the sync fails
+//! closed ("start DCS first"); the sync writes ONE fixed file (`GENERATED_FILE`)
+//! under `types/generated/` — a constant path, never derived from sim data,
+//! disjoint from the top-level `types/*.d.lua` a project hand-writes, so a sync
+//! structurally cannot clobber a hand-written stub. There is no sim-chosen path
+//! segment to confine here, unlike the bridge's `dcs::bridge::Files` writes whose
+//! destinations come from sim Lua; containment there is a guard, here it is the
+//! constant. And the file carries a version stamp so drift is judged against the
+//! RUNNING build, never bytes on disk.
+//!
+//! Scope note (issue #50): this delivers authoritative hover + diagnostics from
+//! the running sim. The `autocomplete` half of the goal needs a completion query
+//! the engine does not have yet — a dependent engine ticket this issue is blocked
+//! on for that capability; the generated `.d.lua` powers hover the moment it lands.
+
+/// The single `.d.lua` a sync writes, relative to the project root. A fixed,
+/// internal path — never derived from sim data — under `types/generated/`, a
+/// directory disjoint from the top-level `types/*.d.lua` a project hand-writes
+/// (the golden `dcs_studio` stub a new project scaffolds). Because the target is
+/// this constant, a sync can only ever land here and never overwrites a
+/// hand-written stub.
+public constant GENERATED_FILE = "types/generated/dcs.d.lua"
+
+/// Version stamp written as a header comment into every generated file and read
+/// back to judge drift. `bridgeVersion` is the running `dcs_studio.version` (the
+/// DLL constant); `dcsVersion` is DCS `_APP_VERSION`, read from the sim by eval.
+/// Drift is a mismatch of EITHER against the running build — never an on-disk
+/// byte compare, which cannot see the loaded process.
+public data TypeStamp { bridgeVersion: string, dcsVersion: string }
+
+/// Outcome of a successful sync: the generated file written, its size, and the
+/// stamp it carries.
+public data SyncResult { path: string, bytes: number, stamp: studio::types::TypeStamp }
+
+/// Drift verdict for the status bar. `inSync` is false when the project's
+/// stamped types no longer match the running build, when nothing has been synced
+/// yet, or when the link is down so the running build is unknown. Both stamps
+/// are surfaced (synced vs running) so the UI can name exactly which version —
+/// the bridge DLL or DCS itself — moved.
+public data DriftStatus { inSync: bool, synced: Option<studio::types::TypeStamp>, running: Option<studio::types::TypeStamp> }
+
+/// A sync failure: the link was down (fail-closed), a version probe failed, or a
+/// guarded write was refused or hit IO.
+public data TypeSyncError { message: string }
+
+/// Studio-side live type-sync service of the Tauri backend. Pulls the sim's
+/// self-described and introspected types over the already-open DCS link
+/// (`studio::link`), stamps and writes them under `types/generated/`, and signals
+/// the language layer to re-index without a project reopen. Fails closed when the
+/// sim isn't up; judges drift against the running build.
+public container TypeSync for studio::core::Studio {
+  /// "Sync types from DCS" — the single developer action. Refuses when the link
+  /// is not live (fail-closed: nothing is written, and the error tells the
+  /// developer to start DCS). Otherwise: read the running version stamp, pull the
+  /// `dcs_studio` module types and the introspected DCS API, write them to the
+  /// fixed `GENERATED_FILE` under `types/generated/`, and trigger a re-index.
+  public Sync(): Result<studio::types::SyncResult, studio::types::TypeSyncError> {
+    live = bool from self.LinkLive()
+    if (!live) {
+      down = studio::types::TypeSyncError from { "Start DCS first — live type sync needs a running sim link" }
+      return Err(down)
+    }
+    stamp = Result<studio::types::TypeStamp, studio::types::TypeSyncError> from self.RunningStamp()
+    if (stamp.isErr) {
+      return Err(stamp.error)
+    }
+    defs = Result<dcs::bridge::TypeDefs, studio::types::TypeSyncError> from self.PullTypeDefs()
+    if (defs.isErr) {
+      return Err(defs.error)
+    }
+    written = Result<studio::types::SyncResult, studio::types::TypeSyncError> from self.WriteGenerated(stamp.value, defs.value)
+    if (written.isErr) {
+      return Err(written.error)
+    }
+    self.Reindex()
+    return Ok(written.value)
+  }
+
+  /// Whether the editor↔sim link is currently up (the bridge is connected). The
+  /// version probes additionally need a pong; this is the cheap pre-gate.
+  LinkLive(): bool;
+
+  /// Read the running build's identity from the sim over the link: the DLL's
+  /// `dcs_studio.version` and DCS `_APP_VERSION` (by eval). Errs (fail-closed) if
+  /// either probe fails, so a half-known build never produces a misleading stamp.
+  RunningStamp(): Result<studio::types::TypeStamp, studio::types::TypeSyncError>;
+
+  /// Pull the sim's emitted types over the link: the `dcs_studio` module
+  /// (`dcs::bridge::Types` EmitDlua) and the introspected DCS API (DumpGlobals),
+  /// concatenated into one definition text.
+  PullTypeDefs(): Result<dcs::bridge::TypeDefs, studio::types::TypeSyncError>;
+
+  /// Prepend the TypeStamp as a header comment to `defs` and write the result to
+  /// the fixed `GENERATED_FILE`. The target is that constant — there is no
+  /// sim-derived path segment — so the write lands under `types/generated/` by
+  /// construction and a hand-written `types/*.d.lua` is structurally unreachable.
+  /// An IO failure surfaces as a TypeSyncError.
+  WriteGenerated(stamp: studio::types::TypeStamp, defs: dcs::bridge::TypeDefs): Result<studio::types::SyncResult, studio::types::TypeSyncError>;
+
+  /// Signal the language layer to re-mount the workspace index so the freshly
+  /// written `.d.lua` takes effect without a project reopen — the hook the
+  /// fs-watcher (#40) and `lang.updateSource` path are wired into.
+  Reindex(): void;
+
+  /// Read the stamp from the generated file's header, if a sync has ever run.
+  ReadSyncedStamp(): Option<studio::types::TypeStamp>;
+
+  /// Whether two stamps describe the same running build (both the bridge and DCS
+  /// versions equal).
+  StampsMatch(a: studio::types::TypeStamp, b: studio::types::TypeStamp): bool;
+
+  /// Drift verdict for the status bar: compare the stamp written into the
+  /// generated file against the RUNNING build pulled over the link. Out of sync
+  /// when no sync has run, when the link is down (running build unknown), or when
+  /// either version differs. Never a byte compare of files on disk.
+  public Drift(): studio::types::DriftStatus {
+    synced = Option<studio::types::TypeStamp> from self.ReadSyncedStamp()
+    if (synced.isNone) {
+      never = studio::types::DriftStatus from { false }
+      return never
+    }
+    live = bool from self.LinkLive()
+    if (!live) {
+      offline = studio::types::DriftStatus from { false, synced.value }
+      return offline
+    }
+    running = Result<studio::types::TypeStamp, studio::types::TypeSyncError> from self.RunningStamp()
+    if (running.isErr) {
+      unknown = studio::types::DriftStatus from { false, synced.value }
+      return unknown
+    }
+    matched = bool from self.StampsMatch(synced.value, running.value)
+    verdict = studio::types::DriftStatus from { matched, synced.value, running.value }
+    return verdict
+  }
+}
+
+/// One action makes the project authoritative against the running build.
+feature SyncWritesUnderGeneratedOnly for studio::types::TypeSync {
+  given "DCS is running with the bridge connected"
+  when "the developer runs Sync types from DCS"
+  then "a stamped `.d.lua` lands under types/generated/"
+  and "no hand-written types/*.d.lua is touched"
+}
+
+/// With no sim, the sync refuses rather than writing stale or empty types.
+feature FailsClosedWhenSimDown for studio::types::TypeSync {
+  given "DCS is not running, so the link is down"
+  when "the developer runs Sync types from DCS"
+  then "the sync fails closed with a start-DCS-first message"
+  and "nothing is written under the project"
+}
+
+/// A fresh sync takes effect without reopening the project.
+feature ReindexWithoutReopen for studio::types::TypeSync {
+  given "a project already open in the editor"
+  when "a sync writes a new generated `.d.lua`"
+  then "the language layer re-indexes it"
+  and "hover reflects the new types without a project reopen"
+}
+
+/// Drift is judged against the loaded process, not files on disk.
+feature DriftFromRunningVersion for studio::types::TypeSync {
+  given "a project synced against one DCS build"
+  when "a different bridge or DCS version is now loaded and running"
+  then "Drift reports out of sync by comparing the running version to the stamp"
+  but "an unchanged build still running reports in sync"
+}
+
+/// Last sync keeps working when the sim is gone.
+feature OfflineFallbackToLastSync for studio::types::TypeSync {
+  given "a project synced earlier and DCS now shut down"
+  when "the developer opens a `.lua` file"
+  then "hover resolves against the last synced types offline"
+  but "a new Sync fails closed until DCS is running again"
+}

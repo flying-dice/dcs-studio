@@ -5,10 +5,11 @@
 //! from boot.
 //!
 //! The native module's Lua surface is self-describing: every binding is
-//! registered through a facade that records its EmmyLua type, emitted as a
-//! `dcs_studio.d.lua` definition file (the `emit_dlua` call) so the editor's
-//! lua-analyzer gives completion/hover on `require("dcs_studio")`. This is
-//! tooling, kept out of the disclosed bodies below.
+//! registered through a facade that records its EmmyLua type. That type text —
+//! and an introspection of the real DCS API in `_G` — is emitted as `.d.lua`
+//! the editor's lua-analyzer indexes (the `Types` container below). Live type
+//! sync (issue #50) pulls it over the link so the editor's hover and
+//! diagnostics match the EXACT running build, not an app-build snapshot.
 
 /// Opaque JSON value carried across the RPC boundary.
 public data Json;
@@ -108,6 +109,8 @@ container Hook for dcs::bridge::Dcs {
     dcs::bridge::RpcServer.Listen()
     dcs::bridge::Router.Register("ping")
     dcs::bridge::Router.Register("eval")
+    dcs::bridge::Router.Register("emit_dlua")
+    dcs::bridge::Router.Register("dump_globals")
     dcs::bridge::Sim.RegisterFrameCallback()
   }
 
@@ -341,6 +344,41 @@ container Sqlite for dcs::bridge::Dcs {
   Transaction(handle: dcs::bridge::SqliteHandle, callback: dcs::bridge::Json): Result<bool, dcs::bridge::SqlError>;
 }
 
+/// EmmyLua-annotated `.d.lua` type text the editor indexes. Emitted by the DLL
+/// from inside the live sim, so the types match the EXACT running build and the
+/// loaded module — not a snapshot frozen at app-build time.
+public data TypeDefs { dlua: string }
+
+/// How deep DumpGlobals recurses into nested API tables before it stops and
+/// types the value opaquely. Bounds output and, with a visited set, breaks the
+/// reference cycles and pathologically deep tables (Export) a naive `_G` walk
+/// would choke on.
+public constant MAX_INTROSPECTION_DEPTH = 4
+
+/// The DLL describing its own Lua surface as `.d.lua`, emitted from inside the
+/// live sim. Two sources feed the editor's index: the self-registered
+/// `dcs_studio` facade (EmitDlua) and an introspection walk of the real DCS API
+/// present in `_G` (DumpGlobals). Both emit dotted statements — `DCS = {}` then
+/// `function DCS.getModelTime() end` — which the resolver's `dotted_match`
+/// already indexes; never `---@meta` ambient, which the syntax layer parses but
+/// no resolver honors.
+container Types for dcs::bridge::Dcs {
+  /// Emit the `dcs_studio` module definition from the facade that registered
+  /// every binding with its EmmyLua type. Pure self-description: answers from
+  /// boot, no mission required, and always matches the loaded DLL exactly.
+  EmitDlua(): dcs::bridge::TypeDefs;
+
+  /// Introspect the modder-facing DCS API — the curated hooks/GUI roots (`DCS`,
+  /// `Export`, `net`, `lfs`, `log`), not all of `_G`, so the dump stays
+  /// authoritative and bounded — and emit it as dotted `.d.lua` statements. Each
+  /// root present in `_G` is walked, typing every member: a function → a
+  /// `fun(...)` annotation, a nested table → recurse until MAX_INTROSPECTION_DEPTH
+  /// (then an opaque table), userdata/thread → an opaque handle; a visited set
+  /// breaks cycles. An absent root is skipped, not errored. Never raises in the
+  /// sim: a walk failure yields the partial dump gathered so far.
+  DumpGlobals(): dcs::bridge::TypeDefs;
+}
+
 /// The bridge answers before any mission is loaded.
 feature AnswersFromBoot for dcs::bridge::Dcs {
   given "DCS has booted to the main menu with the bridge injected"
@@ -407,4 +445,28 @@ feature SqliteErrorSurfaced for dcs::bridge::Dcs {
   when "a query has a SQL error or hits a busy lock"
   then "the call returns nil plus an error message"
   and "the sim keeps running"
+}
+
+/// The DLL emits types for itself and for the live DCS API.
+feature EmitsTypesFromRunningSim for dcs::bridge::Dcs {
+  given "the bridge DLL is loaded in a running DCS"
+  when "the editor calls emit_dlua and dump_globals over the link"
+  then "emit_dlua returns the dcs_studio module .d.lua matching the loaded DLL"
+  and "dump_globals returns the real DCS API as dotted statements the resolver indexes"
+}
+
+/// Introspecting `_G` can never bring the sim down.
+feature IntrospectionNeverCrashesSim for dcs::bridge::Dcs {
+  given "a `_G` holding cycles, metatables, and a table as large as Export"
+  when "dump_globals walks it"
+  then "the depth cap and visited set bound the walk"
+  and "the sim keeps running and a partial dump returns rather than a raise"
+}
+
+/// The dump reflects what the running build currently exposes.
+feature DumpReflectsLoadedBuild for dcs::bridge::Dcs {
+  given "DCS at the main menu with mission-state globals not yet bound"
+  when "dump_globals runs"
+  then "the API roots present in `_G` are emitted"
+  and "an absent root is skipped rather than erroring"
 }
