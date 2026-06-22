@@ -15,6 +15,12 @@
   import { langIntelFor } from "$lib/lang/codemirror";
   import { debuggerExtension, syncDebugView, setConditionHandler } from "$lib/editor/debugger";
   import { debug } from "$lib/debug-session.svelte";
+  import {
+    bookmarkExtension,
+    syncBookmarkView,
+    readBookmarkMarks,
+  } from "$lib/editor/bookmark-gutter";
+  import { bookmarks } from "$lib/bookmarks.svelte";
   import { editorCommands } from "$lib/editor/commands";
   import {
     refactorExtensions,
@@ -119,6 +125,10 @@
         // only for Lua scripts (the only runnable/debuggable files); synced
         // from the debug-session store by the $effect below.
         ...(isLuaFile(path) ? [debuggerExtension(path)] : []),
+        // Bookmark gutter (model/studio/bookmarks.pds) — every file, not just
+        // Lua: any line can be marked. The marks re-map through edits and are
+        // written back to the store on save by the $effect below.
+        bookmarkExtension(path),
         themeComp.of(app.cm),
         langComp.of(languageFor(name)),
         langIntelComp.of(langIntelFor(path)),
@@ -242,6 +252,7 @@
       shownPath = path;
       view.setState(parked);
       syncDebugView(view, path);
+      syncBookmarkView(view, path);
       // Restore scroll after the swapped-in state has been measured/laid
       // out, not synchronously against stale geometry.
       const scrollTop = parkedScroll.get(path) ?? 0;
@@ -289,6 +300,7 @@
       }
       view.setState(freshState(path, name, load.text));
       syncDebugView(view, path);
+      syncBookmarkView(view, path);
       app.onDocLoaded(path, load.text);
       applyPendingJump();
     })();
@@ -328,6 +340,7 @@
             changes: { from: 0, to: view.state.doc.length, insert: doc.docText },
           });
           syncDebugView(view, p);
+          syncBookmarkView(view, p);
         }
       } else {
         parkedStates.delete(p);
@@ -355,6 +368,27 @@
     void debug.status;
     void debug.topLocals;
     if (view && path) syncDebugView(view, path);
+  });
+
+  // Keep the active editor's bookmark gutter in sync with the store. Touch
+  // bookmarks.entries so this re-runs on any toggle / remove / clear / project
+  // load (and on tab switch via app.filePath). Mid-edit the field re-maps
+  // locally and entries are unchanged, so this never clobbers a not-yet-saved
+  // drift (model/studio/bookmarks.pds).
+  $effect(() => {
+    const path = app.filePath;
+    void bookmarks.entries;
+    if (view && path) syncBookmarkView(view, path);
+  });
+
+  // On save, write the active file's re-mapped marks back to the store (model
+  // RemapFileBookmarks): while open, marks rode the buffer's edits, so their
+  // new lines + freshly read snippets are reconciled into persistence now.
+  $effect(() => {
+    const saved = app.saved;
+    if (saved && view && saved.path === shownPath) {
+      bookmarks.syncFile(saved.path, readBookmarkMarks(view));
+    }
   });
 
   // The active tab when it's binary — drives the placeholder overlay (model

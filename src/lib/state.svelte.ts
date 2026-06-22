@@ -23,26 +23,18 @@ import {
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import { canonicalPath } from "./paths";
+import { writeLocalStorage } from "./local-storage";
 import { reconcileBuffer, fsKey } from "./workspace-util";
 import { dcsLink } from "./dcs-link.svelte";
 import { fileWatcher } from "./file-watcher.svelte";
 import { lang } from "./lang/intel.svelte";
 import { saveWithFormat } from "./save-format";
 import { todos } from "./todos.svelte";
+import { bookmarks } from "./bookmarks.svelte";
 import { database } from "./database.svelte";
 import { marketplace } from "./marketplace.svelte";
 import { publish } from "./publish.svelte";
 import type { Extension } from "@codemirror/state";
-
-/** Persist one string to localStorage, swallowing quota / SSR-absence errors. */
-function writeLocalStorage(key: string, value: string): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* ignore quota / serialization errors */
-  }
-}
 
 const EDITOR_THEME_KEY = "dcs.editorTheme";
 const PANEL_SIZES_KEY = "dcs.panelSizes";
@@ -374,6 +366,9 @@ class AppState {
       // …and rescan comment tags for the Todos panel (model/studio/todos.pds
       // RefreshAll) — equally fire-and-forget and non-fatal.
       void todos.refreshAll(path);
+      // …and restore this project's bookmarks (model/studio/bookmarks.pds
+      // LoadProject), keyed by the canonical root — synchronous, localStorage.
+      bookmarks.load(path);
       // …and rediscover the SQLite DBs the DLL writes under lfs.writedir() for
       // the Database panel (model/studio/database.pds RefreshDatabases). Reset
       // first so a previously-opened database's tables/result/selection don't
@@ -416,6 +411,7 @@ class AppState {
       void watchStop().catch((e) => console.error("watch stop failed:", e));
       this.projectOps.resetWorkspace();
       todos.reset();
+      bookmarks.reset();
       database.reset();
     } finally {
       this.switching = false;
@@ -472,6 +468,14 @@ class AppState {
    * `evicted` (rename) so the two effects don't clobber each other.
    */
   reloaded = $state<{ tick: number; paths: string[] }>({ tick: 0, paths: [] });
+
+  /**
+   * Save signal (model/studio/bookmarks.pds RemapFileBookmarks): bumped after a
+   * file is saved so the editor re-anchors that file's bookmarks — it reads the
+   * marks that rode the buffer's edits and writes the new lines + snippets back
+   * to the store. Its own signal so it never tangles with `reloaded`/`evicted`.
+   */
+  saved = $state<{ tick: number; path: string } | null>(null);
 
   /**
    * Reconcile open buffers with disk after an `fs://changed` batch. Refreshes
@@ -847,6 +851,10 @@ class AppState {
           // Saved-file rescan for the Todos panel (model/studio/todos.pds
           // RefreshFile): splices only this file's entries.
           void todos.refreshFile(doc.path);
+          // Re-anchor this file's bookmarks against the saved buffer (model
+          // RemapFileBookmarks): signal the editor to write the marks that rode
+          // the edits — new lines + snippets — back to the store.
+          this.saved = { tick: (this.saved?.tick ?? 0) + 1, path: doc.path };
         },
       });
     } finally {

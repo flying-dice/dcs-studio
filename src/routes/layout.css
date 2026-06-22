@@ -180,6 +180,26 @@
 	opacity: 0.85;
 }
 
+/* Bookmarks: a clickable gutter that tags each bookmarked line (model
+   studio/bookmarks.pds). Distinct from the round red breakpoint dot — a small
+   ribbon in the accent colour, notched at the bottom so the two gutters never
+   read as one. */
+.cm-bookmark-gutter {
+	width: 12px;
+	cursor: pointer;
+}
+.cm-bookmark-gutter:hover {
+	background: color-mix(in oklch, var(--primary) 14%, transparent);
+}
+.cm-bookmark {
+	display: inline-block;
+	width: 8px;
+	height: 11px;
+	margin: 3px 2px 0;
+	clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%);
+	background: var(--primary);
+}
+
 /* ===========================================================================
    CodeMirror chrome — shadcn skin
    ---------------------------------------------------------------------------
