@@ -104,6 +104,9 @@
           if (u.docChanged) {
             app.onDocEdited(path, u.state.doc.toString());
           }
+          // Keep app.canCopy in sync — a doc edit or a selection move can flip
+          // whether a selection exists, gating Edit → Cut / Copy (issue #59).
+          if (u.docChanged || u.selectionSet) reportSelection();
         }),
         // The IDE's editor-function keymap (toggle comment, move/duplicate
         // line) — an owned, documented contract, not a basicSetup default.
@@ -143,6 +146,18 @@
     if (!stillOpen) return;
     parkedStates.set(shownPath, view.state);
     parkedScroll.set(shownPath, view.scrollDOM.scrollTop);
+  }
+
+  /**
+   * Swap the view's whole state (tab change, blank, binary) and resync selection
+   * state. A state swap does NOT fire the update listener, so app.canCopy — which
+   * gates Edit → Cut / Copy (issue #59) — would otherwise keep the prior tab's
+   * value. Pairing the two here makes that invariant structural.
+   */
+  function setViewState(state: EditorState) {
+    if (!view) return;
+    view.setState(state);
+    reportSelection();
   }
 
   /** Land the caret on a pending jump (Problems line/col or a go-to-def /
@@ -247,7 +262,7 @@
     if (!path || !doc) {
       parkCurrent();
       shownPath = null;
-      view.setState(blankState());
+      setViewState(blankState());
       return;
     }
     // Known-binary fast-path (mirrors the parked fast-path): a re-activated
@@ -256,7 +271,7 @@
     if (doc.kind === "binary") {
       parkCurrent();
       shownPath = path;
-      view.setState(blankState());
+      setViewState(blankState());
       return;
     }
     const parked = parkedStates.get(path);
@@ -265,7 +280,7 @@
       // undo history, selection, and folds untouched.
       parkCurrent();
       shownPath = path;
-      view.setState(parked);
+      setViewState(parked);
       syncDebugView(view, path);
       // Restore scroll after the swapped-in state has been measured/laid
       // out, not synchronously against stale geometry.
@@ -308,11 +323,11 @@
       if (load.kind === "binary") {
         // Binary (model `MarkBinary`): a blank view behind the placeholder —
         // the bytes never enter the editor and the tab is never closed.
-        view.setState(blankState());
+        setViewState(blankState());
         app.onDocBinary(path, load.size);
         return;
       }
-      view.setState(freshState(path, name, load.text));
+      setViewState(freshState(path, name, load.text));
       syncDebugView(view, path);
       app.onDocLoaded(path, load.text);
       applyPendingJump();
@@ -473,6 +488,15 @@
     if (!view) return false;
     const { from, to } = view.state.selection.main;
     return from !== to;
+  }
+
+  // Push the active view's selection state into the store so the application
+  // menu's Cut / Copy enablement (app.canCopy) tracks it reactively — the
+  // context menu reads hasSelection() directly, but the app menu can't reach the
+  // view. Called from the update listener (selection moves / edits) and after
+  // each tab-swap state swap (setViewState).
+  function reportSelection() {
+    app.setEditorSelection(hasSelection());
   }
 
   function copySelection() {
