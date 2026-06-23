@@ -18,7 +18,7 @@ use studio_mcp::{Session, handle};
 
 /// Every tool the surface advertises, in registry order — an accidental drop
 /// or rename of any tool fails the `tools/list` assertion below.
-const FULL_TOOL_SURFACE: [&str; 36] = [
+const FULL_TOOL_SURFACE: [&str; 37] = [
     "init_project",
     "check",
     "build",
@@ -29,6 +29,7 @@ const FULL_TOOL_SURFACE: [&str; 36] = [
     "dcs_status",
     "dcs_eval",
     "dcs_call",
+    "sync_types",
     "detect_installs",
     "injection_status",
     "inject",

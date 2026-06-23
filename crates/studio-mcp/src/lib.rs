@@ -206,6 +206,7 @@ pub fn tools_list() -> Value {
     let mut tools = project_tool_specs();
     tools.extend(workspace_tool_specs());
     tools.extend(dcs_tool_specs());
+    tools.extend(types_tool_specs());
     tools.extend(inject_tool_specs());
     tools.extend(launcher_tool_specs());
     tools.extend(mission_tool_specs());
@@ -234,6 +235,9 @@ fn tools_call(session: &Session, params: &Value) -> Result<Value, ToolError> {
         }
     }
     if let Some(result) = dcs_tools(session, name, &arguments) {
+        return result;
+    }
+    if let Some(result) = types_tools(session, name, &arguments) {
         return result;
     }
     if let Some(result) = debug_tools(session, name, &arguments) {
@@ -543,6 +547,48 @@ fn forward_to_dcs(session: &Session, method: &str, params: Option<Value>) -> Val
         Ok(value) => tool_json(&value, false),
         Err(message) => tool_text(&message, true),
     }
+}
+
+// ---- type-sync tools ---------------------------------------------------------
+//
+// Live type sync (model studio::types, issue #50) over the session's link: pull
+// the running build's authoritative .d.lua and write it under the agent's root,
+// so the lang tools then resolve against the EXACT loaded build. The same
+// `studio_services::types::sync` the desktop `sync_types` command runs.
+
+fn types_tool_specs() -> Vec<Value> {
+    vec![json!({
+        "name": "sync_types",
+        "description": "Make a workspace authoritative against the running DCS build: pull the sim's self-described and introspected types over the live link and write them under <root>/types/generated/dcs.d.lua, so a following lua_diagnostics/lua_hover on the root resolves against the EXACT loaded build. Fails closed when no DCS link is up.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": { "type": "string", "description": "Workspace root to sync types into" }
+            },
+            "required": ["root"]
+        }
+    })]
+}
+
+fn types_tools(session: &Session, name: &str, args: &Value) -> Option<Result<Value, ToolError>> {
+    match name {
+        "sync_types" => {
+            Some(require_str(args, "root", "sync_types").map(|root| sync_types_tool(session, root)))
+        }
+        _ => None,
+    }
+}
+
+/// Dial the bridge lazily, then sync the running build's types into `root`. A
+/// headless sync has no editor index to refresh, so the reindex hook is a no-op
+/// (the next lua_* tool re-collects sources fresh anyway).
+fn sync_types_tool(session: &Session, root: &str) -> Value {
+    let url = session.bridge_url.clone();
+    let result = session.block_on(async {
+        session.link.ensure_client(&url).await;
+        studio_services::types::sync(&session.link, Path::new(root), || {}).await
+    });
+    status_or_error(result)
 }
 
 // ---- debugger tools ----------------------------------------------------------

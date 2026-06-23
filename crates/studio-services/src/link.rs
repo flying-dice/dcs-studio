@@ -98,14 +98,19 @@ impl LinkShared {
             .map_err(|e| e.to_string())
     }
 
+    /// Whether the WS handshake to the in-DCS bridge is currently up — the cheap
+    /// pre-gate the type-sync service uses (model `TypeSync.LinkLive` /
+    /// `McpServer.LinkConnected`). A link never started, or started but
+    /// disconnected, is not connected.
+    #[must_use]
+    pub fn is_connected(&self) -> bool {
+        self.client.get().map(|c| c.is_connected()).unwrap_or(false)
+    }
+
     /// Snapshot of the link state, for late-mounting frontends that missed
     /// events (the app's `dcs_status` command).
     pub fn status(&self) -> Value {
-        let connected = self
-            .client
-            .get()
-            .map(|c| c.is_connected())
-            .unwrap_or(false);
+        let connected = self.is_connected();
         let latency = self.latency_ms.load(Ordering::Relaxed);
         json!({
             "connected": connected,

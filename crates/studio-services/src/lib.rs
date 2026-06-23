@@ -26,3 +26,4 @@ pub mod market;
 pub mod mission;
 pub mod publish;
 pub mod term;
+pub mod types;
