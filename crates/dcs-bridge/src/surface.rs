@@ -70,6 +70,15 @@ pub fn build(lua: &Lua, exports: &LuaTable, version: &str) -> LuaResult<ModuleDo
         "Return the generated EmmyLua (.d.lua) type definitions for this module.",
     );
 
+    // `dump_globals` is wired up in lib.rs (it introspects the live `_G` at call
+    // time); record its type here so the module self-describes it.
+    s.record_root_fn(
+        "dump_globals",
+        &[],
+        &[r("string")],
+        "Introspect the live DCS API in `_G` (DCS, Export, net, lfs, log) and return it as dotted .d.lua statements the editor indexes.",
+    );
+
     Ok(s.finish())
 }
 

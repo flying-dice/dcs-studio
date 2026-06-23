@@ -39,6 +39,20 @@ local started, err = pcall(function()
     return f()
   end)
 
+  -- Live type sync (issue #50). The DLL describes its own Lua surface and the
+  -- live DCS API as `.d.lua` the editor's lua-analyzer indexes — emitted from
+  -- inside the running sim, so hover/diagnostics match the EXACT loaded build,
+  -- not an app-build snapshot. Both answer from boot (no mission required);
+  -- dump_globals re-introspects `_G` per call, so it reflects whatever the sim
+  -- currently exposes. Returned as { dlua = ... } per model TypeDefs.
+  router:add_method("emit_dlua", function()
+    return { dlua = bridge.emit_dlua() }
+  end)
+
+  router:add_method("dump_globals", function()
+    return { dlua = bridge.dump_globals() }
+  end)
+
   -- Debugger (model/dcs/debug.pds). Run a chunk under a line hook SCOPED to
   -- that chunk's pcall — never a global hook over DCS's own GUI. On a line
   -- carrying a breakpoint (or the next qualifying line of a pending step) it

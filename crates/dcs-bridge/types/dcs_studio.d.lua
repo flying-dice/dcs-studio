@@ -288,4 +288,8 @@ local dcs_studio = {}
 ---@return string
 function dcs_studio.emit_dlua() end
 
+--- Introspect the live DCS API in `_G` (DCS, Export, net, lfs, log) and return it as dotted .d.lua statements the editor indexes.
+---@return string
+function dcs_studio.dump_globals() end
+
 return dcs_studio
