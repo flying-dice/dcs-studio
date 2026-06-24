@@ -12,10 +12,10 @@
 //
 // `route()` is a pure classifier (URL → `Route`), unit-tested as a dispatch
 // table. `dispatch()` performs the effect — it validates the `open` target,
-// then drives the frontend by emitting `deeplink://navigate`. Because a
-// cold-start link is dispatched before the webview attaches its listener, the
-// navigation is also stashed in `PendingDeepLink`; the frontend drains it once
-// on mount via `deeplink_take_pending`.
+// then drives the frontend by emitting `deeplink://navigate`. A cold-start link
+// is dispatched before the webview attaches its listener, so until the frontend
+// drains once on mount (via `deeplink_take_pending`) that navigation is stashed
+// in `PendingDeepLink`; links routed after the frontend is live are emit-only.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -46,11 +46,51 @@ pub enum Route {
     Ignore,
 }
 
-/// The latest navigation captured before the frontend was ready to receive it
-/// (cold start). Drained once by `deeplink_take_pending`; `None` in the common
-/// already-running case. Managed Tauri state.
+/// Bridges a cold-start navigation — one routed before the frontend attached its
+/// live listener — to the webview, which drains it once on mount via
+/// `deeplink_take_pending`. The slot is a cold-start bridge ONLY: it lives in the
+/// Rust process, which outlives a webview reload, so once the frontend has armed
+/// (drained once) every dispatch is delivered live by the emit and nothing is
+/// retained — else a reload would re-drain and re-fire a long-stale nav. Managed
+/// Tauri state.
 #[derive(Default)]
-pub struct PendingDeepLink(Mutex<Option<Route>>);
+pub struct PendingDeepLink(Mutex<PendingState>);
+
+/// The cold-start slot plus the one-way latch that closes it. Both sit behind a
+/// single lock so a dispatch's stash and the frontend's drain can't interleave
+/// into a lost update (a stash landing just after the drain, never delivered).
+#[derive(Default)]
+struct PendingState {
+    /// The latest cold-start navigation awaiting the frontend's first drain.
+    slot: Option<Route>,
+    /// Latched by the first drain: the frontend's listener is live from then on,
+    /// so further dispatches are emit-only and must not be stashed.
+    frontend_ready: bool,
+}
+
+impl PendingDeepLink {
+    /// Capture a navigation for the cold-start drain — but only until the
+    /// frontend has armed. Once it has, the live emit in `dispatch` delivers
+    /// every nav and retaining one would re-fire it stale on a webview reload.
+    fn stash_if_cold(&self, nav: &Route) {
+        let Ok(mut state) = self.0.lock() else {
+            return;
+        };
+        if !state.frontend_ready {
+            state.slot = Some(nav.clone());
+        }
+    }
+
+    /// Drain the cold-start nav and latch the frontend ready, closing the stash.
+    /// `None` once drained or when nothing was pending.
+    fn take(&self) -> Option<Route> {
+        let Ok(mut state) = self.0.lock() else {
+            return None;
+        };
+        state.frontend_ready = true;
+        state.slot.take()
+    }
+}
 
 /// Register the scheme with the OS (dev; prod registers via the installer),
 /// start listening for opened URLs, and route the URL this process was cold-
@@ -84,12 +124,12 @@ pub fn handle_argv(app: &AppHandle, argv: &[String]) {
     }
 }
 
-/// Drain the cold-start navigation the frontend wasn't yet listening for. The
-/// webview calls this once on mount; `None` once drained or when nothing is
-/// pending.
+/// Drain the cold-start navigation the frontend wasn't yet listening for, and
+/// latch the frontend ready so later dispatches deliver live only. The webview
+/// calls this once on mount; `None` once drained or when nothing is pending.
 #[tauri::command]
 pub fn deeplink_take_pending(pending: tauri::State<'_, PendingDeepLink>) -> Option<Route> {
-    pending.0.lock().ok().and_then(|mut slot| slot.take())
+    pending.take()
 }
 
 /// The `dcs-studio://` URLs among process arguments. A non-URL entry (the
@@ -123,13 +163,12 @@ fn dispatch(app: &AppHandle, url: &Url) {
         _ => {}
     }
     // Only Marketplace/Open reach here (Ignore and an invalid Open returned
-    // early), so the slot never holds Ignore. Stash for the cold-start drain;
-    // when the IDE is already running the live emit below delivers the nav and
-    // this slot simply goes unread until the next mount.
+    // early), so a stashed nav is never Ignore. Stash *only* until the frontend
+    // has armed: a cold-start link routed before the webview's listener existed
+    // is carried by the drain, but once the frontend is live the emit below
+    // delivers every nav and retaining one would re-fire it stale on a reload.
     if let Some(pending) = app.try_state::<PendingDeepLink>() {
-        if let Ok(mut slot) = pending.0.lock() {
-            *slot = Some(nav.clone());
-        }
+        pending.stash_if_cold(&nav);
     }
     if let Err(e) = app.emit(NAVIGATE_EVENT, &nav) {
         tracing::warn!(error = %e, "deep link: navigate emit failed");
@@ -273,5 +312,42 @@ mod tests {
         assert!(!is_project_root(&missing));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pending_bridges_cold_start_then_closes_after_drain() {
+        // A link that cold-started the IDE is routed before the frontend's
+        // listener exists: stash it so the first drain delivers it.
+        let pending = PendingDeepLink::default();
+        let cold = Route::Open {
+            path: "/proj".to_string(),
+        };
+        pending.stash_if_cold(&cold);
+        assert_eq!(pending.take(), Some(cold));
+
+        // The frontend is armed now (it drained once). A later dispatch is
+        // delivered live by the emit, so it must NOT be retained — else a webview
+        // reload would re-drain and re-fire this stale nav (the bug this guards).
+        let live = Route::Marketplace {
+            owner: "acme".to_string(),
+            repo: "mod".to_string(),
+        };
+        pending.stash_if_cold(&live);
+        assert_eq!(pending.take(), None);
+    }
+
+    #[test]
+    fn pending_already_running_never_stashes() {
+        // Already-running start: the frontend mounts and drains before any link,
+        // so the first drain finds nothing and latches the slot closed.
+        let pending = PendingDeepLink::default();
+        assert_eq!(pending.take(), None);
+
+        // Every dispatch from here is live; nothing is stashed for a reload to
+        // re-fire.
+        pending.stash_if_cold(&Route::Open {
+            path: "/proj".to_string(),
+        });
+        assert_eq!(pending.take(), None);
     }
 }
