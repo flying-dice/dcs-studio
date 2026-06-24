@@ -42,11 +42,16 @@ class TypeSyncStore {
    */
   async init(): Promise<void> {
     if (this.initialised || !isTauri()) return;
-    this.initialised = true;
     await listen<string>("dcs://types-synced", (e) => {
       void lang.reindex(e.payload);
       void this.refreshDrift(e.payload);
     });
+    // Flag flips only after the listener attaches; a rejected listen() (transient
+    // boot IPC) leaves it false so a later init retries — the reindex hook is the
+    // only path that re-indexes a freshly written `.d.lua`, so losing it silently
+    // would break ReindexWithoutReopen for the whole session. Single listener ⇒
+    // nothing partial to tear down (cf. notifications/cargolua flag-after-attach).
+    this.initialised = true;
   }
 
   /**
