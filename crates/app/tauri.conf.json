@@ -30,7 +30,8 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "externalBin": [
       "binaries/lua-analyzer"
     ],
@@ -41,5 +42,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/flying-dice/dcs-studio/releases/latest/download/latest.json"
+      ],
+      "pubkey": "REPLACE_ME__see_RELEASING.md_step_1"
+    }
   }
 }

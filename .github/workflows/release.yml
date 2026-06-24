@@ -1,0 +1,81 @@
+# Release pipeline (issue #54).
+#
+# Builds the Windows installer on a GitHub-hosted Windows runner and publishes
+# it as a GitHub Release together with the signed updater manifest (latest.json)
+# that tauri-plugin-updater consumes. This lives on GitHub — not in
+# .gitlab-ci.yml — because the GitLab CI runners are Linux and cannot produce a
+# Windows Tauri bundle, and because the public distribution surface is GitHub
+# (owner decision, #54).
+#
+# PREREQUISITES (owner-provisioned, one-time — see RELEASING.md):
+#   - This repo present on GitHub (mirror of the GitLab origin).
+#   - Repository secrets:
+#       TAURI_SIGNING_PRIVATE_KEY           — updater minisign private key
+#       TAURI_SIGNING_PRIVATE_KEY_PASSWORD  — its password
+#     The matching PUBLIC key lives in crates/app/tauri.conf.json
+#     (plugins.updater.pubkey) and MUST be swapped in before the first release.
+#
+# TRIGGER: push a tag matching v* (e.g. v0.2.0). See RELEASING.md for the
+# version-bump process.
+#
+# NOTE: the release build path (`tauri build` + the NSIS bundler) is exercised
+# for the first time by this workflow — it is not run in GitLab CI. The first
+# tag publishes a DRAFT release (releaseDraft: true) so the owner can inspect
+# the installer + latest.json before making it live.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # create the Release and upload assets
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      # tauri-action runs the repo's own `pnpm tauri build`, which runs
+      # beforeBuildCommand (`pnpm sidecar && pnpm build`): pnpm sidecar builds
+      # lua-analyzer for the host triple (x86_64-pc-windows-msvc) and stages it
+      # under crates/app/binaries/ as the externalBin the bundler expects, then
+      # pnpm build emits the frontend. The TAURI_SIGNING_* env makes the bundler
+      # emit the signed updater artifacts (.sig + latest.json) referenced by
+      # plugins.updater.endpoints.
+      - name: Build + publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: pnpm tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: dcs-studio ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: true
+          args: --target x86_64-pc-windows-msvc

@@ -27,6 +27,37 @@ mod todos_cmd;
 mod types_cmd;
 mod watch;
 
+/// Headless auto-update (issue #54). Checks the release feed configured in
+/// `tauri.conf.json` (`plugins.updater.endpoints`) and, if a newer signed build
+/// is published, downloads + installs it, then relaunches. Every failure is a
+/// logged no-op: before the first GitHub release exists, or when offline, the
+/// check fails quietly — it must never stop the app from starting.
+fn check_for_updates(handle: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        use tauri_plugin_updater::UpdaterExt as _;
+        let updater = match handle.updater() {
+            Ok(updater) => updater,
+            Err(error) => {
+                tracing::warn!(%error, "updater unavailable; skipping update check");
+                return;
+            }
+        };
+        match updater.check().await {
+            Ok(Some(update)) => {
+                tracing::info!(version = %update.version, "update available; downloading");
+                if let Err(error) = update.download_and_install(|_, _| {}, || {}).await {
+                    tracing::error!(%error, "update download/install failed");
+                    return;
+                }
+                tracing::info!("update installed; relaunching");
+                handle.restart();
+            }
+            Ok(None) => tracing::debug!("no update available"),
+            Err(error) => tracing::warn!(%error, "update check failed"),
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Logs to stderr (visible in the `tauri dev` terminal) AND to a file on
@@ -60,6 +91,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(dcs::DcsState::default())
         .manage(lsp::LspHosts::default())
         .manage(build::BuildState::default())
@@ -82,6 +114,9 @@ pub fn run() {
             // Register the dcs-studio:// scheme + start routing deep links
             // (issue #44): marketplace product-page + open-project links.
             deeplink::setup(app.handle());
+            // Auto-update against the GitHub release feed (issue #54): a headless
+            // check on startup. Best-effort — see `check_for_updates`.
+            check_for_updates(app.handle().clone());
             // Crash recovery (issue #41 AC#5): if a previous session died with
             // DCS still up, restore any options.lua left on the low-spec launch
             // profile from its orphaned backup.
