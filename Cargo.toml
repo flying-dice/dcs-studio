@@ -21,6 +21,7 @@ members = [
 [workspace.package]
 edition = "2021"
 version = "0.1.0"
+license = "MIT"
 
 # Lint policy. The dcs-lua engine crates opt in (`[lints] workspace = true`) and
 # take the FULL set — pedantic + the safety lints below. The app/bridge/services/

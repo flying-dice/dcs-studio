@@ -1,5 +1,6 @@
 [package]
 name = "dcs-lua-syntax"
+license.workspace = true
 version.workspace = true
 edition = "2024"
 

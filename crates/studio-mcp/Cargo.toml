@@ -5,6 +5,7 @@
 # headless. Tauri-free; the same logic as the IDE's own commands.
 [package]
 name = "studio-mcp"
+license.workspace = true
 edition = "2024"
 version.workspace = true
 

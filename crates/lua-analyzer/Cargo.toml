@@ -1,5 +1,6 @@
 [package]
 name = "lua-analyzer"
+license.workspace = true
 version.workspace = true
 edition = "2024"
 

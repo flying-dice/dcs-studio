@@ -8,6 +8,7 @@
 # (on-disk for the bundler, workspace membership for the editor).
 [package]
 name = "dcs-lua-require"
+license.workspace = true
 edition.workspace = true
 version.workspace = true
 
