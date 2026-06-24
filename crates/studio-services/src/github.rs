@@ -20,10 +20,10 @@ pub const SIGN_IN_SCOPE: &str = "read:user";
 /// alongside `read:user` when the user first shares a project / cuts a release.
 pub const PUBLISH_SCOPE: &str = "read:user public_repo";
 
-/// Placeholder OAuth App client_id — the real one comes from `DCS_GITHUB_CLIENT_ID`
-/// (a public value; device flow needs no client secret). With the placeholder,
-/// `request_device_code` fails fast; the `DCS_GITHUB_FAKE_LOGIN` bypass covers dev.
-const PLACEHOLDER_CLIENT_ID: &str = "Ov23li-dcsstudio-placeholder";
+/// Baked-in public OAuth App client_id — the shipped default so end users need set
+/// nothing (the device flow uses no client secret, so embedding the id is safe).
+/// `DCS_GITHUB_CLIENT_ID` still overrides it for dev/staging against another app.
+const DEFAULT_CLIENT_ID: &str = "Ov23ctkTeSn0LUywo9gR";
 
 /// A device-flow handshake (model `DeviceCode`). Only `user_code` +
 /// `verification_uri` serialize to the webview; `device_code` (the poll
@@ -71,7 +71,7 @@ struct StoredSession {
     avatar_url: String,
 }
 
-/// The public OAuth App client_id: `DCS_GITHUB_CLIENT_ID`, else the placeholder.
+/// The public OAuth App client_id: `DCS_GITHUB_CLIENT_ID`, else the baked-in default.
 #[must_use]
 pub fn client_id() -> String {
     resolve_client_id(std::env::var("DCS_GITHUB_CLIENT_ID").ok())
@@ -80,7 +80,7 @@ pub fn client_id() -> String {
 /// Pure resolver (testable without touching the process env).
 fn resolve_client_id(env: Option<String>) -> String {
     env.filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| PLACEHOLDER_CLIENT_ID.to_string())
+        .unwrap_or_else(|| DEFAULT_CLIENT_ID.to_string())
 }
 
 /// Dev/e2e sign-in bypass: in DEBUG builds, `DCS_GITHUB_FAKE_LOGIN=<login>` reports
@@ -378,7 +378,7 @@ mod store {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify, grants_publish, resolve_client_id, PLACEHOLDER_CLIENT_ID};
+    use super::{classify, grants_publish, resolve_client_id, DEFAULT_CLIENT_ID};
 
     #[test]
     fn classify_maps_every_device_flow_arm() {
@@ -425,10 +425,17 @@ mod tests {
     }
 
     #[test]
-    fn resolve_client_id_prefers_env_then_placeholder() {
+    fn resolve_client_id_prefers_env_then_default() {
         assert_eq!(resolve_client_id(Some("Iv1.real".to_string())), "Iv1.real");
-        assert_eq!(resolve_client_id(Some("  ".to_string())), PLACEHOLDER_CLIENT_ID);
-        assert_eq!(resolve_client_id(None), PLACEHOLDER_CLIENT_ID);
+        assert_eq!(resolve_client_id(Some("  ".to_string())), DEFAULT_CLIENT_ID);
+        assert_eq!(resolve_client_id(None), DEFAULT_CLIENT_ID);
+    }
+
+    #[test]
+    fn default_client_id_is_the_baked_shipping_id() {
+        // A shipped build must sign in with no DCS_GITHUB_CLIENT_ID set (issue #45);
+        // guard against a regression to a non-functional placeholder.
+        assert_eq!(DEFAULT_CLIENT_ID, "Ov23ctkTeSn0LUywo9gR");
     }
 
     // Runs where the store is the in-memory fallback (CI/Linux); on Windows it is
