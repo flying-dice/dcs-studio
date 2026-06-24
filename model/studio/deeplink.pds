@@ -1,0 +1,105 @@
+//! studio::deeplink — the app's custom-URI-scheme (`dcs-studio://`) deep-link
+//! router (issue #44). Registers the scheme with the OS and dispatches an
+//! incoming URL by its HOST (the area) and then its PATH/QUERY (the arguments).
+//! Two routes ship: `marketplace/<owner>/<repo>` opens a mod's product page, and
+//! `open?path=<abs>` opens a local project. An unknown route is ignored, never
+//! fatal — a stray link must not crash the IDE. A link that reaches an
+//! already-running IDE arrives via single-instance argv forwarding; a cold start
+//! receives it from the launch arguments.
+
+/// The registered URI scheme.
+public constant SCHEME = "dcs-studio"
+
+/// Route host (area): a mod's marketplace product page.
+public constant HOST_MARKETPLACE = "marketplace"
+
+/// Route host (area): open a local project.
+public constant HOST_OPEN = "open"
+
+/// A parsed incoming deep link. `host` selects the area; `path` and `query`
+/// carry the arguments — `marketplace` uses path segments (`/owner/repo`,
+/// mirroring the in-app route), `open` uses a url-encoded `?path=` query
+/// (Windows absolute paths don't fit cleanly in path segments).
+public data DeepLinkUrl { host: string, path: string, query: string }
+
+/// Routes incoming `dcs-studio://` URLs to a handler by host, then path/query.
+public container DeepLink for studio::core::Studio {
+  /// Dispatch an incoming URL: `marketplace` → product page, `open` → local
+  /// project, anything else → ignored. Total over every input — an unknown
+  /// host, an unparseable URL, or a missing argument all degrade to a debug
+  /// log, never a panic.
+  #[manual]
+  public Route(url: studio::deeplink::DeepLinkUrl): void {
+    toMarketplace = bool from url.host == studio::deeplink::HOST_MARKETPLACE
+    if (toMarketplace) {
+      self.NavigateToProduct(url)
+      return
+    }
+    toOpen = bool from url.host == studio::deeplink::HOST_OPEN
+    if (toOpen) {
+      self.OpenProject(url)
+      return
+    }
+    self.Ignore(url)
+  }
+
+  /// `marketplace/<owner>/<repo>`: navigate the IDE to the existing product page
+  /// for that mod. It NEVER installs — the actual install stays behind the
+  /// product page's Install button, so a web-triggered link cannot drive a
+  /// hard-to-reverse filesystem mutation. A path missing `<owner>` or `<repo>`
+  /// is ignored, never fatal.
+  NavigateToProduct(url: studio::deeplink::DeepLinkUrl): void;
+
+  /// `open?path=<abs>`: open the local project rooted at the url-decoded path,
+  /// but ONLY when it is an existing, recognized project root (a directory
+  /// carrying a `dcs-studio.toml`). A missing, unknown, or invalid path is
+  /// non-fatal — the IDE lands on Welcome and the bad path is NOT added to
+  /// recents. Opening only reads the project; it mutates nothing.
+  OpenProject(url: studio::deeplink::DeepLinkUrl): void;
+
+  /// Drop an unroutable URL — unknown host or unhandled path (logged, never
+  /// fatal).
+  Ignore(url: studio::deeplink::DeepLinkUrl): void;
+}
+
+/// A marketplace link opens the mod's product page — and only navigates; no
+/// install runs until the user clicks Install on that page.
+feature MarketplaceLinkOpensProductPage for studio::deeplink::DeepLink {
+  given "the dcs-studio scheme is registered"
+  when "the OS opens dcs-studio://marketplace/acme/super-mod"
+  then "the IDE navigates to the product page for acme/super-mod"
+  and "no install runs until the user clicks Install on that page"
+}
+
+/// An open link opens a known local project and records it in recents.
+feature OpenLinkOpensKnownProject for studio::deeplink::DeepLink {
+  given "an existing dcs-studio project at an absolute path P"
+  when "the OS opens dcs-studio://open?path=<url-encoded P>"
+  then "the IDE opens the project rooted at P"
+  and "P is recorded in recents"
+}
+
+/// An open link to a missing or non-project path is non-fatal.
+feature OpenLinkInvalidPathIsNonFatal for studio::deeplink::DeepLink {
+  given "a path that does not exist or is not a recognized project root"
+  when "the corresponding open link is opened"
+  then "the IDE lands on the Welcome screen without crashing"
+  and "the bad path is not added to recents"
+}
+
+/// A stray/unknown deep link is ignored without error.
+feature UnknownRouteIgnored for studio::deeplink::DeepLink {
+  given "no route is registered for the URL's host or path"
+  when "dcs-studio://nonsense/whatever is opened"
+  then "it is ignored beyond a debug log"
+  and "the IDE keeps running normally"
+}
+
+/// A malformed (non-scheme) argv entry from the single-instance forwarder is
+/// skipped without error.
+feature MalformedArgvIgnored for studio::deeplink::DeepLink {
+  given "the single-instance forwarder receives a second instance's argv"
+  when "an entry is not a parseable dcs-studio:// URL"
+  then "it is skipped without error"
+  and "the IDE keeps running normally"
+}

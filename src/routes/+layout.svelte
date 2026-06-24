@@ -4,6 +4,7 @@
 	import { app } from "$lib/state.svelte";
 	import { mcp } from "$lib/mcp.svelte";
 	import { notifications } from "$lib/notifications.svelte";
+	import { deeplinks } from "$lib/deeplink";
 	import { editorThemeById, chromeVars } from "$lib/themes";
 
 	let { children } = $props();
@@ -17,6 +18,9 @@
 		void app.initWatcher();
 		void mcp.refresh();
 		void notifications.init();
+		// Route incoming dcs-studio:// links (marketplace / open) into the IDE,
+		// and drain any link that cold-started it (issue #44).
+		void deeplinks.init();
 	});
 
 	// The selected editor theme drives the whole UI. We (a) toggle `.dark` so
