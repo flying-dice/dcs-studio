@@ -171,10 +171,11 @@ fn blank(name: &str) -> Vec<TemplateFile> {
             "dcs-studio.toml",
             format!(
                 "{}{}\n\
-                 # Required modules / other mods. Uncomment and edit as needed.\n\
+                 # Other Marketplace mods this one needs — installed automatically\n\
+                 # when yours is. `id` is the dependency's `owner/name`. (A required\n\
+                 # stock DCS module is a separate prerequisite — not declared here.)\n\
                  # [[dependencies]]\n\
-                 # id = \"F-16C_50\"\n\
-                 # name = \"F-16C Viper\"\n\
+                 # id = \"owner/another-mod\"\n\
                  # version = \"*\"\n\
                  # optional = false\n\n\
                  # Install rules: copy matching sources to a destination under a named root.\n\
@@ -232,12 +233,14 @@ fn lua_script_manifest(name: &str, slug: &str) -> TemplateFile {
         "dcs-studio.toml",
         format!(
             "{}{}\n\
-             # Required modules / other mods.\n\
-             [[dependencies]]\n\
-             id = \"F-16C_50\"\n\
-             name = \"F-16C Viper\"\n\
-             version = \"*\"\n\
-             optional = false\n\n\
+             # Other Marketplace mods this one needs — installed automatically\n\
+             # when yours is. `id` is the dependency's `owner/name`. Uncomment to\n\
+             # declare one. (A required stock DCS module is a separate\n\
+             # prerequisite — not declared here.)\n\
+             # [[dependencies]]\n\
+             # id = \"owner/another-mod\"\n\
+             # version = \"*\"\n\
+             # optional = false\n\n\
              # Install rules: copy matching sources to a destination under a named root.\n\
              [[install]]\n\
              source = \"Scripts/{slug}/\"\n\

@@ -38,14 +38,41 @@ public data ReleaseAsset { name: string, size: number }
 /// (`{SavedGames}/...` or `{GameInstall}/...`) — "what installs where".
 public data InstallEntry { source: string, dest: string }
 
-/// A mod's product page: the repo header, the rendered README source, the latest
-/// release's assets + total download size, and the install plan parsed from the
-/// `dcs-studio.toml` release asset. `installable` is true only when that asset is
-/// present; otherwise `installs` is empty and the README still shows.
-public data ProductDetail { repo: string, name: string, author: string, description: string, repoUrl: string, avatarUrl: string, stars: number, readme: Option<string>, releaseTag: Option<string>, releaseUrl: Option<string>, assets: studio::market::ReleaseAsset[], downloadSize: number, installable: bool, installs: studio::market::InstallEntry[], isLibrary: bool }
+/// One `[[dependencies]]` entry from a mod's `dcs-studio.toml`: another
+/// Marketplace mod this one needs. `id` is the dependency's `owner/name` — the
+/// SAME id the ledger and `InstalledIds` use. `version` is a semver constraint
+/// matched against the dependency's latest release tag (`*` or empty = any); a
+/// mismatch only WARNS, never fails, because the Marketplace serves a repo's
+/// latest release only. An `optional` dependency that cannot be resolved is
+/// skipped with a warning rather than failing the install. Every dependency is a
+/// Marketplace mod — a required STOCK DCS module is a different prerequisite kind
+/// (issue #65), not expressed here.
+public data Dependency { id: string, name: string, version: string, optional: bool }
 
-/// What an install pass placed on disk.
-public data InstallReport { copied: number, files: string[] }
+/// A mod's product page: the repo header, the rendered README source, the latest
+/// release's assets + total download size, the install plan parsed from the
+/// `dcs-studio.toml` release asset, and the mod's DIRECT declared dependencies
+/// (other Marketplace mods). `installable` is true only when the manifest asset
+/// is present; otherwise `installs` is empty and the README still shows.
+public data ProductDetail { repo: string, name: string, author: string, description: string, repoUrl: string, avatarUrl: string, stars: number, readme: Option<string>, releaseTag: Option<string>, releaseUrl: Option<string>, assets: studio::market::ReleaseAsset[], downloadSize: number, installable: bool, installs: studio::market::InstallEntry[], dependencies: studio::market::Dependency[], isLibrary: bool }
+
+/// One node of a resolved install plan: a Marketplace mod to place, emitted in
+/// dependency-before-dependent order. `deps` are the `owner/name` ids this node
+/// declares (recorded in the ledger so uninstall can refcount + garbage-collect);
+/// `alreadyInstalled` is true when a satisfying copy is already on disk (its link
+/// step is skipped, only its ledger edges are refreshed); `warnings` carry the
+/// version-mismatch / skipped-optional notes raised resolving it.
+public data PlanNode { id: string, deps: string[], alreadyInstalled: bool, warnings: string[] }
+
+/// What an install pass did (model `Library.Install`): the root mod, every
+/// dependency it pulled in transitively (`owner/name`), the count of links
+/// placed, and any non-fatal warnings (version mismatches, skipped optional
+/// dependencies).
+public data InstallOutcome { root: string, installedDeps: string[], links: number, warnings: string[] }
+
+/// What an uninstall pass did (model `Library.Uninstall`): every mod removed —
+/// the target plus any now-orphaned dependencies garbage-collected with it.
+public data UninstallOutcome { removed: string[] }
 
 /// GitHub's REST search as the store consumes it — a black-box external system.
 /// The token is the logged-in user's (issue #11): the store is sign-in gated, so
@@ -139,28 +166,31 @@ public container Registry for studio::core::Studio {
 
   /// Assemble the product: fetch the repo, README, and latest release; sum the
   /// asset sizes; and when the release carries a `dcs-studio.toml` asset, fetch +
-  /// parse it into the install plan (source → dest) and mark it installable —
-  /// EXCEPT a library (carrying `dcs-studio-library`), which is forced
-  /// non-installable regardless of the manifest asset (issue #48: you bundle a
-  /// library as a dependency, you don't install it into the sim).
+  /// parse it into the install plan (source → dest) AND the mod's direct declared
+  /// `[[dependencies]]`, then mark it installable — EXCEPT a library (carrying
+  /// `dcs-studio-library`), which is forced non-installable regardless of the
+  /// manifest asset (issue #48: you bundle a library as a dependency, you don't
+  /// install it into the sim).
   BuildProduct(owner: string, name: string, token: string): Result<studio::market::ProductDetail, studio::market::MarketError>;
 }
 
 /// Installs, tracks, and removes mods downloaded from the store.
 public container Library for studio::core::Studio {
-  /// Install a discovered mod (sign-in gated): download the release's payload
-  /// (`.zip` asset), unpack it to a content store, and place each `[[install]]`
-  /// rule by LINKING its destination to the store source — a junction for a
-  /// directory, a hard link for a same-volume file, a symlink otherwise (and if
-  /// that cross-volume symlink needs privilege on Windows, a one-shot elevated
-  /// PowerShell `New-Item -SymbolicLink` fallback via UAC — base64-encoded so a
-  /// manifest path can't inject, link verified to point at the store source);
-  /// never a copy. The two hard rules still hold: a
-  /// source must exist in the payload, and
-  /// each dest must resolve under a whitelisted root (the studio::installer
-  /// guard). Records a ledger of placed links for uninstall.
+  /// Install a discovered mod and everything it depends on (sign-in gated).
+  /// First resolves the transitive `[[dependencies]]` graph rooted at the mod
+  /// into a dependency-before-dependent plan, then places each node: download the
+  /// release payload (`.zip` asset), unpack it to a content store, and place each
+  /// `[[install]]` rule by LINKING its destination to the store source — a
+  /// junction for a directory, a hard link for a same-volume file, a symlink
+  /// otherwise (and if that cross-volume symlink needs privilege on Windows, a
+  /// one-shot elevated PowerShell `New-Item -SymbolicLink` fallback via UAC —
+  /// base64-encoded so a manifest path can't inject, link verified to point at the
+  /// store source); never a copy. The two hard rules still hold per node: a source
+  /// must exist in the payload, and each dest must resolve under a whitelisted root
+  /// (the studio::installer guard). Records a ledger of placed links + declared
+  /// dependency ids + an explicit/auto flag for refcounted uninstall.
   #[manual]
-  public Install(owner: string, name: string): Result<studio::market::InstallReport, studio::market::MarketError> {
+  public Install(owner: string, name: string): Result<studio::market::InstallOutcome, studio::market::MarketError> {
     token = Option<string> from self.AuthToken()
     if (token.isNone) {
       refused = studio::market::MarketError from self.SignInRequired()
@@ -173,12 +203,35 @@ public container Library for studio::core::Studio {
       blocked = studio::market::MarketError from self.LibraryNotInstallable(owner, name)
       return Err(blocked)
     }
-    staged = Result<string, studio::market::MarketError> from self.DownloadPayload(owner, name, token.value)
-    if (staged.isErr) {
-      return Err(staged.error)
+    plan = Result<studio::market::PlanNode[], studio::market::MarketError> from self.ResolvePlan(owner, name, token.value)
+    if (plan.isErr) {
+      return Err(plan.error)
     }
-    return self.DeployAndRecord(owner, name, staged.value)
+    return self.InstallPlan(owner, name, plan.value, token.value)
   }
+
+  /// Resolve the transitive `[[dependencies]]` graph rooted at `owner/name` into a
+  /// dependency-before-dependent ordering (the root is the LAST node). Each
+  /// dependency `id` is another Marketplace mod (`owner/name`) whose manifest is
+  /// fetched and whose own dependencies are walked. The decisions: a dependency
+  /// that is itself a LIBRARY is refused (a library belongs in `CargoLua.toml`,
+  /// model studio::cargolua — not installed into the sim); a CYCLE (a mod
+  /// reachable from itself) is refused; a REQUIRED dependency that cannot be
+  /// resolved (gone, no release/manifest, malformed id) fails the resolve, while
+  /// an OPTIONAL one is dropped with a warning; a dependency whose latest release
+  /// tag does not satisfy its `version` constraint is KEPT with a warning. A
+  /// dependency already installed and satisfying is emitted as an `alreadyInstalled`
+  /// node so its links are not replaced.
+  ResolvePlan(owner: string, name: string, token: string): Result<studio::market::PlanNode[], studio::market::MarketError>;
+
+  /// Place each node of the resolved plan in order: download + unpack + LINK a
+  /// node not yet on disk (the link rules + two hard guards above), or skip the
+  /// link step for an `alreadyInstalled` one. Record each in the ledger with its
+  /// declared dependency ids and whether it was installed EXPLICITLY (the root
+  /// `owner/name`) or pulled in only as a dependency — the flag uninstall's
+  /// garbage collection reads (an already-explicit node is never demoted to auto).
+  /// Returns the aggregate outcome (root, pulled-in dependencies, links, warnings).
+  InstallPlan(owner: string, name: string, plan: studio::market::PlanNode[], token: string): Result<studio::market::InstallOutcome, studio::market::MarketError>;
 
   /// Whether the repo carries the `dcs-studio-library` topic — a `GetRepo` REST
   /// query (the authoritative topic source), so the guard costs one round-trip
@@ -194,18 +247,46 @@ public container Library for studio::core::Studio {
   /// The "sign in to install" refusal.
   SignInRequired(): studio::market::MarketError;
 
-  /// Download the release's payload `.zip` and unpack it to a per-mod content
-  /// store; returns that directory (a project-shaped tree with `dcs-studio.toml`).
-  DownloadPayload(owner: string, name: string, token: string): Result<string, studio::market::MarketError>;
+  /// Remove an installed mod and any dependencies orphaned by its removal
+  /// (refcounted). A mod another installed mod still DEPENDS ON cannot be removed
+  /// — its dependents must go first. Otherwise undo its deployed links, drop its
+  /// content store + ledger entry, then garbage-collect every dependency that is
+  /// now orphaned: pulled in only as a dependency (not explicitly installed) and
+  /// no longer required by anything still installed.
+  #[manual]
+  public Uninstall(id: string): Result<studio::market::UninstallOutcome, studio::market::MarketError> {
+    known = bool from self.IsInstalled(id)
+    if (!known) {
+      missing = studio::market::MarketError from self.NotInstalled(id)
+      return Err(missing)
+    }
+    required = bool from self.HasDependents(id)
+    if (required) {
+      blocked = studio::market::MarketError from self.StillRequired(id)
+      return Err(blocked)
+    }
+    removed = string[] from self.RemoveWithOrphans(id)
+    outcome = studio::market::UninstallOutcome from { removed }
+    return Ok(outcome)
+  }
 
-  /// Link the unpacked payload's `[[install]]` destinations to the store sources
-  /// (junction/hard-link/symlink, never copy) and record a ledger entry of the
-  /// placed links for uninstall.
-  DeployAndRecord(owner: string, name: string, store: string): Result<studio::market::InstallReport, studio::market::MarketError>;
+  /// Whether `id` (`owner/name`) is recorded in the install ledger.
+  IsInstalled(id: string): bool;
 
-  /// Remove an installed mod: undo its deployed files and drop its content store
-  /// + ledger entry.
-  public Uninstall(id: string): Result<void, studio::market::MarketError>;
+  /// The "{id} is not installed" refusal.
+  NotInstalled(id: string): studio::market::MarketError;
+
+  /// Whether another installed mod lists `id` among its declared dependencies —
+  /// the refcount that blocks removing a still-needed dependency.
+  HasDependents(id: string): bool;
+
+  /// The "{id} is required by other installed mods — remove them first" refusal.
+  StillRequired(id: string): studio::market::MarketError;
+
+  /// Remove `id` (unlink, drop store + ledger entry), then repeatedly drop every
+  /// dependency that has become orphaned (auto-installed and no longer required);
+  /// returns every id removed.
+  RemoveWithOrphans(id: string): string[];
 
   /// The ids (`owner/name`) of installed mods — drives the product page's
   /// Install / Installed state.
@@ -281,4 +362,73 @@ feature UninstallRemovesWhatWasInstalled for studio::market::Library {
   when "the user uninstalls it"
   then "every link it placed is removed and its content store + ledger entry are dropped"
   but "the link targets (the user's other files) are never followed or deleted"
+}
+
+/// Installing a mod pulls in the other Marketplace mods it declares as
+/// dependencies, transitively, before itself.
+feature InstallResolvesDependenciesTransitively for studio::market::Library {
+  given "an installable mod whose `[[dependencies]]` name other Marketplace mods, each with its own dependencies"
+  when "the user installs it"
+  then "every dependency is resolved and installed before the mod that needs it"
+  and "the outcome lists the root plus every dependency that was pulled in"
+}
+
+/// The product page shows what a mod depends on before you install it.
+feature ProductListsDeclaredDependencies for studio::market::Registry {
+  given "a mod whose manifest declares `[[dependencies]]`"
+  when "its product page is opened"
+  then "each direct dependency (`owner/name` and version constraint) is listed"
+}
+
+/// A dependency graph that loops back on itself is refused rather than walked
+/// forever.
+feature DependencyCycleIsRejected for studio::market::Library {
+  given "two mods that declare each other as dependencies (or a mod that declares itself)"
+  when "either is installed"
+  then "the resolve is refused with a dependency-cycle error"
+  but "nothing is installed"
+}
+
+/// A required dependency that cannot be resolved fails the whole install; an
+/// optional one is merely skipped.
+feature RequiredDependencyMissingFailsInstall for studio::market::Library {
+  given "a mod declaring a required dependency whose repo is gone or ships no installable release"
+  when "the mod is installed"
+  then "the install fails and nothing is placed"
+  but "had the dependency been marked optional, it would be skipped with a warning and the mod installed"
+}
+
+/// The Marketplace serves only a repo's latest release, so a version constraint
+/// can only warn, never block.
+feature VersionMismatchWarnsNotFails for studio::market::Library {
+  given "a mod depending on another at a version its latest release does not satisfy"
+  when "the mod is installed"
+  then "the dependency's latest release is installed anyway"
+  and "the outcome carries a version-mismatch warning"
+}
+
+/// A dependency must be a mod, not a library — a library is bundled at build
+/// time (lua-cargo), never installed into the sim.
+feature DependencyOnALibraryIsRejected for studio::market::Library {
+  given "a mod whose `[[dependencies]]` names a repo carrying the `dcs-studio-library` topic"
+  when "the mod is installed"
+  then "the resolve is refused, directing the author to declare the library in CargoLua.toml instead"
+}
+
+/// A dependency shared by two installed mods is reference-counted: removing one
+/// dependent leaves it in place for the other.
+feature SharedDependencySurvivesUninstall for studio::market::Library {
+  given "two installed mods that both depend on the same third mod"
+  when "one of the two dependents is uninstalled"
+  then "the shared dependency stays installed because the other still needs it"
+  but "uninstalling a mod that is still depended upon is refused outright"
+}
+
+/// Removing a mod also removes the dependencies it alone pulled in, so an
+/// auto-installed dependency never lingers as an orphan.
+feature UninstallGarbageCollectsOrphans for studio::market::Library {
+  given "a mod installed together with a dependency nothing else needs"
+  when "the mod is uninstalled"
+  then "the now-orphaned dependency is garbage-collected with it"
+  but "a dependency the user had also installed explicitly is kept"
 }

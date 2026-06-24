@@ -12,6 +12,12 @@ pub struct Manifest {
     pub project: ProjectMeta,
     #[serde(default)]
     pub install: Vec<InstallRule>,
+    /// `[[dependencies]]` — other Marketplace mods this one requires, resolved +
+    /// installed transitively by the Marketplace (model `studio::market`,
+    /// issue #10). An absent section means no dependencies. (A required STOCK
+    /// DCS module is a different prerequisite — issue #65 — not expressed here.)
+    #[serde(default)]
+    pub dependencies: Vec<DependencyRule>,
     /// `[format]` — Lua formatter options (SPEC.md §7); an absent section
     /// (or field) formats with house-style defaults.
     #[serde(default)]
@@ -87,6 +93,28 @@ pub struct ProjectMeta {
 pub struct InstallRule {
     pub source: String,
     pub dest: String,
+}
+
+/// One `[[dependencies]]` entry (model `studio::market::Dependency`): another
+/// Marketplace mod this one needs. `id` is the dependency's `owner/name` — the
+/// same id the Marketplace ledger keys on. `version` is a semver constraint
+/// matched against the dependency's latest release tag (`*` or empty = any; a
+/// mismatch warns, never fails). An `optional` dependency that can't be resolved
+/// is skipped with a warning instead of failing the install.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DependencyRule {
+    pub id: String,
+    /// Display name for the dependency; falls back to `id` when omitted.
+    #[serde(default)]
+    pub name: String,
+    /// Semver constraint against the dependency's latest release tag; empty or
+    /// `*` means any version.
+    #[serde(default)]
+    pub version: String,
+    /// An optional dependency is skipped (with a warning) when unresolvable,
+    /// rather than failing the install.
+    #[serde(default)]
+    pub optional: bool,
 }
 
 /// Parse manifest text.
@@ -199,6 +227,28 @@ mod tests {
                 .expect("tolerant parse");
         assert_eq!(manifest.project.name, "x");
         assert!(manifest.install.is_empty());
+        // An absent `[[dependencies]]` section means no dependencies.
+        assert!(manifest.dependencies.is_empty());
+    }
+
+    #[test]
+    fn dependencies_parse_with_tolerant_defaults() {
+        let manifest = parse(
+            "[project]\nname = \"x\"\n\n\
+             [[dependencies]]\nid = \"flying-dice/base-mod\"\nname = \"Base Mod\"\nversion = \"^1.2\"\noptional = false\n\n\
+             [[dependencies]]\nid = \"octocat/extras\"\n",
+        )
+        .expect("dependencies parse");
+        assert_eq!(manifest.dependencies.len(), 2);
+        assert_eq!(manifest.dependencies[0].id, "flying-dice/base-mod");
+        assert_eq!(manifest.dependencies[0].name, "Base Mod");
+        assert_eq!(manifest.dependencies[0].version, "^1.2");
+        assert!(!manifest.dependencies[0].optional);
+        // The second entry omits everything but `id` — defaults fill the rest.
+        assert_eq!(manifest.dependencies[1].id, "octocat/extras");
+        assert_eq!(manifest.dependencies[1].name, "");
+        assert_eq!(manifest.dependencies[1].version, "");
+        assert!(!manifest.dependencies[1].optional);
     }
 
     #[test]

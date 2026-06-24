@@ -34,6 +34,11 @@ class MarketplaceStore {
   installedIds = $state<string[]>([]);
   installBusy = $state(false);
   installError = $state<string | null>(null);
+  /** Last install/uninstall result worth surfacing: which dependencies were
+   * pulled in / removed. Cleared when a new install/uninstall starts. */
+  installNotice = $state<string | null>(null);
+  /** Non-fatal install warnings (version mismatches, skipped optional deps). */
+  installWarnings = $state<string[]>([]);
 
   // Monotonic token so a slow product load can't clobber a newer one (rapid
   // A→B→A navigation): only the latest call writes its result.
@@ -62,6 +67,11 @@ class MarketplaceStore {
     this.productBusy = true;
     this.productError = null;
     this.product = null;
+    // Drop any install/uninstall result from a previously-viewed product so its
+    // notice/warnings/error don't bleed onto this page's install card.
+    this.installError = null;
+    this.installNotice = null;
+    this.installWarnings = [];
     try {
       const detail = await marketProduct(owner, name);
       if (gen === this.#productGen) this.product = detail;
@@ -86,13 +96,23 @@ class MarketplaceStore {
     }
   }
 
-  /** Install a mod (download payload + link into the DCS roots), then refresh. */
+  /** Install a mod and its dependencies (resolve → download → link), then
+   * refresh. Surfaces the dependencies pulled in and any non-fatal warnings. */
   async install(owner: string, name: string): Promise<void> {
     if (this.installBusy) return;
     this.installBusy = true;
     this.installError = null;
+    this.installNotice = null;
+    this.installWarnings = [];
     try {
-      await marketInstall(owner, name);
+      const outcome = await marketInstall(owner, name);
+      this.installWarnings = outcome.warnings;
+      this.installNotice =
+        outcome.installed_deps.length > 0
+          ? `Installed with ${outcome.installed_deps.length} ${
+              outcome.installed_deps.length === 1 ? "dependency" : "dependencies"
+            }: ${outcome.installed_deps.join(", ")}`
+          : null;
       await this.refreshInstalled();
     } catch (error) {
       this.installError = errorMessage(error);
@@ -101,13 +121,23 @@ class MarketplaceStore {
     }
   }
 
-  /** Uninstall a mod by id (`owner/name`), then refresh. */
+  /** Uninstall a mod by id (`owner/name`), then refresh. Surfaces any
+   * dependencies garbage-collected along with it. */
   async uninstall(id: string): Promise<void> {
     if (this.installBusy) return;
     this.installBusy = true;
     this.installError = null;
+    this.installNotice = null;
+    this.installWarnings = [];
     try {
-      await marketUninstall(id);
+      const outcome = await marketUninstall(id);
+      const alsoRemoved = outcome.removed.filter((r) => r !== id);
+      this.installNotice =
+        alsoRemoved.length > 0
+          ? `Also removed ${alsoRemoved.length} orphaned ${
+              alsoRemoved.length === 1 ? "dependency" : "dependencies"
+            }: ${alsoRemoved.join(", ")}`
+          : null;
       await this.refreshInstalled();
     } catch (error) {
       this.installError = errorMessage(error);
@@ -126,6 +156,8 @@ class MarketplaceStore {
     this.productError = null;
     this.installedIds = [];
     this.installError = null;
+    this.installNotice = null;
+    this.installWarnings = [];
     this.#productGen += 1; // abandon any in-flight product load
   }
 }

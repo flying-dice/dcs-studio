@@ -543,6 +543,18 @@ export interface InstallEntry {
 }
 
 /**
+ * One `[[dependencies]]` entry — another Marketplace mod this one needs (model
+ * `Dependency`). `id` is the dependency's `owner/name`; `version` is a semver
+ * constraint (`*`/empty = any); `optional` deps are skipped when unresolvable.
+ */
+export interface ProductDependency {
+  id: string;
+  name: string;
+  version: string;
+  optional: boolean;
+}
+
+/**
  * A mod's product page (model studio::market `ProductDetail`): repo header,
  * README source (markdown), the latest release's assets + total `download_size`
  * (bytes), and the install plan from the `dcs-studio.toml` asset. `installable`
@@ -564,6 +576,9 @@ export interface ProductDetail {
   installable: boolean;
   is_library: boolean;
   installs: InstallEntry[];
+  /** Direct declared dependencies (other Marketplace mods); the full transitive
+   * set is resolved at install time. */
+  dependencies: ProductDependency[];
 }
 
 /** Load one mod's product page (README + install plan + size). Sign-in gated. */
@@ -571,20 +586,36 @@ export function marketProduct(owner: string, name: string): Promise<ProductDetai
   return invoke<ProductDetail>("market_product", { owner, name });
 }
 
-/** What an install pass linked into the DCS roots (model `InstallReport`). */
-export interface InstallReport {
-  copied: number;
-  files: string[];
+/**
+ * What an install pass did (model `InstallOutcome`): the root mod, every
+ * dependency newly pulled in (`owner/name`), the total links placed, and any
+ * non-fatal warnings (version mismatches, skipped optional dependencies).
+ */
+export interface InstallOutcome {
+  root: string;
+  installed_deps: string[];
+  links: number;
+  warnings: string[];
 }
 
-/** Install a mod: download the release payload + link it into the DCS roots. */
-export function marketInstall(owner: string, name: string): Promise<InstallReport> {
-  return invoke<InstallReport>("market_install", { owner, name });
+/**
+ * Install a mod and its transitive Marketplace dependencies: resolve the
+ * `[[dependencies]]` graph, then download + link each into the DCS roots.
+ */
+export function marketInstall(owner: string, name: string): Promise<InstallOutcome> {
+  return invoke<InstallOutcome>("market_install", { owner, name });
 }
 
-/** Uninstall a mod by id (`owner/name`): remove its links + content store. */
-export function marketUninstall(id: string): Promise<void> {
-  return invoke<void>("market_uninstall", { id });
+/** What an uninstall pass removed (model `UninstallOutcome`): the target plus
+ * any dependencies garbage-collected with it. */
+export interface UninstallOutcome {
+  removed: string[];
+}
+
+/** Uninstall a mod by id (`owner/name`): remove its links + content store, and
+ * garbage-collect any dependency orphaned by its removal. */
+export function marketUninstall(id: string): Promise<UninstallOutcome> {
+  return invoke<UninstallOutcome>("market_uninstall", { id });
 }
 
 /** The ids (`owner/name`) of installed mods. */

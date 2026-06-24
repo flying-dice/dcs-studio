@@ -4,8 +4,7 @@
 // logged-in user's token Rust-side when signed in. `force` (the panel's Refresh)
 // bypasses the fresh-cache shortcut.
 
-use dcs_studio_project::InstallReport;
-use studio_services::market::{MarketListing, ProductDetail};
+use studio_services::market::{InstallOutcome, MarketListing, ProductDetail, UninstallOutcome};
 
 /// Discover dcs-studio mods on GitHub by topic; see `market::discover`.
 #[tauri::command]
@@ -24,17 +23,19 @@ pub async fn market_product(owner: String, name: String) -> Result<ProductDetail
         .map_err(|e| format!("product task failed: {e}"))?
 }
 
-/// Install a mod: download the release payload + link it into the DCS roots.
+/// Install a mod and its transitive Marketplace dependencies: resolve the
+/// `[[dependencies]]` graph, then download + link each into the DCS roots.
 #[tauri::command]
-pub async fn market_install(owner: String, name: String) -> Result<InstallReport, String> {
+pub async fn market_install(owner: String, name: String) -> Result<InstallOutcome, String> {
     tauri::async_runtime::spawn_blocking(move || studio_services::market::install(&owner, &name))
         .await
         .map_err(|e| format!("install task failed: {e}"))?
 }
 
-/// Uninstall a mod by id (`owner/name`): remove its links + content store.
+/// Uninstall a mod by id (`owner/name`): remove its links + content store, and
+/// garbage-collect any dependency orphaned by its removal.
 #[tauri::command]
-pub async fn market_uninstall(id: String) -> Result<(), String> {
+pub async fn market_uninstall(id: String) -> Result<UninstallOutcome, String> {
     tauri::async_runtime::spawn_blocking(move || studio_services::market::uninstall(&id))
         .await
         .map_err(|e| format!("uninstall task failed: {e}"))?
