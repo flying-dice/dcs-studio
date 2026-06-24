@@ -31,12 +31,13 @@ pub const SCHEME: &str = "dcs-studio";
 /// The single frontend navigation event both routes drive.
 const NAVIGATE_EVENT: &str = "deeplink://navigate";
 
-/// A classified deep link — the payload the frontend consumes. `route()`
-/// produces this purely; `Ignore` covers every unhandled or malformed input and
-/// is never emitted (only logged).
+/// A classified deep link — the payload the frontend consumes (the serialized
+/// return of `deeplink_take_pending`, so `pub` like the crate's other command
+/// types). `route()` produces this purely; `Ignore` covers every unhandled or
+/// malformed input and is never emitted (only logged).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum Route {
+pub enum Route {
     /// `marketplace/<owner>/<repo>` → navigate to the product page.
     Marketplace { owner: String, repo: String },
     /// `open?path=<abs>` → open that local project.
