@@ -133,6 +133,16 @@ impl Resolver<'_> {
 
         // A non-root mod already installed is a satisfied leaf: its payload and
         // its own resolved subtree are on disk, so don't re-walk or re-fetch it.
+        //
+        // DELIBERATE (v1): the leaf carries no tag, so `version_warning` is a
+        // no-op for it — a constraint against an ALREADY-INSTALLED dependency does
+        // not warn, whereas one against a freshly-resolved dependency does. The
+        // asymmetry is intentional and harmless: the Marketplace serves only a
+        // repo's latest release and never replaces an installed copy, so there is
+        // no action a warning could prompt here (the install proceeds either way),
+        // and the ledger does not record per-mod tags to compare against. If a
+        // future slice lets installs upgrade an existing dependency, carry the
+        // installed tag here so the same warning fires symmetrically.
         if !is_root && self.src.is_installed(&id) {
             self.tags.insert(id.clone(), None);
             self.emit(PlanNode {

@@ -350,12 +350,29 @@ fn place_one(
     Ok((store.to_string_lossy().to_string(), links))
 }
 
+/// Refresh an already-on-disk plan node's ledger entry. The ROOT is always fully
+/// re-walked by the resolver, so its `node.deps` are its real current edges —
+/// refresh them and promote it to explicit (the user asked for it directly). A
+/// NON-root already-installed dependency is emitted by the resolver as a LEAF
+/// with `deps: []` (its subtree is on disk, not re-walked), so its ledger edges
+/// are already correct from its OWN install — they must NOT be overwritten.
+/// Clobbering them to `[]` would drop its sub-dependencies' refcount edges, so a
+/// still-needed transitive dependency would look orphaned and be garbage-
+/// collected on the next uninstall, silently breaking the installed mod.
+fn refresh_already_installed(entry: &mut InstalledEntry, node: &PlanNode, is_root: bool) {
+    if is_root {
+        entry.deps = node.deps.clone();
+        entry.explicit = true;
+    }
+}
+
 /// Place each node of a resolved plan in order (model `Library.InstallPlan`):
 /// download + link a node not yet on disk, or skip the link step for one already
 /// installed; record the ledger with each node's declared dependency ids and
 /// whether it was installed explicitly (the root) or only pulled in. On any
-/// failure the nodes placed in THIS pass are rolled back so a partial install
-/// leaves nothing behind. Returns the aggregate outcome.
+/// failure the nodes placed in THIS pass are rolled back — both their links AND
+/// the content stores freshly unpacked for them — so a partial install leaves
+/// nothing behind. Returns the aggregate outcome.
 fn install_plan(
     owner: &str,
     name: &str,
@@ -365,8 +382,11 @@ fn install_plan(
 ) -> Result<InstallOutcome, String> {
     let root_id = format!("{owner}/{name}");
     let mut ledger = read_ledger();
-    // Links placed in THIS pass, for rollback if a later node fails.
-    let mut placed_this_pass: Vec<String> = Vec::new();
+    // Links + content stores placed in THIS pass, for rollback if a later node
+    // fails (the stores are freshly unpacked here, so dropping them on rollback
+    // truly leaves nothing behind — they aren't shared with a prior install).
+    let mut placed_links: Vec<String> = Vec::new();
+    let mut placed_stores: Vec<String> = Vec::new();
     let mut total_links = 0usize;
     let mut installed_deps: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -376,13 +396,8 @@ fn install_plan(
         let is_root = node.id == root_id;
 
         if node.already_installed {
-            // Already on disk: keep its links/store, just ensure its ledger edges
-            // (deps) are current. Promote to explicit if this is the root.
             if let Some(entry) = ledger.get_mut(&node.id) {
-                entry.deps = node.deps.clone();
-                if is_root {
-                    entry.explicit = true;
-                }
+                refresh_already_installed(entry, node, is_root);
             }
             continue;
         }
@@ -393,7 +408,8 @@ fn install_plan(
             .ok_or_else(|| format!("invalid mod id in plan: {}", node.id))?;
         match place_one(parts_owner, parts_name, token, roots) {
             Ok((store, links)) => {
-                placed_this_pass.extend(links.iter().cloned());
+                placed_links.extend(links.iter().cloned());
+                placed_stores.push(store.clone());
                 total_links += links.len();
                 ledger.insert(
                     node.id.clone(),
@@ -409,7 +425,10 @@ fn install_plan(
                 }
             }
             Err(e) => {
-                rollback(&placed_this_pass);
+                rollback(&placed_links);
+                for store in &placed_stores {
+                    let _ = std::fs::remove_dir_all(store);
+                }
                 return Err(format!("installing {}: {e}", node.id));
             }
         }
@@ -689,6 +708,60 @@ mod tests {
         assert!(!l.contains_key("o/root"));
         assert!(l.contains_key("o/a"));
         assert!(l.contains_key("o/b"));
+    }
+
+    #[test]
+    fn re_encountering_an_installed_dependency_keeps_its_subdep_edges() {
+        // Regression (shockwave !52): installing a mod that depends on an
+        // ALREADY-INSTALLED mod must not wipe that mod's own dependency edges, or
+        // its sub-dependency gets wrongly garbage-collected on a later uninstall.
+        //
+        // Given o/a (explicit) requires o/b; both installed.
+        let mut l = ledger(&[
+            ("o/a", entry(&["o/b"], true)),
+            ("o/b", entry(&[], false)),
+        ]);
+        // When o/root (requires o/a) is installed: the resolver emits o/a as an
+        // already-installed LEAF with deps:[] (its subtree is on disk). The
+        // install pass refreshes o/a's entry with that leaf node.
+        let a_leaf = PlanNode {
+            id: "o/a".to_string(),
+            deps: Vec::new(),
+            already_installed: true,
+            warnings: Vec::new(),
+        };
+        if let Some(entry) = l.get_mut("o/a") {
+            refresh_already_installed(entry, &a_leaf, /* is_root */ false);
+        }
+        l.insert("o/root".to_string(), entry(&["o/a"], true));
+
+        // o/a's real edge to o/b must survive (NOT clobbered to []).
+        assert_eq!(
+            l.get("o/a").unwrap().deps,
+            vec!["o/b".to_string()],
+            "the installed dependency keeps its own sub-dependency edge"
+        );
+        // Then uninstalling o/root removes only o/root — o/a still needs o/b.
+        let removed = plan_removal(&l, "o/root").unwrap();
+        assert_eq!(removed, vec!["o/root".to_string()]);
+        assert!(l.contains_key("o/a") && l.contains_key("o/b"), "subtree intact");
+    }
+
+    #[test]
+    fn re_installing_the_root_refreshes_its_edges_and_marks_it_explicit() {
+        // The root IS fully re-walked, so its already-installed refresh DOES apply
+        // the resolver's real deps and promotes it to explicit (e.g. a mod first
+        // pulled in as an auto dependency, later installed directly).
+        let mut entry = entry(&["o/old"], false);
+        let root_node = PlanNode {
+            id: "o/root".to_string(),
+            deps: vec!["o/new".to_string()],
+            already_installed: true,
+            warnings: Vec::new(),
+        };
+        refresh_already_installed(&mut entry, &root_node, /* is_root */ true);
+        assert_eq!(entry.deps, vec!["o/new".to_string()], "root edges refreshed");
+        assert!(entry.explicit, "root promoted to explicit");
     }
 
     #[test]
