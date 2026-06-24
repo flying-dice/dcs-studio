@@ -5,14 +5,17 @@
 	import { mcp } from "$lib/mcp.svelte";
 	import { notifications } from "$lib/notifications.svelte";
 	import { deeplinks } from "$lib/deeplink";
+	import { typeSync } from "$lib/types-sync.svelte";
 	import { editorThemeById, chromeVars } from "$lib/themes";
 
 	let { children } = $props();
 
 	// Start listening for the Rust-side DCS link events (status bar feed),
 	// snapshot the IDE-hosted MCP server status (issue #39) for the status bar,
-	// and arm the notification center's event listeners (issue #56) so events
-	// are captured even before the panel is ever opened.
+	// arm the notification center's event listeners (issue #56) so events are
+	// captured even before the panel is ever opened, and subscribe to the
+	// type-sync reindex signal (issue #50) so a fresh `.d.lua` takes effect
+	// without a project reopen.
 	onMount(() => {
 		app.initDcs();
 		void app.initWatcher();
@@ -21,6 +24,7 @@
 		// Route incoming dcs-studio:// links (marketplace / open) into the IDE,
 		// and drain any link that cold-started it (issue #44).
 		void deeplinks.init();
+		void typeSync.init();
 	});
 
 	// The selected editor theme drives the whole UI. We (a) toggle `.dark` so
