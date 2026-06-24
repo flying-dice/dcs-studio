@@ -73,6 +73,17 @@ pub struct InstallEntry {
     pub dest: String,
 }
 
+/// One `[[dependencies]]` entry shown on the product page (model `Dependency`):
+/// another Marketplace mod (`id` = `owner/name`) this one needs, its version
+/// constraint, and whether it is optional.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProductDependency {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub optional: bool,
+}
+
 /// A mod's product page (model `ProductDetail`): repo header, README source,
 /// the latest release's assets + total download size, and the install plan
 /// parsed from the `dcs-studio.toml` release asset (`installable` only when that
@@ -93,6 +104,9 @@ pub struct ProductDetail {
     pub download_size: u64,
     pub installable: bool,
     pub installs: Vec<InstallEntry>,
+    /// The mod's direct declared `[[dependencies]]` (other Marketplace mods);
+    /// the full transitive set is resolved at install time, not here.
+    pub dependencies: Vec<ProductDependency>,
     /// A dependency-only library (issue #48): forced non-installable; the product
     /// page offers "Add as dependency" instead of Install.
     pub is_library: bool,
@@ -345,17 +359,27 @@ fn assemble_product(
     // A library is NEVER installable into DCS, regardless of a manifest asset
     // (issue #48): you bundle it as a dependency, not install it into the sim.
     let installable = manifest.is_some() && !is_library;
-    let installs = manifest
-        .map(|m| {
+    let (installs, dependencies) = match manifest {
+        Some(m) => (
             m.install
                 .into_iter()
                 .map(|r| InstallEntry {
                     source: r.source,
                     dest: r.dest,
                 })
-                .collect()
-        })
-        .unwrap_or_default();
+                .collect(),
+            m.dependencies
+                .into_iter()
+                .map(|d| ProductDependency {
+                    id: d.id,
+                    name: d.name,
+                    version: d.version,
+                    optional: d.optional,
+                })
+                .collect(),
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
     let (release_tag, release_url, assets, download_size) = match release {
         Some(r) => {
             let total = r.assets.iter().map(|a| a.size).sum();
@@ -378,6 +402,7 @@ fn assemble_product(
         download_size,
         installable,
         installs,
+        dependencies,
         is_library,
     }
 }
@@ -465,9 +490,11 @@ fn fall_back_to_cache(error: &str) -> Result<Vec<MarketListing>, String> {
 
 // --- install: the engine lives in the `library` submodule (model studio::market
 // `Library`); these are its public entry points. The discovery slice above
-// (search, product, cache) stays in this module. -----------------------------
+// (search, product, cache) stays in this module. The dependency walk
+// (`Library.ResolvePlan`) is the `resolve` submodule. -------------------------
 mod library;
-pub use library::{install, installed_ids, uninstall};
+mod resolve;
+pub use library::{InstallOutcome, UninstallOutcome, install, installed_ids, uninstall};
 
 #[cfg(test)]
 mod tests {
@@ -548,7 +575,7 @@ mod tests {
             ],
             manifest_url: Some("https://example.invalid/dcs-studio.toml".to_string()),
         };
-        let manifest = "[project]\nname = \"Cool\"\n\n[[install]]\nsource = \"dist\"\ndest = \"{SavedGames}/Scripts/cool\"\n";
+        let manifest = "[project]\nname = \"Cool\"\n\n[[install]]\nsource = \"dist\"\ndest = \"{SavedGames}/Scripts/cool\"\n\n[[dependencies]]\nid = \"flying-dice/base\"\nname = \"Base\"\nversion = \"^1.0\"\n";
         let p = assemble_product(
             repo("octocat", "cool-mod", &["dcs-studio"]),
             Some("# Cool".to_string()),
@@ -559,6 +586,10 @@ mod tests {
         assert_eq!(p.installs.len(), 1);
         assert_eq!(p.installs[0].source, "dist");
         assert_eq!(p.installs[0].dest, "{SavedGames}/Scripts/cool");
+        // The product page surfaces the mod's direct declared dependencies.
+        assert_eq!(p.dependencies.len(), 1);
+        assert_eq!(p.dependencies[0].id, "flying-dice/base");
+        assert_eq!(p.dependencies[0].version, "^1.0");
         assert_eq!(p.download_size, 1200, "summed asset bytes");
         assert_eq!(p.release_tag.as_deref(), Some("v2.0.0"));
         assert_eq!(p.readme.as_deref(), Some("# Cool"));

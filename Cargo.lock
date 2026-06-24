@@ -5468,6 +5468,7 @@ dependencies = [
  "keyring",
  "portable-pty",
  "rusqlite",
+ "semver",
  "serde",
  "serde_json",
  "tokio",

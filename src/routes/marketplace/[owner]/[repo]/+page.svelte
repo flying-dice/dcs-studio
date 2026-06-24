@@ -32,6 +32,8 @@
     Trash2,
     Library,
     Plus,
+    Boxes,
+    TriangleAlert,
   } from "@lucide/svelte";
 
   const owner = $derived($page.params.owner ?? "");
@@ -326,7 +328,47 @@
             {#if marketplace.installError}
               <p class="mt-2 text-[11px] text-destructive" data-testid="product-install-error">{marketplace.installError}</p>
             {/if}
+            {#if marketplace.installNotice}
+              <p class="mt-2 text-[11px] text-muted-foreground" data-testid="product-install-notice">{marketplace.installNotice}</p>
+            {/if}
+            {#if marketplace.installWarnings.length > 0}
+              <ul class="mt-2 flex flex-col gap-1" data-testid="product-install-warnings">
+                {#each marketplace.installWarnings as w (w)}
+                  <li class="flex items-start gap-1 text-[11px] text-amber-600 dark:text-amber-500">
+                    <TriangleAlert class="mt-0.5 size-3 shrink-0" /><span>{w}</span>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
           </div>
+
+          {#if product.installable && product.dependencies.length > 0}
+            <div class="rounded-xl border border-border bg-card p-3">
+              <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                <Boxes class="size-3.5" /> Dependencies
+              </div>
+              <p class="mt-1.5 text-[11px] text-muted-foreground">
+                Installing this also installs {product.dependencies.length === 1 ? "this mod" : "these mods"}:
+              </p>
+              <ul class="mt-2 flex flex-col gap-2" data-testid="product-dependencies">
+                {#each product.dependencies as d (d.id)}
+                  <li class="flex flex-col gap-0.5 text-[11px]">
+                    <a
+                      href={`/marketplace/${d.id}`}
+                      class="truncate font-mono text-foreground underline-offset-2 hover:underline"
+                      title={d.id}
+                    >
+                      {d.id}
+                    </a>
+                    <span class="flex items-center gap-1.5 font-mono text-muted-foreground">
+                      <span>{d.version && d.version !== "*" ? d.version : "any version"}</span>
+                      {#if d.optional}<span class="rounded bg-muted px-1 py-0.5 text-[10px]">optional</span>{/if}
+                    </span>
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
 
           <div class="rounded-xl border border-border bg-card p-3">
             <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
