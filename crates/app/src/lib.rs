@@ -23,6 +23,7 @@ mod packages_cmd;
 mod startup;
 mod term;
 mod todos_cmd;
+mod types_cmd;
 mod watch;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -118,6 +119,8 @@ pub fn run() {
             packages_cmd::revalidate_packages,
             dcs::dcs_call,
             dcs::dcs_status,
+            types_cmd::sync_types,
+            types_cmd::type_drift,
             mcp::mcp_status,
             inject::dcs_detect_installs,
             inject::dcs_injection_status,

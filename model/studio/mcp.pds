@@ -396,6 +396,22 @@ public container McpServer for studio::core::Studio {
     pending = studio::mcp::NotImplemented from { "go-to-definition is not implemented in the engine yet" }
     return Err(pending)
   }
+
+  /// sync_types — make the workspace at `root` authoritative against the running
+  /// build: pull the sim's self-described and introspected types over the IDE's
+  /// shared link and write them under `root`/`types/generated/`, so a following
+  /// lua_diagnostics/lua_hover on that root resolves against the EXACT loaded
+  /// build. Delegates to the same `studio::types::TypeSync` the desktop action
+  /// uses; fails closed when no sim link is up (the link guard answers, never a
+  /// hang).
+  public SyncTypes(root: string): Result<studio::types::SyncResult, studio::types::TypeSyncError> {
+    self.EnsureLink()
+    synced = Result<studio::types::SyncResult, studio::types::TypeSyncError> from studio::types::TypeSync.Sync(root)
+    if (synced.isErr) {
+      return Err(synced.error)
+    }
+    return Ok(synced.value)
+  }
 }
 
 /// An agent runs Lua inside the live sim through the MCP surface.
@@ -454,4 +470,14 @@ feature AgentSeesRealDiagnostics for studio::mcp::McpServer {
   then "the engine's finding surfaces with its stable LUA-Exxx code"
   and "lua_hover on a documented local answers the same card the IDE shows"
   but "lua_complete and lua_definition answer a stable not-implemented error"
+}
+
+/// An agent makes a workspace authoritative against the running build through
+/// the same type-sync the IDE action uses.
+feature AgentSyncsTypesFromSim for studio::mcp::McpServer {
+  given "DCS runs with the bridge injected and an agent workspace root on disk"
+  when "an agent calls sync_types on that root"
+  then "the running sim's types are written under types/generated/ in the root"
+  and "a following lua_hover resolves a DCS API symbol against the synced build"
+  but "with no DCS listening sync_types fails closed, never a hang"
 }

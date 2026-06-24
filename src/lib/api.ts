@@ -326,6 +326,44 @@ export function dcsStatus(): Promise<DcsStatus> {
   return invoke<DcsStatus>("dcs_status");
 }
 
+/** A running-build version stamp (model studio::types `TypeStamp`). */
+export interface TypeStamp {
+  bridge_version: string;
+  dcs_version: string;
+}
+
+/** Outcome of a successful type sync (model studio::types `SyncResult`). */
+export interface SyncResult {
+  path: string;
+  bytes: number;
+  stamp: TypeStamp;
+}
+
+/**
+ * Drift verdict for the status bar (model studio::types `DriftStatus`):
+ * `in_sync` is false when the synced types no longer match the running build,
+ * nothing has been synced yet, or the link is down (the running build is unknown).
+ */
+export interface DriftStatus {
+  in_sync: boolean;
+  synced: TypeStamp | null;
+  running: TypeStamp | null;
+}
+
+/**
+ * "Sync types from DCS" (issue #50): pull the running build's authoritative
+ * `.d.lua` over the live link and write it under `<root>/types/generated/`, then
+ * signal a re-index. Rejects with a start-DCS-first message when the link is down.
+ */
+export function syncTypes(root: string): Promise<SyncResult> {
+  return invoke<SyncResult>("sync_types", { root });
+}
+
+/** Whether the project's synced types still match the running DCS build. */
+export function typeDrift(root: string): Promise<DriftStatus> {
+  return invoke<DriftStatus>("type_drift", { root });
+}
+
 /**
  * The IDE-hosted MCP server's status (model studio::mcp, issue #39): standard
  * MCP Streamable HTTP on a fixed loopback port, unauthenticated (loopback-only).

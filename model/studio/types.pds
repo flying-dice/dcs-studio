@@ -54,13 +54,20 @@ public data TypeSyncError { message: string }
 /// (`studio::link`), stamps and writes them under `types/generated/`, and signals
 /// the language layer to re-index without a project reopen. Fails closed when the
 /// sim isn't up; judges drift against the running build.
+///
+/// `root` is the project the operation targets — the open workspace for the
+/// desktop action, the agent-supplied root for the MCP `sync_types` tool — so
+/// the IDE and an agent run the exact same logic over an explicit root rather
+/// than an ambient one. The link is shared (`studio::link`) and so is not a
+/// parameter.
 public container TypeSync for studio::core::Studio {
-  /// "Sync types from DCS" — the single developer action. Refuses when the link
-  /// is not live (fail-closed: nothing is written, and the error tells the
-  /// developer to start DCS). Otherwise: read the running version stamp, pull the
-  /// `dcs_studio` module types and the introspected DCS API, write them to the
-  /// fixed `GENERATED_FILE` under `types/generated/`, and trigger a re-index.
-  public Sync(): Result<studio::types::SyncResult, studio::types::TypeSyncError> {
+  /// "Sync types from DCS" — the single developer action, over the project at
+  /// `root`. Refuses when the link is not live (fail-closed: nothing is written,
+  /// and the error tells the developer to start DCS). Otherwise: read the running
+  /// version stamp, pull the `dcs_studio` module types and the introspected DCS
+  /// API, write them to the fixed `GENERATED_FILE` under `root`/`types/generated/`,
+  /// and trigger a re-index.
+  public Sync(root: string): Result<studio::types::SyncResult, studio::types::TypeSyncError> {
     live = bool from self.LinkLive()
     if (!live) {
       down = studio::types::TypeSyncError from { "Start DCS first — live type sync needs a running sim link" }
@@ -74,7 +81,7 @@ public container TypeSync for studio::core::Studio {
     if (defs.isErr) {
       return Err(defs.error)
     }
-    written = Result<studio::types::SyncResult, studio::types::TypeSyncError> from self.WriteGenerated(stamp.value, defs.value)
+    written = Result<studio::types::SyncResult, studio::types::TypeSyncError> from self.WriteGenerated(root, stamp.value, defs.value)
     if (written.isErr) {
       return Err(written.error)
     }
@@ -97,30 +104,32 @@ public container TypeSync for studio::core::Studio {
   PullTypeDefs(): Result<dcs::bridge::TypeDefs, studio::types::TypeSyncError>;
 
   /// Prepend the TypeStamp as a header comment to `defs` and write the result to
-  /// the fixed `GENERATED_FILE`. The target is that constant — there is no
-  /// sim-derived path segment — so the write lands under `types/generated/` by
-  /// construction and a hand-written `types/*.d.lua` is structurally unreachable.
-  /// An IO failure surfaces as a TypeSyncError.
-  WriteGenerated(stamp: studio::types::TypeStamp, defs: dcs::bridge::TypeDefs): Result<studio::types::SyncResult, studio::types::TypeSyncError>;
+  /// the fixed `GENERATED_FILE` under `root`. The relative target is that
+  /// constant — there is no sim-derived path segment — so the write lands under
+  /// `root`/`types/generated/` by construction and a hand-written `types/*.d.lua`
+  /// is structurally unreachable. An IO failure surfaces as a TypeSyncError.
+  WriteGenerated(root: string, stamp: studio::types::TypeStamp, defs: dcs::bridge::TypeDefs): Result<studio::types::SyncResult, studio::types::TypeSyncError>;
 
   /// Signal the language layer to re-mount the workspace index so the freshly
   /// written `.d.lua` takes effect without a project reopen — the hook the
   /// fs-watcher (#40) and `lang.updateSource` path are wired into.
   Reindex(): void;
 
-  /// Read the stamp from the generated file's header, if a sync has ever run.
-  ReadSyncedStamp(): Option<studio::types::TypeStamp>;
+  /// Read the stamp from the generated file's header under `root`, if a sync has
+  /// ever run there.
+  ReadSyncedStamp(root: string): Option<studio::types::TypeStamp>;
 
   /// Whether two stamps describe the same running build (both the bridge and DCS
   /// versions equal).
   StampsMatch(a: studio::types::TypeStamp, b: studio::types::TypeStamp): bool;
 
   /// Drift verdict for the status bar: compare the stamp written into the
-  /// generated file against the RUNNING build pulled over the link. Out of sync
-  /// when no sync has run, when the link is down (running build unknown), or when
-  /// either version differs. Never a byte compare of files on disk.
-  public Drift(): studio::types::DriftStatus {
-    synced = Option<studio::types::TypeStamp> from self.ReadSyncedStamp()
+  /// generated file under `root` against the RUNNING build pulled over the link.
+  /// Out of sync when no sync has run, when the link is down (running build
+  /// unknown), or when either version differs. Never a byte compare of files on
+  /// disk.
+  public Drift(root: string): studio::types::DriftStatus {
+    synced = Option<studio::types::TypeStamp> from self.ReadSyncedStamp(root)
     if (synced.isNone) {
       never = studio::types::DriftStatus from { false }
       return never
