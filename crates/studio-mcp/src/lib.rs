@@ -990,7 +990,7 @@ fn lang_tool_specs() -> Vec<Value> {
         }),
         json!({
             "name": "lua_complete",
-            "description": "Completion suggestions. Not implemented in the engine yet — answers a stable JSON-RPC error so the contract holds.",
+            "description": "Completion suggestions at a 1-based line/character in a Lua file under the root: in-scope locals, workspace global roots, and the members of a `recv.` access (named-type fields + dotted-global members). Each item carries a kind, a signature detail, the doc run, and a snippet insertText for functions.",
             "inputSchema": position_schema.clone()
         }),
         json!({
@@ -1008,9 +1008,7 @@ fn lang_tools(name: &str, args: &Value) -> Option<Result<Value, ToolError>> {
                 .map(|root| lua_diagnostics_tool(Path::new(root))),
         ),
         "lua_hover" => Some(lua_hover_tool(args)),
-        "lua_complete" => Some(Err(ToolError::not_implemented(
-            "lua_complete: completion is not implemented in the engine yet",
-        ))),
+        "lua_complete" => Some(lua_complete_tool(args)),
         "lua_definition" => Some(Err(ToolError::not_implemented(
             "lua_definition: go-to-definition is not implemented in the engine yet",
         ))),
@@ -1061,20 +1059,23 @@ fn lua_diagnostics_tool(root: &Path) -> Value {
     )
 }
 
-/// The engine's hover card at a 1-based line/character.
-fn lua_hover_tool(args: &Value) -> Result<Value, ToolError> {
-    let root = require_str(args, "root", "lua_hover")?;
-    let path = require_str(args, "path", "lua_hover")?;
-    let line = require_u32(args, "line", "lua_hover")?;
-    let character = require_u32(args, "character", "lua_hover")?;
-
+/// Mount every Lua source under `root` and resolve a 1-based line/character in
+/// `path` to a workspace key and byte offset — the shared preamble of every
+/// position-based lang tool. The `Err` arm is the tool result to return when
+/// `path` is not a mounted Lua source under `root`.
+fn mount_and_locate(
+    root: &str,
+    path: &str,
+    line: u32,
+    character: u32,
+) -> Result<(Workspace, String, u32), Value> {
     let files = dcs_studio_project::sources::collect(Path::new(root), &[]);
     let mut workspace = Workspace::new();
     for (file_path, text) in &files {
         workspace.set_source(file_path, text);
     }
     let Some(key) = workspace_key(&workspace, path) else {
-        return Ok(tool_text(
+        return Err(tool_text(
             &format!("'{path}' is not a Lua source under '{root}'"),
             true,
         ));
@@ -1084,10 +1085,51 @@ fn lua_hover_tool(args: &Value) -> Result<Value, ToolError> {
         .map(|entry| entry.source.clone())
         .unwrap_or_default();
     let offset = offset_at(&source, line, character);
+    Ok((workspace, key, offset))
+}
+
+/// The engine's hover card at a 1-based line/character.
+fn lua_hover_tool(args: &Value) -> Result<Value, ToolError> {
+    let root = require_str(args, "root", "lua_hover")?;
+    let path = require_str(args, "path", "lua_hover")?;
+    let line = require_u32(args, "line", "lua_hover")?;
+    let character = require_u32(args, "character", "lua_hover")?;
+    let (workspace, key, offset) = match mount_and_locate(root, path, line, character) {
+        Ok(located) => located,
+        Err(error) => return Ok(error),
+    };
     Ok(match dcs_lua_lsp_core::hover(&workspace, &key, offset) {
         Some(info) => tool_json(&json!({ "title": info.title, "body": info.body }), false),
         None => tool_text("no hover information at this position", false),
     })
+}
+
+/// The engine's completions at a 1-based line/character. An empty `items`
+/// array is the answer over whitespace, in a comment/string, or after an
+/// unresolved receiver — never an error.
+fn lua_complete_tool(args: &Value) -> Result<Value, ToolError> {
+    let root = require_str(args, "root", "lua_complete")?;
+    let path = require_str(args, "path", "lua_complete")?;
+    let line = require_u32(args, "line", "lua_complete")?;
+    let character = require_u32(args, "character", "lua_complete")?;
+    let (workspace, key, offset) = match mount_and_locate(root, path, line, character) {
+        Ok(located) => located,
+        Err(error) => return Ok(error),
+    };
+    let items: Vec<Value> = dcs_lua_lsp_core::complete(&workspace, &key, offset)
+        .into_iter()
+        .map(|item| {
+            json!({
+                "label": item.label,
+                "kind": item.kind,
+                "detail": item.detail,
+                "documentation": item.documentation,
+                "insertText": item.insert_text,
+                "insertTextFormat": item.insert_text_format,
+            })
+        })
+        .collect();
+    Ok(tool_json(&json!({ "items": items }), false))
 }
 
 /// Resolve the workspace key for `path`: an exact key first, then

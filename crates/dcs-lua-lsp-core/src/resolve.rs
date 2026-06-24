@@ -10,6 +10,7 @@
 use dcs_lua_syntax::ast::{Ast, ExprId, ExprKind, FuncBody, FuncName, Name, Parsed, StatKind};
 use dcs_lua_syntax::span::Span;
 
+use crate::symbols::render_func_name;
 use crate::workspace::Workspace;
 
 /// The identifier under the cursor.
@@ -274,24 +275,67 @@ struct Candidate<'a> {
     decl: Decl<'a>,
 }
 
+/// `true` when a candidate's name passes the filter — a specific name when
+/// resolving one identifier, or `None` to collect every binding for
+/// completion.
+fn matches_name(filter: Option<&str>, text: &str) -> bool {
+    filter.is_none_or(|name| name == text)
+}
+
+/// The ranking key: innermost scope first, then binding rank, then the
+/// latest declaration. `lookup_scopes` minimises it; `visible_locals`
+/// dedupes by it.
+fn rank_key(candidate: &Candidate<'_>) -> (u32, u8, std::cmp::Reverse<u32>) {
+    (
+        candidate.scope_len,
+        candidate.rank,
+        std::cmp::Reverse(candidate.decl_start),
+    )
+}
+
 /// Every binding of `name` visible at `offset`, innermost-shadowing wins.
 /// Scope nesting falls out of the arenas: every candidate's scope span
 /// contains `offset`, so spans nest and the shortest is the innermost.
 fn lookup_scopes<'a>(parsed: &'a Parsed, name: &str, offset: u32) -> Option<Decl<'a>> {
     let ast = &parsed.ast;
     let mut candidates: Vec<Candidate<'a>> = Vec::new();
-    local_candidates(&mut candidates, ast, name, offset);
-    binder_candidates(&mut candidates, ast, name, offset);
+    local_candidates(&mut candidates, ast, Some(name), offset);
+    binder_candidates(&mut candidates, ast, Some(name), offset);
+    candidates.into_iter().min_by_key(rank_key).map(|c| c.decl)
+}
+
+/// Every binding visible at `offset` — locals, `local function`s, function
+/// parameters, and for-bindings — deduped by name with the innermost
+/// (shadowing) binding kept. The completion counterpart of [`lookup_scopes`]:
+/// it collects every name where that selects one.
+#[must_use]
+pub fn visible_locals<'a>(parsed: &'a Parsed, offset: u32) -> Vec<Decl<'a>> {
+    let ast = &parsed.ast;
+    let mut candidates: Vec<Candidate<'a>> = Vec::new();
+    local_candidates(&mut candidates, ast, None, offset);
+    binder_candidates(&mut candidates, ast, None, offset);
+    candidates.sort_by_key(rank_key);
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     candidates
         .into_iter()
-        .min_by_key(|candidate| {
-            (
-                candidate.scope_len,
-                candidate.rank,
-                std::cmp::Reverse(candidate.decl_start),
-            )
-        })
+        .filter(|candidate| seen.insert(decl_label(&candidate.decl)))
         .map(|candidate| candidate.decl)
+        .collect()
+}
+
+/// The bare identifier a declaration introduces — the completion label and
+/// the scope dedup key.
+#[must_use]
+pub fn decl_label(decl: &Decl<'_>) -> String {
+    match decl {
+        Decl::Local { name, .. }
+        | Decl::LocalFunction { name, .. }
+        | Decl::Param { name }
+        | Decl::NumericFor { name, .. }
+        | Decl::GenericFor { name, .. } => name.text.clone(),
+        Decl::GlobalAssign { name, .. } => name.clone(),
+        Decl::GlobalFunction { name, .. } => render_func_name(name),
+    }
 }
 
 /// `local` / `local function` declarations visible at `offset`, in a block
@@ -302,7 +346,7 @@ fn lookup_scopes<'a>(parsed: &'a Parsed, name: &str, offset: u32) -> Option<Decl
 fn local_candidates<'a>(
     candidates: &mut Vec<Candidate<'a>>,
     ast: &'a Ast,
-    name: &str,
+    name: Option<&str>,
     offset: u32,
 ) {
     for block in &ast.blocks {
@@ -318,7 +362,7 @@ fn local_candidates<'a>(
                         continue;
                     }
                     for (position, decl_name) in names.iter().enumerate() {
-                        if decl_name.text == name {
+                        if matches_name(name, &decl_name.text) {
                             candidates.push(Candidate {
                                 scope_len,
                                 rank: 0,
@@ -339,7 +383,7 @@ fn local_candidates<'a>(
                     if stat.span.start > offset {
                         continue;
                     }
-                    if decl_name.text == name {
+                    if matches_name(name, &decl_name.text) {
                         candidates.push(Candidate {
                             scope_len,
                             rank: 0,
@@ -363,15 +407,28 @@ fn local_candidates<'a>(
 fn func_scope<'a>(
     candidates: &mut Vec<Candidate<'a>>,
     func: &'a FuncBody,
-    name: &str,
+    name: Option<&str>,
     offset: u32,
 ) {
     if !within(func.span, offset) {
         return;
     }
-    if let Some(param) = func.params.iter().rev().find(|param| param.text == name) {
+    let scope_len = func.span.end - func.span.start;
+    // Resolving one name takes the last parameter of that name
+    // (`function (x, x)`); collecting takes every parameter once.
+    let params: Vec<&'a Name> = match name {
+        Some(n) => func
+            .params
+            .iter()
+            .rev()
+            .filter(|param| param.text == n)
+            .take(1)
+            .collect(),
+        None => func.params.iter().collect(),
+    };
+    for param in params {
         candidates.push(Candidate {
-            scope_len: func.span.end - func.span.start,
+            scope_len,
             rank: 1,
             decl_start: param.span.start,
             decl: Decl::Param { name: param },
@@ -384,7 +441,7 @@ fn func_scope<'a>(
 fn binder_candidates<'a>(
     candidates: &mut Vec<Candidate<'a>>,
     ast: &'a Ast,
-    name: &str,
+    name: Option<&str>,
     offset: u32,
 ) {
     for expr in &ast.exprs {
@@ -403,7 +460,7 @@ fn binder_candidates<'a>(
             } => {
                 func_scope(candidates, func, name, offset);
                 // The function's own name is visible inside it (recursion).
-                if decl_name.text == name && within(func.span, offset) {
+                if matches_name(name, &decl_name.text) && within(func.span, offset) {
                     candidates.push(Candidate {
                         scope_len: func.span.end - func.span.start,
                         rank: 1,
@@ -422,7 +479,7 @@ fn binder_candidates<'a>(
                 ..
             } => {
                 let body_span = ast.block(*body).span;
-                if decl_name.text == name && within(body_span, offset) {
+                if matches_name(name, &decl_name.text) && within(body_span, offset) {
                     candidates.push(Candidate {
                         scope_len: body_span.end - body_span.start,
                         rank: 2,
@@ -439,7 +496,13 @@ fn binder_candidates<'a>(
                 if !within(body_span, offset) {
                     continue;
                 }
-                if let Some(decl_name) = names.iter().rev().find(|n| n.text == name) {
+                // Resolving one name takes the last binding of that name;
+                // collecting takes every binding the for-clause introduces.
+                let bound: Vec<&Name> = match name {
+                    Some(n) => names.iter().rev().filter(|nm| nm.text == n).take(1).collect(),
+                    None => names.iter().collect(),
+                };
+                for decl_name in bound {
                     candidates.push(Candidate {
                         scope_len: body_span.end - body_span.start,
                         rank: 2,
@@ -568,4 +631,171 @@ fn dotted_match<'a>(
         }
         _ => None,
     }
+}
+
+// ---- completion enumeration -------------------------------------------------
+
+/// The dotted path of a non-method function declaration (`a.b.c`); `None`
+/// for a method (`a:b`), whose receiver is not a dotted-global path.
+fn func_path(name: &FuncName) -> Option<String> {
+    if name.method.is_some() {
+        return None;
+    }
+    Some(
+        name.segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect::<Vec<_>>()
+            .join("."),
+    )
+}
+
+/// Every workspace global with a simple (non-dotted) name: `NameRef`
+/// assignment targets and single-segment function declarations, each paired
+/// with the file that declares it. The typed half of completion's
+/// bare-identifier set — every `Decl` carries the kind, signature, and docs.
+#[must_use]
+pub fn global_decls(workspace: &Workspace) -> Vec<(String, Decl<'_>)> {
+    let mut out = Vec::new();
+    for (path, entry) in workspace.files() {
+        let ast = &entry.parsed.ast;
+        for stat in &ast.stats {
+            match &stat.kind {
+                StatKind::Assign { targets, values } => {
+                    for (position, &target) in targets.iter().enumerate() {
+                        if let ExprKind::NameRef(target_name) = &ast.expr(target).kind {
+                            out.push((
+                                path.to_string(),
+                                Decl::GlobalAssign {
+                                    name: target_name.clone(),
+                                    value: values.get(position).copied(),
+                                    stat_start: stat.span.start,
+                                    name_span: target_name_span(ast, target),
+                                },
+                            ));
+                        }
+                    }
+                }
+                StatKind::FunctionDecl { name, func } => {
+                    if name.method.is_none() && name.segments.len() == 1 {
+                        out.push((
+                            path.to_string(),
+                            Decl::GlobalFunction {
+                                name,
+                                func,
+                                stat_start: stat.span.start,
+                            },
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// Every distinct global root across the workspace: a simple global's name,
+/// or the first segment of a dotted-global statement (`DCS` from
+/// `DCS.x = …`). The bare-identifier set's complete label list — it surfaces
+/// a `_G` table that only ever appears dotted.
+#[must_use]
+pub fn global_roots(workspace: &Workspace) -> Vec<String> {
+    let mut roots: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (_, entry) in workspace.files() {
+        let ast = &entry.parsed.ast;
+        for stat in &ast.stats {
+            match &stat.kind {
+                StatKind::Assign { targets, .. } => {
+                    for &target in targets {
+                        let Some(dotted) = render_dotted(ast, target) else {
+                            continue;
+                        };
+                        if let Some(root) = root_segment(&dotted) {
+                            roots.insert(root.to_string());
+                        }
+                    }
+                }
+                StatKind::FunctionDecl { name, .. } => {
+                    if let Some(first) = name.segments.first() {
+                        roots.insert(first.text.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    roots.into_iter().collect()
+}
+
+/// The members one segment under `receiver.`: every dotted-global
+/// `Assign`/`FunctionDecl` whose path is `receiver.<segment>[.…]`, returned
+/// as `(segment, declaring-path, decl)`. The generated `.d.lua` member path —
+/// the same dotted statements `dotted_match` resolves, enumerated by prefix.
+#[must_use]
+pub fn dotted_children<'ws>(
+    workspace: &'ws Workspace,
+    receiver: &str,
+) -> Vec<(String, String, Decl<'ws>)> {
+    let prefix = format!("{receiver}.");
+    let mut out = Vec::new();
+    for (path, entry) in workspace.files() {
+        let ast = &entry.parsed.ast;
+        for stat in &ast.stats {
+            match &stat.kind {
+                StatKind::Assign { targets, values } => {
+                    for (position, &target) in targets.iter().enumerate() {
+                        let Some(dotted) = render_dotted(ast, target) else {
+                            continue;
+                        };
+                        let Some(segment) = child_segment(&dotted, &prefix) else {
+                            continue;
+                        };
+                        out.push((
+                            segment,
+                            path.to_string(),
+                            Decl::GlobalAssign {
+                                name: dotted,
+                                value: values.get(position).copied(),
+                                stat_start: stat.span.start,
+                                name_span: target_name_span(ast, target),
+                            },
+                        ));
+                    }
+                }
+                StatKind::FunctionDecl { name, func } => {
+                    let Some(segment) =
+                        func_path(name).and_then(|dotted| child_segment(&dotted, &prefix))
+                    else {
+                        continue;
+                    };
+                    out.push((
+                        segment,
+                        path.to_string(),
+                        Decl::GlobalFunction {
+                            name,
+                            func,
+                            stat_start: stat.span.start,
+                        },
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// The first segment of a dotted path (`DCS` from `DCS.x`), or `None` for an
+/// empty string.
+fn root_segment(dotted: &str) -> Option<&str> {
+    dotted.split('.').next().filter(|segment| !segment.is_empty())
+}
+
+/// The single segment directly under `prefix` (`foo` from `DCS.foo` or
+/// `DCS.foo.bar` under `DCS.`), or `None` when `dotted` is not under it.
+fn child_segment(dotted: &str, prefix: &str) -> Option<String> {
+    let rest = dotted.strip_prefix(prefix)?;
+    let segment = rest.split('.').next().unwrap_or(rest);
+    (!segment.is_empty()).then(|| segment.to_string())
 }

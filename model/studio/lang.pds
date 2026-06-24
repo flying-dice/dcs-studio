@@ -16,8 +16,11 @@ public data ProfileRule { glob: string, profile: string }
 /// code (LUA-Exxx parse, LUA-Sxxx static, DCS-Wxxx lints).
 public data Diagnostic { path: string, severity: string, code: string, message: string, start: number, end: number }
 
-/// One completion suggestion at a cursor offset.
-public data CompletionItem { label: string, kind: string, detail: string }
+/// One completion suggestion at a cursor offset: the inserted `label`, its
+/// `kind`, a `detail` signature line, the `documentation` doc run, and the
+/// `insertText` (a `${1:param}` snippet when `insertTextFormat` is `snippet`,
+/// else the bare label).
+public data CompletionItem { label: string, kind: string, detail: string, documentation: string, insertText: string, insertTextFormat: string }
 
 /// Markdown hover card for the symbol under the cursor.
 public data Hover { title: string, body: string }

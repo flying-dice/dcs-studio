@@ -383,11 +383,17 @@ public container McpServer for studio::core::Studio {
   /// Byte offset of a 1-based line/column pair in a mounted source.
   OffsetAt(path: string, line: number, character: number): number;
 
-  /// lua_complete — reserved: the engine has no completion query yet, so
-  /// the tool answers a stable not-implemented error, never a guess.
-  public LuaComplete(root: string, path: string, line: number, character: number): Result<studio::lang::CompletionItem[], studio::mcp::NotImplemented> {
-    pending = studio::mcp::NotImplemented from { "completion is not implemented in the engine yet" }
-    return Err(pending)
+  /// lua_complete — the engine's completions at a 1-based line/column in one
+  /// mounted file: the in-scope locals and workspace global roots for a bare
+  /// identifier, or the members of a `recv.` access (its named-type fields
+  /// unioned with the dotted-global members), each function a snippet. Empty
+  /// inside a comment or string, or over a receiver with no known members.
+  public LuaComplete(root: string, path: string, line: number, character: number): lspcore::CompletionItem[] {
+    files = dcslua::SourceUnit[] from self.CollectSources(root)
+    dcslua::DcsLuaLs.Analyse(files)
+    offset = number from self.OffsetAt(path, line, character)
+    items = lspcore::CompletionItem[] from dcslua::DcsLuaLs.Complete(path, offset)
+    return items
   }
 
   /// lua_definition — reserved: the engine has no definition query yet, so

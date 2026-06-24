@@ -353,6 +353,71 @@ fn inlay_hints_carry_inferred_signature_types() {
 }
 
 #[test]
+fn completion_advertises_capability_and_offers_members_over_stdio() {
+    let root = temp_dir("completion");
+    // A dotted-global table whose members the engine enumerates; the member is
+    // a function, so the offered item carries a snippet.
+    std::fs::write(
+        root.join("api.lua"),
+        "DCS = {}\nDCS.getPlayerUnit = function() end\nlocal probe = DCS.\n",
+    )
+    .expect("seed file");
+
+    let mut child = lua_analyzer()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn lua-analyzer");
+    let mut reader = BufReader::new(child.stdout.take().expect("stdout piped"));
+
+    let root_uri = format!("file:///{}", root.display().to_string().replace('\\', "/"));
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"processId": null, "rootUri": root_uri, "capabilities": {}}}),
+    );
+    let init = lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(1)));
+    // The server advertises completion with `.` as the member trigger.
+    assert_eq!(
+        init["result"]["capabilities"]["completionProvider"]["triggerCharacters"],
+        json!(["."])
+    );
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
+    );
+
+    let file_uri = format!("{root_uri}/api.lua");
+    // `local probe = DCS.` — the cursor sits just past the dot on line 2.
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 11, "method": "textDocument/completion",
+                "params": {"textDocument": {"uri": file_uri},
+                           "position": {"line": 2, "character": 18}}}),
+    );
+    let response = lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(11)));
+    let items = response["result"].as_array().expect("completion array");
+    let member = items
+        .iter()
+        .find(|item| item["label"] == json!("getPlayerUnit"))
+        .unwrap_or_else(|| panic!("DCS.getPlayerUnit not offered; items: {items:?}"));
+    // CompletionItemKind::Function == 3; the function member inserts a snippet
+    // (InsertTextFormat::Snippet == 2).
+    assert_eq!(member["kind"], json!(3), "item was: {member}");
+    assert_eq!(member["insertTextFormat"], json!(2), "item was: {member}");
+
+    lsp_send(
+        &mut child,
+        &json!({"jsonrpc": "2.0", "id": 99, "method": "shutdown"}),
+    );
+    lsp_read_until(&mut reader, |m| m.get("id") == Some(&json!(99)));
+    lsp_send(&mut child, &json!({"jsonrpc": "2.0", "method": "exit"}));
+    assert!(child.wait().expect("exit").success());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn initialize_walk_indexes_vendored_dependencies() {
     let root = temp_dir("vendored");
     // A CargoLua.toml declaring one dependency, vendored on disk under the
