@@ -565,8 +565,27 @@ fn parse_repo_url(url: &str) -> Result<RepoInfo, String> {
 
 // --- orchestration (model Publisher) ----------------------------------------
 
+/// The `public_repo`-scoped publishing token. A seam, like [`api_base`]: production
+/// reads it from the keyring (the signed-in session); a test points
+/// `PUBLISH_TOKEN_OVERRIDE` at a fake so the orchestrator runs against faked
+/// transport without the keyring — the one reach the mock can't otherwise satisfy.
+#[cfg(not(test))]
 fn publish_token() -> Result<String, String> {
     crate::github::current_token()
+        .ok_or_else(|| "Sign in and authorize publishing first.".to_string())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Per-test override of the publishing token, set by `MockGitHub::start` so the
+    /// orchestrator (`publish_release_with_progress`) runs against faked transport
+    /// without reaching the keyring. `None` reproduces the logged-out error.
+    static PUBLISH_TOKEN_OVERRIDE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+fn publish_token() -> Result<String, String> {
+    PUBLISH_TOKEN_OVERRIDE
+        .with(|o| o.borrow().clone())
         .ok_or_else(|| "Sign in and authorize publishing first.".to_string())
 }
 
@@ -651,6 +670,10 @@ pub fn publish_release_with_progress(
         Err(e) if e == crate::progress::CANCELLED => {
             // Roll back THIS run: drop the draft (cascades its assets) so a cancel
             // leaves nothing — no half-uploaded draft to confuse the next publish.
+            // Best-effort: a failed rollback (e.g. a 5xx on the delete) is swallowed
+            // so the user's cancel still surfaces as CANCELLED, never masked behind a
+            // delete error. A draft that survives a failed rollback is exactly what a
+            // genuine failure leaves — the next publish re-drafts it idempotently.
             let _ = delete_release(&repo, release.id, &token);
             Err(e)
         }
@@ -1316,10 +1339,13 @@ mod tests {
                     }
                 }
             });
-            // Point the publish flow's REST + uploads base at this server.
+            // Point the publish flow's REST + uploads base — and the publishing
+            // token — at this server, so a test drives the orchestrator end-to-end
+            // against faked transport with no keyring reach.
             let base = format!("http://{addr}");
             API_BASE_OVERRIDE.with(|o| *o.borrow_mut() = Some(base.clone()));
             UPLOADS_BASE_OVERRIDE.with(|o| *o.borrow_mut() = Some(base));
+            PUBLISH_TOKEN_OVERRIDE.with(|o| *o.borrow_mut() = Some("test-token".to_string()));
             MockGitHub { addr, fake, shutdown, handle: Some(handle) }
         }
         fn lock(&self) -> std::sync::MutexGuard<'_, Fake> {
@@ -1330,6 +1356,7 @@ mod tests {
         fn drop(&mut self) {
             API_BASE_OVERRIDE.with(|o| *o.borrow_mut() = None);
             UPLOADS_BASE_OVERRIDE.with(|o| *o.borrow_mut() = None);
+            PUBLISH_TOKEN_OVERRIDE.with(|o| *o.borrow_mut() = None);
             self.shutdown.store(true, Ordering::Relaxed);
             // Unblock the pending accept() so the server thread sees shutdown.
             let _ = TcpStream::connect(&self.addr);
@@ -1589,6 +1616,73 @@ mod tests {
         assert!(
             mock.lock().releases.iter().all(|r| r.id != rid),
             "the draft (and its assets) are gone — a cancel leaves nothing published"
+        );
+    }
+
+    /// `git init` a project tree and point its `origin` at `url`, so `repo_of_project`
+    /// (which shells `git remote get-url origin`) resolves the owner/name — no network,
+    /// no commit needed.
+    fn init_git_origin(root: &Path, url: &str) {
+        git(root, &["init"]).expect("git init");
+        git(root, &["remote", "add", "origin", url]).expect("git remote add origin");
+    }
+
+    #[test]
+    fn publish_release_with_progress_cancelled_mid_upload_deletes_the_draft_and_never_publishes() {
+        // The orchestrator end-to-end: the cancel→rollback wiring + ordered step
+        // emissions + inter-step checks that the component tests above exercise only
+        // in isolation. A real on-disk project (git origin → repo_of_project, a
+        // loadable manifest, one small [[install]] source → a single `.7z`, so
+        // manifest + payload = two upload parts) on the mock backend.
+        let mock = MockGitHub::start();
+        let tree = TempTree::new("orchestrator");
+        tree.write(
+            "dcs-studio.toml",
+            b"[project]\nname = \"x\"\n\n[[install]]\nsource = \"scripts\"\ndest = \"{SavedGames}/x\"\n",
+        );
+        tree.write("scripts/a.lua", b"return 1\n");
+        init_git_origin(&tree.0, "https://github.com/octocat/cool-mod");
+
+        // The user cancels while part 1 (the manifest) uploads: the sink flips the
+        // token on the first Upload event, so the `cancel.check` before part 2 trips
+        // mid-flight — the draft is created and part 1 lands, then the publish aborts.
+        let cancel = Cancel::new();
+        let trip = cancel.clone();
+        let events = std::cell::RefCell::new(Vec::new());
+        let on = |p: PublishProgress| {
+            if p.step == PublishStep::Upload && p.part == Some(1) {
+                trip.cancel();
+            }
+            events.borrow_mut().push(p);
+        };
+
+        let err = publish_release_with_progress(tree.0.to_str().expect("utf-8 path"), "v1", &on, &cancel)
+            .expect_err("a mid-upload cancel aborts the publish");
+        assert_eq!(err, crate::progress::CANCELLED, "a user cancel surfaces the sentinel");
+
+        // Ordered emissions up to the cancel: package → draft → upload(part 1). No
+        // split (single archive), no publish (the draft→published flip never runs).
+        let steps: Vec<PublishStep> = events.into_inner().iter().map(|e| e.step).collect();
+        assert_eq!(
+            steps,
+            vec![PublishStep::Package, PublishStep::Draft, PublishStep::Upload],
+            "the orchestrator emits the ordered prefix and stops at the cancel",
+        );
+
+        let f = mock.lock();
+        // Rollback ran: the draft (cascading the one uploaded asset) is deleted, so a
+        // cancel leaves nothing published and nothing half-uploaded.
+        assert!(f.releases.is_empty(), "the draft is rolled back — a cancel leaves nothing");
+        assert!(
+            f.hits.iter().any(|h| {
+                h.method == "DELETE" && h.path.contains("/releases/") && !h.path.contains("/assets/")
+            }),
+            "rollback issues DELETE /releases/{{id}}",
+        );
+        // The release was never flipped to published (no PATCH draft=false).
+        assert!(
+            !f.hits.iter().any(|h| h.method == "PATCH"),
+            "a cancelled publish never flips the draft to published",
         );
     }
 
