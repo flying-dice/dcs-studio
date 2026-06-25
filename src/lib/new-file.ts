@@ -13,16 +13,22 @@ const BASE = "untitled";
 const EXT = ".lua";
 
 /**
- * The first of `untitled.lua`, `untitled-2.lua`, `untitled-3.lua`, … whose name
- * is not already in `taken` (the sibling names at the target directory). The
- * comparison folds case: Windows and macOS filesystems are case-insensitive, so
- * an `UNTITLED.LUA` on disk still collides with `untitled.lua`.
+ * The first of `<base>.lua`, `<base>-2.lua`, `<base>-3.lua`, … whose name is not
+ * already in `taken` (the sibling names at the target directory). The comparison
+ * folds case: Windows and macOS filesystems are case-insensitive, so an
+ * `UNTITLED.LUA` on disk still collides with `untitled.lua`. The base is the
+ * `untitled` default (`nextUntitledName`) or a recipe-derived slug (issue #60).
  */
-export function nextUntitledName(taken: Set<string>): string {
+export function uniqueLuaName(base: string, taken: Set<string>): string {
   const lower = new Set([...taken].map((n) => n.toLowerCase()));
-  let candidate = `${BASE}${EXT}`;
+  let candidate = `${base}${EXT}`;
   for (let i = 2; lower.has(candidate.toLowerCase()); i++) {
-    candidate = `${BASE}-${i}${EXT}`;
+    candidate = `${base}-${i}${EXT}`;
   }
   return candidate;
+}
+
+/** The first free `untitled.lua`, `untitled-2.lua`, … not already in `taken`. */
+export function nextUntitledName(taken: Set<string>): string {
+  return uniqueLuaName(BASE, taken);
 }

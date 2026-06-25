@@ -3,7 +3,7 @@
   // small DCS Lua snippets (src/lib/recipes.ts). Each card runs in the Lua
   // console (against the live sim) or copies to the clipboard. Pure content/UI —
   // no model body; the catalog + filter are runes-free in $lib/recipes.
-  import { Search, Play, Copy, Check, BookOpen, Plane } from "@lucide/svelte";
+  import { Search, Play, Copy, Check, FilePlus, BookOpen, Plane } from "@lucide/svelte";
   import { recipes as appRecipes, type RecipesLibrary } from "$lib/recipes.svelte";
   import { RECIPE_CATEGORIES, categoryLabel, type Recipe } from "$lib/recipes";
   import { luaConsole } from "$lib/lua-console.svelte";
@@ -131,6 +131,16 @@
                   <Copy class="size-3.5" />
                   Copy
                 {/if}
+              </button>
+              <button
+                type="button"
+                class="flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-foreground hover:bg-accent"
+                data-testid="recipes-new-file"
+                title="Create a new file from this snippet at the workspace root"
+                onclick={() => store.openFromRecipe(recipe)}
+              >
+                <FilePlus class="size-3.5" />
+                New file
               </button>
             </div>
           </div>
