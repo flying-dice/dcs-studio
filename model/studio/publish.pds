@@ -26,8 +26,9 @@ public data RepoInfo { fullName: string, htmlUrl: string, owner: string, name: s
 public data ReleaseInfo { tag: string, htmlUrl: string }
 
 /// A created or resolved release plus the plumbing `id` used to upload assets to
-/// it and flip it from draft to published.
-public data ReleaseRef { id: number, info: studio::publish::ReleaseInfo }
+/// it and flip it between draft and published. `draft` lets a re-publish tell an
+/// in-flight draft (reuse as-is) from an already-published tag (re-draft first).
+public data ReleaseRef { id: number, draft: bool, info: studio::publish::ReleaseInfo }
 
 /// One asset already on a release: its GitHub `id` (for delete-then-replace) and
 /// its asset name.
@@ -62,9 +63,12 @@ public system GitHubWrite {
   /// it is flipped to published only once every asset has uploaded.
   public CreateDraftRelease(repo: studio::publish::RepoInfo, tag: string, body: string, token: string): Result<studio::publish::ReleaseRef, studio::publish::PublishError>;
 
-  /// The existing release for `tag`, or None (`GET .../releases/tags/{tag}`; a
-  /// 404 is None) — reused so a re-publish after a partial failure is idempotent
-  /// rather than creating a duplicate.
+  /// The existing release for `tag`, or None — matched over the paginated release
+  /// LIST (`GET .../releases?per_page=100&page=N`), NOT `GET .../releases/tags/{tag}`:
+  /// the by-tag endpoint is published-only, and a draft's git tag isn't cut until
+  /// publish, so a draft would be invisible there and every retry would orphan a
+  /// duplicate draft. Listing surfaces drafts to a push-access token, so a
+  /// partially-published draft is reused and a re-publish stays idempotent.
   public FindReleaseByTag(repo: studio::publish::RepoInfo, tag: string, token: string): Result<Option<studio::publish::ReleaseRef>, studio::publish::PublishError>;
 
   /// The assets already on a release (`GET .../releases/{id}/assets`), so an
@@ -78,8 +82,10 @@ public system GitHubWrite {
   /// volume is never fully buffered (`POST .../releases/{id}/assets?name=`).
   public UploadAsset(repo: studio::publish::RepoInfo, release: studio::publish::ReleaseRef, path: string, token: string): Result<void, studio::publish::PublishError>;
 
-  /// Flip a draft release to published (`PATCH .../releases/{id}`, `draft: false`).
-  public PublishDraft(repo: studio::publish::RepoInfo, release: studio::publish::ReleaseRef, token: string): Result<void, studio::publish::PublishError>;
+  /// Set a release's draft flag (`PATCH .../releases/{id}`): `false` flips a
+  /// fully-uploaded draft to published; `true` re-drafts an already-published tag
+  /// before a re-publish, so assets are never mutated on a public release.
+  public SetReleaseDraft(repo: studio::publish::RepoInfo, release: studio::publish::ReleaseRef, draft: bool, token: string): Result<void, studio::publish::PublishError>;
 }
 
 /// Local git via the installed `git` binary (gix has no production push, and one
@@ -139,9 +145,11 @@ public container Publisher for studio::core::Studio {
   /// package the manifest + every `[[install]]` source into a 7-Zip payload —
   /// split into `volume_size` volumes when large — BEFORE touching GitHub, so a
   /// packaging failure leaves GitHub untouched; create (or reuse) a DRAFT release
-  /// for `tag`; upload the standalone manifest + every payload volume as assets
-  /// (deleting any same-named asset first, so a re-publish is idempotent); and
-  /// only once every asset has uploaded, flip the release to published.
+  /// for `tag` (re-drafting it first if it was already published); upload the
+  /// standalone manifest + every payload volume as assets (replacing the prior
+  /// manifest + payload-volume asset family first, so a re-publish is idempotent
+  /// even when the payload shape changes); and only once every asset has
+  /// uploaded, flip the release to published.
   #[manual]
   public PublishRelease(root: string, tag: string): Result<studio::publish::ReleaseInfo, studio::publish::PublishError> {
     token = Result<string, studio::publish::PublishError> from self.PublishToken()
@@ -161,7 +169,7 @@ public container Publisher for studio::core::Studio {
     if (uploaded.isErr) {
       return Err(uploaded.error)
     }
-    published = Result<void, studio::publish::PublishError> from studio::publish::GitHubWrite.PublishDraft(repo, draft.value, token.value)
+    published = Result<void, studio::publish::PublishError> from studio::publish::GitHubWrite.SetReleaseDraft(repo, draft.value, false, token.value)
     if (published.isErr) {
       return Err(published.error)
     }
@@ -189,13 +197,16 @@ public container Publisher for studio::core::Studio {
   /// omitted); sources are streamed so the payload is never fully held in RAM.
   PackageRelease(root: string, repoName: string, tag: string): Result<studio::publish::PackagedRelease, studio::publish::PublishError>;
 
-  /// Reuse the existing draft release for `tag` (idempotent re-publish after a
-  /// partial failure) or create a fresh draft.
+  /// Reuse the existing release for `tag` (idempotent re-publish after a partial
+  /// failure) — re-drafting it first if it was already published, so assets are
+  /// never mutated on a public release — or create a fresh draft.
   FindOrCreateDraft(repo: studio::publish::RepoInfo, tag: string, token: string): Result<studio::publish::ReleaseRef, studio::publish::PublishError>;
 
   /// Upload the standalone `dcs-studio.toml` + every payload volume as assets of
-  /// `release`, deleting any same-named asset first (idempotent re-upload) and
-  /// retrying a transient upload error with exponential backoff.
+  /// `release`, first deleting the prior asset family — the manifest plus every
+  /// `<base>.7z` / `.7z.NNN` volume (not just same-named assets, so a changed
+  /// payload shape leaves no orphaned volume) — and retrying a transient upload
+  /// error with exponential backoff.
   UploadReleaseAssets(repo: studio::publish::RepoInfo, release: studio::publish::ReleaseRef, packaged: studio::publish::PackagedRelease, token: string): Result<void, studio::publish::PublishError>;
 }
 
@@ -261,6 +272,7 @@ feature RepublishingATagIsIdempotent for studio::publish::Publisher {
   when "the author publishes that tag again"
   then "the existing draft release is reused, not duplicated"
   and "an asset that already exists is deleted and re-uploaded"
+  and "if the payload shape changed, no stale volume from the previous shape survives"
   and "the release ends published with the complete asset set"
 }
 
