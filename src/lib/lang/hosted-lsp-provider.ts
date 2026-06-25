@@ -81,7 +81,11 @@ export abstract class HostedLspProvider implements LanguageProvider {
     stderr: string[];
   }) => void)[] = [];
 
-  protected constructor(protected readonly connect: () => Promise<LspClient>) {}
+  protected constructor(
+    protected readonly connect: (
+      root: string,
+    ) => Promise<{ client: LspClient; isNew: boolean }>,
+  ) {}
 
   // ---- per-engine hooks ----------------------------------------------------
 
@@ -146,8 +150,9 @@ export abstract class HostedLspProvider implements LanguageProvider {
       // with a build/install hint (non-fatal), NOT a crash. A handshake failure
       // below must never reach this label.
       let client: LspClient;
+      let isNew: boolean;
       try {
-        client = await this.connect();
+        ({ client, isNew } = await this.connect(root));
       } catch (error) {
         this.disabled = true;
         this._status = "disabled";
@@ -188,13 +193,21 @@ export abstract class HostedLspProvider implements LanguageProvider {
             }
           }
         });
-        await client.request("initialize", {
-          processId: null,
-          // The server walks the project itself from here.
-          rootUri: pathToUri(root),
-          capabilities: this.initializeCapabilities(),
-        });
-        await client.notify("initialized", {});
+        // A re-attach (isNew=false) happens only for the SAME root: the backend
+        // keys re-attach on the project root, so a re-attached server is already
+        // indexing THIS root — skip the handshake (re-initializing a live server
+        // is the #31 violation). A different root evicts the stale server and
+        // spawns fresh (isNew=true), re-initializing here.
+        if (isNew) {
+          await client.request("initialize", {
+            processId: null,
+            // The server walks the project itself from here.
+            rootUri: pathToUri(root),
+            capabilities: this.initializeCapabilities(),
+          });
+          await client.notify("initialized", {});
+          await client.markInitialized();
+        }
         this.exited = false; // a fresh, live session
         this._status = "ready";
       } catch (error) {

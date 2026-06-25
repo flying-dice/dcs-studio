@@ -461,4 +461,16 @@ export class LangIntel {
   }
 }
 
-export const lang = new LangIntel();
+// Dev-only HMR continuity (issue #31): mirror `app` (state.svelte.ts). A
+// hot-update in the lang chain must not hand components a fresh `LangIntel`
+// with the engine reset to "off" and its push-wiring lost — stash the
+// singleton so the open session survives the reload alongside the warm
+// providers (registry.ts). Statically `new` in production: `import.meta.hot`
+// is undefined there.
+export const lang: LangIntel =
+  (import.meta.hot?.data.lang as LangIntel | undefined) ?? new LangIntel();
+if (import.meta.hot) {
+  import.meta.hot.dispose((data) => {
+    data.lang = lang;
+  });
+}

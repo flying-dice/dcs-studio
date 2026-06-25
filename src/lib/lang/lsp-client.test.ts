@@ -39,10 +39,11 @@ class FakeTransport implements LspTransport {
     onMessage: (raw: string) => void,
     onExit: () => void,
     onStderr?: (line: string) => void,
-  ): Promise<void> {
+  ): Promise<boolean> {
     this.onMessage = onMessage;
     this.onExit = onExit;
     this.onStderr = onStderr;
+    return true; // a fresh spawn; these lifecycle tests don't exercise re-attach
   }
 
   async send(message: string): Promise<void> {
@@ -78,7 +79,7 @@ async function attach(): Promise<{
   exits: LspExitInfo[];
 }> {
   const transport = new FakeTransport();
-  const client = await LspClient.withTransport(transport);
+  const { client } = await LspClient.withTransport(transport);
   const exits: LspExitInfo[] = [];
   client.onServerExit((info) => exits.push(info));
   return { client, transport, exits };
@@ -122,7 +123,7 @@ describe("LspClient crash-vs-stop exit gate", () => {
 describe("LspClient.stop() — second stop on an already-stopped client is a no-op", () => {
   it("returns immediately: onExit fires once, no shutdown/exit re-sent, no second transport stop", async () => {
     const transport = new FakeTransport();
-    const client = await LspClient.withTransport(transport);
+    const { client } = await LspClient.withTransport(transport);
     const onExit = vi.fn();
     client.onServerExit(onExit);
 
@@ -142,7 +143,7 @@ describe("LspClient.stop() — second stop on an already-stopped client is a no-
 
   it("a stop after a spontaneous crash is a no-op — never talks to a dead server", async () => {
     const transport = new FakeTransport();
-    const client = await LspClient.withTransport(transport);
+    const { client } = await LspClient.withTransport(transport);
     const onExit = vi.fn();
     client.onServerExit(onExit);
 
@@ -160,7 +161,7 @@ describe("LspClient.stop() — second stop on an already-stopped client is a no-
 describe("LspClient.stop() — reindex racing a concurrent mount does not double-stop", () => {
   it("two concurrent stops tear the client down exactly once", async () => {
     const transport = new FakeTransport();
-    const client = await LspClient.withTransport(transport);
+    const { client } = await LspClient.withTransport(transport);
     const onExit = vi.fn();
     client.onServerExit(onExit);
 
@@ -179,7 +180,7 @@ describe("LspClient.stop() — reindex racing a concurrent mount does not double
 describe("LspClient.stop() — normal single stop is unchanged", () => {
   it("runs the polite shutdown → exit → transport.stop → onExit in order", async () => {
     const transport = new FakeTransport();
-    const client = await LspClient.withTransport(transport);
+    const { client } = await LspClient.withTransport(transport);
     const order: string[] = [];
     client.onServerExit(() => order.push("onExit"));
     const realStop = transport.stop.bind(transport);

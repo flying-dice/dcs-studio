@@ -16,22 +16,19 @@ import { LspClient } from "./lsp-client";
 import { HostedLspProvider } from "./hosted-lsp-provider";
 import type { LanguageProvider } from "./provider";
 
-// A fresh host id per spawn. A project switch stops the old server and starts a
-// new one, but the backend host (crates/app/src/lsp.rs) only closes the old
-// process's stdin and schedules its kill — the handle lingers in the host map
-// until the reader thread reaps the exiting process. A SHARED id would then hit
-// lsp_start's idempotent guard (already-present → no-op), so no fresh process
-// spawns and the new client talks to a dying one, surfacing as a false "binary
-// not found". A unique id never collides with the lingering old server.
-let hostConnectionSeq = 0;
-
-/** Production connection: ask the backend for the binary, host it. */
-async function connectViaHost(): Promise<LspClient> {
+/** Production connection: ask the backend for the binary, host it.
+ *
+ * rust-analyzer is root-bound: it indexes from the `rootUri` sent once at
+ * initialize and never re-roots. Pass `root` as the re-attach key so the
+ * backend re-attaches only to a server rooted here — a different root evicts
+ * the stale server and spawns fresh, re-initializing against the new project
+ * (issue #31 / MR !20). The backend assigns the physical id; the logical id is
+ * just `"rust-analyzer"`. */
+async function connectViaHost(
+  root: string,
+): Promise<{ client: LspClient; isNew: boolean }> {
   const program = await invoke<string>("rust_analyzer_path");
-  hostConnectionSeq += 1;
-  // `:`-separated, NOT `#`: the id becomes a Tauri event name
-  // (`lsp://message/<id>`) and Tauri rejects `#`, making listen() throw.
-  return LspClient.start(`rust-analyzer:${hostConnectionSeq}`, program, []);
+  return LspClient.start("rust-analyzer", program, [], root);
 }
 
 /** Production Cargo.toml probe through the backend fs commands. */
@@ -59,7 +56,9 @@ export class RustAnalyzerProvider extends HostedLspProvider {
 
   /** Both seams injectable so `/lab/rust` drives this exact class. */
   constructor(
-    connect: () => Promise<LspClient> = connectViaHost,
+    connect: (
+      root: string,
+    ) => Promise<{ client: LspClient; isNew: boolean }> = connectViaHost,
     private readonly hasCargoToml: (
       root: string,
     ) => Promise<boolean> = cargoTomlExists,

@@ -23,13 +23,27 @@ export interface LspExitInfo {
 
 /** How a client reaches its server; production = the Tauri host pump. */
 export interface LspTransport {
+  /**
+   * Attach to the server. Resolves `true` when it was freshly spawned (the
+   * caller must run the LSP initialize handshake) and `false` when it
+   * re-attached to a server that outlived a webview reload and is already
+   * initialized (skip the handshake — re-initializing a live server is the
+   * issue-#31 protocol violation). `onStderr` receives the server's stderr
+   * lines for an exit's failure context (issue #61).
+   */
   start(
     onMessage: (raw: string) => void,
     onExit: () => void,
     onStderr?: (line: string) => void,
-  ): Promise<void>;
+  ): Promise<boolean>;
   send(message: string): Promise<void>;
   stop(): Promise<void>;
+  /**
+   * Record that the initialize handshake completed, so a later re-attach
+   * can skip it. Absent on transports with no backend lifecycle to track
+   * (the in-page browser fake).
+   */
+  markInitialized?(): Promise<void>;
 }
 
 /** A request that outlives this has hit a dead or wedged server. */
@@ -46,49 +60,69 @@ interface Pending {
 
 class TauriTransport implements LspTransport {
   private unlisten: UnlistenFn[] = [];
+  // The backend-assigned PHYSICAL id this spawn answers on — the key for
+  // every send/stop/mark. Learned from `lsp_get_or_start`; `logicalId` is
+  // the stable name the backend resolves against.
+  private physicalId = "";
 
   constructor(
-    private readonly serverId: string,
+    private readonly logicalId: string,
     private readonly program: string,
     private readonly args: string[],
+    // The scope this spawn is bound to (a root-bound server's project root),
+    // or null when root-agnostic. The backend grants a re-attach only for a
+    // matching root, so a server rooted at the old project is never silently
+    // reused after a switch (issue #31 / MR !20).
+    private readonly root: string | null,
   ) {}
 
   async start(
     onMessage: (raw: string) => void,
     onExit: () => void,
     onStderr?: (line: string) => void,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    const { serverId: physicalId, isNew } = await invoke<{
+      serverId: string;
+      isNew: boolean;
+    }>("lsp_get_or_start", {
+      logicalId: this.logicalId,
+      program: this.program,
+      args: this.args,
+      root: this.root,
+    });
+    this.physicalId = physicalId;
+    // Listen only after the spawn returns the physical id. The gap is safe:
+    // a fresh server stays silent until it receives `initialize`, and a
+    // re-attached one until its next request, so no message is missed.
     this.unlisten.push(
-      await listen<string>(`lsp://message/${this.serverId}`, (event) =>
+      await listen<string>(`lsp://message/${physicalId}`, (event) =>
         onMessage(event.payload),
       ),
     );
-    this.unlisten.push(
-      await listen(`lsp://exit/${this.serverId}`, () => onExit()),
-    );
+    this.unlisten.push(await listen(`lsp://exit/${physicalId}`, () => onExit()));
     // Forward server stderr to the client's context buffer (surfaced on an
     // unexpected exit) and mirror it to the devtools console.
     this.unlisten.push(
-      await listen<string>(`lsp://stderr/${this.serverId}`, (event) => {
+      await listen<string>(`lsp://stderr/${physicalId}`, (event) => {
         onStderr?.(event.payload);
-        console.debug(`[${this.serverId}]`, event.payload);
+        console.debug(`[${physicalId}]`, event.payload);
       }),
     );
-    await invoke("lsp_start", {
-      serverId: this.serverId,
-      program: this.program,
-      args: this.args,
-    });
+    return isNew;
   }
 
   async send(message: string): Promise<void> {
-    await invoke("lsp_send", { serverId: this.serverId, message });
+    await invoke("lsp_send", { serverId: this.physicalId, message });
   }
 
   async stop(): Promise<void> {
-    await invoke("lsp_stop", { serverId: this.serverId });
+    await invoke("lsp_stop", { serverId: this.physicalId });
     for (const stop of this.unlisten) stop();
     this.unlisten = [];
+  }
+
+  async markInitialized(): Promise<void> {
+    await invoke("lsp_mark_initialized", { serverId: this.physicalId });
   }
 }
 
@@ -115,24 +149,36 @@ export class LspClient {
 
   private constructor(private readonly transport: LspTransport) {}
 
-  /** Spawn `program args` behind the backend host and attach. */
+  /**
+   * Spawn (or re-attach to) `program args` behind the backend host. `root`
+   * binds the spawn to a scope (a root-bound server's project root, or null
+   * when root-agnostic): the backend re-attaches only for a matching root,
+   * else spawns fresh. The `isNew` flag is true for a fresh spawn the caller
+   * must hand-shake, false when re-attached to a server that survived a
+   * webview reload AND is rooted where the caller now wants it.
+   */
   static async start(
-    serverId: string,
+    logicalId: string,
     program: string,
     args: string[],
-  ): Promise<LspClient> {
-    return LspClient.withTransport(new TauriTransport(serverId, program, args));
+    root: string | null,
+  ): Promise<{ client: LspClient; isNew: boolean }> {
+    return LspClient.withTransport(
+      new TauriTransport(logicalId, program, args, root),
+    );
   }
 
   /** Attach over any transport — the browser test seam. */
-  static async withTransport(transport: LspTransport): Promise<LspClient> {
+  static async withTransport(
+    transport: LspTransport,
+  ): Promise<{ client: LspClient; isNew: boolean }> {
     const client = new LspClient(transport);
-    await transport.start(
+    const isNew = await transport.start(
       (raw) => client.onMessage(raw),
       () => client.onExit(),
       (line) => client.captureStderr(line),
     );
-    return client;
+    return { client, isNew };
   }
 
   get isAlive(): boolean {
@@ -147,6 +193,15 @@ export class LspClient {
    * tells them apart. */
   onServerExit(handler: (info: LspExitInfo) => void): void {
     this.exitHandlers.push(handler);
+  }
+
+  /**
+   * Tell the host the initialize handshake landed, so a re-attach after a
+   * webview reload skips it (issue #31). A no-op on transports that don't
+   * track backend lifecycle (the in-page browser fake).
+   */
+  async markInitialized(): Promise<void> {
+    await this.transport.markInitialized?.();
   }
 
   async request(

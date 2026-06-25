@@ -3,7 +3,7 @@
 // indexes the project from the rootUri). The one `LanguageProvider` the app
 // uses for `.lua`. The connection lifecycle and queries live in the shared
 // HostedLspProvider base; this class adds only the lua-specific bits: the
-// (salted) connect seam and inlay hints.
+// root-keyed connect seam and inlay hints.
 
 import { invoke } from "@tauri-apps/api/core";
 import { LspClient } from "./lsp-client";
@@ -12,49 +12,37 @@ import { lineStarts } from "./offsets";
 import { lineStart, pathToUri } from "./lsp-wire";
 import type { InlayHint } from "./provider";
 
-// A fresh host id per spawn — same reasoning as rust-analyzer.ts: a project
-// switch stops the old server and reconnects, but the backend host map lingers
-// until the old process is reaped, so a shared id would hit lsp_start's
-// idempotent guard and the new client would talk to a dying server. The logical
-// provider id stays "dcs-lua" (below); only the host connection id is sequenced.
-//
-// The sequence is also salted with a per-page-load token: a full page
-// navigation (which the e2e-lang suite does between specs against the one
-// running app) resets module state to seq 0, so without the salt every load's
-// first connection would reuse id `dcs-lua:1` — and lsp_start, idempotent on
-// id, would hand back the PREVIOUS load's now-stale server (its old file still
-// open), starving every positional query. The salt makes each page load's ids
-// disjoint, so a reload always gets a fresh server. Tauri event names allow
-// alphanumerics and `-/:_`, so the token stays within that set.
-const HOST_CONNECTION_SALT = Math.random().toString(36).slice(2, 8);
-let hostConnectionSeq = 0;
-
 /** Production connection: ask the backend for the lua-analyzer binary, host it
  * as a standalone process — exactly how rust-analyzer is hosted.
  *
- * The connection id is `:`-separated, NOT `#`: it becomes a Tauri event name
- * (`lsp://message/<id>`), and Tauri only permits alphanumerics + `-/:_` — a
- * `#` makes `listen()` throw and the server never connects. */
-async function connectViaHost(): Promise<LspClient> {
+ * lua-analyzer is root-bound (it indexes the project from `rootUri`): pass
+ * `root` as the re-attach key so the backend re-attaches only to a server
+ * rooted here (skipping the handshake after a reload), while a different root
+ * evicts the stale server and spawns fresh, re-initializing against the new
+ * project (issue #31 / MR !20). The backend assigns the physical id and keys
+ * the IPC channel; the stable logical id is just `"dcs-lua"`. */
+async function connectViaHost(
+  root: string,
+): Promise<{ client: LspClient; isNew: boolean }> {
   const program = await invoke<string>("lua_analyzer_path");
-  hostConnectionSeq += 1;
-  return LspClient.start(
-    `dcs-lua:${HOST_CONNECTION_SALT}-${hostConnectionSeq}`,
-    program,
-    [],
-  );
+  return LspClient.start("dcs-lua", program, [], root);
 }
 
 export class LuaAnalyzerProvider extends HostedLspProvider {
   // The LOGICAL provider id is shared via dcs-lua.ts: the app sees one "dcs-lua"
-  // Lua provider whichever transport backs it. The BINARY is lua-analyzer; only
-  // the host connection id (above) is sequenced.
+  // Lua provider whichever transport backs it. The BINARY is lua-analyzer; the
+  // backend assigns a physical id per spawn and re-attaches by this logical id
+  // keyed on the project root.
   readonly id = "dcs-lua";
   readonly extensions = [".lua"];
   protected readonly languageId = "lua";
 
   /** `connect` is injectable so `/lab/lsp` drives this exact class. */
-  constructor(connect: () => Promise<LspClient> = connectViaHost) {
+  constructor(
+    connect: (
+      root: string,
+    ) => Promise<{ client: LspClient; isNew: boolean }> = connectViaHost,
+  ) {
     super(connect);
   }
 
