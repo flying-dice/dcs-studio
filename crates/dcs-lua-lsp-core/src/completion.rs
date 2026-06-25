@@ -797,4 +797,22 @@ mod tests {
         assert_eq!(speeds[0].detail, "string", "{:?}", labels(&items));
         assert_eq!(find(&items, "extra").detail, "number", "{:?}", labels(&items));
     }
+
+    #[test]
+    fn dotted_global_member_shadows_a_same_named_literal_field() {
+        // The dotted half of the precedence union: `cfg` is bound to a literal
+        // `{ speed, only_lit }` *and* extended by a dotted-global assignment
+        // `cfg.speed = "hi"`. The dotted member wins for `speed` — listed once,
+        // detail `global cfg.speed: string`, not the literal's `number` — while
+        // the literal-only `only_lit` still surfaces. The typed-shadow test pins
+        // typed > literal; this pins dotted > literal. Drop the dotted block
+        // below the literal block and `speed`'s detail regresses to `number`.
+        let src = "cfg = { speed = 1, only_lit = 2 }\ncfg.speed = \"hi\"\ncfg.\n";
+        let ws = single(src);
+        let items = complete(&ws, "main.lua", after(src, "cfg.", 1));
+        let speeds: Vec<_> = items.iter().filter(|item| item.label == "speed").collect();
+        assert_eq!(speeds.len(), 1, "{:?}", labels(&items));
+        assert_eq!(speeds[0].detail, "global cfg.speed: string", "{:?}", labels(&items));
+        assert_eq!(find(&items, "only_lit").detail, "number", "{:?}", labels(&items));
+    }
 }
