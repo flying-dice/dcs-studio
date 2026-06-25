@@ -190,9 +190,13 @@ public container Queries for dcslua::DcsLuaLs {
   /// context, prefix-filtered by the partial word under it. A member access
   /// (`recv.`) yields the members of `recv` — the fields of its `@class`/
   /// `@type` named type (inherited fields included, walking the parent
-  /// chain) unioned with the dotted-global statements under `recv.` (the
-  /// generated `.d.lua` path `dotted_match` feeds), each function member
-  /// carrying its signature. A bare identifier yields the locals in scope
+  /// chain), the dotted-global statements under `recv.` (the generated
+  /// `.d.lua` path `dotted_match` feeds), and the `name = value` fields of
+  /// the table literal `recv` is bound to when it is a `local`/global
+  /// constructor — the structural shape `Type::Table` inference otherwise
+  /// discards — all unioned, a name an earlier source carries kept over a
+  /// later one, each function member carrying its signature. A bare
+  /// identifier yields the locals in scope
   /// (innermost-shadowing, deduped) and the workspace global roots. Every
   /// item carries the declaration's doc run; a function item's `insertText`
   /// is a `${1:param}` snippet. Empty inside a comment or string, over a
@@ -216,6 +220,15 @@ feature CompletionOffersScopeGlobalsAndMembers for lspcore::Queries {
   then "the bare-identifier cursor offers the in-scope local and the workspace global root"
   and "the `recv.` cursor offers the named type's fields and the dotted-global members, functions as snippets"
   but "a cursor inside a comment or string, or after a receiver with no known members, offers nothing"
+}
+
+/// A receiver bound to a table literal completes its constructor's fields —
+/// the structural members `Type::Table` inference drops.
+feature CompletionInfersTableLiteralMembers for lspcore::Queries {
+  given "a local bound to a table literal whose fields include a value and a function"
+  when "completion is requested at that local's member access"
+  then "the items are the literal's field names, prefix-filtered"
+  and "a function-valued field carries the function kind and a `${1:param}` snippet, the rest the field kind"
 }
 
 /// A type-incompatible argument is the `param-type-mismatch` lint.
