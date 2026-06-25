@@ -45,6 +45,10 @@ tauri-plugin-single-instance = "2"
 # marketplace product pages and local projects from a browser link (issue #44).
 tauri-plugin-deep-link = "2"
 url = "2"
+# Auto-update (issue #54): shipped builds pull signed releases from the GitHub
+# release feed (tauri.conf.json `plugins.updater`). Headless check on startup —
+# see `check_for_updates` in lib.rs.
+tauri-plugin-updater = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["net"] }
