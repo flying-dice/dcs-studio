@@ -32,6 +32,9 @@ needless_lifetimes = "warn"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+# Structured logging facade (wasm-safe; native binaries install the subscriber).
+# Used to surface non-fatal publish warnings (e.g. a clamped `volume_size`).
+tracing = { workspace = true }
 dcs-bridge-client = { path = "../dcs-bridge-client" }
 dcs-studio-project = { path = "../dcs-studio-project" }
 # Integrated terminal (model/studio/term.pds, issue #13): real pseudo-terminals
@@ -44,8 +47,14 @@ ureq = { version = "2", features = ["json"] }
 # the token never lands in argv.
 base64 = "0.22"
 # Package a release payload (publish) + unpack it on Marketplace install
-# (issue #10/#12); same crate the signed-package writer uses.
+# (issue #10/#12); same crate the signed-package writer uses. Kept for the
+# legacy single-`.zip` payload read path on the install side.
 zip = "2"
+# Package a large release payload as a 7-Zip multi-volume archive on publish and
+# re-stitch it on install (issue #62) — pure-Rust read+write 7z. `compress` is the
+# writer surface used by publish; the install (read) side lands in a later slice.
+# Pinned to 0.20.x: 0.21 raised the MSRV to 1.93, above CI's rust:1.92.
+sevenz-rust2 = { version = "0.20", default-features = false, features = ["compress"] }
 # Persistent per-user data dir for the Marketplace content store + ledger
 # (issue #10) — must survive reboot, unlike temp.
 dirs = "6"

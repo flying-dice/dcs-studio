@@ -104,10 +104,12 @@ fn resolve_roots() -> Result<dcs_studio_project::RootMap, String> {
     dcs_studio_project::detect::resolve_roots(None)
 }
 
-/// The download URL of the payload the publish side wrote — the asset named
-/// `dcs-studio-<name>-<tag>.zip` (see publish.rs `package_payload`). Matched by
-/// that exact `dcs-studio-<name>-` prefix so an unrelated `.zip` on the release
-/// can't be installed by mistake (publish + install agree on the artifact).
+/// The download URL of the legacy single-`.zip` payload — the asset named
+/// `dcs-studio-<name>-<tag>.zip`. Matched by that exact `dcs-studio-<name>-`
+/// prefix so an unrelated `.zip` on the release can't be installed by mistake.
+/// (Publish now writes a 7-Zip payload instead — issue #62; discovering and
+/// re-stitching those `.7z`/`.7z.NNN` assets on install lands with that issue's
+/// install slice, while this legacy `.zip` path stays for older releases.)
 fn find_payload_asset(owner: &str, name: &str, token: &str) -> Result<String, String> {
     #[derive(Deserialize)]
     struct Resp {

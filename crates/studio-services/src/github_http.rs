@@ -31,6 +31,18 @@ pub(crate) fn put(url: &str, token: &str) -> ureq::Request {
     authed(ureq::put(url), token)
 }
 
+/// An authenticated `PATCH`, with `User-Agent` + `Bearer {token}` set (used to
+/// flip a draft release to published).
+pub(crate) fn patch(url: &str, token: &str) -> ureq::Request {
+    authed(ureq::request("PATCH", url), token)
+}
+
+/// An authenticated `DELETE`, with `User-Agent` + `Bearer {token}` set (used to
+/// delete a release asset before re-uploading it).
+pub(crate) fn delete(url: &str, token: &str) -> ureq::Request {
+    authed(ureq::delete(url), token)
+}
+
 fn authed(req: ureq::Request, token: &str) -> ureq::Request {
     req.set("User-Agent", USER_AGENT)
         .set("Authorization", &format!("Bearer {token}"))
