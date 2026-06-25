@@ -15,11 +15,14 @@
 //! The untrusted, unsigned third-party payload is held to the same ceilings as the
 //! legacy path: extraction is confined to the store (an entry escaping it is
 //! refused) and bounded by a budget measured on ACTUAL decompressed bytes (a lying
-//! declared size is never trusted), plus an entry-count cap, an aggregate-size cap,
-//! a volume-count cap, and a free-space pre-flight. The volumes are read through a
-//! CHAINED SEEK-READER in place — never concatenated into one temp copy — so peak
-//! install disk is the downloaded volumes + the extracted tree, nothing more. ureq
-//! is blocking — callers run it off the UI thread.
+//! declared size is never trusted) that is ITSELF capped at the free disk, plus an
+//! entry-count cap, an aggregate-size cap, a volume-count cap, and a free-space
+//! pre-flight. The 7-Zip volumes stream to a scratch dir and are read through a
+//! CHAINED SEEK-READER in place — never concatenated into one temp copy; only the
+//! legacy `.zip` is buffered whole in memory, under a RAM-sane download cap. So a
+//! lying header can exhaust neither memory nor disk, and peak install disk is the
+//! downloaded volumes + the extracted tree, nothing more. ureq is blocking —
+//! callers run it off the UI thread.
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -34,6 +37,12 @@ use crate::github_http::{self, API_BASE};
 /// ~16 GiB). Measured on bytes written, not the archive's declared sizes, so a
 /// lying-header zip bomb is stopped at the budget regardless.
 pub(super) const MAX_UNCOMPRESSED_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+/// RAM ceiling for the legacy `.zip`, which is buffered whole in memory before
+/// unpacking (the 7-Zip path streams to disk instead). Restores the pre-#62
+/// 512 MiB download bound so a hostile `.zip`-only release can't force a
+/// multi-gigabyte allocation in the desktop process. Distinct from the
+/// decompression budget: this caps the COMPRESSED download, that the extracted bytes.
+const MAX_LEGACY_ZIP_BYTES: u64 = 512 * 1024 * 1024;
 /// Cap on the number of entries unpacked from one payload (a fork-bomb of tiny
 /// files is refused before it floods the filesystem).
 pub(super) const MAX_PAYLOAD_ENTRIES: usize = 20_000;
@@ -249,16 +258,28 @@ fn disk_shortfall(free: u64, need: u64) -> Option<u64> {
     (free < required).then(|| required - free)
 }
 
+/// Free bytes on `dir`'s filesystem — a missing `dir` resolves to its nearest
+/// existing ancestor for the probe. Shared so the pre-flight and the extraction
+/// disk-budget bound read the same number.
+fn free_space(dir: &Path) -> Result<u64, String> {
+    let probe = dir.ancestors().find(|p| p.exists()).unwrap_or(dir);
+    fs2::available_space(probe).map_err(|e| format!("could not check free disk space: {e}"))
+}
+
+/// The extraction budget: the smaller of the decompression cap and what the disk
+/// can actually hold (free minus headroom). Bounding the running budget to the free
+/// disk is what stops a lying header that under-declares `size()` from driving the
+/// decoder to ENOSPC — the actual-bytes guard trips first. Pure, so the bound is
+/// unit-tested without a real disk.
+fn disk_bounded_budget(max_uncompressed: u64, free: u64) -> u64 {
+    max_uncompressed.min(free.saturating_sub(DISK_HEADROOM_BYTES))
+}
+
 /// Refuse up front when `dir`'s filesystem cannot hold `need` plus headroom.
 fn ensure_free_space(dir: &Path, need: u64) -> Result<(), String> {
-    // A missing data dir resolves to its parent's filesystem for the probe.
-    let probe = dir.ancestors().find(|p| p.exists()).unwrap_or(dir);
-    let free = fs2::available_space(probe)
-        .map_err(|e| format!("could not check free disk space: {e}"))?;
-    match disk_shortfall(free, need) {
+    match disk_shortfall(free_space(dir)?, need) {
         Some(short) => Err(format!(
-            "not enough disk space to install: need ~{} more byte(s) free",
-            short
+            "not enough disk space to install: need ~{short} more byte(s) free"
         )),
         None => Ok(()),
     }
@@ -375,13 +396,14 @@ fn extract_7z<R: Read + Seek>(
     if entry_count > max_entries {
         return Err("payload has too many files to install".to_string());
     }
-    // Pre-extract free-space check on the DECLARED total (a cheap UX guard; the
-    // real cap is the actual-bytes budget below, which a lying header can't beat).
+    // Friendly fast-fail on the DECLARED total — a clear "not enough disk" before any
+    // write, when an HONEST archive obviously won't fit. The hard guarantee is the
+    // disk-bounded budget below, which never trusts `declared`.
     let declared: u64 = archive.archive().files.iter().filter(|f| !f.is_directory()).map(|f| f.size()).sum();
     ensure_free_space(store, declared)?;
 
     let store = store.to_path_buf();
-    let mut budget = max_uncompressed;
+    let mut budget = disk_bounded_budget(max_uncompressed, free_space(&store)?);
     let mut written_total: u64 = 0;
     let mut guard_error: Option<String> = None;
 
@@ -512,7 +534,9 @@ fn unpack_zip(bytes: &[u8], store: &Path, max_uncompressed: u64, max_entries: us
     if archive.len() > max_entries {
         return Err("payload has too many files to install".to_string());
     }
-    let mut budget = max_uncompressed;
+    // Same disk bound as the 7z path: the actual-bytes budget is capped at the free
+    // disk, so a lying `uncompressed_size` can't write past it to ENOSPC.
+    let mut budget = disk_bounded_budget(max_uncompressed, free_space(store)?);
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| format!("payload entry: {e}"))?;
         let Some(rel) = entry.enclosed_name() else {
@@ -583,9 +607,11 @@ fn fetch_into_store(plan: &PayloadPlan, owner: &str, name: &str, token: &str, st
 
     if !plan.seven_zip {
         let url = plan.volumes.first().ok_or("legacy payload has no asset")?;
-        // The in-memory zip can't exceed the decompression budget anyway, so cap
-        // the download at it.
-        let bytes = fetch_capped_bytes(&url.browser_download_url, token, MAX_UNCOMPRESSED_BYTES)?;
+        // The legacy `.zip` is buffered whole in memory, so its download is capped at
+        // a RAM-sane bound — NOT the (disk-bounded) decompression budget. This is the
+        // path an attacker forces by publishing only a `.zip`; the cap stops a hostile
+        // release from forcing a multi-gigabyte allocation in the desktop process.
+        let bytes = fetch_capped_bytes(&url.browser_download_url, token, MAX_LEGACY_ZIP_BYTES)?;
         unpack_zip(&bytes, store, MAX_UNCOMPRESSED_BYTES, MAX_PAYLOAD_ENTRIES)?;
         // The legacy zip reader reports no running decompressed total; return the
         // downloaded byte count (callers use it only as a non-zero signal).
@@ -757,6 +783,17 @@ mod tests {
         // Exactly need+headroom is enough; one byte short is not.
         assert!(disk_shortfall(1000 + DISK_HEADROOM_BYTES, 1000).is_none());
         assert_eq!(disk_shortfall(DISK_HEADROOM_BYTES, 1000), Some(1000));
+    }
+
+    #[test]
+    fn budget_is_bounded_by_free_disk_not_just_the_cap() {
+        // Ample disk → the decompression cap governs.
+        assert_eq!(disk_bounded_budget(16 * 1024, 1 << 40), 16 * 1024);
+        // Scarce disk → free-minus-headroom governs, BELOW the cap: the lying-header
+        // disk guard, the budget can't exceed what the disk actually holds.
+        assert_eq!(disk_bounded_budget(u64::MAX, DISK_HEADROOM_BYTES + 4096), 4096);
+        // Disk at/under headroom → zero budget; the first byte trips before ENOSPC.
+        assert_eq!(disk_bounded_budget(u64::MAX, DISK_HEADROOM_BYTES), 0);
     }
 
     // --- chained reader + 7z round-trip -------------------------------------
