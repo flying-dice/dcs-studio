@@ -104,6 +104,14 @@ public data Release { tag: string, htmlUrl: string, assets: studio::market::Rele
 /// A pointer to a release asset to fetch by URL.
 public data ReleaseRef { downloadUrl: string }
 
+/// The discovered, verified install payload of a release (issue #62). `volumes`
+/// are the ordered asset pointers to fetch: one entry for a single `<base>.7z` or
+/// a legacy `<base>.zip`, the ordered `<base>.7z.001`, `.002`, … set for a
+/// multi-volume 7-Zip payload. `totalBytes` is the aggregate download size across
+/// the set; `sevenZip` is false only for the legacy single-`.zip` path (which
+/// unpacks via the existing Zip reader rather than the chained 7-Zip reassembly).
+public data PayloadPlan { volumes: studio::market::ReleaseRef[], totalBytes: number, sevenZip: bool }
+
 /// Discovers dcs-studio mods on GitHub and presents them as store listings.
 public container Registry for studio::core::Studio {
   /// Discover mods for the store. Browsing requires a GitHub sign-in: with no
@@ -179,7 +187,8 @@ public container Library for studio::core::Studio {
   /// Install a discovered mod and everything it depends on (sign-in gated).
   /// First resolves the transitive `[[dependencies]]` graph rooted at the mod
   /// into a dependency-before-dependent plan, then places each node: download the
-  /// release payload (`.zip` asset), unpack it to a content store, and place each
+  /// release payload (a 7-Zip `.7z` / `.7z.NNN` volume set, or a legacy `.zip`),
+  /// unpack it to a content store, and place each
   /// `[[install]]` rule by LINKING its destination to the store source — a
   /// junction for a directory, a hard link for a same-volume file, a symlink
   /// otherwise (and if that cross-volume symlink needs privilege on Windows, a
@@ -225,13 +234,40 @@ public container Library for studio::core::Studio {
   ResolvePlan(owner: string, name: string, token: string): Result<studio::market::PlanNode[], studio::market::MarketError>;
 
   /// Place each node of the resolved plan in order: download + unpack + LINK a
-  /// node not yet on disk (the link rules + two hard guards above), or skip the
-  /// link step for an `alreadyInstalled` one. Record each in the ledger with its
+  /// node not yet on disk (via `DiscoverPayload` + `FetchPayloadIntoStore`, then
+  /// the link rules + two hard guards above), or skip the link step for an
+  /// `alreadyInstalled` one. Record each in the ledger with its
   /// declared dependency ids and whether it was installed EXPLICITLY (the root
   /// `owner/name`) or pulled in only as a dependency — the flag uninstall's
   /// garbage collection reads (an already-explicit node is never demoted to auto).
   /// Returns the aggregate outcome (root, pulled-in dependencies, links, warnings).
   InstallPlan(owner: string, name: string, plan: studio::market::PlanNode[], token: string): Result<studio::market::InstallOutcome, studio::market::MarketError>;
+
+  /// Discover a node's install payload and verify it is COMPLETE before any large
+  /// download (issue #62). The latest release's assets are classified into one
+  /// shape: an ordered multi-volume 7-Zip set (`<base>.7z.001`, `.002`, …), a
+  /// single `<base>.7z`, or the legacy single `<base>.zip` (`base` is
+  /// `dcs-studio-<name>-<tag>`). For a volume set the `.001` start header is parsed
+  /// to derive the expected volume count and last-volume size, and every volume is
+  /// confirmed present and correctly sized (each but the last exactly the `.001`
+  /// size) — a missing or short volume fails fast with an "incomplete volume set"
+  /// error and NOTHING is downloaded. A hostile release is pre-empted here too: an
+  /// aggregate payload over the size cap, or more volumes than the limit (≤ 1000),
+  /// is refused up front.
+  DiscoverPayload(owner: string, name: string, token: string): Result<studio::market::PayloadPlan, studio::market::MarketError>;
+
+  /// Download a verified payload and unpack it into the per-mod content store,
+  /// returning the actual decompressed byte count (issue #62). A free-space
+  /// pre-flight refuses up front when the disk cannot hold the download plus the
+  /// extracted tree. Each volume is downloaded (a transient failure retried with
+  /// exponential backoff); the volumes are then read through a CHAINED SEEK-READER
+  /// in place — never concatenated into one temp copy — and extracted straight into
+  /// the store. Extraction is confined to the store (an entry whose path escapes it
+  /// is refused) and bounded by a budget measured on ACTUAL decompressed bytes (a
+  /// lying declared size is not trusted); a failed CRC is a corruption error. On
+  /// success each downloaded volume is deleted; on any failure the partial store and
+  /// the downloaded volumes are cleaned up.
+  FetchPayloadIntoStore(plan: studio::market::PayloadPlan, owner: string, name: string, token: string): Result<number, studio::market::MarketError>;
 
   /// Whether the repo carries the `dcs-studio-library` topic — a `GetRepo` REST
   /// query (the authoritative topic source), so the guard costs one round-trip
@@ -431,4 +467,46 @@ feature UninstallGarbageCollectsOrphans for studio::market::Library {
   when "the mod is uninstalled"
   then "the now-orphaned dependency is garbage-collected with it"
   but "a dependency the user had also installed explicitly is kept"
+}
+
+/// A mod too large for a single GitHub asset publishes as ordered 7-Zip volumes
+/// and installs by reassembling them in place (issue #62).
+feature LargePayloadReassembledFromVolumes for studio::market::Library {
+  given "an installable mod whose latest release carries ordered `<base>.7z.001`, `.002`, … volumes"
+  when "the user installs it"
+  then "the `.001` start header is parsed to confirm the complete, correctly-sized volume set before downloading"
+  and "the volumes are read through one chained seek-reader in place — never concatenated into a temp copy — and extracted into the content store"
+  and "each downloaded volume is deleted once extraction completes"
+}
+
+/// An incomplete volume set is caught before a large download starts, not midway.
+feature IncompleteVolumeSetFailsFast for studio::market::Library {
+  given "a release whose final 7-Zip volume is missing or shorter than the start header implies"
+  when "install resolves the payload"
+  then "it fails immediately with an `incomplete volume set` error"
+  but "no payload volume is downloaded"
+}
+
+/// The small-mod and pre-#62 paths are untouched: a single `.7z` and a legacy
+/// single `.zip` both still install.
+feature SingleArchiveAndLegacyZipStillInstall for studio::market::Library {
+  given "a release carrying either one `<base>.7z` asset or only the legacy `<base>.zip` payload"
+  when "the user installs it"
+  then "the single archive is downloaded and extracted (the `.zip` via the existing Zip path) and its `[[install]]` rules are linked"
+}
+
+/// The decompression budget is measured on the bytes actually written, so a 7-Zip
+/// payload lying about its size cannot exhaust the disk.
+feature DecompressionBudgetCapsActualBytes for studio::market::Library {
+  given "a 7-Zip payload whose real decompressed size exceeds the configured budget"
+  when "install extracts it"
+  then "extraction stops at the budget measured on ACTUAL bytes, with nothing written past the cap"
+  but "the declared per-entry sizes are never trusted to enforce the cap"
+}
+
+/// Hostile aggregate counts are pre-empted before any download.
+feature HostileCountsArePreempted for studio::market::Library {
+  given "a release advertising an aggregate payload over the size cap, or more volumes than the limit"
+  when "install resolves the payload"
+  then "it is refused up front, before any volume is downloaded"
 }

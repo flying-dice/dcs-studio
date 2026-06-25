@@ -493,6 +493,7 @@ fn fall_back_to_cache(error: &str) -> Result<Vec<MarketListing>, String> {
 // (search, product, cache) stays in this module. The dependency walk
 // (`Library.ResolvePlan`) is the `resolve` submodule. -------------------------
 mod library;
+mod payload;
 mod resolve;
 pub use library::{InstallOutcome, UninstallOutcome, install, installed_ids, uninstall};
 
