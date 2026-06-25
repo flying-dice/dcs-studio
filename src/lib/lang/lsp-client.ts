@@ -80,6 +80,11 @@ export class LspClient {
   >();
   private readonly exitHandlers: (() => void)[] = [];
   private alive = true;
+  // Single-flight latch for stop(), claimed before its first await so a racing
+  // or repeat stop() short-circuits without re-sending shutdown/exit or
+  // re-reaping. Separate from `alive` (which gates caller requests and marks
+  // "reaped"): flipping that first would suppress stop()'s own polite shutdown.
+  private stopping = false;
 
   private constructor(private readonly transport: LspTransport) {}
 
@@ -138,8 +143,13 @@ export class LspClient {
     await this.send({ jsonrpc: "2.0", method, params });
   }
 
-  /** Polite LSP teardown, then reap the process. */
+  /** Polite LSP teardown, then reap the process. Idempotent and race-safe: the
+   *  first caller claims the teardown; a second or concurrent stop() — e.g.
+   *  reindex.restart() racing a switch-mount on the shared client — returns at
+   *  the latch, so shutdown/exit go out once and onExit fires once. */
   async stop(): Promise<void> {
+    if (this.stopping || !this.alive) return;
+    this.stopping = true;
     try {
       await this.request("shutdown", null, 1000);
       await this.notify("exit", null);
