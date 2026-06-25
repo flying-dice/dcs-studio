@@ -1,5 +1,6 @@
 [package]
 name = "dcs-lua-fmt"
+license.workspace = true
 version.workspace = true
 edition = "2024"
 

@@ -3,6 +3,7 @@
 # server signs the manifest at build time and validates it at install time.
 [package]
 name = "studio-packages"
+license.workspace = true
 edition.workspace = true
 version.workspace = true
 

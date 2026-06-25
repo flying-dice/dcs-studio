@@ -4,6 +4,7 @@
 # exists to drive the package flow (and its tests) end to end.
 [package]
 name = "mock-package-server"
+license.workspace = true
 edition.workspace = true
 version.workspace = true
 
