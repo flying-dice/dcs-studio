@@ -11,6 +11,12 @@
 
 import { app } from "./state.svelte";
 import { luaConsole } from "./lua-console.svelte";
+import { createFileFromRecipe } from "./recipe-file";
+import {
+  readDir as fsReadDir,
+  createFile as fsCreateFile,
+  writeTextFile as fsWriteFile,
+} from "./api";
 import {
   RECIPES,
   filterRecipes,
@@ -49,6 +55,27 @@ export class RecipesLibrary {
   /** Copy a recipe's code to the clipboard. */
   async copy(recipe: Recipe): Promise<void> {
     await navigator.clipboard?.writeText(recipe.code);
+  }
+
+  /**
+   * Open a recipe's snippet as a NEW file at the workspace root (issue #60): a
+   * uniquely-named, disk-backed file seeded with the code, opened as a tab — the
+   * disk-backed pattern #59 chose over ephemeral buffers. Fire-and-forget over
+   * the testable `createFileFromRecipe` (recipe-file.ts), wired here to the real
+   * fs + workbench seams; a no-op with no project, fs failures logged not thrown.
+   */
+  openFromRecipe(recipe: Recipe): void {
+    void createFileFromRecipe(recipe, {
+      rootPath: () => app.rootPath,
+      readDir: (dir) => fsReadDir(dir),
+      // The action only ever creates at the root it resolved once (parentDir),
+      // so it is both the guard root and the target dir — no second, racy read
+      // of app.rootPath (which a mid-flight project close would null out).
+      createFile: (parentDir, name) => fsCreateFile(parentDir, parentDir, name),
+      writeFile: (path, contents) => fsWriteFile(path, contents),
+      openFile: (path, name) => app.openFile(path, name),
+      refreshTree: () => app.refreshTree(),
+    });
   }
 }
 
