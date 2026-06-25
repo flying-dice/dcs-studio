@@ -68,7 +68,7 @@ pub fn complete(workspace: &Workspace, path: &str, offset: u32) -> Vec<Completio
         Context::Member { receiver, prefix } => {
             member_items(workspace, path, &receiver, &prefix, offset)
         }
-        Context::Ident { prefix } => ident_items(workspace, entry, &prefix, offset),
+        Context::Ident { prefix } => ident_items(workspace, entry, path, &prefix, offset),
     }
 }
 
@@ -183,8 +183,10 @@ fn member_items(
     }
 
     // Named-type fields went into `seen` first, so a dotted-global of the same
-    // name is shadowed here — the union, not a duplicate listing.
-    for (segment, decl_path, decl) in dotted_children(workspace, receiver) {
+    // name is shadowed here — the union, not a duplicate listing. `dotted_children`
+    // is resolution-ordered, so first-wins is deterministic and, for a leaf
+    // member, picks the same decl hover resolves.
+    for (segment, decl_path, decl) in dotted_children(workspace, path, receiver) {
         if segment.starts_with(prefix)
             && seen.insert(segment.clone())
             && let Some(entry) = workspace.file(&decl_path)
@@ -255,6 +257,7 @@ fn field_item(field: &FieldAnno) -> CompletionItem {
 fn ident_items(
     workspace: &Workspace,
     entry: &FileEntry,
+    path: &str,
     prefix: &str,
     offset: u32,
 ) -> Vec<CompletionItem> {
@@ -271,10 +274,12 @@ fn ident_items(
         }
     }
 
-    let simple: HashMap<String, (String, Decl)> = global_decls(workspace)
-        .into_iter()
-        .map(|(decl_path, decl)| (decl_label(&decl), (decl_path, decl)))
-        .collect();
+    // First-wins over the resolution-ordered decls: the declaration the
+    // resolver (and hover) would pick for each name, not a HashMap-order race.
+    let mut simple: HashMap<String, (String, Decl)> = HashMap::new();
+    for (decl_path, decl) in global_decls(workspace, path) {
+        simple.entry(decl_label(&decl)).or_insert((decl_path, decl));
+    }
     for root in global_roots(workspace) {
         if !root.starts_with(prefix) || !seen.insert(root.clone()) {
             continue;
@@ -542,5 +547,68 @@ mod tests {
         let ws = single(src);
         let items = complete(&ws, "main.lua", after(src, "\n\n", 0));
         assert!(items.is_empty(), "{:?}", labels(&items));
+    }
+
+    #[test]
+    fn cross_file_duplicate_global_detail_is_deterministic_and_matches_hover() {
+        // Two files declare `spawn` at differing arity; a third queries it.
+        // Resolution is current-file-first then path-sorted, so `a.lua` wins
+        // over `b.lua` — the completion detail/snippet must name that same
+        // declaration hover resolves, regardless of file-insertion order.
+        let src = "spawn()\nspaw\n";
+        for insert_b_first in [false, true] {
+            let mut ws = Workspace::new();
+            let (a, b) = (
+                "function spawn(alpha) end\n",
+                "function spawn(beta, gamma) end\n",
+            );
+            if insert_b_first {
+                ws.set_source("b.lua", b);
+                ws.set_source("a.lua", a);
+            } else {
+                ws.set_source("a.lua", a);
+                ws.set_source("b.lua", b);
+            }
+            ws.set_source("main.lua", src);
+
+            let item = find(&complete(&ws, "main.lua", after(src, "\nspaw", 0)), "spawn").clone();
+            assert_eq!(item.detail, "function spawn(alpha)", "b_first={insert_b_first}");
+            assert_eq!(item.insert_text, "spawn(${1:alpha})", "b_first={insert_b_first}");
+            let card = crate::hover::hover(&ws, "main.lua", after(src, "spawn", 0) - 1)
+                .expect("hover resolves spawn");
+            assert_eq!(item.detail, card.title, "b_first={insert_b_first}");
+        }
+    }
+
+    #[test]
+    fn cross_file_duplicate_dotted_member_detail_is_deterministic_and_matches_hover() {
+        // The `.d.lua` stub plus a user redefinition of the same `DCS.spawn`.
+        // Member completion's detail must name the declaration `resolve_dotted`
+        // (hover) picks — `a.lua` by path order — not a HashMap-order winner.
+        let src = "local x = DCS.spawn\nlocal y = DCS.\n";
+        for insert_b_first in [false, true] {
+            let mut ws = Workspace::new();
+            let (a, b) = (
+                "DCS = {}\nDCS.spawn = function(alpha) end\n",
+                "DCS.spawn = function(beta, gamma) end\n",
+            );
+            if insert_b_first {
+                ws.set_source("b.lua", b);
+                ws.set_source("a.lua", a);
+            } else {
+                ws.set_source("a.lua", a);
+                ws.set_source("b.lua", b);
+            }
+            ws.set_source("main.lua", src);
+
+            let item = find(&complete(&ws, "main.lua", after(src, "DCS.", 1)), "spawn").clone();
+            assert_eq!(
+                item.detail, "global DCS.spawn: function(alpha)",
+                "b_first={insert_b_first}"
+            );
+            let card = crate::hover::hover(&ws, "main.lua", after(src, "DCS.spawn", 0) - 1)
+                .expect("hover resolves DCS.spawn");
+            assert_eq!(item.detail, card.title, "b_first={insert_b_first}");
+        }
     }
 }

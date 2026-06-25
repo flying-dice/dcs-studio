@@ -11,7 +11,7 @@ use dcs_lua_syntax::ast::{Ast, ExprId, ExprKind, FuncBody, FuncName, Name, Parse
 use dcs_lua_syntax::span::Span;
 
 use crate::symbols::render_func_name;
-use crate::workspace::Workspace;
+use crate::workspace::{FileEntry, Workspace};
 
 /// The identifier under the cursor.
 #[derive(Debug)]
@@ -534,25 +534,38 @@ fn file_global<'a>(
         .min_by_key(Decl::start)
 }
 
-/// Current file first, then every other mounted file in path order.
+/// Mounted files in resolution priority: the current file first, then every
+/// other file in path order. The single ordering every workspace-global walk
+/// shares — single-symbol lookup ([`lookup_globals`]) and the completion
+/// enumerations ([`global_decls`], [`dotted_children`]) — so completion picks
+/// the same declaration hover and go-to-definition resolve.
+fn files_in_resolution_order<'ws>(
+    workspace: &'ws Workspace,
+    current_path: &str,
+) -> Vec<(&'ws str, &'ws FileEntry)> {
+    let mut current = None;
+    let mut others: Vec<(&'ws str, &'ws FileEntry)> = Vec::new();
+    for (path, entry) in workspace.files() {
+        if path == current_path {
+            current = Some((path, entry));
+        } else {
+            others.push((path, entry));
+        }
+    }
+    others.sort_by_key(|(path, _)| *path);
+    current.into_iter().chain(others).collect()
+}
+
+/// The first global matched by `matcher`: each file in resolution order
+/// (current first, then path order), taking that file's earliest match.
 fn lookup_globals<'ws>(
     workspace: &'ws Workspace,
     path: &str,
     matcher: impl Fn(&'ws Ast, &'ws dcs_lua_syntax::ast::Stat) -> Option<Decl<'ws>>,
 ) -> Option<(String, Decl<'ws>)> {
-    if let Some(entry) = workspace.file(path)
-        && let Some(decl) = file_global(&entry.parsed, &matcher)
-    {
-        return Some((path.to_string(), decl));
-    }
-    let mut others: Vec<(&str, &crate::workspace::FileEntry)> = workspace
-        .files()
-        .filter(|(other, _)| *other != path)
-        .collect();
-    others.sort_by_key(|(other, _)| other.to_string());
-    for (other, entry) in others {
+    for (file_path, entry) in files_in_resolution_order(workspace, path) {
         if let Some(decl) = file_global(&entry.parsed, &matcher) {
-            return Some((other.to_string(), decl));
+            return Some((file_path.to_string(), decl));
         }
     }
     None
@@ -654,43 +667,47 @@ fn func_path(name: &FuncName) -> Option<String> {
 /// assignment targets and single-segment function declarations, each paired
 /// with the file that declares it. The typed half of completion's
 /// bare-identifier set — every `Decl` carries the kind, signature, and docs.
+///
+/// Returned in resolution order — current file first, then path order, each
+/// file's declarations earliest-first — so the caller's first-wins dedup by
+/// name selects the same declaration [`resolve`] (and thus hover) would.
 #[must_use]
-pub fn global_decls(workspace: &Workspace) -> Vec<(String, Decl<'_>)> {
+pub fn global_decls<'ws>(
+    workspace: &'ws Workspace,
+    current_path: &str,
+) -> Vec<(String, Decl<'ws>)> {
     let mut out = Vec::new();
-    for (path, entry) in workspace.files() {
+    for (path, entry) in files_in_resolution_order(workspace, current_path) {
         let ast = &entry.parsed.ast;
+        let mut file_decls: Vec<Decl<'ws>> = Vec::new();
         for stat in &ast.stats {
             match &stat.kind {
                 StatKind::Assign { targets, values } => {
                     for (position, &target) in targets.iter().enumerate() {
                         if let ExprKind::NameRef(target_name) = &ast.expr(target).kind {
-                            out.push((
-                                path.to_string(),
-                                Decl::GlobalAssign {
-                                    name: target_name.clone(),
-                                    value: values.get(position).copied(),
-                                    stat_start: stat.span.start,
-                                    name_span: target_name_span(ast, target),
-                                },
-                            ));
+                            file_decls.push(Decl::GlobalAssign {
+                                name: target_name.clone(),
+                                value: values.get(position).copied(),
+                                stat_start: stat.span.start,
+                                name_span: target_name_span(ast, target),
+                            });
                         }
                     }
                 }
                 StatKind::FunctionDecl { name, func } => {
                     if name.method.is_none() && name.segments.len() == 1 {
-                        out.push((
-                            path.to_string(),
-                            Decl::GlobalFunction {
-                                name,
-                                func,
-                                stat_start: stat.span.start,
-                            },
-                        ));
+                        file_decls.push(Decl::GlobalFunction {
+                            name,
+                            func,
+                            stat_start: stat.span.start,
+                        });
                     }
                 }
                 _ => {}
             }
         }
+        file_decls.sort_by_key(Decl::start);
+        out.extend(file_decls.into_iter().map(|decl| (path.to_string(), decl)));
     }
     out
 }
@@ -732,15 +749,25 @@ pub fn global_roots(workspace: &Workspace) -> Vec<String> {
 /// `Assign`/`FunctionDecl` whose path is `receiver.<segment>[.…]`, returned
 /// as `(segment, declaring-path, decl)`. The generated `.d.lua` member path —
 /// the same dotted statements `dotted_match` resolves, enumerated by prefix.
+///
+/// Returned in resolution order — current file first, then path order, each
+/// file's declarations earliest-first — so the caller's first-wins dedup by
+/// segment is deterministic. For a leaf member it selects the declaration
+/// [`resolve_dotted`] (and thus hover) resolves for `receiver.<segment>`; the
+/// exception is a nested namespace whose own `receiver.<segment>` declaration
+/// is outranked by a deeper `receiver.<segment>.…` sibling — the generated
+/// stubs are flat, so leaves are the norm.
 #[must_use]
 pub fn dotted_children<'ws>(
     workspace: &'ws Workspace,
+    current_path: &str,
     receiver: &str,
 ) -> Vec<(String, String, Decl<'ws>)> {
     let prefix = format!("{receiver}.");
     let mut out = Vec::new();
-    for (path, entry) in workspace.files() {
+    for (path, entry) in files_in_resolution_order(workspace, current_path) {
         let ast = &entry.parsed.ast;
+        let mut file_children: Vec<(String, Decl<'ws>)> = Vec::new();
         for stat in &ast.stats {
             match &stat.kind {
                 StatKind::Assign { targets, values } => {
@@ -751,9 +778,8 @@ pub fn dotted_children<'ws>(
                         let Some(segment) = child_segment(&dotted, &prefix) else {
                             continue;
                         };
-                        out.push((
+                        file_children.push((
                             segment,
-                            path.to_string(),
                             Decl::GlobalAssign {
                                 name: dotted,
                                 value: values.get(position).copied(),
@@ -769,9 +795,8 @@ pub fn dotted_children<'ws>(
                     else {
                         continue;
                     };
-                    out.push((
+                    file_children.push((
                         segment,
-                        path.to_string(),
                         Decl::GlobalFunction {
                             name,
                             func,
@@ -782,6 +807,12 @@ pub fn dotted_children<'ws>(
                 _ => {}
             }
         }
+        file_children.sort_by_key(|(_, decl)| decl.start());
+        out.extend(
+            file_children
+                .into_iter()
+                .map(|(segment, decl)| (segment, path.to_string(), decl)),
+        );
     }
     out
 }
