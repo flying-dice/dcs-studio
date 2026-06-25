@@ -308,3 +308,26 @@ export function visibleToasts(
     .filter((e) => e.severity === "error" && !dismissed.has(e.id))
     .slice(0, max);
 }
+
+/**
+ * Drop dismissed-toast ids whose entries the store has since evicted (it caps
+ * at {@link MAX_NOTIFICATIONS}), so the dismissed set can't grow without bound
+ * over the app's life. Ids are monotonic and never reused, so a pruned id can
+ * never re-surface its toast. Returns the *same* set when nothing is stale, so
+ * a reactive caller can skip a redundant write and settle in one pass.
+ */
+export function pruneDismissed(
+  dismissed: ReadonlySet<number>,
+  entries: NotificationEntry[],
+): ReadonlySet<number> {
+  const live = new Set(entries.map((e) => e.id));
+  let stale = false;
+  for (const id of dismissed) {
+    if (!live.has(id)) {
+      stale = true;
+      break;
+    }
+  }
+  if (!stale) return dismissed;
+  return new Set([...dismissed].filter((id) => live.has(id)));
+}

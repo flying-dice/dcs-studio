@@ -11,15 +11,25 @@
   import { CircleX, X } from "@lucide/svelte";
   import { app } from "$lib/state.svelte";
   import { notifications as appNotifications, NotificationStore } from "$lib/notifications.svelte";
-  import { visibleToasts, TOAST_TTL_MS } from "$lib/notifications-classify";
+  import { visibleToasts, pruneDismissed, TOAST_TTL_MS } from "$lib/notifications-classify";
 
   let { store = appNotifications }: { store?: NotificationStore } = $props();
 
   // Toasts already gone — auto-timed-out, clicked, or dismissed — filtered out
   // of view. The entry itself lives on in the store/panel; only the toast goes.
-  let dismissed = $state(new Set<number>());
+  // Wholesale-replaced on every change (never mutated in place), so the derived
+  // toast list re-runs.
+  let dismissed = $state<ReadonlySet<number>>(new Set<number>());
 
   const toasts = $derived(visibleToasts(store.entries, dismissed));
+
+  // Keep `dismissed` bounded: once the store evicts an entry past its cap, that
+  // dismissed id is dead weight. pruneDismissed returns the same set when
+  // nothing is stale, so the guard makes this settle in one pass — no loop.
+  $effect(() => {
+    const pruned = pruneDismissed(dismissed, store.entries);
+    if (pruned !== dismissed) dismissed = pruned;
+  });
 
   // One auto-dismiss timer per toast, armed exactly once when it first appears
   // (the `has` guard stops a re-render from restarting a running countdown).

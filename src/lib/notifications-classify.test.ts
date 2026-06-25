@@ -19,6 +19,7 @@ import {
   withoutEntry,
   relativeTime,
   visibleToasts,
+  pruneDismissed,
   MAX_NOTIFICATIONS,
   COALESCE_WINDOW_MS,
   type NotificationEntry,
@@ -317,5 +318,29 @@ describe("visibleToasts", () => {
   it("caps the visible stack", () => {
     const errors = [6, 5, 4, 3].map((id) => entry(id, { severity: "error" }));
     expect(visibleToasts(errors, new Set(), 2).map((e) => e.id)).toEqual([6, 5]);
+  });
+});
+
+describe("pruneDismissed", () => {
+  const list = [entry(3), entry(2), entry(1)];
+
+  it("drops dismissed ids the store has evicted", () => {
+    // 9 and 8 are gone from the store; 2 still present
+    const pruned = pruneDismissed(new Set([9, 8, 2]), list);
+    expect([...pruned].sort()).toEqual([2]);
+  });
+
+  it("keeps every dismissed id still backed by an entry", () => {
+    const dismissed = new Set([3, 1]);
+    expect([...pruneDismissed(dismissed, list)].sort()).toEqual([1, 3]);
+  });
+
+  it("returns the same set reference when nothing is stale (no needless write)", () => {
+    const dismissed = new Set([2]);
+    expect(pruneDismissed(dismissed, list)).toBe(dismissed);
+  });
+
+  it("prunes to empty when the store has been cleared", () => {
+    expect(pruneDismissed(new Set([3, 2, 1]), []).size).toBe(0);
   });
 });

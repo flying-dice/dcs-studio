@@ -36,7 +36,7 @@ export interface LspTransport {
 const REQUEST_TIMEOUT_MS = 15_000;
 
 /** Trailing stderr lines kept for an exit's failure context (bounded). */
-const STDERR_BUFFER_LINES = 50;
+export const STDERR_BUFFER_LINES = 50;
 
 interface Pending {
   resolve: (value: unknown) => void;
