@@ -58,6 +58,7 @@
   const fakeTransport: LspTransport = {
     async start(onMessage) {
       emitMessage = onMessage;
+      return true; // the in-page fake is always a fresh spawn
     },
     async send(raw: string) {
       const message = JSON.parse(raw);

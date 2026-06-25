@@ -118,6 +118,18 @@ public system DcsLua {
 /// opening every file. Located next to the app executable (overridable via
 /// `DCS_LUA_ANALYZER`); a missing binary surfaces in the status bar but the
 /// IDE stays usable (model `EngineFailureIsNonFatal`).
+///
+/// Host re-attach lifecycle (issue #31): the backend — not the webview — owns
+/// the server across an HMR update or full reload (the Tauri process outlives
+/// the webview). On every (re)mount the webview calls the host's get_or_start,
+/// keyed by the stable logical id and the project root, and is told the
+/// physical server id and is_new. A healthy, already-initialized server bound
+/// to the SAME root is re-attached (is_new false) and the webview skips the
+/// initialize handshake — re-initializing a live server is the #31 violation.
+/// A stale, never-initialized, or wrong-root leftover is evicted first and a
+/// fresh server spawns (is_new true) that handshakes against the new root.
+/// lua-analyzer indexes from the rootUri, so it re-attaches only for a matching
+/// root (model `WarmReattachAcrossReload`).
 public system LuaAnalyzer;
 
 /// rust-analyzer, the third-party Rust language server: a hosted server
@@ -126,6 +138,15 @@ public system LuaAnalyzer;
 /// contract. Detection goes via the Rust toolchain (PATH, then rustup
 /// which); absence is non-fatal — the IDE stays fully usable with Lua
 /// intelligence intact.
+///
+/// Shares lua-analyzer's host re-attach lifecycle (issue #31): get_or_start
+/// re-attach is keyed by (logical id, root), so a same-root reload re-attaches
+/// the warm, already-indexed server — no second initialize, no re-index — while
+/// a project switch evicts the old-rooted server and respawns against the new
+/// root. rust-analyzer fixes its root at the initialize rootUri and cannot be
+/// re-rooted in place, so the matching-root guard is load-bearing: re-attaching
+/// it for a different project would leave it indexing the old root forever
+/// (model `WarmReattachAcrossReload`).
 public system RustAnalyzer;
 
 /// Lifecycle state of a language-intelligence provider surfaced in the
@@ -396,6 +417,21 @@ feature RustAnalyzerSurvivesReopen for studio::lang::LanguageIntel {
   when "the developer closes it and reopens a Cargo project"
   then "rust-analyzer reconnects and reports running"
   but "a restart in flight is never reported as a missing binary"
+}
+
+/// Warm re-attach across a webview reload (issue #31): the backend keeps the
+/// language server alive across an HMR update or full reload, so the IDE
+/// re-attaches to the live, already-initialized server instead of re-indexing
+/// the project, re-initializing a live server, or leaking an orphaned process.
+/// Re-attach is keyed by project root, so a reload on the same project re-uses
+/// the warm server while a switch to another project root respawns.
+feature WarmReattachAcrossReload for studio::lang::LanguageIntel {
+  given "a project is open with the language servers initialized"
+  when "the webview hot-updates or fully reloads on the same project"
+  then "the host re-attaches to the live server instead of spawning a new one"
+  and "no second initialize is sent and no re-index occurs"
+  and "no orphaned server process remains"
+  but "reloading onto a different project root evicts the old-rooted server and spawns a fresh one that initializes against the new root"
 }
 
 /// Language providers surface their lifecycle state in the status bar so
