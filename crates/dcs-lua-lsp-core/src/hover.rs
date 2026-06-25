@@ -56,7 +56,7 @@ pub fn hover(workspace: &Workspace, path: &str, offset: u32) -> Option<HoverInfo
 
 // ---- the headline -----------------------------------------------------------
 
-fn title(ast: &Ast, decl: &Decl<'_>) -> String {
+pub(crate) fn title(ast: &Ast, decl: &Decl<'_>) -> String {
     match decl {
         Decl::Local { name, value, .. } => {
             format!("local {}: {}", name.text, infer(ast, *value))

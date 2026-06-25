@@ -25,6 +25,13 @@ public data DocumentSymbol { name: string, kind: lspcore::SymbolKind, span: synt
 /// declaration; a cross-file global appends `defined in <path>:<line>`).
 public data HoverInfo { title: string, body: string }
 
+/// One completion suggestion at a cursor: the inserted `label`, its `kind`
+/// (`function`/`variable`/`field`), a `detail` type-or-signature line (the
+/// hover title), the `documentation` doc run, and the `insertText` — a
+/// `${1:param}` snippet when `insertTextFormat` is `snippet`, else the bare
+/// label.
+public data CompletionItem { label: string, kind: string, detail: string, documentation: string, insertText: string, insertTextFormat: string }
+
 /// One inferred-type inlay hint: the label (`: <type>`) and the byte offset
 /// it sits after — the end of a bound name, a function parameter name, or the
 /// parameter list's closing `)`. `kind` is the LSP inlay-hint kind (`Type`).
@@ -178,6 +185,20 @@ public container Queries for dcslua::DcsLuaLs {
   /// constructors, arithmetic/concat/comparison/unary operators; calls,
   /// `and`/`or`, and field chains stay `unknown`.
   public HoverAt(path: string, offset: number): Option<lspcore::HoverInfo>;
+
+  /// Completions at a byte offset: the candidate set for the cursor's
+  /// context, prefix-filtered by the partial word under it. A member access
+  /// (`recv.`) yields the members of `recv` — the fields of its `@class`/
+  /// `@type` named type (inherited fields included, walking the parent
+  /// chain) unioned with the dotted-global statements under `recv.` (the
+  /// generated `.d.lua` path `dotted_match` feeds), each function member
+  /// carrying its signature. A bare identifier yields the locals in scope
+  /// (innermost-shadowing, deduped) and the workspace global roots. Every
+  /// item carries the declaration's doc run; a function item's `insertText`
+  /// is a `${1:param}` snippet. Empty inside a comment or string, over a
+  /// member access whose receiver resolves to no known members (never
+  /// falling back to globals), and over whitespace.
+  public Complete(path: string, offset: number): lspcore::CompletionItem[];
 }
 
 /// Hover explains a declaration: kind, inferred type, and its doc text.
@@ -186,6 +207,15 @@ feature HoverExplainsDeclarations for lspcore::Queries {
   when "the developer hovers its name"
   then "the card titles it as a local with the inferred string type"
   and "the doc comment text above the declaration appears in the body"
+}
+
+/// Completion offers in-scope locals, workspace globals, and table members.
+feature CompletionOffersScopeGlobalsAndMembers for lspcore::Queries {
+  given "a local in scope, a workspace global, and a `recv.` member access on a typed table"
+  when "completion is requested at each cursor"
+  then "the bare-identifier cursor offers the in-scope local and the workspace global root"
+  and "the `recv.` cursor offers the named type's fields and the dotted-global members, functions as snippets"
+  but "a cursor inside a comment or string, or after a receiver with no known members, offers nothing"
 }
 
 /// A type-incompatible argument is the `param-type-mismatch` lint.

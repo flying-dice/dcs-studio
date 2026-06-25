@@ -308,26 +308,43 @@ fn lang_tools_answer_from_the_real_engine() {
         "card was: {card}"
     );
 
-    // lua_complete / lua_definition: stable not-implemented JSON-RPC errors,
-    // not a guess — the model's pending-query contract (mcp.pds).
-    for (id, tool) in [(3u64, "lua_complete"), (4u64, "lua_definition")] {
-        let pending = mcp.call(
-            id,
-            tool,
-            &json!({"root": root.to_string_lossy(),
-                   "path": documented.to_string_lossy(),
-                   "line": 1, "character": 1}),
-        );
-        assert_eq!(pending["error"]["code"], json!(-32601), "tool: {tool}");
-        assert!(
-            pending["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("not implemented in the engine yet"),
-            "tool {tool} answered: {}",
-            pending["error"]["message"]
-        );
-    }
+    // lua_complete answers from the engine now: completing the `g` prefix at
+    // `print(greet)` offers the in-scope local `greet` — real items, not a stub.
+    let completion = mcp.call(
+        3,
+        "lua_complete",
+        &json!({"root": root.to_string_lossy(),
+               "path": documented.to_string_lossy(),
+               "line": 3, "character": 8}),
+    );
+    assert_eq!(completion["result"]["isError"], json!(false));
+    let suggestions: Value = serde_json::from_str(tool_text(&completion)).expect("completion json");
+    let items = suggestions["items"].as_array().expect("items array");
+    assert!(
+        items
+            .iter()
+            .any(|item| item["label"] == json!("greet") && item["kind"] == json!("variable")),
+        "completion was: {suggestions}"
+    );
+
+    // lua_definition is still the model's pending-query contract: a stable
+    // not-implemented JSON-RPC error, never a guess (mcp.pds).
+    let pending = mcp.call(
+        4,
+        "lua_definition",
+        &json!({"root": root.to_string_lossy(),
+               "path": documented.to_string_lossy(),
+               "line": 1, "character": 1}),
+    );
+    assert_eq!(pending["error"]["code"], json!(-32601));
+    assert!(
+        pending["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not implemented in the engine yet"),
+        "lua_definition answered: {}",
+        pending["error"]["message"]
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }

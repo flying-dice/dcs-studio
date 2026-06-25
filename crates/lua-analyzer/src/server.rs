@@ -10,17 +10,20 @@ use std::sync::{Mutex, PoisonError};
 
 use dcs_lua_lsp_core::workspace::Workspace;
 use dcs_lua_lsp_core::{
-    DocumentSymbol as CoreSymbol, SymbolKind as CoreSymbolKind, file_findings, findings_by_file,
+    CompletionItem as CoreCompletion, DocumentSymbol as CoreSymbol, SymbolKind as CoreSymbolKind,
+    file_findings, findings_by_file,
 };
 use dcs_lua_syntax::{LineIndex, Severity, Span};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
+    CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability, GotoDefinitionParams,
-    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    InitializeParams, InitializeResult, InitializedParams, InlayHint, InlayHintKind,
-    InlayHintLabel, InlayHintParams, Location, MarkupContent, MarkupKind, NumberOrString, OneOf,
+    DidOpenTextDocumentParams, Documentation, DocumentSymbol, DocumentSymbolParams,
+    DocumentSymbolResponse, FoldingRange, FoldingRangeParams, FoldingRangeProviderCapability,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, InlayHint,
+    InlayHintKind, InlayHintLabel, InlayHintParams, InsertTextFormat, Location, MarkupContent,
+    MarkupKind, NumberOrString, OneOf,
     Position, Range, ReferenceParams, RenameParams, ServerCapabilities, ServerInfo, SymbolKind,
     TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit,
 };
@@ -94,6 +97,13 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
+                completion_provider: Some(CompletionOptions {
+                    // `.` opens member completion; the editor invokes the rest
+                    // explicitly. The engine returns the context's candidate
+                    // set and the client prefix-filters it.
+                    trigger_characters: Some(vec![".".to_string()]),
+                    ..CompletionOptions::default()
+                }),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
@@ -256,6 +266,23 @@ impl LanguageServer for Backend {
         }))
     }
 
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let position = params.text_document_position;
+        let Some(path) = uri_path(&position.text_document.uri) else {
+            return Ok(None);
+        };
+        let workspace = self.workspace.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(entry) = workspace.file(&path) else {
+            return Ok(None);
+        };
+        let offset = offset_of(&entry.source, position.position);
+        let items = dcs_lua_lsp_core::complete(&workspace, &path, offset)
+            .into_iter()
+            .map(to_lsp_completion)
+            .collect();
+        Ok(Some(CompletionResponse::Array(items)))
+    }
+
     async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
         let Some(path) = uri_path(&params.text_document.uri) else {
             return Ok(None);
@@ -364,6 +391,35 @@ impl LanguageServer for Backend {
 /// An engine [`Location`](dcs_lua_lsp_core::Location) → an LSP `Location` with
 /// a UTF-16 range, read from the TARGET file's source (which may differ from
 /// the queried file for a cross-file global).
+/// Map an engine completion item onto the LSP shape: the kind string becomes
+/// a `CompletionItemKind`, the snippet flag an `InsertTextFormat`, and the doc
+/// run a string `Documentation`. Empty optional fields stay `None`.
+fn to_lsp_completion(item: CoreCompletion) -> CompletionItem {
+    CompletionItem {
+        label: item.label,
+        kind: Some(completion_kind(&item.kind)),
+        detail: (!item.detail.is_empty()).then_some(item.detail),
+        documentation: (!item.documentation.is_empty())
+            .then_some(Documentation::String(item.documentation)),
+        insert_text: Some(item.insert_text),
+        insert_text_format: Some(if item.insert_text_format == "snippet" {
+            InsertTextFormat::SNIPPET
+        } else {
+            InsertTextFormat::PLAIN_TEXT
+        }),
+        ..CompletionItem::default()
+    }
+}
+
+/// The engine's kind string mapped to its LSP icon kind.
+fn completion_kind(kind: &str) -> CompletionItemKind {
+    match kind {
+        "function" => CompletionItemKind::FUNCTION,
+        "field" => CompletionItemKind::FIELD,
+        _ => CompletionItemKind::VARIABLE,
+    }
+}
+
 fn to_lsp_location(workspace: &Workspace, location: &dcs_lua_lsp_core::Location) -> Option<Location> {
     let entry = workspace.file(&location.path)?;
     let uri = Url::from_file_path(&location.path).ok()?;

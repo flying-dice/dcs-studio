@@ -29,4 +29,11 @@ public system DcsLuaLs {
     card = Option<lspcore::HoverInfo> from lspcore::Queries.HoverAt(path, offset)
     return card
   }
+
+  /// Completions at a byte offset in a mounted source — the LSP
+  /// textDocument/completion and the MCP lua_complete tool both land here.
+  public Complete(path: string, offset: number): lspcore::CompletionItem[] {
+    items = lspcore::CompletionItem[] from lspcore::Queries.Complete(path, offset)
+    return items
+  }
 }
