@@ -21,13 +21,6 @@
       "csp": null
     }
   },
-  "plugins": {
-    "deep-link": {
-      "desktop": {
-        "schemes": ["dcs-studio"]
-      }
-    }
-  },
   "bundle": {
     "active": true,
     "targets": ["nsis"],
@@ -44,11 +37,16 @@
     ]
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["dcs-studio"]
+      }
+    },
     "updater": {
       "endpoints": [
         "https://github.com/flying-dice/dcs-studio/releases/latest/download/latest.json"
       ],
-      "pubkey": "REPLACE_ME__see_RELEASING.md_step_1"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE4QzFDOTQwMjU0MURBQUIKUldTcjJrRWxRTW5CR0trcnhrLy9YOE9rTUpnd2g1Y1lxblZ3U2VqSzNEK040TUtOaUhjT0R4R0MK"
     }
   }
 }
