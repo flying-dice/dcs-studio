@@ -41,6 +41,8 @@
   import { debug } from "$lib/debug-session.svelte";
   import { runConfig } from "$lib/run-config.svelte";
   import { recipes } from "$lib/recipes.svelte";
+  import { typeSync } from "$lib/types-sync.svelte";
+  import { typeSyncIndicator } from "$lib/types-sync-classify";
   import { cn } from "$lib/utils.js";
 
   import { Button } from "$lib/components/ui/button/index.js";
@@ -104,6 +106,24 @@
   const darkThemes = EDITOR_THEMES.filter((t) => t.dark);
   const lightThemes = EDITOR_THEMES.filter((t) => !t.dark);
   const editorThemeLabel = $derived(editorThemeById(app.editorThemeId).label);
+
+  // Keep the type-sync drift indicator live (issue #50, model
+  // DriftFromRunningVersion): re-check when the project opens or the DCS link /
+  // mission state flips — the running build the verdict compares against changes
+  // with each (a connect exposes the bridge version; a mission start exposes DCS
+  // _APP_VERSION). A sync refreshes it through the reindex event too; closing the
+  // project clears it.
+  $effect(() => {
+    const root = app.rootPath;
+    const dcsConnected = app.dcsConnected;
+    const dcsSimRunning = app.dcsSimRunning;
+    if (root) void typeSync.refreshDrift(root);
+    else typeSync.reset();
+    // Read above purely to subscribe this effect to the link signals — a flip in
+    // either re-checks drift against the now-different running build.
+    void dcsConnected;
+    void dcsSimRunning;
+  });
 
   type Tool = { id: string; label: string; icon: LucideIcon };
 
@@ -228,6 +248,18 @@
               openOutput();
             }
           },
+        },
+        { sep: true },
+        {
+          // Live type sync (issue #50): pull authoritative `.d.lua` from the
+          // running DCS. Fails closed with a start-DCS-first prompt when the sim
+          // is down, so it stays enabled while a project is open.
+          label: "Sync Types from DCS",
+          action: () => {
+            if (app.rootPath) void typeSync.sync(app.rootPath);
+          },
+          disabled: () => !app.rootPath || typeSync.running,
+          testId: "menu-sync-types",
         },
       ],
     },
@@ -782,6 +814,36 @@
           DCS: connected · in menu{#if app.dcsLatencyMs != null}&nbsp;· {app.dcsLatencyMs}ms{/if}
         {/if}
       </span>
+      {#if app.rootPath}
+        {@const indicator = typeSyncIndicator(typeSync.drift, typeSync.running)}
+        <Separator orientation="vertical" class="!h-3" />
+        <!-- Live type sync (issue #50): dot = drift verdict against the RUNNING
+             build (emerald in sync · amber drift/syncing · grey offline/unsynced).
+             Click to sync types from DCS; fails closed with a start-DCS-first
+             prompt when the sim is down. -->
+        <button
+          type="button"
+          class="flex shrink-0 items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground hover:text-foreground"
+          data-testid="types-status"
+          data-state={indicator.state}
+          title={indicator.title}
+          disabled={typeSync.running}
+          onclick={() => {
+            if (app.rootPath) void typeSync.sync(app.rootPath);
+          }}
+        >
+          <span
+            class={cn(
+              "size-1.5 rounded-full",
+              indicator.state === "synced" && "bg-emerald-500",
+              indicator.state === "syncing" && "animate-pulse bg-amber-400",
+              indicator.state === "drift" && "bg-amber-500",
+              (indicator.state === "offline" || indicator.state === "unsynced") && "bg-muted-foreground/40",
+            )}
+          ></span>
+          {indicator.label}
+        </button>
+      {/if}
       {#if debug.status !== "idle"}
         <Separator orientation="vertical" class="!h-3" />
         <!-- Debug session: amber = running, green pulsing = paused. -->
