@@ -9,15 +9,34 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+/** Why a server exited, handed to {@link LspClient.onServerExit} handlers. */
+export interface LspExitInfo {
+  /**
+   * True when the process died on its own (a crash); false on a deliberate
+   * {@link LspClient.stop} — project switch, re-index, or shutdown. Lets a
+   * consumer notify on a genuine failure without flagging an orderly teardown.
+   */
+  unexpected: boolean;
+  /** The trailing stderr lines captured before the exit, as failure context. */
+  stderr: string[];
+}
+
 /** How a client reaches its server; production = the Tauri host pump. */
 export interface LspTransport {
-  start(onMessage: (raw: string) => void, onExit: () => void): Promise<void>;
+  start(
+    onMessage: (raw: string) => void,
+    onExit: () => void,
+    onStderr?: (line: string) => void,
+  ): Promise<void>;
   send(message: string): Promise<void>;
   stop(): Promise<void>;
 }
 
 /** A request that outlives this has hit a dead or wedged server. */
 const REQUEST_TIMEOUT_MS = 15_000;
+
+/** Trailing stderr lines kept for an exit's failure context (bounded). */
+const STDERR_BUFFER_LINES = 50;
 
 interface Pending {
   resolve: (value: unknown) => void;
@@ -37,6 +56,7 @@ class TauriTransport implements LspTransport {
   async start(
     onMessage: (raw: string) => void,
     onExit: () => void,
+    onStderr?: (line: string) => void,
   ): Promise<void> {
     this.unlisten.push(
       await listen<string>(`lsp://message/${this.serverId}`, (event) =>
@@ -46,12 +66,13 @@ class TauriTransport implements LspTransport {
     this.unlisten.push(
       await listen(`lsp://exit/${this.serverId}`, () => onExit()),
     );
-    // Surface server stderr in the devtools console until the Output
-    // panel grows a consumer.
+    // Forward server stderr to the client's context buffer (surfaced on an
+    // unexpected exit) and mirror it to the devtools console.
     this.unlisten.push(
-      await listen<string>(`lsp://stderr/${this.serverId}`, (event) =>
-        console.debug(`[${this.serverId}]`, event.payload),
-      ),
+      await listen<string>(`lsp://stderr/${this.serverId}`, (event) => {
+        onStderr?.(event.payload);
+        console.debug(`[${this.serverId}]`, event.payload);
+      }),
     );
     await invoke("lsp_start", {
       serverId: this.serverId,
@@ -78,13 +99,19 @@ export class LspClient {
     string,
     (params: unknown) => void
   >();
-  private readonly exitHandlers: (() => void)[] = [];
+  private readonly exitHandlers: ((info: LspExitInfo) => void)[] = [];
   private alive = true;
-  // Single-flight latch for stop(), claimed before its first await so a racing
-  // or repeat stop() short-circuits without re-sending shutdown/exit or
-  // re-reaping. Separate from `alive` (which gates caller requests and marks
+  // Set at the start of stop(), before its first await. Two roles: a
+  // single-flight latch so a racing or repeat stop() short-circuits without
+  // re-sending shutdown/exit or re-reaping (the reindex.restart()-vs-switch-mount
+  // race), and the deliberate-teardown flag so the exit it provokes — direct
+  // onExit() below or the backend's racing exit event — is reported as expected,
+  // never a crash. Separate from `alive` (which gates caller requests and marks
   // "reaped"): flipping that first would suppress stop()'s own polite shutdown.
   private stopping = false;
+  // A bounded tail of the server's recent stderr, attached to an exit as the
+  // failure context (issue #61).
+  private readonly recentStderr: string[] = [];
 
   private constructor(private readonly transport: LspTransport) {}
 
@@ -103,6 +130,7 @@ export class LspClient {
     await transport.start(
       (raw) => client.onMessage(raw),
       () => client.onExit(),
+      (line) => client.captureStderr(line),
     );
     return client;
   }
@@ -115,8 +143,9 @@ export class LspClient {
     this.notificationHandlers.set(method, handler);
   }
 
-  /** Runs when the server goes away — crash or teardown. */
-  onServerExit(handler: () => void): void {
+  /** Runs when the server goes away — crash or teardown; `info.unexpected`
+   * tells them apart. */
+  onServerExit(handler: (info: LspExitInfo) => void): void {
     this.exitHandlers.push(handler);
   }
 
@@ -149,6 +178,7 @@ export class LspClient {
    *  the latch, so shutdown/exit go out once and onExit fires once. */
   async stop(): Promise<void> {
     if (this.stopping || !this.alive) return;
+    // Mark the teardown deliberate up front: the exit it provokes is expected.
     this.stopping = true;
     try {
       await this.request("shutdown", null, 1000);
@@ -221,6 +251,12 @@ export class LspClient {
     });
   }
 
+  /** Buffer a stderr line as exit context, bounded to the recent tail. */
+  private captureStderr(line: string): void {
+    this.recentStderr.push(line);
+    if (this.recentStderr.length > STDERR_BUFFER_LINES) this.recentStderr.shift();
+  }
+
   private onExit(): void {
     if (!this.alive) return;
     this.alive = false;
@@ -229,6 +265,10 @@ export class LspClient {
       pending.reject(new Error("language server exited"));
     }
     this.pending.clear();
-    for (const handler of this.exitHandlers) handler();
+    const info: LspExitInfo = {
+      unexpected: !this.stopping,
+      stderr: [...this.recentStderr],
+    };
+    for (const handler of this.exitHandlers) handler(info);
   }
 }

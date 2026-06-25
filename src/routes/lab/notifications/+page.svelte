@@ -6,10 +6,13 @@
   // panel closed, then open it and watch the count clear (the read/unread race
   // in model/studio/notifications.pds BadgeCountsUnseen) — no Tauri, no DCS.
   import Notifications from "$lib/components/Notifications.svelte";
+  import NotificationToasts from "$lib/components/NotificationToasts.svelte";
   import { NotificationStore } from "$lib/notifications.svelte";
   import {
     classifyBuildDone,
+    classifyLspExit,
     dcsDisconnectedNotification,
+    marketplaceInstalledNotification,
     publishSharedNotification,
   } from "$lib/notifications-classify";
 
@@ -32,6 +35,22 @@
   function addPublishShare() {
     store.add(publishSharedNotification("octo/hornet-mod"));
   }
+
+  // An unexpected engine exit: an error (so it toasts) that coalesces per server
+  // id — clicking repeatedly folds into one counted entry, not a flood.
+  function addLspCrash() {
+    store.add(
+      classifyLspExit({ id: "dcs-lua", label: "Lua language server" }, [
+        "thread 'main' panicked at 'index out of bounds'",
+        "note: run with `RUST_BACKTRACE=1`",
+      ]),
+    );
+  }
+
+  // A finished install: review-only info — recorded in the panel, never toasts.
+  function addMarketInstall() {
+    store.add(marketplaceInstalledNotification("octo/hornet-mod"));
+  }
 </script>
 
 <div class="flex h-screen flex-col gap-2 p-3" data-testid="notifications-lab">
@@ -53,6 +72,16 @@
     >
       add publish-share
     </button>
+    <button class="rounded border px-2 py-0.5" data-testid="add-lsp-crash" onclick={addLspCrash}>
+      add lsp-crash
+    </button>
+    <button
+      class="rounded border px-2 py-0.5"
+      data-testid="add-market-install"
+      onclick={addMarketInstall}
+    >
+      add market-install
+    </button>
     <button
       class="rounded border px-2 py-0.5"
       data-testid="toggle-panel"
@@ -66,4 +95,7 @@
       <Notifications {store} />
     {/if}
   </div>
+
+  <!-- The real toast overlay, driven by this lab store (error-only, ~5s). -->
+  <NotificationToasts {store} />
 </div>
