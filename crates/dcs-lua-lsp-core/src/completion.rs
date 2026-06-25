@@ -767,4 +767,34 @@ mod tests {
             find(&items, "speed").documentation
         );
     }
+
+    #[test]
+    fn inferred_global_literal_members_complete_after_the_dot() {
+        // The global counterpart of the local-literal arm: a bare global bound
+        // to a `{ … }` constructor exposes its fields the same way a `local`
+        // does — `Decl::GlobalAssign` carries the initializer too.
+        let src = "cfg = { speed = 1, start = function() end }\ncfg.\n";
+        let ws = single(src);
+        let items = complete(&ws, "main.lua", after(src, "cfg.", 0));
+        assert_eq!(labels(&items), vec!["speed", "start"], "{:?}", labels(&items));
+        assert_eq!(find(&items, "start").kind, KIND_FUNCTION);
+        assert_eq!(find(&items, "speed").kind, KIND_FIELD);
+        assert_eq!(find(&items, "speed").detail, "number");
+    }
+
+    #[test]
+    fn typed_field_shadows_a_same_named_literal_field() {
+        // `c` is both `@type Cfg` (whose `@field speed string` types it) and
+        // bound to a literal `{ speed = 1, extra = 2 }`. The typed field wins
+        // for `speed` — listed once, detail `string`, not the literal's
+        // `number` — while the literal-only `extra` still surfaces. Reorder the
+        // three member sources and this regresses; the test pins the union.
+        let src = "---@class Cfg\n---@field speed string\nCfg = {}\n---@type Cfg\nlocal c = { speed = 1, extra = 2 }\nc.\n";
+        let ws = single(src);
+        let items = complete(&ws, "main.lua", after(src, "c.", 0));
+        let speeds: Vec<_> = items.iter().filter(|item| item.label == "speed").collect();
+        assert_eq!(speeds.len(), 1, "{:?}", labels(&items));
+        assert_eq!(speeds[0].detail, "string", "{:?}", labels(&items));
+        assert_eq!(find(&items, "extra").detail, "number", "{:?}", labels(&items));
+    }
 }
