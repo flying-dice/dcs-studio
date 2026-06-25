@@ -6,6 +6,8 @@
 // `state.svelte.ts` announces project-opened; components read findings here.
 
 import { readDir, readTextFile, type DirEntry } from "$lib/api";
+import { notifications } from "$lib/notifications.svelte";
+import { classifyLspExit } from "$lib/notifications-classify";
 import { allProviders, providerFor } from "./registry";
 import type {
   Diagnostic,
@@ -116,6 +118,7 @@ export class LangIntel {
   // survive remounts without stacking duplicate callbacks.
   private readonly pushWired = new WeakSet<LanguageProvider>();
   private readonly progressWired = new WeakSet<LanguageProvider>();
+  private readonly crashWired = new WeakSet<LanguageProvider>();
   // Editor repaint subscribers: the CodeMirror wiring registers here so a
   // late diagnostics publish forces a re-lint of the open editor (model
   // `LateDiagnosticsPaintWithoutEditing`). One way out — intel never imports
@@ -210,6 +213,16 @@ export class LangIntel {
               ...this.providerProgress,
               [provider.id]: msg,
             };
+          });
+        }
+        // Engine crash → durable error notification + transient toast (issue
+        // #61). Wired once per provider; maps the engine id to its human label
+        // (reusing PROVIDER_LABELS) and carries the recent stderr as context.
+        if (provider.onServerCrash && !this.crashWired.has(provider)) {
+          this.crashWired.add(provider);
+          provider.onServerCrash(({ id, stderr }) => {
+            const label = LangIntel.PROVIDER_LABELS[id] ?? id;
+            notifications.add(classifyLspExit({ id, label }, stderr));
           });
         }
         this.providerStatuses = {

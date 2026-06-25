@@ -14,6 +14,8 @@ import {
   type ProductDetail,
 } from "./api";
 import { errorMessage } from "$lib/utils";
+import { notifications } from "./notifications.svelte";
+import { marketplaceInstalledNotification } from "./notifications-classify";
 
 class MarketplaceStore {
   /** Discovered mods (every public repo carrying the `dcs-studio` topic). */
@@ -114,6 +116,9 @@ class MarketplaceStore {
             }: ${outcome.installed_deps.join(", ")}`
           : null;
       await this.refreshInstalled();
+      // A finished install earns a durable, review-only notification (issue
+      // #61) so it isn't missed; info severity, so it never toasts.
+      notifications.add(marketplaceInstalledNotification(`${owner}/${name}`));
     } catch (error) {
       this.installError = errorMessage(error);
     } finally {

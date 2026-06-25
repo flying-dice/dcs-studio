@@ -6,6 +6,7 @@
 	import { notifications } from "$lib/notifications.svelte";
 	import { deeplinks } from "$lib/deeplink";
 	import { typeSync } from "$lib/types-sync.svelte";
+	import NotificationToasts from "$lib/components/NotificationToasts.svelte";
 	import { editorThemeById, chromeVars } from "$lib/themes";
 
 	let { children } = $props();
@@ -43,3 +44,7 @@
 </script>
 
 {@render children()}
+
+<!-- Global error-toast overlay (issue #61); fixed-position, fed by the
+     app-wide notification store. -->
+<NotificationToasts />

@@ -4,9 +4,10 @@
   // — build outcomes, DCS link transitions, managed-launch exits, publish
   // results, MCP bind errors. Each row shows a severity, a source chip, a human
   // message, and a relative timestamp; actionable rows navigate on click (a
-  // failed build opens Output, a publish error focuses Publish). Opening the
-  // panel marks everything read and clears the rail's bell badge. Mirrors the
-  // Todos panel trio (store + component + +page.svelte registration).
+  // failed build opens Output, a publish error focuses Publish, an engine crash
+  // opens Problems). Opening the panel marks everything read and clears the
+  // rail's bell badge. Mirrors the Todos panel trio (store + component +
+  // +page.svelte registration).
   import { onMount } from "svelte";
   import {
     CircleCheck,
@@ -57,7 +58,8 @@
   // Output shortcut and ProblemChips already use.
   function navigate(action: NotificationAction) {
     if (action === "open-output") app.bottomTool = "output";
-    else app.rightTool = "publish";
+    else if (action === "open-problems") app.bottomTool = "problems";
+    else app.rightTool = "publish"; // focus-publish
   }
 </script>
 
@@ -105,6 +107,13 @@
                 class="shrink-0 rounded bg-muted px-1 font-mono text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
                 data-testid="notification-source">{n.source}</span
               >
+              {#if n.count > 1}
+                <span
+                  class="shrink-0 rounded bg-muted px-1 font-mono text-[10px] font-semibold text-muted-foreground"
+                  data-testid="notification-count"
+                  title={`Repeated ${n.count} times`}>×{n.count}</span
+                >
+              {/if}
               <span
                 class="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground"
                 data-testid="notification-time">{relativeTime(now, n.at)}</span
@@ -113,6 +122,14 @@
             <div class="mt-0.5 break-words text-foreground/90" data-testid="notification-message">
               {n.message}
             </div>
+            {#if n.detail}
+              <div
+                class="mt-0.5 line-clamp-3 whitespace-pre-wrap break-words font-mono text-[10px] text-muted-foreground"
+                data-testid="notification-detail"
+              >
+                {n.detail}
+              </div>
+            {/if}
           {/snippet}
 
           {#if n.action}

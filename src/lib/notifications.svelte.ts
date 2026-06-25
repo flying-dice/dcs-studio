@@ -20,7 +20,7 @@ import {
   dcsDisconnectedNotification,
   shouldRecordLinkEvent,
   launchDoneNotification,
-  appendEntry,
+  recordEntry,
   unreadCountOf,
   markAllReadIn,
   withoutEntry,
@@ -65,8 +65,11 @@ export class NotificationStore {
       id: ++this.seq,
       at: Date.now(),
       read: this.open,
+      count: 1,
     };
-    this.entries = appendEntry(this.entries, entry);
+    // recordEntry folds a same-key restart storm onto its existing row (count++)
+    // rather than stacking; a keyless event prepends as before.
+    this.entries = recordEntry(this.entries, entry);
   }
 
   /** Mark every entry read — opening the panel clears the badge. */

@@ -192,6 +192,13 @@ export interface LanguageProvider {
    * chip animation (model `ProgressFeedback`).
    */
   onProgress?(cb: (message: string | null) => void): void;
+  /**
+   * Optional crash push: `cb` fires when the hosted server exits *unexpectedly*
+   * (a genuine crash, not a deliberate stop/re-index/shutdown), carrying the
+   * provider id and the server's trailing stderr. Drives the LSP-failure
+   * notification (issue #61); a provider with no out-of-process server omits it.
+   */
+  onServerCrash?(cb: (info: { id: string; stderr: string[] }) => void): void;
   /** The declaration outline of one file. */
   documentSymbols(path: string): Promise<DocumentSymbol[]>;
   /** Foldable regions of one file (offsets into the document text). */

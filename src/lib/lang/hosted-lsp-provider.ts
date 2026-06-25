@@ -74,6 +74,12 @@ export abstract class HostedLspProvider implements LanguageProvider {
   protected readonly findings = new Map<string, Diagnostic[]>();
   protected readonly publishWaiters = new Map<string, () => void>();
   protected readonly publishListeners: (() => void)[] = [];
+  // Crash subscribers (issue #61): notified when the hosted server exits
+  // unexpectedly, never on a deliberate stop.
+  private readonly crashListeners: ((info: {
+    id: string;
+    stderr: string[];
+  }) => void)[] = [];
 
   protected constructor(protected readonly connect: () => Promise<LspClient>) {}
 
@@ -161,7 +167,7 @@ export abstract class HostedLspProvider implements LanguageProvider {
           ),
         );
         this.onClientConnected(client);
-        client.onServerExit(() => {
+        client.onServerExit((info) => {
           // Unstick any lint pass awaiting a publish that will never come.
           for (const [, release] of this.publishWaiters) release();
           this.publishWaiters.clear();
@@ -174,6 +180,13 @@ export abstract class HostedLspProvider implements LanguageProvider {
           this.client = null;
           this.versions.clear();
           this.mountedRoot = null;
+          // A genuine crash (not a deliberate stop) earns a notification, with
+          // the server's recent stderr as context (issue #61).
+          if (info.unexpected) {
+            for (const cb of this.crashListeners) {
+              cb({ id: this.id, stderr: info.stderr });
+            }
+          }
         });
         await client.request("initialize", {
           processId: null,
@@ -273,6 +286,12 @@ export abstract class HostedLspProvider implements LanguageProvider {
   /** Late-push surfacing: `cb` runs on every publishDiagnostics. */
   onDiagnostics(cb: () => void): void {
     this.publishListeners.push(cb);
+  }
+
+  /** Crash push (issue #61): `cb` runs when the hosted server exits
+   * unexpectedly, with this provider's id and the server's trailing stderr. */
+  onServerCrash(cb: (info: { id: string; stderr: string[] }) => void): void {
+    this.crashListeners.push(cb);
   }
 
   async documentSymbols(path: string): Promise<DocumentSymbol[]> {

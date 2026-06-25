@@ -10,12 +10,18 @@ import {
   publishReleasedNotification,
   publishFailedNotification,
   mcpStatusNotification,
+  classifyLspExit,
+  marketplaceInstalledNotification,
   appendEntry,
+  recordEntry,
   unreadCountOf,
   markAllReadIn,
   withoutEntry,
   relativeTime,
+  visibleToasts,
+  pruneDismissed,
   MAX_NOTIFICATIONS,
+  COALESCE_WINDOW_MS,
   type NotificationEntry,
 } from "./notifications-classify";
 
@@ -27,6 +33,7 @@ function entry(id: number, over: Partial<NotificationEntry> = {}): NotificationE
     source: "build",
     severity: "info",
     message: `n${id}`,
+    count: 1,
     ...over,
   };
 }
@@ -194,5 +201,146 @@ describe("relativeTime", () => {
 
   it("never reads negative for a future timestamp", () => {
     expect(relativeTime(now, now + 5_000)).toBe("just now");
+  });
+});
+
+describe("classifyLspExit", () => {
+  it("is an actionable error opening engine status, keyed per server, with stderr context", () => {
+    expect(
+      classifyLspExit({ id: "dcs-lua", label: "Lua language server" }, [
+        "warming up",
+        "thread 'main' panicked",
+        "note: backtrace",
+      ]),
+    ).toEqual({
+      source: "lsp",
+      severity: "error",
+      message: "Lua language server exited unexpectedly.",
+      action: "open-problems",
+      coalesceKey: "lsp:dcs-lua",
+      detail: "warming up\nthread 'main' panicked\nnote: backtrace",
+    });
+  });
+
+  it("keeps only the trailing stderr lines as context", () => {
+    const stderr = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const note = classifyLspExit({ id: "rust-analyzer", label: "rust-analyzer" }, stderr);
+    expect(note.detail).toBe("line 15\nline 16\nline 17\nline 18\nline 19\nline 20");
+  });
+
+  it("omits detail when there is no stderr", () => {
+    const note = classifyLspExit({ id: "dcs-lua", label: "Lua language server" }, []);
+    expect(note.detail).toBeUndefined();
+    expect(note).toMatchObject({ source: "lsp", severity: "error", action: "open-problems" });
+  });
+});
+
+describe("marketplaceInstalledNotification", () => {
+  it("is a review-only info that names the mod (no action, so it never toasts)", () => {
+    expect(marketplaceInstalledNotification("octo/hornet-mod")).toEqual({
+      source: "marketplace",
+      severity: "info",
+      message: "Installed octo/hornet-mod.",
+    });
+  });
+});
+
+describe("recordEntry (coalescing)", () => {
+  const lspEntry = (id: number, at: number, over: Partial<NotificationEntry> = {}) =>
+    entry(id, {
+      at,
+      source: "lsp",
+      severity: "error",
+      coalesceKey: "lsp:dcs-lua",
+      message: "Lua language server exited unexpectedly.",
+      ...over,
+    });
+
+  it("prepends a keyless entry, same as appendEntry", () => {
+    expect(recordEntry([entry(1)], entry(2)).map((e) => e.id)).toEqual([2, 1]);
+  });
+
+  it("folds a same-key arrival within the window onto the existing row, bumping count", () => {
+    const first = lspEntry(1, 1000, { detail: "panic A" });
+    const merged = recordEntry([first], lspEntry(2, 5000, { detail: "panic B" }));
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({
+      id: 1, // the original row, updated in place — not a new entry
+      count: 2,
+      at: 5000, // refreshed to the latest arrival
+      detail: "panic B", // latest context wins
+    });
+  });
+
+  it("re-raises a folded entry as unread when the new arrival is unread", () => {
+    const merged = recordEntry(
+      [lspEntry(1, 1000, { read: true })],
+      lspEntry(2, 2000, { read: false }),
+    );
+    expect(merged[0]?.read).toBe(false);
+  });
+
+  it("stacks a fresh entry once the coalesce window has passed", () => {
+    const list = recordEntry(
+      [lspEntry(1, 1000)],
+      lspEntry(2, 1000 + COALESCE_WINDOW_MS + 1),
+    );
+    expect(list.map((e) => e.id)).toEqual([2, 1]);
+    expect(list.every((e) => e.count === 1)).toBe(true);
+  });
+
+  it("never folds across different server keys", () => {
+    const list = recordEntry(
+      [lspEntry(1, 1000)],
+      lspEntry(2, 1500, { coalesceKey: "lsp:rust-analyzer" }),
+    );
+    expect(list.map((e) => e.id)).toEqual([2, 1]);
+  });
+});
+
+describe("visibleToasts", () => {
+  const list = [
+    entry(5, { severity: "error" }),
+    entry(4, { severity: "info" }),
+    entry(3, { severity: "error" }),
+    entry(2, { severity: "warning" }),
+    entry(1, { severity: "error" }),
+  ];
+
+  it("selects only error-severity entries, newest-first", () => {
+    expect(visibleToasts(list, new Set()).map((e) => e.id)).toEqual([5, 3, 1]);
+  });
+
+  it("excludes dismissed ids", () => {
+    expect(visibleToasts(list, new Set([5])).map((e) => e.id)).toEqual([3, 1]);
+  });
+
+  it("caps the visible stack", () => {
+    const errors = [6, 5, 4, 3].map((id) => entry(id, { severity: "error" }));
+    expect(visibleToasts(errors, new Set(), 2).map((e) => e.id)).toEqual([6, 5]);
+  });
+});
+
+describe("pruneDismissed", () => {
+  const list = [entry(3), entry(2), entry(1)];
+
+  it("drops dismissed ids the store has evicted", () => {
+    // 9 and 8 are gone from the store; 2 still present
+    const pruned = pruneDismissed(new Set([9, 8, 2]), list);
+    expect([...pruned].sort()).toEqual([2]);
+  });
+
+  it("keeps every dismissed id still backed by an entry", () => {
+    const dismissed = new Set([3, 1]);
+    expect([...pruneDismissed(dismissed, list)].sort()).toEqual([1, 3]);
+  });
+
+  it("returns the same set reference when nothing is stale (no needless write)", () => {
+    const dismissed = new Set([2]);
+    expect(pruneDismissed(dismissed, list)).toBe(dismissed);
+  });
+
+  it("prunes to empty when the store has been cleared", () => {
+    expect(pruneDismissed(new Set([3, 2, 1]), []).size).toBe(0);
   });
 });
