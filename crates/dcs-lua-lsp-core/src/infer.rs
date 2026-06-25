@@ -7,7 +7,7 @@
 //! [`Type::Unknown`] so the checker never false-positives.
 
 use dcs_lua_syntax::Type;
-use dcs_lua_syntax::ast::{Ast, BinOp, ExprId, ExprKind, UnOp};
+use dcs_lua_syntax::ast::{Ast, BinOp, ExprId, ExprKind, Name, TableField, UnOp};
 
 use crate::annot::block_at;
 use crate::resolve::{Decl, resolve, resolve_dotted};
@@ -21,6 +21,28 @@ const MAX_DEPTH: u32 = 8;
 #[must_use]
 pub fn infer_type(workspace: &Workspace, path: &str, expr: ExprId) -> Type {
     infer(workspace, path, expr, 0)
+}
+
+/// The `name = value` fields of a table-constructor expression, in source
+/// order — the structural field set a `{ … }` literal carries but the opaque
+/// [`Type::Table`] inference above discards. `None` when `expr` is not a table
+/// constructor, so a caller can tell "not a literal" from `{}` (an empty but
+/// real table). Positional and `[expr]`-keyed entries are skipped: only a
+/// `name = value` field is reachable as `recv.name`.
+#[must_use]
+pub fn table_literal_fields(ast: &Ast, expr: ExprId) -> Option<Vec<(&Name, ExprId)>> {
+    let ExprKind::Table { fields } = &ast.expr(expr).kind else {
+        return None;
+    };
+    Some(
+        fields
+            .iter()
+            .filter_map(|field| match field {
+                TableField::Named { name, value } => Some((name, *value)),
+                TableField::Positional(_) | TableField::Keyed { .. } => None,
+            })
+            .collect(),
+    )
 }
 
 fn infer(workspace: &Workspace, path: &str, expr: ExprId, depth: u32) -> Type {

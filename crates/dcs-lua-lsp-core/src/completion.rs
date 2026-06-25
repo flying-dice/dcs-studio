@@ -13,12 +13,13 @@ use std::collections::{HashMap, HashSet};
 
 use dcs_lua_syntax::Type;
 use dcs_lua_syntax::FieldAnno;
-use dcs_lua_syntax::ast::{Ast, ExprKind, FuncBody};
+use dcs_lua_syntax::ast::{Ast, ExprId, ExprKind, FuncBody, Name};
 use dcs_lua_syntax::span::Span;
 use dcs_lua_syntax::token::Trivia;
 
 use crate::annot::block_at;
 use crate::hover::title;
+use crate::infer::{infer_type, table_literal_fields};
 use crate::resolve::{
     Decl, decl_label, dotted_children, global_decls, global_roots, resolve, resolve_dotted,
     visible_locals,
@@ -195,8 +196,103 @@ fn member_items(
         }
     }
 
+    // Inferred-literal members: a receiver bound to a `{ name = value, … }`
+    // constructor exposes those fields — the structural shape `Type::Table`
+    // inference drops. Last source, so a `@class`/`@type` field or a
+    // dotted-global of the same name (already in `seen`) keeps precedence over
+    // the constructor's.
+    if let Some((decl_path, value)) = receiver_initializer(workspace, path, receiver, offset)
+        && let Some(decl_entry) = workspace.file(&decl_path)
+        && let Some(fields) = table_literal_fields(&decl_entry.parsed.ast, value)
+    {
+        for (name, field_value) in fields {
+            if name.text.starts_with(prefix) && seen.insert(name.text.clone()) {
+                items.push(literal_field_item(
+                    workspace,
+                    &decl_path,
+                    decl_entry,
+                    name,
+                    field_value,
+                ));
+            }
+        }
+    }
+
     sort_by_label(&mut items);
     items
+}
+
+/// Resolve a member-completion receiver to its declaration: a dotted receiver
+/// (`a.b`) through the dotted-global path, a bare one through the lexical
+/// scopes then globals — the resolution split the member queries share.
+fn resolve_receiver<'ws>(
+    workspace: &'ws Workspace,
+    path: &str,
+    receiver: &str,
+    offset: u32,
+) -> Option<(String, Decl<'ws>)> {
+    if receiver.contains('.') {
+        resolve_dotted(workspace, path, receiver)
+    } else {
+        resolve(workspace, path, receiver, offset)
+    }
+}
+
+/// The initializer expression a receiver is bound to: the `value` of a
+/// `local recv = <expr>` or a global `recv = <expr>` assignment, in the file
+/// that declares it. `None` when the receiver resolves to nothing, to a
+/// declaration with no initializer, or to a binding that is not a plain
+/// assignment (a parameter, a `for` variable, a `function` form).
+fn receiver_initializer(
+    workspace: &Workspace,
+    path: &str,
+    receiver: &str,
+    offset: u32,
+) -> Option<(String, ExprId)> {
+    let (decl_path, decl) = resolve_receiver(workspace, path, receiver, offset)?;
+    match decl {
+        Decl::Local {
+            value: Some(value), ..
+        }
+        | Decl::GlobalAssign {
+            value: Some(value), ..
+        } => Some((decl_path, value)),
+        _ => None,
+    }
+}
+
+/// A completion item for a table-literal field bound under `name`: a field
+/// holding a function literal becomes a `${1:param}` snippet, everything else
+/// a plain field. Detail is the value's shallow inferred type and the
+/// documentation is the field's own doc run — the same sources hover reads.
+fn literal_field_item(
+    workspace: &Workspace,
+    decl_path: &str,
+    entry: &FileEntry,
+    name: &Name,
+    value: ExprId,
+) -> CompletionItem {
+    let detail = infer_type(workspace, decl_path, value).render();
+    let documentation = block_at(entry, name.span.start).doc;
+    if let ExprKind::Function(func) = &entry.parsed.ast.expr(value).kind {
+        CompletionItem {
+            label: name.text.clone(),
+            kind: KIND_FUNCTION.to_string(),
+            detail,
+            documentation,
+            insert_text: snippet_from_params(&name.text, func),
+            insert_text_format: SNIPPET.to_string(),
+        }
+    } else {
+        CompletionItem {
+            label: name.text.clone(),
+            kind: KIND_FIELD.to_string(),
+            detail,
+            documentation,
+            insert_text: name.text.clone(),
+            insert_text_format: PLAINTEXT.to_string(),
+        }
+    }
 }
 
 /// The named type `receiver` carries: a `@class` directly on its declaration
@@ -208,11 +304,7 @@ fn receiver_class(
     receiver: &str,
     offset: u32,
 ) -> Option<String> {
-    let (decl_path, decl) = if receiver.contains('.') {
-        resolve_dotted(workspace, path, receiver)?
-    } else {
-        resolve(workspace, path, receiver, offset)?
-    };
+    let (decl_path, decl) = resolve_receiver(workspace, path, receiver, offset)?;
     let entry = workspace.file(&decl_path)?;
     let block = block_at(entry, decl.start());
     if let Some(class) = block.class_name {
@@ -610,5 +702,117 @@ mod tests {
                 .expect("hover resolves DCS.spawn");
             assert_eq!(item.detail, card.title, "b_first={insert_b_first}");
         }
+    }
+
+    #[test]
+    fn inferred_local_literal_members_complete_after_the_dot() {
+        let src = "local cfg = { speed = 1, name = 'x', start = function() end }\ncfg.\n";
+        let ws = single(src);
+        let items = complete(&ws, "main.lua", after(src, "cfg.", 0));
+        assert_eq!(
+            labels(&items),
+            vec!["name", "speed", "start"],
+            "{:?}",
+            labels(&items)
+        );
+        assert_eq!(find(&items, "start").kind, KIND_FUNCTION);
+        assert_eq!(find(&items, "speed").kind, KIND_FIELD);
+        assert_eq!(find(&items, "name").kind, KIND_FIELD);
+        assert_eq!(find(&items, "speed").detail, "number");
+    }
+
+    #[test]
+    fn inferred_literal_member_prefix_filters() {
+        let src = "local cfg = { speed = 1, name = 'x' }\nlocal s = cfg.sp\n";
+        let ws = single(src);
+        let items = complete(&ws, "main.lua", after(src, "cfg.sp", 0));
+        assert_eq!(labels(&items), vec!["speed"], "{:?}", labels(&items));
+    }
+
+    #[test]
+    fn inferred_literal_function_field_is_a_snippet() {
+        let src = "local api = { spawn = function(country, name) end }\napi.\n";
+        let ws = single(src);
+        let items = complete(&ws, "main.lua", after(src, "api.", 0));
+        let item = find(&items, "spawn");
+        assert_eq!(item.kind, KIND_FUNCTION);
+        assert_eq!(item.insert_text, "spawn(${1:country}, ${2:name})");
+        assert_eq!(item.insert_text_format, SNIPPET);
+    }
+
+    #[test]
+    fn inferred_literal_skips_positional_and_keyed_entries() {
+        let src = "local cfg = { 1, 2, [\"dyn\"] = 3, named = 4 }\ncfg.\n";
+        let ws = single(src);
+        let items = complete(&ws, "main.lua", after(src, "cfg.", 0));
+        assert_eq!(labels(&items), vec!["named"], "{:?}", labels(&items));
+    }
+
+    #[test]
+    fn non_table_local_offers_no_members() {
+        let src = "local n = 42\nn.\n";
+        let ws = single(src);
+        let items = complete(&ws, "main.lua", after(src, "n.", 0));
+        assert!(items.is_empty(), "{:?}", labels(&items));
+    }
+
+    #[test]
+    fn inferred_literal_field_carries_documentation() {
+        let src = "local cfg = {\n  --- The unit speed.\n  speed = 1,\n}\ncfg.\n";
+        let ws = single(src);
+        let items = complete(&ws, "main.lua", after(src, "cfg.", 0));
+        assert!(
+            find(&items, "speed").documentation.contains("unit speed"),
+            "doc missing: {:?}",
+            find(&items, "speed").documentation
+        );
+    }
+
+    #[test]
+    fn inferred_global_literal_members_complete_after_the_dot() {
+        // The global counterpart of the local-literal arm: a bare global bound
+        // to a `{ … }` constructor exposes its fields the same way a `local`
+        // does — `Decl::GlobalAssign` carries the initializer too.
+        let src = "cfg = { speed = 1, start = function() end }\ncfg.\n";
+        let ws = single(src);
+        let items = complete(&ws, "main.lua", after(src, "cfg.", 0));
+        assert_eq!(labels(&items), vec!["speed", "start"], "{:?}", labels(&items));
+        assert_eq!(find(&items, "start").kind, KIND_FUNCTION);
+        assert_eq!(find(&items, "speed").kind, KIND_FIELD);
+        assert_eq!(find(&items, "speed").detail, "number");
+    }
+
+    #[test]
+    fn typed_field_shadows_a_same_named_literal_field() {
+        // `c` is both `@type Cfg` (whose `@field speed string` types it) and
+        // bound to a literal `{ speed = 1, extra = 2 }`. The typed field wins
+        // for `speed` — listed once, detail `string`, not the literal's
+        // `number` — while the literal-only `extra` still surfaces. Reorder the
+        // three member sources and this regresses; the test pins the union.
+        let src = "---@class Cfg\n---@field speed string\nCfg = {}\n---@type Cfg\nlocal c = { speed = 1, extra = 2 }\nc.\n";
+        let ws = single(src);
+        let items = complete(&ws, "main.lua", after(src, "c.", 0));
+        let speeds: Vec<_> = items.iter().filter(|item| item.label == "speed").collect();
+        assert_eq!(speeds.len(), 1, "{:?}", labels(&items));
+        assert_eq!(speeds[0].detail, "string", "{:?}", labels(&items));
+        assert_eq!(find(&items, "extra").detail, "number", "{:?}", labels(&items));
+    }
+
+    #[test]
+    fn dotted_global_member_shadows_a_same_named_literal_field() {
+        // The dotted half of the precedence union: `cfg` is bound to a literal
+        // `{ speed, only_lit }` *and* extended by a dotted-global assignment
+        // `cfg.speed = "hi"`. The dotted member wins for `speed` — listed once,
+        // detail `global cfg.speed: string`, not the literal's `number` — while
+        // the literal-only `only_lit` still surfaces. The typed-shadow test pins
+        // typed > literal; this pins dotted > literal. Drop the dotted block
+        // below the literal block and `speed`'s detail regresses to `number`.
+        let src = "cfg = { speed = 1, only_lit = 2 }\ncfg.speed = \"hi\"\ncfg.\n";
+        let ws = single(src);
+        let items = complete(&ws, "main.lua", after(src, "cfg.", 1));
+        let speeds: Vec<_> = items.iter().filter(|item| item.label == "speed").collect();
+        assert_eq!(speeds.len(), 1, "{:?}", labels(&items));
+        assert_eq!(speeds[0].detail, "global cfg.speed: string", "{:?}", labels(&items));
+        assert_eq!(find(&items, "only_lit").detail, "number", "{:?}", labels(&items));
     }
 }
