@@ -13,6 +13,7 @@ members = [
     "crates/lua-analyzer",
     "crates/lua-cargo",
     "crates/studio-services",
+    "crates/studio-archive",
     "crates/studio-mcp",
     "crates/studio-packages",
     "crates/mock-package-server",
