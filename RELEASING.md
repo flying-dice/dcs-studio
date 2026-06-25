@@ -47,7 +47,8 @@ root. Do them once, before the first release.
    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the password from step 1
 
 > Until the placeholder `pubkey` is replaced with the real public key, shipped
-> clients cannot verify updates. Do step 1 before tagging a real release.
+> clients cannot verify updates. Do step 1 before tagging a real release — the
+> workflow checks for the `REPLACE_ME` placeholder and fail-closes if you forget.
 
 ## Cutting a release
 
@@ -57,6 +58,10 @@ root. Do them once, before the first release.
    - `crates/app/tauri.conf.json` → `version`  (drives the updater + installer)
    - `Cargo.toml` → `[workspace.package] version`
    - `crates/app/Cargo.toml` → `version`
+
+   The workflow asserts the pushed tag (`vX.Y.Z`) equals `tauri.conf.json`'s
+   `version` and fail-closes on drift, so a forgotten bump aborts the release
+   instead of shipping a `latest.json` that advertises the wrong version.
 
 2. **Commit, tag, push the tag.** The tag triggers the release workflow.
    ```bash

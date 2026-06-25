@@ -39,6 +39,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Fail-closed release invariants (#53), before toolchain install so a
+      # misconfig dies in seconds. tauri-action signs with the PRIVATE key (env)
+      # independent of the PUBLIC key baked from tauri.conf.json — a placeholder
+      # pubkey still builds + ships a non-updatable installer. Guard explicitly.
+      # pwsh, not bash: windows-latest's default shell, no jq/grep dependency.
+      - name: Guard — updater pubkey is swapped in
+        shell: pwsh
+        run: |
+          $conf = Get-Content crates/app/tauri.conf.json -Raw | ConvertFrom-Json
+          if ($conf.plugins.updater.pubkey -like '*REPLACE_ME*') {
+            Write-Host '::error::plugins.updater.pubkey in crates/app/tauri.conf.json is still the placeholder. Swap in the real updater public key (RELEASING.md step 1) before tagging — shipping now publishes a build no client can update.'
+            exit 1
+          }
+
+      - name: Guard — tag matches tauri.conf.json version
+        shell: pwsh
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $conf = Get-Content crates/app/tauri.conf.json -Raw | ConvertFrom-Json
+          $tag = $env:REF_NAME -replace '^v', ''
+          if ($tag -ne $conf.version) {
+            Write-Host "::error::Tag $env:REF_NAME (version $tag) does not match crates/app/tauri.conf.json version $($conf.version). Bump the conf version to match the tag (RELEASING.md) — otherwise latest.json advertises the wrong version and shipped clients see no update."
+            exit 1
+          }
+
       - name: Install Rust (stable, MSVC)
         uses: dtolnay/rust-toolchain@stable
         with:
