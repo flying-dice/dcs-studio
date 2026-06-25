@@ -5,6 +5,7 @@ mod build;
 mod cargolua;
 mod database_cmd;
 mod dcs;
+mod deeplink;
 mod format;
 mod fs;
 mod github;
@@ -45,22 +46,29 @@ pub fn run() {
         // Single instance first (Tauri requires it before other plugins): a
         // second launch focuses the running window instead of starting a rival
         // that would collide on the one DCS link and the MCP loopback (#33).
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             use tauri::Manager as _;
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.set_focus();
             }
+            // A deep link launched a second instance with the URL in argv —
+            // route it into this running one (issue #44).
+            deeplink::handle_argv(app, &args);
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_deep_link::init())
         .manage(dcs::DcsState::default())
         .manage(lsp::LspHosts::default())
         .manage(build::BuildState::default())
         .manage(cargolua::CargoLuaState::default())
         .manage(term::TermRegistry::default())
         .manage(watch::WatchState::default())
+        // Cold-start deep link captured before the webview was ready to receive
+        // it; the frontend drains it on mount (issue #44).
+        .manage(deeplink::PendingDeepLink::default())
         // Single-flight + cancel guard for the GitHub device-flow poll loop
         // (issue #11): lets the sign-in modal's Cancel/reopen actually stop the
         // fire-and-forget loop so it never persists or emits after cancel.
@@ -71,6 +79,9 @@ pub fn run() {
             // Host the agent MCP surface over loopback, sharing the live DCS
             // link (issue #33) — hosted in-process, not a separate sidecar.
             mcp::start(app.handle());
+            // Register the dcs-studio:// scheme + start routing deep links
+            // (issue #44): marketplace product-page + open-project links.
+            deeplink::setup(app.handle());
             // Crash recovery (issue #41 AC#5): if a previous session died with
             // DCS still up, restore any options.lua left on the low-spec launch
             // profile from its orphaned backup.
@@ -167,6 +178,7 @@ pub fn run() {
             mission::dcs_mission_script_set,
             mission::dcs_mission_script_restore,
             startup::startup_open,
+            deeplink::deeplink_take_pending,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
