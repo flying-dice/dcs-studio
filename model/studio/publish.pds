@@ -25,6 +25,20 @@ public data RepoInfo { fullName: string, htmlUrl: string, owner: string, name: s
 /// A created GitHub release.
 public data ReleaseInfo { tag: string, htmlUrl: string }
 
+/// A created or resolved release plus the plumbing `id` used to upload assets to
+/// it and flip it from draft to published.
+public data ReleaseRef { id: number, info: studio::publish::ReleaseInfo }
+
+/// One asset already on a release: its GitHub `id` (for delete-then-replace) and
+/// its asset name.
+public data ReleaseAsset { id: number, name: string }
+
+/// A packaged release ready to upload: the standalone `dcs-studio.toml` asset and
+/// the payload as a single `.7z` or ordered `.7z.NNN` volumes (empty for a
+/// manifest-only project). The volume paths are local temp files, removed after
+/// the publish run.
+public data PackagedRelease { manifestPath: string, volumePaths: string[] }
+
 /// The plan for a new repo, derived from the project manifest: name, blurb, the
 /// topics (always including `dcs-studio`), and the first commit message.
 public data RepoPlan { name: string, description: string, topics: string[], commitMessage: string }
@@ -43,11 +57,29 @@ public system GitHubWrite {
   /// Replace the repo's topics (`PUT /repos/{owner}/{name}/topics`).
   public SetTopics(repo: studio::publish::RepoInfo, topics: string[], token: string): Result<void, studio::publish::PublishError>;
 
-  /// Create a release for `tag` (`POST /repos/{owner}/{name}/releases`).
-  public CreateRelease(repo: studio::publish::RepoInfo, tag: string, body: string, token: string): Result<studio::publish::ReleaseInfo, studio::publish::PublishError>;
+  /// Create a DRAFT release for `tag` (`POST .../releases` with `draft: true`),
+  /// body `Release <tag>`, so a half-uploaded release is never publicly visible;
+  /// it is flipped to published only once every asset has uploaded.
+  public CreateDraftRelease(repo: studio::publish::RepoInfo, tag: string, body: string, token: string): Result<studio::publish::ReleaseRef, studio::publish::PublishError>;
 
-  /// Upload one file as a release asset (`POST .../releases/{id}/assets`).
-  public UploadAsset(repo: studio::publish::RepoInfo, release: studio::publish::ReleaseInfo, path: string, token: string): Result<void, studio::publish::PublishError>;
+  /// The existing release for `tag`, or None (`GET .../releases/tags/{tag}`; a
+  /// 404 is None) — reused so a re-publish after a partial failure is idempotent
+  /// rather than creating a duplicate.
+  public FindReleaseByTag(repo: studio::publish::RepoInfo, tag: string, token: string): Result<Option<studio::publish::ReleaseRef>, studio::publish::PublishError>;
+
+  /// The assets already on a release (`GET .../releases/{id}/assets`), so an
+  /// asset that already exists can be deleted before it is re-uploaded.
+  public ReleaseAssets(repo: studio::publish::RepoInfo, release: studio::publish::ReleaseRef, token: string): Result<studio::publish::ReleaseAsset[], studio::publish::PublishError>;
+
+  /// Delete one release asset by id (`DELETE .../releases/assets/{id}`).
+  public DeleteAsset(repo: studio::publish::RepoInfo, asset: studio::publish::ReleaseAsset, token: string): Result<void, studio::publish::PublishError>;
+
+  /// Upload one file as a release asset, streaming its bytes so a multi-GiB
+  /// volume is never fully buffered (`POST .../releases/{id}/assets?name=`).
+  public UploadAsset(repo: studio::publish::RepoInfo, release: studio::publish::ReleaseRef, path: string, token: string): Result<void, studio::publish::PublishError>;
+
+  /// Flip a draft release to published (`PATCH .../releases/{id}`, `draft: false`).
+  public PublishDraft(repo: studio::publish::RepoInfo, release: studio::publish::ReleaseRef, token: string): Result<void, studio::publish::PublishError>;
 }
 
 /// Local git via the installed `git` binary (gix has no production push, and one
@@ -103,10 +135,13 @@ public container Publisher for studio::core::Studio {
     return Ok(created.value)
   }
 
-  /// Publish a release for an already-shared project at `root`: create the GitHub
-  /// release for `tag`, then upload `dcs-studio.toml` + the project's files as
-  /// assets — that manifest asset is what makes the Marketplace listing
-  /// installable.
+  /// Publish a release for an already-shared project at `root` (issue #62):
+  /// package the manifest + every `[[install]]` source into a 7-Zip payload —
+  /// split into `volume_size` volumes when large — BEFORE touching GitHub, so a
+  /// packaging failure leaves GitHub untouched; create (or reuse) a DRAFT release
+  /// for `tag`; upload the standalone manifest + every payload volume as assets
+  /// (deleting any same-named asset first, so a re-publish is idempotent); and
+  /// only once every asset has uploaded, flip the release to published.
   #[manual]
   public PublishRelease(root: string, tag: string): Result<studio::publish::ReleaseInfo, studio::publish::PublishError> {
     token = Result<string, studio::publish::PublishError> from self.PublishToken()
@@ -114,16 +149,23 @@ public container Publisher for studio::core::Studio {
       return Err(token.error)
     }
     repo = studio::publish::RepoInfo from self.RepoOfProject(root)
-    body = string from self.ReleaseBody(root, tag)
-    release = Result<studio::publish::ReleaseInfo, studio::publish::PublishError> from studio::publish::GitHubWrite.CreateRelease(repo, tag, body, token.value)
-    if (release.isErr) {
-      return Err(release.error)
+    packaged = Result<studio::publish::PackagedRelease, studio::publish::PublishError> from self.PackageRelease(root, repo.name, tag)
+    if (packaged.isErr) {
+      return Err(packaged.error)
     }
-    uploaded = Result<void, studio::publish::PublishError> from self.UploadReleaseAssets(repo, release.value, root, token.value)
+    draft = Result<studio::publish::ReleaseRef, studio::publish::PublishError> from self.FindOrCreateDraft(repo, tag, token.value)
+    if (draft.isErr) {
+      return Err(draft.error)
+    }
+    uploaded = Result<void, studio::publish::PublishError> from self.UploadReleaseAssets(repo, draft.value, packaged.value, token.value)
     if (uploaded.isErr) {
       return Err(uploaded.error)
     }
-    return Ok(release.value)
+    published = Result<void, studio::publish::PublishError> from studio::publish::GitHubWrite.PublishDraft(repo, draft.value, token.value)
+    if (published.isErr) {
+      return Err(published.error)
+    }
+    return Ok(draft.value.info)
   }
 
   /// A write-scoped token (`public_repo`): the cached sign-in token when it
@@ -140,11 +182,21 @@ public container Publisher for studio::core::Studio {
   /// shared).
   RepoOfProject(root: string): studio::publish::RepoInfo;
 
-  /// The release notes body for `tag` (e.g. derived from the manifest version).
-  ReleaseBody(root: string, tag: string): string;
+  /// Package the manifest + every `[[install]]` source into a 7-Zip payload on
+  /// disk: a payload at or under `volume_size` stays a single `.7z`, a larger one
+  /// is split into ordered `.7z.NNN` volumes, and a manifest-only project yields
+  /// no volumes at all. A symlink in a source tree is refused (never silently
+  /// omitted); sources are streamed so the payload is never fully held in RAM.
+  PackageRelease(root: string, repoName: string, tag: string): Result<studio::publish::PackagedRelease, studio::publish::PublishError>;
 
-  /// Upload `dcs-studio.toml` + the project's files as assets of `release`.
-  UploadReleaseAssets(repo: studio::publish::RepoInfo, release: studio::publish::ReleaseInfo, root: string, token: string): Result<void, studio::publish::PublishError>;
+  /// Reuse the existing draft release for `tag` (idempotent re-publish after a
+  /// partial failure) or create a fresh draft.
+  FindOrCreateDraft(repo: studio::publish::RepoInfo, tag: string, token: string): Result<studio::publish::ReleaseRef, studio::publish::PublishError>;
+
+  /// Upload the standalone `dcs-studio.toml` + every payload volume as assets of
+  /// `release`, deleting any same-named asset first (idempotent re-upload) and
+  /// retrying a transient upload error with exponential backoff.
+  UploadReleaseAssets(repo: studio::publish::RepoInfo, release: studio::publish::ReleaseRef, packaged: studio::publish::PackagedRelease, token: string): Result<void, studio::publish::PublishError>;
 }
 
 /// Publishing needs write access — the read-only sign-in is escalated first.
@@ -163,10 +215,75 @@ feature SharedRepoIsTaggedForDiscovery for studio::publish::Publisher {
   and "it then appears in the Marketplace store for signed-in users"
 }
 
-/// A release carries the manifest + files so the mod is installable.
-feature ReleaseUploadsManifestAndFiles for studio::publish::Publisher {
-  given "an already-shared project"
+/// A small payload ships as one `.7z`; the manifest is always a standalone asset.
+feature SmallPayloadShipsAsASingleArchive for studio::publish::Publisher {
+  given "a project whose packaged payload is at most `volume_size`"
   when "a release is published"
-  then "the `dcs-studio.toml` manifest and the project files are uploaded as release assets"
-  and "the Marketplace product page then shows the install plan and download size"
+  then "the payload is uploaded as one `dcs-studio-<name>-<tag>.7z` asset"
+  and "the `dcs-studio.toml` manifest is uploaded as its own standalone asset"
+}
+
+/// A large payload is split into 7-Zip volumes GitHub will accept.
+feature LargePayloadSplitsIntoVolumes for studio::publish::Publisher {
+  given "a project whose packaged payload exceeds `volume_size`"
+  when "a release is published"
+  then "the payload is emitted as ordered `dcs-studio-<name>-<tag>.7z.001`, `.002`, … volumes"
+  and "every volume except the last is exactly `volume_size` bytes"
+  and "each volume is uploaded as its own release asset"
+}
+
+/// The volumes are a byte-split of one `.7z`, openable by the standalone 7-Zip CLI.
+feature VolumesAreSevenZipCompatible for studio::publish::Publisher {
+  given "a published multi-volume release"
+  when "a user runs `7z x dcs-studio-<name>-<tag>.7z.001` with every volume present"
+  then "the original payload tree is extracted without DCS Studio"
+}
+
+/// `volume_size` is clamped so no volume GitHub would reject is ever produced.
+feature VolumeSizeIsClampedToTheCeiling for studio::publish::Publisher {
+  given "a `dcs-studio.toml` whose `[release] volume_size` exceeds the safe ceiling"
+  when "the author publishes"
+  then "`volume_size` is clamped to the ceiling and a warning is surfaced"
+  but "no volume is produced that GitHub would reject"
+}
+
+/// The release is visible only once it is complete — a draft until then.
+feature ReleaseIsPublishedOnlyAfterEveryAssetUploads for studio::publish::Publisher {
+  given "a release being published"
+  when "the draft is created and every volume plus the manifest is uploaded"
+  then "only then is the release flipped from draft to published"
+  but "a failure partway leaves a draft, never a half-populated public release"
+}
+
+/// Re-publishing the same tag reuses the draft and replaces assets — idempotent.
+feature RepublishingATagIsIdempotent for studio::publish::Publisher {
+  given "a previous publish of the same tag that failed partway"
+  when "the author publishes that tag again"
+  then "the existing draft release is reused, not duplicated"
+  and "an asset that already exists is deleted and re-uploaded"
+  and "the release ends published with the complete asset set"
+}
+
+/// A packaging failure never touches GitHub.
+feature PackagingFailureLeavesGitHubUntouched for studio::publish::Publisher {
+  given "packaging the payload fails (e.g. a missing install source)"
+  when "the author publishes"
+  then "no release is created and no asset is uploaded"
+  and "the error names the failing step"
+}
+
+/// A symlink in a source tree is refused — nothing is silently omitted.
+feature SymlinkInAnInstallSourceIsRejected for studio::publish::Publisher {
+  given "an `[[install]]` source tree containing a symlink or junction"
+  when "the author publishes"
+  then "publish fails with an error naming the offending path"
+  and "nothing is silently omitted from the payload"
+}
+
+/// A manifest-only project publishes with no payload volumes.
+feature ManifestOnlyProjectPublishesWithoutAPayload for studio::publish::Publisher {
+  given "a project with no `[[install]]` rules"
+  when "a release is published"
+  then "only the `dcs-studio.toml` asset is uploaded, with no payload volumes"
+  and "the release succeeds"
 }

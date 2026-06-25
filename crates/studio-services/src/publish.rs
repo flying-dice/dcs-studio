@@ -1,25 +1,35 @@
 //! studio::publish — share a project to GitHub and cut a release (model
 //! `model/studio/publish.pds`, issue #12). `share` creates a public repo, tags
 //! it `dcs-studio` (so studio::market discovers it), then init/commit/push the
-//! project via the installed `git`. `publish_release` creates a GitHub release
-//! and uploads `dcs-studio.toml` so the Marketplace product page shows the
-//! install plan (the source-file payload lands with the install slice). Both run
-//! as the logged-in user with a `public_repo`-scoped token (issue #11/#12); the
-//! REST calls use ureq, the git calls shell out. ureq + git are blocking —
-//! callers run this off the UI thread.
+//! project via the installed `git`. `publish_release` packages the manifest +
+//! every `[[install]]` source into a 7-Zip payload — split into GitHub-safe
+//! volumes when large (issue #62) — creates a DRAFT release, uploads the
+//! standalone `dcs-studio.toml` plus every payload volume, and only then flips
+//! the release to published (so a partial failure never leaves a half-populated
+//! public release). Both run as the logged-in user with a `public_repo`-scoped
+//! token (issue #11/#12); the REST calls use ureq, the git calls shell out.
+//! ureq + git are blocking — callers run this off the UI thread.
 
-use std::io::Write as _;
+use std::fs::File;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use serde::Deserialize;
+use sevenz_rust2::{ArchiveEntry, ArchiveWriter};
 
 use crate::github_http::{self, API_BASE};
-use dcs_studio_project::{DISCOVERY_TOPIC, LIBRARY_TOPIC, MANIFEST_FILE};
+use dcs_studio_project::{DISCOVERY_TOPIC, LIBRARY_TOPIC, MANIFEST_FILE, Manifest};
 
 const UPLOADS_BASE: &str = "https://uploads.github.com";
 /// The branch the initial commit is pushed to (model `DEFAULT_BRANCH`).
 const DEFAULT_BRANCH: &str = "main";
+
+/// How many times a transient release-asset upload is attempted before failing.
+const UPLOAD_ATTEMPTS: u32 = 3;
+/// Base backoff between upload attempts; doubled each retry.
+const UPLOAD_BACKOFF: Duration = Duration::from_millis(500);
 
 /// A created (or resolved) GitHub repository (model `RepoInfo`).
 #[derive(Clone, Debug, serde::Serialize, Deserialize)]
@@ -184,52 +194,168 @@ fn set_topics(repo: &RepoInfo, topics: &[String], token: &str) -> Result<(), Str
     Ok(())
 }
 
-/// A created release plus its id (the id is plumbing for the asset upload).
-struct CreatedRelease {
-    info: ReleaseInfo,
+/// A created or resolved release plus the id used to upload assets and publish it
+/// (model `ReleaseRef`).
+struct ReleaseRef {
     id: u64,
+    info: ReleaseInfo,
 }
 
-fn create_release(repo: &RepoInfo, tag: &str, body: &str, token: &str) -> Result<CreatedRelease, String> {
-    #[derive(Deserialize)]
-    struct Resp {
-        id: u64,
-        html_url: String,
-        tag_name: String,
+/// A GitHub release as create/find return it.
+#[derive(Deserialize)]
+struct ReleaseResp {
+    id: u64,
+    html_url: String,
+    tag_name: String,
+}
+
+impl From<ReleaseResp> for ReleaseRef {
+    fn from(r: ReleaseResp) -> Self {
+        ReleaseRef {
+            id: r.id,
+            info: ReleaseInfo {
+                tag: r.tag_name,
+                html_url: r.html_url,
+            },
+        }
     }
-    let payload = serde_json::json!({ "tag_name": tag, "name": tag, "body": body });
-    let resp: Resp = github_http::post(&format!("{API_BASE}/repos/{}/{}/releases", repo.owner, repo.name), token)
+}
+
+/// One asset already on a release (model `ReleaseAsset`) — its id (to delete) and
+/// name (to match a re-upload against).
+#[derive(Deserialize)]
+struct AssetResp {
+    id: u64,
+    name: String,
+}
+
+/// `{API_BASE}/repos/{owner}/{name}{suffix}` — the repo-scoped API prefix every
+/// release REST call shares (so the owner/name pair lives in one place).
+fn repo_api(repo: &RepoInfo, suffix: &str) -> String {
+    format!("{API_BASE}/repos/{}/{}{suffix}", repo.owner, repo.name)
+}
+
+/// Create a DRAFT release for `tag` (`draft: true`), so a half-uploaded release
+/// is never publicly visible until every asset has landed.
+fn create_draft_release(repo: &RepoInfo, tag: &str, body: &str, token: &str) -> Result<ReleaseRef, String> {
+    let payload = serde_json::json!({ "tag_name": tag, "name": tag, "body": body, "draft": true });
+    let resp: ReleaseResp = github_http::post(&repo_api(repo, "/releases"), token)
         .set("Accept", github_http::ACCEPT_JSON)
         .send_json(payload)
-        .map_err(|e| rest_error("create release", e))?
+        .map_err(|e| rest_error("create draft release", e))?
         .into_json()
         .map_err(|e| format!("create-release response: {e}"))?;
-    Ok(CreatedRelease {
-        info: ReleaseInfo {
-            tag: resp.tag_name,
-            html_url: resp.html_url,
-        },
-        id: resp.id,
-    })
+    Ok(resp.into())
 }
 
-fn upload_asset(repo: &RepoInfo, release_id: u64, path: &Path, token: &str) -> Result<(), String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let filename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| "asset has no filename".to_string())?;
-    github_http::post(
-        &format!(
-            "{UPLOADS_BASE}/repos/{}/{}/releases/{release_id}/assets?name={filename}",
-            repo.owner, repo.name
-        ),
-        token,
-    )
-    .set("Content-Type", "application/octet-stream")
-    .send_bytes(&bytes)
-    .map_err(|e| rest_error("upload asset", e))?;
+/// The existing release for `tag`, or `None` on 404 — reused so a re-publish
+/// after a partial failure is idempotent rather than creating a duplicate.
+fn find_release_by_tag(repo: &RepoInfo, tag: &str, token: &str) -> Result<Option<ReleaseRef>, String> {
+    match github_http::get(&repo_api(repo, &format!("/releases/tags/{tag}")), token)
+        .set("Accept", github_http::ACCEPT_JSON)
+        .call()
+    {
+        Ok(resp) => {
+            let r: ReleaseResp = resp
+                .into_json()
+                .map_err(|e| format!("find-release response: {e}"))?;
+            Ok(Some(r.into()))
+        }
+        Err(ureq::Error::Status(404, _)) => Ok(None),
+        Err(e) => Err(rest_error("find release", e)),
+    }
+}
+
+/// Reuse the existing release for `tag` (idempotent), else create a fresh draft.
+fn find_or_create_draft(repo: &RepoInfo, tag: &str, token: &str) -> Result<ReleaseRef, String> {
+    match find_release_by_tag(repo, tag, token)? {
+        Some(existing) => Ok(existing),
+        None => create_draft_release(repo, tag, &format!("Release {tag}"), token),
+    }
+}
+
+/// Every asset already on a release (paginated), for delete-then-replace.
+fn release_assets(repo: &RepoInfo, release_id: u64, token: &str) -> Result<Vec<AssetResp>, String> {
+    let mut all = Vec::new();
+    let mut page = 1;
+    loop {
+        let batch: Vec<AssetResp> = github_http::get(
+            &repo_api(repo, &format!("/releases/{release_id}/assets?per_page=100&page={page}")),
+            token,
+        )
+        .set("Accept", github_http::ACCEPT_JSON)
+        .call()
+        .map_err(|e| rest_error("list assets", e))?
+        .into_json()
+        .map_err(|e| format!("list-assets response: {e}"))?;
+        let full_page = batch.len() == 100;
+        all.extend(batch);
+        if !full_page {
+            return Ok(all);
+        }
+        page += 1;
+    }
+}
+
+/// Delete one release asset by id.
+fn delete_asset(repo: &RepoInfo, asset_id: u64, token: &str) -> Result<(), String> {
+    github_http::delete(&repo_api(repo, &format!("/releases/assets/{asset_id}")), token)
+        .set("Accept", github_http::ACCEPT_JSON)
+        .call()
+        .map_err(|e| rest_error("delete asset", e))?;
     Ok(())
+}
+
+/// Flip a draft release to published.
+fn publish_draft(repo: &RepoInfo, release_id: u64, token: &str) -> Result<(), String> {
+    github_http::patch(&repo_api(repo, &format!("/releases/{release_id}")), token)
+        .set("Accept", github_http::ACCEPT_JSON)
+        .send_json(serde_json::json!({ "draft": false }))
+        .map_err(|e| rest_error("publish release", e))?;
+    Ok(())
+}
+
+/// A transient failure worth retrying: a 5xx status or a transport-level error.
+fn is_transient(e: &ureq::Error) -> bool {
+    matches!(e, ureq::Error::Status(code, _) if *code >= 500)
+        || matches!(e, ureq::Error::Transport(_))
+}
+
+/// The file name of `path` as a `&str`, or an error naming the offending path.
+fn asset_filename(path: &Path) -> Result<&str, String> {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| format!("asset has no filename: {}", path.display()))
+}
+
+/// Upload one file as a release asset, streaming its bytes from disk (a multi-GiB
+/// volume is never fully read into RAM) and retrying a transient failure with
+/// exponential backoff.
+fn upload_asset(repo: &RepoInfo, release_id: u64, path: &Path, token: &str) -> Result<(), String> {
+    let filename = asset_filename(path)?;
+    let len = std::fs::metadata(path)
+        .map_err(|e| format!("stat {}: {e}", path.display()))?
+        .len();
+    let url = format!(
+        "{UPLOADS_BASE}/repos/{}/{}/releases/{release_id}/assets?name={filename}",
+        repo.owner, repo.name
+    );
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+        let file = File::open(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        match github_http::post(&url, token)
+            .set("Content-Type", "application/octet-stream")
+            .set("Content-Length", &len.to_string())
+            .send(file)
+        {
+            Ok(_) => return Ok(()),
+            Err(e) if attempt < UPLOAD_ATTEMPTS && is_transient(&e) => {
+                std::thread::sleep(UPLOAD_BACKOFF * 2_u32.pow(attempt - 1));
+            }
+            Err(e) => return Err(rest_error(&format!("upload asset {filename}"), e)),
+        }
+    }
 }
 
 // --- local git (model GitLocal), shelled ------------------------------------
@@ -393,10 +519,13 @@ pub fn share(root: &str, as_library: bool) -> Result<RepoInfo, String> {
 }
 
 /// Publish a release for the already-shared project at `root` (model
-/// `Publisher.PublishRelease`): create the release for `tag`, then upload
-/// `dcs-studio.toml` (so discovery/product can read the install plan without the
-/// whole payload) AND a `<repo>-<tag>.zip` payload of the manifest + every
-/// `[[install]]` source, so the Marketplace can actually download + install it.
+/// `Publisher.PublishRelease`, issue #62): package the manifest + every
+/// `[[install]]` source into a 7-Zip payload — split into GitHub-safe volumes
+/// when large — BEFORE any GitHub call (so a packaging failure leaves GitHub
+/// untouched); create or reuse a DRAFT release for `tag`; upload the standalone
+/// `dcs-studio.toml` plus every payload volume (deleting any same-named asset
+/// first, so a re-publish is idempotent); and only once every asset has landed,
+/// flip the release to published.
 pub fn publish_release(root: &str, tag: &str) -> Result<ReleaseInfo, String> {
     let root = Path::new(root);
     let token = publish_token()?;
@@ -406,88 +535,215 @@ pub fn publish_release(root: &str, tag: &str) -> Result<ReleaseInfo, String> {
         return Err(format!("no {MANIFEST_FILE} at the project root — nothing to publish"));
     }
     let manifest = dcs_studio_project::manifest::load(root)?;
-    // Build the payload archive first so a packaging error fails before we create
-    // an empty release on GitHub.
-    let payload = package_payload(root, &repo.name, tag, &manifest)?;
 
-    let created = create_release(&repo, tag, &format!("Release {tag}"), &token)?;
+    // Package + split first: a packaging failure must touch nothing on GitHub.
+    let packaged = package_release(root, &repo.name, tag, &manifest, &manifest_path)?;
+
+    let release = find_or_create_draft(&repo, tag, &token)?;
+    // Upload every asset, then flip the draft to published — published only once
+    // every asset has landed, so a failure partway leaves the draft, never a
+    // half-populated public release.
     let result = (|| {
-        upload_asset(&repo, created.id, &manifest_path, &token)?;
-        upload_asset(&repo, created.id, &payload, &token)
+        upload_release_assets(&repo, &release, &packaged, &token)?;
+        publish_draft(&repo, release.id, &token)
     })();
-    let _ = std::fs::remove_file(&payload); // best-effort temp cleanup
+
+    // Best-effort temp cleanup regardless of outcome. Only the payload volumes
+    // are temps; the manifest lives in the project.
+    for temp in &packaged.volume_paths {
+        let _ = std::fs::remove_file(temp);
+    }
     result?;
-    Ok(created.info)
+    Ok(release.info)
 }
 
-/// Zip the manifest + every `[[install]]` source into a temp `<repo>-<tag>.zip`
-/// at project-relative paths, so unpacking it yields a project-shaped tree the
-/// installer can deploy. Returns the temp archive path.
-fn package_payload(
-    root: &Path,
-    repo_name: &str,
-    tag: &str,
-    manifest: &dcs_studio_project::manifest::Manifest,
-) -> Result<PathBuf, String> {
+/// Upload the standalone manifest + every payload volume as assets of `release`,
+/// deleting any same-named asset first so a re-upload is idempotent.
+fn upload_release_assets(
+    repo: &RepoInfo,
+    release: &ReleaseRef,
+    packaged: &PackagedRelease,
+    token: &str,
+) -> Result<(), String> {
+    let existing = release_assets(repo, release.id, token)?;
+    // The standalone manifest first, then every payload volume.
+    let assets = std::iter::once(&packaged.manifest_path).chain(&packaged.volume_paths);
+    for asset in assets {
+        let name = asset_filename(asset)?;
+        if let Some(old) = existing.iter().find(|a| a.name == name) {
+            delete_asset(repo, old.id, token)?;
+        }
+        upload_asset(repo, release.id, asset, token)?;
+    }
+    Ok(())
+}
+
+/// The payload archive base name (no volume suffix): `dcs-studio-<repo>-<tag>`,
+/// the tag sanitised to a filename-safe form. The single-archive asset is
+/// `<base>.7z`; volumes are `<base>.7z.001`, `<base>.7z.002`, …
+fn payload_base(repo_name: &str, tag: &str) -> String {
     let safe_tag: String = tag
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '-' })
         .collect();
-    let zip_path = std::env::temp_dir().join(format!("dcs-studio-{repo_name}-{safe_tag}.zip"));
-    let file = std::fs::File::create(&zip_path).map_err(|e| format!("create payload: {e}"))?;
-    let mut zip = zip::ZipWriter::new(file);
-    let opts = zip::write::SimpleFileOptions::default();
+    format!("dcs-studio-{repo_name}-{safe_tag}")
+}
 
-    zip_add_file(&mut zip, root, Path::new(MANIFEST_FILE), opts)?;
+/// A packaged release ready to upload (model `PackagedRelease`): the in-project
+/// standalone manifest, plus the payload as the temp `.7z`/volume files — a
+/// single `<base>.7z` for a small payload, ordered `<base>.7z.NNN` for a large
+/// one, and empty for a manifest-only project. The volume files are temps,
+/// removed after the run; the manifest is never a temp.
+struct PackagedRelease {
+    manifest_path: PathBuf,
+    volume_paths: Vec<PathBuf>,
+}
+
+/// Package the release (model `Publisher.PackageRelease`): the standalone
+/// manifest always, plus — when the project declares `[[install]]` rules — a
+/// 7-Zip payload, split into `volume_size` volumes when it exceeds that size. A
+/// manifest-only project yields no payload. Runs entirely before any GitHub call.
+fn package_release(
+    root: &Path,
+    repo_name: &str,
+    tag: &str,
+    manifest: &Manifest,
+    manifest_path: &Path,
+) -> Result<PackagedRelease, String> {
+    let manifest_path = manifest_path.to_path_buf();
+    if manifest.install.is_empty() {
+        return Ok(PackagedRelease { manifest_path, volume_paths: Vec::new() }); // manifest-only
+    }
+    let sized = manifest.release.volume_size_bytes()?;
+    if let Some(warning) = &sized.warning {
+        tracing::warn!("{warning}");
+    }
+    let archive = package_payload_7z(root, repo_name, tag, manifest)?;
+    let archive_len = std::fs::metadata(&archive)
+        .map_err(|e| format!("stat payload: {e}"))?
+        .len();
+    let volume_paths = if archive_len <= sized.bytes {
+        vec![archive] // small payload stays a single `.7z`
+    } else {
+        split_into_volumes(&archive, sized.bytes)?
+    };
+    Ok(PackagedRelease { manifest_path, volume_paths })
+}
+
+/// Stream the manifest + every `[[install]]` source into a temp `<base>.7z` FILE
+/// (each source streamed entry-by-entry, so the payload is never fully held in
+/// RAM). A symlink in any source tree is refused — never silently omitted. On
+/// any failure the partial archive is removed, so a failed package leaks nothing.
+/// Returns the archive path.
+fn package_payload_7z(root: &Path, repo_name: &str, tag: &str, manifest: &Manifest) -> Result<PathBuf, String> {
+    let archive = std::env::temp_dir().join(format!("{}.7z", payload_base(repo_name, tag)));
+    match write_payload_7z(&archive, root, manifest) {
+        Ok(()) => Ok(archive),
+        Err(e) => {
+            let _ = std::fs::remove_file(&archive);
+            Err(e)
+        }
+    }
+}
+
+/// Write the manifest + every `[[install]]` source into the `.7z` at `archive`.
+fn write_payload_7z(archive: &Path, root: &Path, manifest: &Manifest) -> Result<(), String> {
+    let mut writer =
+        ArchiveWriter::create(archive).map_err(|e| format!("create 7z payload: {e}"))?;
+    add_file_entry(&mut writer, root, Path::new(MANIFEST_FILE))?;
     for rule in &manifest.install {
         let rel = Path::new(&rule.source);
         let abs = root.join(rel);
-        if abs.is_file() {
-            zip_add_file(&mut zip, root, rel, opts)?;
-        } else if abs.is_dir() {
-            zip_add_dir(&mut zip, root, rel, opts)?;
+        let file_type = std::fs::symlink_metadata(&abs)
+            .map_err(|e| format!("install source not found: {} ({e})", rule.source))?
+            .file_type();
+        if file_type.is_symlink() {
+            return Err(format!("install source is a symlink (refused): {}", rule.source));
+        } else if file_type.is_file() {
+            add_file_entry(&mut writer, root, rel)?;
+        } else if file_type.is_dir() {
+            add_dir_entries(&mut writer, root, rel)?;
         } else {
-            return Err(format!("install source not found: {}", rule.source));
+            return Err(format!("install source is neither a file nor a directory: {}", rule.source));
         }
     }
-    zip.finish().map_err(|e| format!("finish payload: {e}"))?;
-    Ok(zip_path)
+    writer.finish().map_err(|e| format!("finish 7z payload: {e}"))?;
+    Ok(())
 }
 
-/// Add `root/rel` to the zip under its forward-slashed relative path.
-fn zip_add_file(
-    zip: &mut zip::ZipWriter<std::fs::File>,
-    root: &Path,
-    rel: &Path,
-    opts: zip::write::SimpleFileOptions,
-) -> Result<(), String> {
-    let bytes = std::fs::read(root.join(rel)).map_err(|e| format!("read {}: {e}", rel.display()))?;
+/// Add `root/rel` to the archive under its forward-slashed project-relative path,
+/// streaming the file rather than buffering it. UTF-8 entry names preserve
+/// non-ASCII (e.g. Cyrillic) filenames byte-for-byte.
+fn add_file_entry(writer: &mut ArchiveWriter<File>, root: &Path, rel: &Path) -> Result<(), String> {
+    let abs = root.join(rel);
     let name = rel.to_string_lossy().replace('\\', "/");
-    zip.start_file(name, opts).map_err(|e| format!("zip entry: {e}"))?;
-    zip.write_all(&bytes).map_err(|e| format!("zip write: {e}"))?;
+    let file = File::open(&abs).map_err(|e| format!("read {}: {e}", rel.display()))?;
+    let entry = ArchiveEntry::from_path(&abs, name);
+    writer
+        .push_archive_entry(entry, Some(file))
+        .map_err(|e| format!("7z entry {}: {e}", rel.display()))?;
     Ok(())
 }
 
-/// Recursively add every file under `root/rel` to the zip (relative to `root`).
-fn zip_add_dir(
-    zip: &mut zip::ZipWriter<std::fs::File>,
-    root: &Path,
-    rel: &Path,
-    opts: zip::write::SimpleFileOptions,
-) -> Result<(), String> {
+/// Recursively add every file under `root/rel`, in sorted order for determinism,
+/// refusing any symlink so nothing is silently omitted from the payload.
+fn add_dir_entries(writer: &mut ArchiveWriter<File>, root: &Path, rel: &Path) -> Result<(), String> {
     let dir = root.join(rel);
-    let entries = std::fs::read_dir(&dir).map_err(|e| format!("read dir {}: {e}", dir.display()))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("dir entry: {e}"))?;
-        let child_rel = rel.join(entry.file_name());
-        let kind = entry.file_type().map_err(|e| format!("file type: {e}"))?;
-        if kind.is_dir() {
-            zip_add_dir(zip, root, &child_rel, opts)?;
-        } else if kind.is_file() {
-            zip_add_file(zip, root, &child_rel, opts)?;
+    let mut names: Vec<_> = std::fs::read_dir(&dir)
+        .map_err(|e| format!("read dir {}: {e}", dir.display()))?
+        .map(|entry| entry.map(|e| e.file_name()))
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("dir entry in {}: {e}", dir.display()))?;
+    names.sort();
+    for name in names {
+        let child_rel = rel.join(&name);
+        let abs = root.join(&child_rel);
+        let file_type = std::fs::symlink_metadata(&abs)
+            .map_err(|e| format!("stat {}: {e}", child_rel.display()))?
+            .file_type();
+        if file_type.is_symlink() {
+            return Err(format!("source contains a symlink (refused): {}", child_rel.display()));
+        } else if file_type.is_dir() {
+            add_dir_entries(writer, root, &child_rel)?;
+        } else if file_type.is_file() {
+            add_file_entry(writer, root, &child_rel)?;
         }
     }
     Ok(())
+}
+
+/// Byte-split `archive` into ordered `<archive>.001`, `.002`, … volumes of
+/// `volume_size` bytes each (the last is the remainder), streamed through a
+/// fixed buffer so the payload is never fully in RAM. Concatenating the volumes
+/// reproduces `archive` exactly, so `7z x <base>.7z.001` reassembles natively.
+/// Removes `archive`; returns the volume paths in order.
+fn split_into_volumes(archive: &Path, volume_size: u64) -> Result<Vec<PathBuf>, String> {
+    let total = std::fs::metadata(archive)
+        .map_err(|e| format!("stat payload: {e}"))?
+        .len();
+    let mut src = File::open(archive).map_err(|e| format!("open payload: {e}"))?;
+    let count = total.div_ceil(volume_size);
+    let mut volumes = Vec::new();
+    for index in 1..=count {
+        let vol = volume_path(archive, index);
+        let mut out = File::create(&vol).map_err(|e| format!("create volume {index}: {e}"))?;
+        let want = volume_size.min(total - (index - 1) * volume_size);
+        let copied = std::io::copy(&mut (&mut src).take(want), &mut out)
+            .map_err(|e| format!("write volume {index}: {e}"))?;
+        if copied != want {
+            return Err(format!("payload split short at volume {index}: {copied} of {want} bytes"));
+        }
+        volumes.push(vol);
+    }
+    drop(src);
+    let _ = std::fs::remove_file(archive); // the volumes supersede the whole `.7z`
+    Ok(volumes)
+}
+
+/// The `index`-th volume path: `<archive>.001`, `.002`, … (3-digit minimum,
+/// 7-Zip's own naming).
+fn volume_path(archive: &Path, index: u64) -> PathBuf {
+    PathBuf::from(format!("{}.{index:03}", archive.display()))
 }
 
 #[cfg(test)]
@@ -562,5 +818,120 @@ mod tests {
         let b = parse_repo_url("https://github.com/octocat/cool-mod.git").unwrap();
         assert_eq!(b.full_name, "octocat/cool-mod");
         assert!(parse_repo_url("https://gitlab.com/x/y").is_err());
+    }
+
+    // --- packaging + volume split (issue #62) -------------------------------
+
+    /// A throwaway temp tree, removed on drop so a panicking assert never leaks.
+    struct TempTree(PathBuf);
+    impl TempTree {
+        fn new(tag: &str) -> Self {
+            let root =
+                std::env::temp_dir().join(format!("dcs-publish-test-{tag}-{}", std::process::id()));
+            std::fs::create_dir_all(&root).expect("create temp root");
+            TempTree(root)
+        }
+        fn write(&self, rel: &str, contents: &[u8]) -> PathBuf {
+            let path = self.0.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).expect("create parent");
+            std::fs::write(&path, contents).expect("write file");
+            path
+        }
+    }
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn manifest_of(text: &str) -> Manifest {
+        dcs_studio_project::manifest::parse(text).expect("manifest parses")
+    }
+
+    #[test]
+    fn payload_base_sanitises_the_tag() {
+        assert_eq!(payload_base("cool-mod", "v1.2.3"), "dcs-studio-cool-mod-v1.2.3");
+        // Anything outside [A-Za-z0-9._-] collapses to '-' (filename-safe).
+        assert_eq!(payload_base("mod", "v1/0 beta"), "dcs-studio-mod-v1-0-beta");
+    }
+
+    #[test]
+    fn volume_path_pads_to_three_digits() {
+        let base = Path::new("/tmp/dcs-studio-mod-v1.7z");
+        assert_eq!(volume_path(base, 1), PathBuf::from("/tmp/dcs-studio-mod-v1.7z.001"));
+        assert_eq!(volume_path(base, 42), PathBuf::from("/tmp/dcs-studio-mod-v1.7z.042"));
+        // Past 999 it widens rather than truncating, so lexical order is preserved.
+        assert_eq!(volume_path(base, 1000), PathBuf::from("/tmp/dcs-studio-mod-v1.7z.1000"));
+    }
+
+    #[test]
+    fn split_into_volumes_round_trips_and_sizes_each_volume() {
+        let tree = TempTree::new("split");
+        // 2500 bytes split at 1000 → 1000 + 1000 + 500.
+        let original: Vec<u8> = (0..2500u32).map(|i| (i % 251) as u8).collect();
+        let archive = tree.write("payload.7z", &original);
+        let volumes = split_into_volumes(&archive, 1000).expect("split");
+        let sizes: Vec<u64> = volumes
+            .iter()
+            .map(|v| std::fs::metadata(v).expect("volume exists").len())
+            .collect();
+        assert_eq!(sizes, vec![1000, 1000, 500]);
+        // The whole-archive temp is removed; the volumes concatenate back to it.
+        assert!(!archive.exists(), "the source `.7z` is removed after split");
+        let restitched: Vec<u8> = volumes
+            .iter()
+            .flat_map(|v| std::fs::read(v).expect("read volume"))
+            .collect();
+        assert_eq!(restitched, original, "volumes reassemble the original byte-for-byte");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_payload_7z_rejects_a_symlinked_source() {
+        use std::os::unix::fs::symlink;
+        let tree = TempTree::new("symlink");
+        tree.write("dcs-studio.toml", b"[project]\nname = \"x\"\n");
+        tree.write("src/real.txt", b"hi");
+        symlink(tree.0.join("src/real.txt"), tree.0.join("src/link.txt")).expect("symlink");
+        let manifest = manifest_of(
+            "[project]\nname = \"x\"\n\n[[install]]\nsource = \"src\"\ndest = \"{SavedGames}/x\"\n",
+        );
+        let err = package_payload_7z(&tree.0, "symx", "v1", &manifest).expect_err("symlink refused");
+        assert!(err.contains("symlink"), "error names it a symlink: {err}");
+        assert!(err.contains("link.txt"), "error names the offending path: {err}");
+        // The partial archive self-cleans on failure — nothing leaks to temp.
+        assert!(!std::env::temp_dir().join("dcs-studio-symx-v1.7z").exists());
+    }
+
+    #[test]
+    fn manifest_only_project_packages_only_the_manifest() {
+        let tree = TempTree::new("manifestonly");
+        let manifest_path = tree.write("dcs-studio.toml", b"[project]\nname = \"x\"\n");
+        let manifest = manifest_of("[project]\nname = \"x\"\n");
+        let packaged =
+            package_release(&tree.0, "x", "v1", &manifest, &manifest_path).expect("package");
+        assert_eq!(packaged.manifest_path, manifest_path, "the manifest is the standalone asset");
+        assert!(packaged.volume_paths.is_empty(), "no payload volumes for a manifest-only project");
+    }
+
+    #[test]
+    fn small_payload_packages_a_single_7z_asset() {
+        let tree = TempTree::new("single");
+        let manifest_path = tree.write("dcs-studio.toml", b"[project]\nname = \"x\"\n");
+        tree.write("scripts/a.lua", b"return 1\n");
+        let manifest = manifest_of(
+            "[project]\nname = \"x\"\n\n[[install]]\nsource = \"scripts\"\ndest = \"{SavedGames}/x\"\n",
+        );
+        let packaged =
+            package_release(&tree.0, "x", "single-v1", &manifest, &manifest_path).expect("package");
+        // Standalone manifest + one `.7z` payload (well under the default volume size).
+        assert_eq!(packaged.manifest_path, manifest_path, "manifest is the standalone asset");
+        assert_eq!(packaged.volume_paths.len(), 1, "a small payload stays a single `.7z`");
+        let archive = packaged.volume_paths.first().expect("one payload file");
+        assert!(archive.to_string_lossy().ends_with(".7z"), "single archive, not volumes");
+        assert!(archive.is_file(), "the `.7z` exists on disk");
+        for temp in &packaged.volume_paths {
+            let _ = std::fs::remove_file(temp);
+        }
     }
 }
