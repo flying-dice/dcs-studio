@@ -14,14 +14,6 @@ use serde::{Deserialize, Serialize};
 
 use super::SIGN_IN_REQUIRED;
 use super::resolve::{self, ModFacts, ModSource, PlanNode};
-use crate::github_http::{self, API_BASE};
-
-/// Hard ceilings on the untrusted, unsigned third-party payload (any
-/// topic-tagged public repo is one-click installable): cap the download and the
-/// decompressed total so a malicious release can't exhaust RAM/disk (zip bomb).
-const MAX_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_PAYLOAD_ENTRIES: usize = 20_000;
 
 /// A what-was-installed record: the content store dir, the links placed, the
 /// `owner/name` ids this mod declared as dependencies, and whether the user
@@ -102,113 +94,6 @@ fn write_ledger(ledger: &HashMap<String, InstalledEntry>) {
 /// the guard rather than installing a third-party mod to the game dir.
 fn resolve_roots() -> Result<dcs_studio_project::RootMap, String> {
     dcs_studio_project::detect::resolve_roots(None)
-}
-
-/// The download URL of the legacy single-`.zip` payload — the asset named
-/// `dcs-studio-<name>-<tag>.zip`. Matched by that exact `dcs-studio-<name>-`
-/// prefix so an unrelated `.zip` on the release can't be installed by mistake.
-/// (Publish now writes a 7-Zip payload instead — issue #62; discovering and
-/// re-stitching those `.7z`/`.7z.NNN` assets on install lands with that issue's
-/// install slice, while this legacy `.zip` path stays for older releases.)
-fn find_payload_asset(owner: &str, name: &str, token: &str) -> Result<String, String> {
-    #[derive(Deserialize)]
-    struct Resp {
-        #[serde(default)]
-        assets: Vec<Asset>,
-    }
-    #[derive(Deserialize)]
-    struct Asset {
-        name: String,
-        browser_download_url: String,
-    }
-    let url = format!("{API_BASE}/repos/{owner}/{name}/releases/latest");
-    let resp: Resp = github_http::get(&url, token)
-        .set("Accept", github_http::ACCEPT_JSON)
-        .call()
-        .map_err(|e| format!("latest-release request failed: {e}"))?
-        .into_json()
-        .map_err(|e| format!("latest-release response: {e}"))?;
-    let prefix = format!("dcs-studio-{name}-");
-    resp.assets
-        .into_iter()
-        .find(|a| a.name.starts_with(&prefix) && a.name.ends_with(".zip"))
-        .map(|a| a.browser_download_url)
-        .ok_or_else(|| {
-            format!("this release has no `{prefix}*.zip` payload (re-publish the release from DCS Studio)")
-        })
-}
-
-/// Download the payload, capped: reject an oversized Content-Length up front and
-/// hard-stop the stream past `MAX_PAYLOAD_BYTES` so an unsigned third-party asset
-/// can't exhaust memory.
-fn fetch_asset_bytes(url: &str, token: &str) -> Result<Vec<u8>, String> {
-    use std::io::Read as _;
-    let resp = github_http::get(url, token)
-        .call()
-        .map_err(|e| format!("payload download failed: {e}"))?;
-    if let Some(len) = resp.header("Content-Length").and_then(|l| l.parse::<u64>().ok()) {
-        if len > MAX_PAYLOAD_BYTES {
-            return Err("payload is too large to install".to_string());
-        }
-    }
-    let mut buf = Vec::new();
-    resp.into_reader()
-        .take(MAX_PAYLOAD_BYTES + 1)
-        .read_to_end(&mut buf)
-        .map_err(|e| format!("payload read failed: {e}"))?;
-    if buf.len() as u64 > MAX_PAYLOAD_BYTES {
-        return Err("payload exceeds the size limit".to_string());
-    }
-    Ok(buf)
-}
-
-/// Replace `store` with the unpacked archive (a project-shaped tree), capped by
-/// entry-count (`max_entries`) and a running budget of ACTUAL decompressed bytes
-/// (`max_uncompressed`), and confined to `store` via `enclosed_name` (Zip-Slip
-/// guard). The byte cap is on real output, not the archive's DECLARED
-/// `uncompressed_size` header (which zip does not enforce) — so a lying-header
-/// zip bomb that declares a tiny size is still stopped at the budget.
-fn unpack(
-    bytes: &[u8],
-    store: &Path,
-    max_uncompressed: u64,
-    max_entries: usize,
-) -> Result<(), String> {
-    use std::io::Read as _;
-    let _ = std::fs::remove_dir_all(store);
-    std::fs::create_dir_all(store).map_err(|e| format!("create store: {e}"))?;
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .map_err(|e| format!("open payload: {e}"))?;
-    if archive.len() > max_entries {
-        return Err("payload has too many files to install".to_string());
-    }
-    let mut budget = max_uncompressed;
-    for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(|e| format!("payload entry: {e}"))?;
-        // Zip-Slip guard: skip any entry whose name escapes the store.
-        let Some(rel) = entry.enclosed_name() else {
-            continue;
-        };
-        let out = store.join(rel);
-        if entry.is_dir() {
-            std::fs::create_dir_all(&out).map_err(|e| format!("unpack dir: {e}"))?;
-        } else {
-            if let Some(parent) = out.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| format!("unpack parent: {e}"))?;
-            }
-            let mut file = std::fs::File::create(&out).map_err(|e| format!("unpack file: {e}"))?;
-            // Cap on ACTUAL bytes: read at most budget+1 so an oversize entry
-            // (honest OR lying-header) trips the check rather than being written.
-            let mut limited = entry.by_ref().take(budget + 1);
-            let written = std::io::copy(&mut limited, &mut file)
-                .map_err(|e| format!("unpack write: {e}"))?;
-            if written > budget {
-                return Err("payload is too large when decompressed".to_string());
-            }
-            budget -= written;
-        }
-    }
-    Ok(())
 }
 
 /// Link each `[[install]]` rule's resolved dest to its store source (never copy).
@@ -344,10 +229,11 @@ fn place_one(
     token: &str,
     roots: &dcs_studio_project::RootMap,
 ) -> Result<(String, Vec<String>), String> {
-    let payload_url = find_payload_asset(owner, name, token)?;
-    let bytes = fetch_asset_bytes(&payload_url, token)?;
     let store = store_dir(owner, name);
-    unpack(&bytes, &store, MAX_UNCOMPRESSED_BYTES, MAX_PAYLOAD_ENTRIES)?;
+    // Discover the release payload (single `.7z`, a `.7z.NNN` volume set, or the
+    // legacy `.zip`), verify a volume set is complete, then download + re-stitch +
+    // extract it into the content store (issue #62, model `FetchPayloadIntoStore`).
+    super::payload::download_into_store(owner, name, token, &store)?;
     let links = deploy_links(&store, roots)?;
     Ok((store.to_string_lossy().to_string(), links))
 }
@@ -807,96 +693,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    fn crc32(data: &[u8]) -> u32 {
-        let mut crc = !0u32;
-        for &byte in data {
-            crc ^= u32::from(byte);
-            for _ in 0..8 {
-                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
-            }
-        }
-        !crc
-    }
-
-    /// A single STORED entry whose declared `uncompressed_size` is a LIE
-    /// (`forged`) while the real data is `data` — what an honest zip writer can't
-    /// produce. Mirrors the review PoC.
-    fn forged_zip(name: &str, data: &[u8], forged_uncompressed: u32) -> Vec<u8> {
-        let crc = crc32(data);
-        let csize = data.len() as u32;
-        let nlen = name.len() as u16;
-        let mut z = Vec::new();
-        // local file header
-        z.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
-        z.extend_from_slice(&20u16.to_le_bytes());
-        z.extend_from_slice(&0u16.to_le_bytes());
-        z.extend_from_slice(&0u16.to_le_bytes()); // method: STORED
-        z.extend_from_slice(&0u16.to_le_bytes());
-        z.extend_from_slice(&0u16.to_le_bytes());
-        z.extend_from_slice(&crc.to_le_bytes());
-        z.extend_from_slice(&csize.to_le_bytes());
-        z.extend_from_slice(&forged_uncompressed.to_le_bytes()); // the lie
-        z.extend_from_slice(&nlen.to_le_bytes());
-        z.extend_from_slice(&0u16.to_le_bytes());
-        z.extend_from_slice(name.as_bytes());
-        z.extend_from_slice(data);
-        let cd_off = z.len() as u32;
-        // central directory header
-        z.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
-        z.extend_from_slice(&20u16.to_le_bytes());
-        z.extend_from_slice(&20u16.to_le_bytes());
-        z.extend_from_slice(&0u16.to_le_bytes());
-        z.extend_from_slice(&0u16.to_le_bytes()); // STORED
-        z.extend_from_slice(&0u16.to_le_bytes());
-        z.extend_from_slice(&0u16.to_le_bytes());
-        z.extend_from_slice(&crc.to_le_bytes());
-        z.extend_from_slice(&csize.to_le_bytes());
-        z.extend_from_slice(&forged_uncompressed.to_le_bytes()); // the lie
-        z.extend_from_slice(&nlen.to_le_bytes());
-        z.extend_from_slice(&0u16.to_le_bytes());
-        z.extend_from_slice(&0u16.to_le_bytes());
-        z.extend_from_slice(&0u16.to_le_bytes());
-        z.extend_from_slice(&0u16.to_le_bytes());
-        z.extend_from_slice(&0u32.to_le_bytes());
-        z.extend_from_slice(&0u32.to_le_bytes()); // local header offset
-        z.extend_from_slice(name.as_bytes());
-        let cd_size = z.len() as u32 - cd_off;
-        // end of central directory
-        z.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
-        z.extend_from_slice(&0u16.to_le_bytes());
-        z.extend_from_slice(&0u16.to_le_bytes());
-        z.extend_from_slice(&1u16.to_le_bytes());
-        z.extend_from_slice(&1u16.to_le_bytes());
-        z.extend_from_slice(&cd_size.to_le_bytes());
-        z.extend_from_slice(&cd_off.to_le_bytes());
-        z.extend_from_slice(&0u16.to_le_bytes());
-        z
-    }
-
-    #[test]
-    fn unpack_caps_actual_bytes_against_a_lying_uncompressed_header() {
-        // 4 KiB of real data, but the header DECLARES uncompressed_size = 0.
-        let data = vec![b'A'; 4096];
-        let zip = forged_zip("big.bin", &data, 0);
-        let store = std::env::temp_dir().join(format!("dcs-bomb-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&store);
-
-        // A tiny 1 KiB budget: the real 4 KiB output must trip it despite the lie.
-        let result = unpack(&zip, &store, 1024, 100);
-
-        assert!(result.is_err(), "lying-header bomb must be rejected on actual bytes");
-        let _ = std::fs::remove_dir_all(&store);
-    }
-
-    #[test]
-    fn unpack_accepts_a_payload_within_budget() {
-        let data = b"hello world";
-        let zip = forged_zip("ok.txt", data, data.len() as u32);
-        let store = std::env::temp_dir().join(format!("dcs-ok-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&store);
-
-        unpack(&zip, &store, 1024, 100).expect("a small honest payload unpacks");
-        assert_eq!(std::fs::read(store.join("ok.txt")).unwrap(), data);
-        let _ = std::fs::remove_dir_all(&store);
-    }
+    // The payload download + unpack engine (single `.7z`, `.7z.NNN` volume sets,
+    // and the legacy `.zip` path) — including the actual-bytes decompression-budget
+    // guard — lives in `super::payload`; its tests live there.
 }
