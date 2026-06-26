@@ -11,19 +11,52 @@
 //! Junctions + hard links cover the common DCS case (Saved Games on the same
 //! drive as the store) without any privilege prompt.
 
+use std::io;
 use std::path::Path;
+
+use studio_archive::extended_path;
+
+/// Windows file-lock error codes: a path held open by another process surfaces as
+/// one of these — the common cause being a running DCS holding installed mod files.
+/// ERROR_ACCESS_DENIED (5), ERROR_SHARING_VIOLATION (32), ERROR_LOCK_VIOLATION (33).
+/// Pure → unit-tested on every platform.
+fn is_lock_code(code: i32) -> bool {
+    matches!(code, 5 | 32 | 33)
+}
+
+/// Whether `e` looks like a path locked by another process — Windows only (Unix
+/// has no mandatory lock that blocks an unlink/replace this way, so the hint would
+/// mislead).
+fn looks_locked(e: &io::Error) -> bool {
+    cfg!(windows) && e.raw_os_error().is_some_and(is_lock_code)
+}
+
+/// The "is DCS running?" tail appended to a filesystem error when the OS reports
+/// the path is locked. Pure → unit-tested.
+fn lock_hint(locked: bool) -> &'static str {
+    if locked {
+        " — is DCS running? Close it and retry."
+    } else {
+        ""
+    }
+}
+
+/// Format a filesystem error for `path`, appending the locked-by-DCS hint when the
+/// OS reports the path is held open by another process (issue #62 hardening).
+fn fs_err(context: &str, path: &Path, e: &io::Error) -> String {
+    format!("{context} {}: {e}{}", path.display(), lock_hint(looks_locked(e)))
+}
 
 /// Create a link at `link_path` pointing to `target`. Creates parent dirs.
 /// Refuses if `link_path` already exists (never clobbers the user's files).
 pub fn link(link_path: &Path, target: &Path) -> Result<(), String> {
-    if link_path.symlink_metadata().is_ok() {
+    if extended_path(link_path).symlink_metadata().is_ok() {
         return Err(format!("destination already exists: {}", link_path.display()));
     }
     if let Some(parent) = link_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(extended_path(parent)).map_err(|e| fs_err("create", parent, &e))?;
     }
-    let meta =
-        std::fs::metadata(target).map_err(|e| format!("link target {}: {e}", target.display()))?;
+    let meta = std::fs::metadata(extended_path(target)).map_err(|e| fs_err("link target", target, &e))?;
     if meta.is_dir() {
         link_dir(link_path, target)
     } else {
@@ -34,19 +67,24 @@ pub fn link(link_path: &Path, target: &Path) -> Result<(), String> {
 /// Remove a previously placed link WITHOUT following it into the target — so the
 /// user's real files (the link's target) are never touched. A no-op if gone.
 pub fn unlink(link_path: &Path) -> Result<(), String> {
-    let Ok(meta) = link_path.symlink_metadata() else {
+    let Ok(meta) = extended_path(link_path).symlink_metadata() else {
         return Ok(());
     };
     // A junction / dir-symlink reports as a dir; `remove_dir` drops the link
     // itself (it does not recurse into the target). A file link → remove_file.
     let result = if meta.is_dir() {
-        std::fs::remove_dir(link_path)
+        std::fs::remove_dir(extended_path(link_path))
     } else {
-        std::fs::remove_file(link_path)
+        std::fs::remove_file(extended_path(link_path))
     };
-    result.map_err(|e| format!("remove link {}: {e}", link_path.display()))
+    result.map_err(|e| fs_err("remove link", link_path, &e))
 }
 
+// The directory case is a junction — a single reparse point at the (shallow) DCS
+// dest. The deep tree that risks MAX_PATH lives INSIDE the extracted store, which
+// `studio_archive::extract` writes via extended-length paths; DCS resolves through
+// the reparse point without the junction itself needing the `\\?\` form, so the
+// PowerShell `New-Item` path below is left as-is.
 #[cfg(windows)]
 fn link_dir(link_path: &Path, target: &Path) -> Result<(), String> {
     junction(link_path, target)
@@ -59,15 +97,18 @@ fn link_dir(link_path: &Path, target: &Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn link_file(link_path: &Path, target: &Path) -> Result<(), String> {
-    // Same volume → hard link (no elevation).
-    if same_volume(link_path, target) && std::fs::hard_link(target, link_path).is_ok() {
+    // Same volume → hard link (no elevation). Extended-length paths so a deep
+    // store target / dest survives MAX_PATH (issue #62).
+    if same_volume(link_path, target)
+        && std::fs::hard_link(extended_path(target), extended_path(link_path)).is_ok()
+    {
         return Ok(());
     }
     // Cross-volume (or a failed hard link) → file symlink. Try unprivileged first
     // — works when Windows Developer Mode is on — then fall back to a one-shot
     // elevated `mklink` (a single UAC prompt), mirroring the original NodeJS
     // linker's createSymlinkElevated. The common same-drive case never reaches here.
-    if std::os::windows::fs::symlink_file(target, link_path).is_ok() {
+    if std::os::windows::fs::symlink_file(extended_path(target), extended_path(link_path)).is_ok() {
         return Ok(());
     }
     symlink_file_elevated(link_path, target)
@@ -240,6 +281,55 @@ mod cmd_tests {
         assert!(cmd.contains("-EncodedCommand"), "passes the script base64-encoded: {cmd}");
         // No `cmd`, no `mklink`, no `%` — the whole injection surface is gone.
         assert!(!cmd.contains("mklink") && !cmd.contains('%'), "no cmd/mklink/%: {cmd}");
+    }
+}
+
+// The locked-target classification is pure, so it is tested on every platform
+// (provoking a real ERROR_SHARING_VIOLATION would need a second process holding
+// the file open).
+#[cfg(test)]
+mod lock_tests {
+    use super::{fs_err, is_lock_code, lock_hint, looks_locked};
+    use std::io;
+    use std::path::Path;
+
+    #[test]
+    fn lock_codes_match_only_the_windows_lock_family() {
+        for code in [5, 32, 33] {
+            assert!(is_lock_code(code), "{code} is a lock code");
+        }
+        for code in [0, 2, 3, 13, 31, 34, 999] {
+            assert!(!is_lock_code(code), "{code} is not a lock code");
+        }
+    }
+
+    #[test]
+    fn lock_hint_only_speaks_when_locked() {
+        assert!(lock_hint(true).contains("DCS"), "the hint names DCS");
+        assert_eq!(lock_hint(false), "", "no hint when not locked");
+    }
+
+    #[test]
+    fn fs_err_carries_context_path_and_error() {
+        let e = io::Error::from_raw_os_error(32);
+        let msg = fs_err("remove link", Path::new("/x/y"), &e);
+        assert!(msg.starts_with("remove link /x/y: "), "context + path: {msg}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_sharing_violation_is_flagged_as_locked() {
+        let e = io::Error::from_raw_os_error(32);
+        assert!(looks_locked(&e), "ERROR_SHARING_VIOLATION reads as locked");
+        assert!(fs_err("create", Path::new(r"C:\x"), &e).contains("DCS"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_never_flags_a_lock() {
+        // Unix has no mandatory lock that blocks unlink/replace — never mislead.
+        let e = io::Error::from_raw_os_error(32);
+        assert!(!looks_locked(&e), "no lock hint on Unix");
     }
 }
 

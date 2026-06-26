@@ -289,8 +289,8 @@ pub struct ExtractLimits {
 /// reads, so a corrupt volume surfaces as an extraction error. A failure leaves a
 /// half-written `dest`, which the caller drops.
 pub fn extract<R: Read + Seek>(reader: R, dest: &Path, limits: ExtractLimits) -> Result<u64, String> {
-    let _ = std::fs::remove_dir_all(dest);
-    std::fs::create_dir_all(dest).map_err(|e| format!("create store: {e}"))?;
+    let _ = std::fs::remove_dir_all(extended_path(dest));
+    std::fs::create_dir_all(extended_path(dest)).map_err(|e| format!("create store: {e}"))?;
 
     let mut archive =
         ArchiveReader::new(reader, Password::empty()).map_err(|e| format!("open 7-Zip payload: {e}"))?;
@@ -319,19 +319,19 @@ pub fn extract<R: Read + Seek>(reader: R, dest: &Path, limits: ExtractLimits) ->
         };
         let out = dest.join(&rel);
         if entry.is_directory() {
-            if let Err(e) = std::fs::create_dir_all(&out) {
+            if let Err(e) = std::fs::create_dir_all(extended_path(&out)) {
                 guard_error = Some(format!("unpack dir {}: {e}", rel.display()));
                 return Ok(false);
             }
             return Ok(true);
         }
         if let Some(parent) = out.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
+            if let Err(e) = std::fs::create_dir_all(extended_path(parent)) {
                 guard_error = Some(format!("unpack parent {}: {e}", rel.display()));
                 return Ok(false);
             }
         }
-        let mut file = match File::create(&out) {
+        let mut file = match File::create(extended_path(&out)) {
             Ok(f) => f,
             Err(e) => {
                 guard_error = Some(format!("unpack file {}: {e}", rel.display()));
@@ -368,6 +368,44 @@ pub fn extract<R: Read + Seek>(reader: R, dest: &Path, limits: ExtractLimits) ->
     Ok(written_total)
 }
 
+/// On Windows, rewrite an **absolute** path to its extended-length (`\\?\`) form so
+/// a deep extracted tree survives the legacy 260-char `MAX_PATH` limit (issue #62);
+/// a no-op on other platforms and for a path that is already verbatim. The `\\?\`
+/// prefix turns OFF the normalization Win32 would otherwise apply, so the path must
+/// be absolute and free of `.`/`..` components — store/root paths qualify (absolute)
+/// and entry/manifest names are component-checked ([`confined_relative`], the
+/// installer's source guard). Separator folding (`/` → `\`, which the non-normalizing
+/// verbatim form REQUIRES) is handled by [`extended_str`].
+#[must_use]
+pub fn extended_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        PathBuf::from(extended_str(&path.to_string_lossy()))
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_path_buf()
+    }
+}
+
+/// The pure `\\?\` rewrite of a Windows path string — `C:\a` → `\\?\C:\a`, a UNC
+/// `\\srv\share` → `\\?\UNC\srv\share`, already-verbatim left alone. Forward slashes
+/// are first folded to `\`: the verbatim prefix disables Win32's `/`→`\` fixup, so a
+/// `/` left in (manifest sources and archive entry names carry it) would become a
+/// literal filename character. Split out so the rewrite is unit-tested on every
+/// platform; [`extended_path`] applies it only on Windows.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn extended_str(s: &str) -> String {
+    let s = s.replace('/', r"\");
+    if s.starts_with(r"\\?\") {
+        s
+    } else if let Some(rest) = s.strip_prefix(r"\\") {
+        format!(r"\\?\UNC\{rest}")
+    } else {
+        format!(r"\\?\{s}")
+    }
+}
+
 /// Confine an archive entry name under the content store: backslashes normalised,
 /// then every path component must be a plain name (no `..`, root, or drive prefix)
 /// — the Zip-Slip / 7z-slip guard. Returns the store-relative path when safe.
@@ -388,6 +426,36 @@ fn confined_relative(entry_name: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    // --- extended-length path rewrite (issue #62, Windows MAX_PATH) ----------
+
+    #[test]
+    fn extended_str_prefixes_a_drive_path() {
+        assert_eq!(extended_str(r"C:\mods\deep\tree"), r"\\?\C:\mods\deep\tree");
+    }
+
+    #[test]
+    fn extended_str_prefixes_a_unc_path() {
+        assert_eq!(extended_str(r"\\server\share\x"), r"\\?\UNC\server\share\x");
+    }
+
+    #[test]
+    fn extended_str_leaves_an_already_verbatim_path() {
+        let v = r"\\?\C:\already";
+        assert_eq!(extended_str(v), v);
+        // UNC verbatim is also left alone (it starts with the `\\?\` guard).
+        let u = r"\\?\UNC\server\share";
+        assert_eq!(extended_str(u), u);
+    }
+
+    #[test]
+    fn extended_str_folds_inner_forward_slashes_to_backslashes() {
+        // The verbatim prefix disables Win32's `/`→`\` fixup, so a joined store
+        // path like `C:\store\Liveries/F-16` (entry names carry `/`) MUST be folded
+        // or the `/` becomes a literal filename char — the regression this guards.
+        assert_eq!(extended_str(r"C:\store\Liveries/F-16"), r"\\?\C:\store\Liveries\F-16");
+        assert!(!extended_str("C:/store/a/b").contains('/'), "no slash survives the rewrite");
+    }
 
     // --- helpers ------------------------------------------------------------
 
