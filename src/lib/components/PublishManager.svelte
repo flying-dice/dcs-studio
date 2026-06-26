@@ -7,6 +7,8 @@
   import { goto } from "$app/navigation";
   import { publish } from "$lib/publish.svelte";
   import { app } from "$lib/state.svelte";
+  import { formatBytes } from "$lib/utils";
+  import type { PublishProgress } from "$lib/api";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Separator } from "$lib/components/ui/separator/index.js";
   import {
@@ -17,11 +19,27 @@
     LoaderCircle,
     Store,
     GitBranch,
+    X,
   } from "@lucide/svelte";
 
   let tag = $state("v0.1.0");
   // Publish-time choice: mark the repo as a dependency-only library (#48).
   let asLibrary = $state(false);
+
+  // The pipeline step shown while a release uploads (issue #62).
+  const STEP_LABEL: Record<PublishProgress["step"], string> = {
+    package: "Packaging payload…",
+    split: "Splitting into volumes…",
+    draft: "Creating draft release…",
+    upload: "Uploading assets…",
+    publish: "Publishing release…",
+  };
+
+  /** Upload completion 0–100, or null when bytes aren't known yet. */
+  function uploadPercent(p: PublishProgress): number | null {
+    if (p.total_bytes === undefined || p.total_bytes === 0) return null;
+    return Math.min(100, Math.round(((p.bytes ?? 0) / p.total_bytes) * 100));
+  }
 </script>
 
 <div class="flex h-full flex-col gap-2 p-2 text-[13px]" data-testid="publish-panel">
@@ -150,6 +168,33 @@
         <UploadCloud class="size-3.5" /> Release
       </Button>
     </div>
+    {#if publish.progress}
+      {@const p = publish.progress}
+      {@const pct = uploadPercent(p)}
+      <div class="rounded-lg border border-border bg-card p-2.5" data-testid="publish-progress">
+        <div class="flex items-center justify-between gap-2">
+          <span class="flex items-center gap-1.5 text-[12px]">
+            <LoaderCircle class="size-3 animate-spin" /> {STEP_LABEL[p.step]}
+          </span>
+          <button
+            class="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+            onclick={() => publish.cancelRelease()}
+            data-testid="publish-release-cancel"
+          >
+            <X class="size-3" /> Cancel
+          </button>
+        </div>
+        {#if p.step === "upload" && pct !== null}
+          <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-muted">
+            <div class="h-full rounded-full bg-primary transition-[width]" style="width: {pct}%"></div>
+          </div>
+          <p class="mt-1 text-[10px] text-muted-foreground">
+            {#if p.detail}<span class="font-mono">{p.detail}</span> · {/if}
+            {p.part ?? 0}/{p.parts ?? 0} · {formatBytes(p.bytes ?? 0)} / {formatBytes(p.total_bytes ?? 0)}
+          </p>
+        {/if}
+      </div>
+    {/if}
     {#if publish.release}
       {@const release = publish.release}
       <div class="rounded-lg border border-border bg-card p-2.5">
