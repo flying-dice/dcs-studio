@@ -618,6 +618,77 @@ mod tests {
     }
 
     #[test]
+    fn place_plan_download_surfaced_cancel_stays_cancelled_and_rolls_back() {
+        // A cancel observed INSIDE the download surfaces as `Err(CANCELLED)` from the
+        // placer — not the pre-node guard (the token is never flipped here). Node 1
+        // places; node 2's placer returns the sentinel. The error must pass through
+        // UNWRAPPED as `CANCELLED` — wrap it and the UI reads a user-cancel as a
+        // crash — and node 1's link + store are rolled back.
+        let plan = vec![node("o/dep", &[]), node("o/root", &["o/dep"])];
+        let mut ledger = HashMap::new();
+        let undone = std::cell::RefCell::new(Vec::<(Vec<String>, Vec<String>)>::new());
+
+        let err = place_plan(
+            &plan,
+            "o/root",
+            &mut ledger,
+            &crate::progress::no_progress(),
+            &Cancel::new(), // never flipped — the cancel surfaces from the placer
+            |id| {
+                if id == "o/root" {
+                    Err(CANCELLED.to_string()) // the download observed the cancel and aborted
+                } else {
+                    Ok((format!("/store/{id}"), vec![format!("/link/{id}")]))
+                }
+            },
+            |links, stores| undone.borrow_mut().push((links.to_vec(), stores.to_vec())),
+        )
+        .expect_err("a download-surfaced cancel errors");
+
+        assert_eq!(err, CANCELLED, "the sentinel passes through, so the UI reads a cancel not a failure");
+        let undone = undone.into_inner();
+        assert_eq!(undone.len(), 1, "rollback ran once");
+        let (links, stores) = undone.into_iter().next().expect("one rollback");
+        assert_eq!(links, vec!["/link/o/dep".to_string()], "node 1's link is rolled back");
+        assert_eq!(stores, vec!["/store/o/dep".to_string()], "node 1's store is rolled back");
+    }
+
+    #[test]
+    fn place_plan_node_failure_wraps_the_error_rolls_back_and_records_nothing() {
+        // A genuine node failure (not a cancel): node 1 places, node 2's placer
+        // errors. The message names the failing node, this pass's links + stores are
+        // rolled back, and the failing node is never recorded — no half-install.
+        let plan = vec![node("o/dep", &[]), node("o/root", &["o/dep"])];
+        let mut ledger = HashMap::new();
+        let undone = std::cell::RefCell::new(Vec::<(Vec<String>, Vec<String>)>::new());
+
+        let err = place_plan(
+            &plan,
+            "o/root",
+            &mut ledger,
+            &crate::progress::no_progress(),
+            &Cancel::new(),
+            |id| {
+                if id == "o/root" {
+                    Err("boom".to_string())
+                } else {
+                    Ok((format!("/store/{id}"), vec![format!("/link/{id}")]))
+                }
+            },
+            |links, stores| undone.borrow_mut().push((links.to_vec(), stores.to_vec())),
+        )
+        .expect_err("a node failure errors");
+
+        assert_eq!(err, "installing o/root: boom", "the error names the failing node");
+        let undone = undone.into_inner();
+        assert_eq!(undone.len(), 1, "rollback ran once");
+        let (links, stores) = undone.into_iter().next().expect("one rollback");
+        assert_eq!(links, vec!["/link/o/dep".to_string()], "node 1's link is rolled back");
+        assert_eq!(stores, vec!["/store/o/dep".to_string()], "node 1's store is rolled back");
+        assert!(!ledger.contains_key("o/root"), "the failing node was never recorded");
+    }
+
+    #[test]
     fn an_old_ledger_entry_reads_back_as_explicit_with_no_deps() {
         // Back-compat: a pre-dependency-tracking entry has no `deps`/`explicit`.
         let json = r#"{"o/mod":{"store":"/s","links":["/l"]}}"#;

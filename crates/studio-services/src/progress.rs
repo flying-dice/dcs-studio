@@ -93,15 +93,15 @@ impl PublishProgress {
     }
 }
 
-/// The phase an install has reached for a given mod (issue #62 UI feedback):
-/// `Download` repeats per volume with `part`/`parts`/`bytes`; `Extract` and `Link`
-/// are per-mod steps; `Discover` fires once up front.
+/// The phase an install has reached for a given plan node (issue #62 UI feedback):
+/// `Download` (fetch + unpack the node's payload) then `Link` fire once each, per
+/// node, so the UI lights a two-step row per mod. Per-volume download byte detail
+/// and a split-out `Extract` phase are deferred to 2b, where the download-emit slice
+/// adds them.
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum InstallPhase {
-    Discover,
     Download,
-    Extract,
     Link,
 }
 
