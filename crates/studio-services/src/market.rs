@@ -495,7 +495,9 @@ fn fall_back_to_cache(error: &str) -> Result<Vec<MarketListing>, String> {
 mod library;
 mod payload;
 mod resolve;
-pub use library::{InstallOutcome, UninstallOutcome, install, installed_ids, uninstall};
+pub use library::{
+    InstallOutcome, UninstallOutcome, install, install_with_progress, installed_ids, uninstall,
+};
 
 #[cfg(test)]
 mod tests {

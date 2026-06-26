@@ -32,6 +32,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::github_http::{self, API_BASE};
+use crate::progress::Cancel;
 
 /// Budget on ACTUAL decompressed bytes (model: the decompression cap, default
 /// ~16 GiB). Measured on bytes written, not the archive's declared sizes, so a
@@ -343,7 +344,14 @@ impl Drop for DownloadScratch {
 /// seek-reader straight into the store; the legacy `.zip` takes the in-memory
 /// path. The scratch dir (and its volumes) is removed on the way out, success or
 /// failure.
-fn fetch_into_store(plan: &PayloadPlan, owner: &str, name: &str, token: &str, store: &Path) -> Result<u64, String> {
+fn fetch_into_store(
+    plan: &PayloadPlan,
+    owner: &str,
+    name: &str,
+    token: &str,
+    store: &Path,
+    cancel: &Cancel,
+) -> Result<u64, String> {
     let total = plan.total_bytes();
     if total > MAX_DOWNLOAD_BYTES {
         return Err(format!(
@@ -360,6 +368,7 @@ fn fetch_into_store(plan: &PayloadPlan, owner: &str, name: &str, token: &str, st
     ensure_free_space(market_dir, total)?;
 
     if !plan.seven_zip {
+        cancel.check()?;
         let url = plan.volumes.first().ok_or("legacy payload has no asset")?;
         // The legacy `.zip` is buffered whole in memory, so its download is capped at
         // a RAM-sane bound — NOT the (disk-bounded) decompression budget. This is the
@@ -375,6 +384,9 @@ fn fetch_into_store(plan: &PayloadPlan, owner: &str, name: &str, token: &str, st
     let scratch = DownloadScratch::new(market_dir, owner, name)?;
     let mut volume_paths = Vec::with_capacity(plan.volumes.len());
     for (index, asset) in (1u64..).zip(plan.volumes.iter()) {
+        // Observe cancel before each volume so a multi-GiB download aborts promptly
+        // (the scratch dir is dropped on the way out, removing the partial set).
+        cancel.check()?;
         let path = scratch.dir.join(format!("vol.{index:03}"));
         download_to_file(&asset.browser_download_url, token, &path, asset.size)?;
         volume_paths.push(path);
@@ -403,7 +415,13 @@ fn fetch_into_store(plan: &PayloadPlan, owner: &str, name: &str, token: &str, st
 /// the bytes written (the install-side entry point `place_one` calls). Volume sets
 /// are verified complete (count + sizes via the `.001` start header) and pre-empted
 /// for hostile counts BEFORE the bulk download.
-pub(super) fn download_into_store(owner: &str, name: &str, token: &str, store: &Path) -> Result<u64, String> {
+pub(super) fn download_into_store(
+    owner: &str,
+    name: &str,
+    token: &str,
+    store: &Path,
+    cancel: &Cancel,
+) -> Result<u64, String> {
     let assets = fetch_latest_assets(owner, name, token)?;
     let plan = classify_payload(name, &assets)?;
 
@@ -415,7 +433,7 @@ pub(super) fn download_into_store(owner: &str, name: &str, token: &str, store: &
         studio_archive::verify_volume_set(&sizes, archive_len)?;
     }
 
-    fetch_into_store(&plan, owner, name, token, store)
+    fetch_into_store(&plan, owner, name, token, store, cancel)
 }
 
 #[cfg(test)]
