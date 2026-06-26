@@ -45,8 +45,12 @@ class PublishStore {
   #settle: ((err: string | null) => void) | null = null;
 
   // One persistent `publish://progress` listener, attached on first release.
-  // Safe to share: the busy guard makes release single-flight, so two runs'
-  // events can never interleave on this channel.
+  // `busy` drops a settled run's late events. Release is single-flight, so the
+  // next run is user-initiated — the event loop drains this run's tail before a
+  // click can start the next. A sub-ms Tauri event/response reorder could still
+  // feed a *programmatic* back-to-back release a stale tail event; `PublishProgress`
+  // carries no run identity to filter on, so an airtight guard needs a per-run
+  // token on the wire payload (merged `studio_services::progress`) — #62 phase 3.
   #progressListening = false;
 
   async #ensureProgressListener(): Promise<void> {

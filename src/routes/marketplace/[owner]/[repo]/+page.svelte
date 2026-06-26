@@ -334,13 +334,17 @@
                   <Download class="size-3.5" /> Install
                 {/if}
               </Button>
-              {#if marketplace.installBusy && marketplace.installProgress}
+              {#if marketplace.installingId === product.repo}
                 {@const p = marketplace.installProgress}
                 <div class="mt-2 rounded-lg border border-border bg-card p-2.5" data-testid="product-install-progress">
                   <div class="flex items-center justify-between gap-2">
                     <span class="flex items-center gap-1.5 text-[12px]">
                       <LoaderCircle class="size-3 animate-spin" />
-                      {INSTALL_PHASE_LABEL[p.phase]} <span class="font-mono">{p.id}</span>
+                      {#if p}
+                        {INSTALL_PHASE_LABEL[p.phase]} <span class="font-mono">{p.id}</span>
+                      {:else}
+                        Resolving…
+                      {/if}
                     </span>
                     <button
                       class="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
@@ -351,9 +355,15 @@
                     </button>
                   </div>
                   <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-muted">
-                    <div class="h-full rounded-full bg-primary transition-[width]" style="width: {nodePercent(p)}%"></div>
+                    {#if p}
+                      <div class="h-full rounded-full bg-primary transition-[width]" style="width: {nodePercent(p)}%"></div>
+                    {:else}
+                      <div class="h-full w-1/3 animate-pulse rounded-full bg-primary/60"></div>
+                    {/if}
                   </div>
-                  <p class="mt-1 text-[10px] text-muted-foreground">Installing {p.node} of {p.nodes}</p>
+                  <p class="mt-1 text-[10px] text-muted-foreground">
+                    {#if p}Installing {p.node} of {p.nodes}{:else}Resolving dependencies…{/if}
+                  </p>
                 </div>
               {/if}
               <p class="mt-1.5 text-[11px] text-muted-foreground">

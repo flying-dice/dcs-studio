@@ -48,14 +48,25 @@ class MarketplaceStore {
   installWarnings = $state<string[]>([]);
   /** Live per-node install progress, or null when no install is running. */
   installProgress = $state<InstallProgress | null>(null);
+  /** The `owner/name` whose install is in flight, or null. Set at install entry
+   * — before the first plan-node event — so the product page surfaces the
+   * progress card (and its Cancel) from the very start, through the backend
+   * resolve / pre-flight window, not only once node 1 emits. Scopes the card to
+   * the mod actually installing; uninstall never sets it. */
+  installingId = $state<string | null>(null);
 
   // Monotonic token so a slow product load can't clobber a newer one (rapid
   // A→B→A navigation): only the latest call writes its result.
   #productGen = 0;
 
   // One persistent `install://progress` listener, attached on first install.
-  // Safe to share across installs: the backend's single-flight install guard
-  // means two installs' events can never interleave on this channel.
+  // `installBusy` drops a settled run's late events. Install is single-flight
+  // (the busy mutex), so the next run is user-initiated — the event loop has
+  // drained this run's tail before a click can start the next. A sub-ms Tauri
+  // event/response reorder could still feed a *programmatic* back-to-back run a
+  // stale tail event; closing that needs a per-run token on the wire payload
+  // (merged `studio_services::progress`) — #62 phase 3. NB `InstallProgress.id`
+  // is per-node (the mod being placed), not a run key, so it can't gate runs.
   #installListening = false;
 
   async #ensureInstallListener(): Promise<void> {
@@ -130,6 +141,7 @@ class MarketplaceStore {
   async install(owner: string, name: string): Promise<void> {
     if (this.installBusy) return;
     this.installBusy = true;
+    this.installingId = `${owner}/${name}`;
     this.installError = null;
     this.installNotice = null;
     this.installWarnings = [];
@@ -158,6 +170,7 @@ class MarketplaceStore {
       }
     } finally {
       this.installBusy = false;
+      this.installingId = null;
       this.installProgress = null;
     }
   }
@@ -206,6 +219,7 @@ class MarketplaceStore {
     this.installNotice = null;
     this.installWarnings = [];
     this.installProgress = null;
+    this.installingId = null;
     this.#productGen += 1; // abandon any in-flight product load
   }
 }
