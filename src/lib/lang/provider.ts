@@ -58,11 +58,20 @@ export interface FoldingRange {
   end: number;
 }
 
-/** One completion suggestion. */
+/**
+ * One completion suggestion at a cursor offset (model/studio/lang.pds
+ * `CompletionItem`). `kind` is `"function" | "field" | "variable"`;
+ * `insertTextFormat` is `"snippet" | "plaintext"`. For a snippet, `insertText`
+ * carries `${1:param}` placeholders; otherwise it is the bare `label`.
+ * `documentation` is the declaration's `---` doc run — the same source hover reads.
+ */
 export interface CompletionItem {
   label: string;
   kind: string;
   detail: string;
+  documentation: string;
+  insertText: string;
+  insertTextFormat: string;
 }
 
 /** Markdown hover card. */

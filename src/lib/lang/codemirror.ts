@@ -3,6 +3,7 @@
 // CodeMirror's lint and hover sources accept promises, and the synchronous
 // fold service reads ranges cached during each lint pass.
 
+import { autocompletion } from "@codemirror/autocomplete";
 import { foldService } from "@codemirror/language";
 import {
   linter,
@@ -19,6 +20,7 @@ import {
   type DecorationSet,
 } from "@codemirror/view";
 import { lang } from "./intel.svelte";
+import { luaCompletionSource, memberCompletionTrigger } from "./completion";
 import { renderMarkdown } from "./markdown";
 import { openLinksExternally } from "../external";
 import { providerFor } from "./registry";
@@ -211,6 +213,13 @@ export function langIntelFor(path: string | null): Extension {
     };
   });
 
+  // Autocomplete: the provider's completion query as a CodeMirror source plus
+  // the `.` member trigger. `override` makes this the sole source, so the
+  // candidate set is exactly the engine's — no default word-scraping noise.
+  const completion = autocompletion({
+    override: [luaCompletionSource(provider, path)],
+  });
+
   // Registers the live view for symbol navigation and publishes the caret
   // (debounced) so the Structure panel highlights the enclosing symbol.
   const cursorTracker = ViewPlugin.define((view) => {
@@ -233,7 +242,15 @@ export function langIntelFor(path: string | null): Extension {
     };
   });
 
-  return [lintSource, folding, hover, cursorTracker, inlayHintField];
+  return [
+    lintSource,
+    folding,
+    hover,
+    completion,
+    memberCompletionTrigger,
+    cursorTracker,
+    inlayHintField,
+  ];
 }
 
 function toCmDiagnostic(d: Diagnostic, docLength: number): CmDiagnostic {

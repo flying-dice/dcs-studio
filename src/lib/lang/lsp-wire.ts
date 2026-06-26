@@ -6,6 +6,7 @@
 import { lineStarts } from "./offsets";
 import { canonicalPath } from "../paths";
 import type {
+  CompletionItem,
   Diagnostic,
   DocumentSymbol,
   Hover,
@@ -169,6 +170,52 @@ export function convertHover(wire: LspWireHover | null): Hover | null {
   if (!wire) return null;
   const markdown = hoverMarkdown(wire.contents).trim();
   return markdown === "" ? null : { title: "", body: markdown };
+}
+
+/** One `textDocument/completion` item. `kind` is the numeric LSP
+ * `CompletionItemKind`; `insertTextFormat` is `2` for a snippet, `1`/absent for
+ * plain text; `documentation` is a markdown string or a `MarkupContent`. */
+export interface LspWireCompletionItem {
+  label: string;
+  kind?: number;
+  detail?: string;
+  documentation?: string | { kind?: string; value: string };
+  insertText?: string;
+  insertTextFormat?: number;
+}
+
+/** LSP `CompletionItemKind` → our kind string. The engine emits only Function,
+ * Field, and Variable; any other kind a hosted server returns maps to variable
+ * (the catch-all, mirroring `convertSymbol`'s SymbolKind handling). */
+function completionKind(kind: number | undefined): string {
+  // CompletionItemKind: Function = 3, Field = 5, Variable = 6.
+  if (kind === 3) return "function";
+  if (kind === 5) return "field";
+  return "variable";
+}
+
+/** Flatten LSP `documentation` (a bare string or a `MarkupContent`) to one
+ * markdown string — empty when the item carries no doc run. */
+function completionDoc(doc: LspWireCompletionItem["documentation"]): string {
+  if (!doc) return "";
+  return typeof doc === "string" ? doc : doc.value;
+}
+
+/** Wire completion item → our DTO. `insertText` falls back to the label and the
+ * format to plaintext, so an item is always insertable even from a server that
+ * omits them. */
+export function convertCompletionItem(
+  wire: LspWireCompletionItem,
+): CompletionItem {
+  return {
+    label: wire.label,
+    kind: completionKind(wire.kind),
+    detail: wire.detail ?? "",
+    documentation: completionDoc(wire.documentation),
+    insertText: wire.insertText ?? wire.label,
+    // InsertTextFormat: Snippet = 2, PlainText = 1.
+    insertTextFormat: wire.insertTextFormat === 2 ? "snippet" : "plaintext",
+  };
 }
 
 /** A `textDocument/definition` / `references` result element. */
