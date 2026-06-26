@@ -4,12 +4,17 @@
 // backend-side — a still-fresh cache returns without a network call, and Refresh
 // forces a live search. Mirrors packages.svelte.ts.
 
+import { isTauri } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
+  CANCELLED,
   marketDiscover,
   marketProduct,
-  marketInstall,
+  marketInstallWithProgress,
+  marketInstallCancel,
   marketUninstall,
   marketInstalled,
+  type InstallProgress,
   type MarketListing,
   type ProductDetail,
 } from "./api";
@@ -41,10 +46,32 @@ class MarketplaceStore {
   installNotice = $state<string | null>(null);
   /** Non-fatal install warnings (version mismatches, skipped optional deps). */
   installWarnings = $state<string[]>([]);
+  /** Live per-node install progress, or null when no install is running. */
+  installProgress = $state<InstallProgress | null>(null);
 
   // Monotonic token so a slow product load can't clobber a newer one (rapid
   // A→B→A navigation): only the latest call writes its result.
   #productGen = 0;
+
+  // One persistent `install://progress` listener, attached on first install.
+  // Safe to share across installs: the backend's single-flight install guard
+  // means two installs' events can never interleave on this channel.
+  #installListening = false;
+
+  async #ensureInstallListener(): Promise<void> {
+    if (this.#installListening || !isTauri()) return;
+    let unlisten: UnlistenFn;
+    try {
+      unlisten = await listen<InstallProgress>("install://progress", (e) => {
+        // A late event from a settled run must not resurrect the bar.
+        if (this.installBusy) this.installProgress = e.payload;
+      });
+    } catch {
+      return; // stay unlistened so the next install retries the attach
+    }
+    void unlisten; // persistent for the app's lifetime (single-flight channel)
+    this.#installListening = true;
+  }
 
   /** Discover mods. `force` (the Refresh button) bypasses the backend's
    * fresh-cache shortcut and does a live search. */
@@ -106,8 +133,10 @@ class MarketplaceStore {
     this.installError = null;
     this.installNotice = null;
     this.installWarnings = [];
+    this.installProgress = null;
     try {
-      const outcome = await marketInstall(owner, name);
+      await this.#ensureInstallListener();
+      const outcome = await marketInstallWithProgress(owner, name);
       this.installWarnings = outcome.warnings;
       this.installNotice =
         outcome.installed_deps.length > 0
@@ -120,10 +149,23 @@ class MarketplaceStore {
       // #61) so it isn't missed; info severity, so it never toasts.
       notifications.add(marketplaceInstalledNotification(`${owner}/${name}`));
     } catch (error) {
-      this.installError = errorMessage(error);
+      // A user cancel rolled back to nothing — a benign notice, not an error
+      // (no failure notification, mirroring the publish-escalation cancel).
+      if (errorMessage(error) === CANCELLED) {
+        this.installNotice = "Install cancelled — nothing was installed.";
+      } else {
+        this.installError = errorMessage(error);
+      }
     } finally {
       this.installBusy = false;
+      this.installProgress = null;
     }
+  }
+
+  /** Cancel an in-progress install: roll back this pass server-side (records
+   * nothing). Wired to the product page's Cancel while installing. */
+  cancelInstall(): void {
+    void marketInstallCancel().catch(() => {});
   }
 
   /** Uninstall a mod by id (`owner/name`), then refresh. Surfaces any
@@ -163,6 +205,7 @@ class MarketplaceStore {
     this.installError = null;
     this.installNotice = null;
     this.installWarnings = [];
+    this.installProgress = null;
     this.#productGen += 1; // abandon any in-flight product load
   }
 }

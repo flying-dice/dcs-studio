@@ -4,15 +4,19 @@
 // (githubAuthorizePublish), whose result arrives on the shared
 // `github://authorized` event, then proceed. Mirrors packages.svelte.ts's run().
 
+import { isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
+  CANCELLED,
   publishCan,
   publishShare,
-  publishRelease,
+  publishReleaseWithProgress,
+  publishReleaseCancel,
   githubAuthorizePublish,
   githubLoginCancel,
   type GithubDeviceCode,
   type GithubSession,
+  type PublishProgress,
   type RepoInfo,
   type ReleaseInfo,
 } from "./api";
@@ -33,10 +37,32 @@ class PublishStore {
   repo = $state<RepoInfo | null>(null);
   /** The published release after a successful release. */
   release = $state<ReleaseInfo | null>(null);
+  /** Live release-upload progress, or null when no release is running. */
+  progress = $state<PublishProgress | null>(null);
 
   #unlisteners: UnlistenFn[] = [];
   // Settles the in-flight escalation wait (set synchronously when armed).
   #settle: ((err: string | null) => void) | null = null;
+
+  // One persistent `publish://progress` listener, attached on first release.
+  // Safe to share: the busy guard makes release single-flight, so two runs'
+  // events can never interleave on this channel.
+  #progressListening = false;
+
+  async #ensureProgressListener(): Promise<void> {
+    if (this.#progressListening || !isTauri()) return;
+    let unlisten: UnlistenFn;
+    try {
+      unlisten = await listen<PublishProgress>("publish://progress", (e) => {
+        // A late event from a settled run must not resurrect the bar.
+        if (this.busy) this.progress = e.payload;
+      });
+    } catch {
+      return; // stay unlistened so the next release retries the attach
+    }
+    void unlisten; // persistent for the app's lifetime (single-flight channel)
+    this.#progressListening = true;
+  }
 
   /** Ensure a publish-scoped token, escalating via the device flow if needed.
    * Listeners are armed and torn down in one try/finally (no leak on a failed
@@ -112,14 +138,33 @@ class PublishStore {
     });
   }
 
-  /** Publish a release `tag` for the shared project at `root`. */
+  /** Publish a release `tag` for the shared project at `root`, with live step
+   * progress and cancellation. A user cancel rolls the draft back to nothing —
+   * a benign outcome, surfaced as a notice, not a publish failure. */
   async publishReleaseTag(root: string, tag: string): Promise<void> {
     if (!tag.trim()) return;
     this.release = null;
+    this.progress = null;
     await this.#run(async () => {
-      this.release = await publishRelease(root, tag.trim());
-      notifications.add(publishReleasedNotification(this.release.tag));
+      await this.#ensureProgressListener();
+      try {
+        this.release = await publishReleaseWithProgress(root, tag.trim());
+        notifications.add(publishReleasedNotification(this.release.tag));
+      } catch (error) {
+        // Re-throw genuine failures to #run (error line + notification); a user
+        // cancel is benign — swallow it and surface a notice instead.
+        if (errorMessage(error) !== CANCELLED) throw error;
+        this.error = "Release cancelled — nothing was published.";
+      } finally {
+        this.progress = null;
+      }
     });
+  }
+
+  /** Cancel an in-progress release: abort the upload and delete the draft. Wired
+   * to the publish panel's Cancel while a release is uploading. */
+  cancelRelease(): void {
+    void publishReleaseCancel().catch(() => {});
   }
 
   /** Drop publish state (and abandon any escalation) — called on sign-out. */
@@ -129,6 +174,7 @@ class PublishStore {
     this.device = null;
     this.repo = null;
     this.release = null;
+    this.progress = null;
   }
 }
 

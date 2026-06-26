@@ -2,6 +2,7 @@
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod build;
+mod cancel;
 mod cargolua;
 mod database_cmd;
 mod dcs;
@@ -105,6 +106,11 @@ pub fn run() {
         // (issue #11): lets the sign-in modal's Cancel/reopen actually stop the
         // fire-and-forget loop so it never persists or emits after cancel.
         .manage(std::sync::Arc::new(github::LoginGen::default()))
+        // Single-flight cancel slots for the long-running publish/install
+        // commands (issue #62 phase 2b): each panel's Cancel flips the armed
+        // token so the run aborts and rolls back to nothing.
+        .manage(publish::PublishCancel::default())
+        .manage(market::InstallCancel::default())
         .manage(startup_args)
         .setup(|app| {
             dcs::start(app.handle().clone());
@@ -184,11 +190,15 @@ pub fn run() {
             market::market_discover,
             market::market_product,
             market::market_install,
+            market::market_install_with_progress,
+            market::market_install_cancel,
             market::market_uninstall,
             market::market_installed,
             publish::publish_can,
             publish::publish_share,
             publish::publish_release,
+            publish::publish_release_with_progress,
+            publish::publish_release_cancel,
             lsp::lua_analyzer_path,
             lsp::lsp_get_or_start,
             lsp::lsp_mark_initialized,

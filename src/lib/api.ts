@@ -3,6 +3,11 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { wsCall } from "./dcs-ws";
 
+/** The error a user-cancelled long-running command returns (backend
+ * `progress::CANCELLED`, issue #62): the run rolled back to nothing, so callers
+ * treat it as a benign outcome, not a failure. */
+export const CANCELLED = "cancelled";
+
 export interface DirEntry {
   name: string;
   path: string;
@@ -606,6 +611,33 @@ export function marketInstall(owner: string, name: string): Promise<InstallOutco
   return invoke<InstallOutcome>("market_install", { owner, name });
 }
 
+/** The phase an install reached for a plan node (model `InstallPhase`, kebab on
+ * the wire): `download` (fetch + unpack the node's payload) then `link`. */
+export type InstallPhase = "download" | "link";
+
+/** One `install://progress` event (model `InstallProgress`): the `owner/name`
+ * being placed and the 1-based plan-node index/count, so the UI shows
+ * "installing k of N". */
+export interface InstallProgress {
+  id: string;
+  phase: InstallPhase;
+  node: number;
+  nodes: number;
+}
+
+/** Install a mod with per-node progress + cancellation (issue #62): emits
+ * {@link InstallProgress} on `install://progress` and aborts on
+ * {@link marketInstallCancel}, rolling back to nothing. */
+export function marketInstallWithProgress(owner: string, name: string): Promise<InstallOutcome> {
+  return invoke<InstallOutcome>("market_install_with_progress", { owner, name });
+}
+
+/** Cancel an in-progress install: roll back this pass, record nothing. A no-op
+ * when no install is running. */
+export function marketInstallCancel(): Promise<void> {
+  return invoke<void>("market_install_cancel");
+}
+
 /** What an uninstall pass removed (model `UninstallOutcome`): the target plus
  * any dependencies garbage-collected with it. */
 export interface UninstallOutcome {
@@ -656,6 +688,35 @@ export function publishShare(root: string, asLibrary: boolean): Promise<RepoInfo
  * so the Marketplace product page shows the install plan). */
 export function publishRelease(root: string, tag: string): Promise<ReleaseInfo> {
   return invoke<ReleaseInfo>("publish_release", { root, tag });
+}
+
+/** The pipeline step a publish reached (model `PublishStep`, kebab on the wire).
+ * `split` only fires for a multi-volume payload; `upload` repeats per asset. */
+export type PublishStep = "package" | "split" | "draft" | "upload" | "publish";
+
+/** One `publish://progress` event (model `PublishProgress`). On an `upload`
+ * step, `detail` names the current asset, `part`/`parts` are its 1-based index
+ * and count, and `bytes`/`total_bytes` drive a byte bar. */
+export interface PublishProgress {
+  step: PublishStep;
+  detail?: string;
+  part?: number;
+  parts?: number;
+  bytes?: number;
+  total_bytes?: number;
+}
+
+/** Publish a release with step-by-step progress + cancellation (issue #62):
+ * emits {@link PublishProgress} on `publish://progress` and aborts on
+ * {@link publishReleaseCancel}, rolling the draft back to nothing. */
+export function publishReleaseWithProgress(root: string, tag: string): Promise<ReleaseInfo> {
+  return invoke<ReleaseInfo>("publish_release_with_progress", { root, tag });
+}
+
+/** Cancel an in-progress release: abort the upload and delete the draft. A no-op
+ * when no release is running. */
+export function publishReleaseCancel(): Promise<void> {
+  return invoke<void>("publish_release_cancel");
 }
 
 /** A detected `<install>\Scripts\MissionScripting.lua` candidate. */

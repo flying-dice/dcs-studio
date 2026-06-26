@@ -9,7 +9,7 @@
   import { cargolua } from "$lib/cargolua.svelte";
   import { app } from "$lib/state.svelte";
   import { renderMarkdown } from "$lib/lang/markdown";
-  import { readTextFile, writeTextFile } from "$lib/api";
+  import { readTextFile, writeTextFile, type InstallProgress } from "$lib/api";
   import { errorMessage } from "$lib/utils";
   import GithubAuth from "$lib/components/GithubAuth.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -34,11 +34,24 @@
     Plus,
     Boxes,
     TriangleAlert,
+    X,
   } from "@lucide/svelte";
 
   const owner = $derived($page.params.owner ?? "");
   const repo = $derived($page.params.repo ?? "");
   const product = $derived(marketplace.product);
+
+  // The per-node phase shown while an install runs (issue #62).
+  const INSTALL_PHASE_LABEL: Record<InstallProgress["phase"], string> = {
+    download: "Downloading",
+    link: "Linking",
+  };
+
+  /** Plan-node completion 0–100 (the current node of the total). */
+  function nodePercent(p: InstallProgress): number {
+    if (p.nodes === 0) return 0;
+    return Math.min(100, Math.round((p.node / p.nodes) * 100));
+  }
 
   // Load (or reload) when the route params change and the user is signed in,
   // and refresh which mods are installed (drives the Install/Installed button).
@@ -321,6 +334,28 @@
                   <Download class="size-3.5" /> Install
                 {/if}
               </Button>
+              {#if marketplace.installBusy && marketplace.installProgress}
+                {@const p = marketplace.installProgress}
+                <div class="mt-2 rounded-lg border border-border bg-card p-2.5" data-testid="product-install-progress">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="flex items-center gap-1.5 text-[12px]">
+                      <LoaderCircle class="size-3 animate-spin" />
+                      {INSTALL_PHASE_LABEL[p.phase]} <span class="font-mono">{p.id}</span>
+                    </span>
+                    <button
+                      class="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                      onclick={() => marketplace.cancelInstall()}
+                      data-testid="product-install-cancel"
+                    >
+                      <X class="size-3" /> Cancel
+                    </button>
+                  </div>
+                  <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-muted">
+                    <div class="h-full rounded-full bg-primary transition-[width]" style="width: {nodePercent(p)}%"></div>
+                  </div>
+                  <p class="mt-1 text-[10px] text-muted-foreground">Installing {p.node} of {p.nodes}</p>
+                </div>
+              {/if}
               <p class="mt-1.5 text-[11px] text-muted-foreground">
                 Links the files into your DCS folders (no copy); uninstall removes the links.
               </p>
