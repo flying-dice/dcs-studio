@@ -13,6 +13,7 @@
 import { LspClient } from "./lsp-client";
 import { lineStarts } from "./offsets";
 import {
+  convertCompletionItem,
   convertDiagnostic,
   convertHover,
   convertLocation,
@@ -24,6 +25,7 @@ import {
   offsetToPosition,
   pathToUri,
   uriToPath,
+  type LspWireCompletionItem,
   type LspWireDiagnostic,
   type LspWireHover,
   type LspWireLocation,
@@ -340,9 +342,20 @@ export abstract class HostedLspProvider implements LanguageProvider {
     }));
   }
 
-  // Phase 2 parity comes later; neither server advertises completion yet.
-  async complete(_path: string, _offset: number): Promise<CompletionItem[]> {
-    return [];
+  async complete(path: string, offset: number): Promise<CompletionItem[]> {
+    if (!this.client || this.disabled) return [];
+    const text = this.texts.get(path) ?? "";
+    const response = (await this.client.request("textDocument/completion", {
+      textDocument: { uri: pathToUri(path) },
+      position: offsetToPosition(lineStarts(text), offset),
+    })) as
+      | LspWireCompletionItem[]
+      | { items: LspWireCompletionItem[] }
+      | null;
+    // LSP allows either a bare `CompletionItem[]` (lua-analyzer) or a
+    // `CompletionList { items }` (rust-analyzer) — normalise both.
+    const items = Array.isArray(response) ? response : (response?.items ?? []);
+    return items.map(convertCompletionItem);
   }
 
   async hover(path: string, offset: number): Promise<Hover | null> {
