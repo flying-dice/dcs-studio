@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::SIGN_IN_REQUIRED;
 use super::resolve::{self, ModFacts, ModSource, PlanNode};
+use crate::progress::{CANCELLED, Cancel, InstallPhase, InstallProgress};
 
 /// A what-was-installed record: the content store dir, the links placed, the
 /// `owner/name` ids this mod declared as dependencies, and whether the user
@@ -150,7 +151,21 @@ fn rollback(links: &[String]) {
 /// `Library.Install`): sign-in gated; resolve the `[[dependencies]]` graph, then
 /// place each node (download → unpack → link) deps-first, recording the ledger.
 pub fn install(owner: &str, name: &str) -> Result<InstallOutcome, String> {
-    install_with(crate::github::current_token().as_deref(), owner, name)
+    install_with_progress(owner, name, &crate::progress::no_progress(), &Cancel::new())
+}
+
+/// [`install`] with a progress sink + a cancel token (issue #62 phase 2): emit a
+/// per-node `Download`/`Link` phase as each mod is placed, and observe `cancel`
+/// before each node + (threaded into the download) between volumes, so an in-flight
+/// cancel aborts promptly and rolls THIS pass back to nothing. The bare [`install`]
+/// passes a no-op sink + a never-cancelled token, so the MCP/CLI are untouched.
+pub fn install_with_progress(
+    owner: &str,
+    name: &str,
+    on: &dyn Fn(InstallProgress),
+    cancel: &Cancel,
+) -> Result<InstallOutcome, String> {
+    install_with(crate::github::current_token().as_deref(), owner, name, on, cancel)
 }
 
 /// Refuse to install a library (a repo carrying `dcs-studio-library`) into DCS.
@@ -201,10 +216,17 @@ impl ModSource for GithubSource<'_> {
 }
 
 /// The testable core of [`install`]: the session token is injected.
-fn install_with(token: Option<&str>, owner: &str, name: &str) -> Result<InstallOutcome, String> {
+fn install_with(
+    token: Option<&str>,
+    owner: &str,
+    name: &str,
+    on: &dyn Fn(InstallProgress),
+    cancel: &Cancel,
+) -> Result<InstallOutcome, String> {
     let Some(token) = token else {
         return Err(SIGN_IN_REQUIRED.to_string());
     };
+    cancel.check()?;
     // Defence in depth (issue #48): a library is never installable into DCS, even
     // via a direct call that bypassed the product page's hidden Install button.
     // The topic is the authoritative source, re-fetched server-side here; the
@@ -217,23 +239,25 @@ fn install_with(token: Option<&str>, owner: &str, name: &str) -> Result<InstallO
     let plan = resolve::resolve(owner, name, &source)?;
 
     let roots = resolve_roots()?;
-    install_plan(owner, name, &plan, token, &roots)
+    install_plan(owner, name, &plan, token, &roots, on, cancel)
 }
 
 /// Download the payload, unpack it to the per-mod content store, and link its
-/// `[[install]]` rules — one plan node's placement. Returns the store dir + the
-/// links placed.
+/// `[[install]]` rules — one plan node's placement. `cancel` is observed between
+/// volumes inside the download, so a cancel aborts a long download promptly.
+/// Returns the store dir + the links placed.
 fn place_one(
     owner: &str,
     name: &str,
     token: &str,
     roots: &dcs_studio_project::RootMap,
+    cancel: &Cancel,
 ) -> Result<(String, Vec<String>), String> {
     let store = store_dir(owner, name);
     // Discover the release payload (single `.7z`, a `.7z.NNN` volume set, or the
     // legacy `.zip`), verify a volume set is complete, then download + re-stitch +
     // extract it into the content store (issue #62, model `FetchPayloadIntoStore`).
-    super::payload::download_into_store(owner, name, token, &store)?;
+    super::payload::download_into_store(owner, name, token, &store, cancel)?;
     let links = deploy_links(&store, roots)?;
     Ok((store.to_string_lossy().to_string(), links))
 }
@@ -267,17 +291,60 @@ fn install_plan(
     plan: &[PlanNode],
     token: &str,
     roots: &dcs_studio_project::RootMap,
+    on: &dyn Fn(InstallProgress),
+    cancel: &Cancel,
 ) -> Result<InstallOutcome, String> {
     let root_id = format!("{owner}/{name}");
     let mut ledger = read_ledger();
+    let outcome = place_plan(
+        plan,
+        &root_id,
+        &mut ledger,
+        on,
+        cancel,
+        |id| {
+            let (parts_owner, parts_name) =
+                id.split_once('/').ok_or_else(|| format!("invalid mod id in plan: {id}"))?;
+            place_one(parts_owner, parts_name, token, roots, cancel)
+        },
+        |links, stores| {
+            rollback(links);
+            for store in stores {
+                let _ = std::fs::remove_dir_all(store);
+            }
+        },
+    )?;
+    // Persist only on success — a failed or cancelled pass undoes its links + stores
+    // and leaves the ledger file untouched, so nothing half-installed is recorded.
+    write_ledger(&ledger);
+    Ok(outcome)
+}
+
+/// The placement loop (model `Library.InstallPlan`), with the per-node `place`
+/// (download → unpack → link) and the `undo` rollback INJECTED so the per-node
+/// progress, cancel, and rollback decisions are unit-tested without touching disk
+/// or network. Emits a `Download` then `Link` phase per placed node (`k of N`);
+/// observes `cancel` before each node; on a cancel or a node failure, rolls back
+/// every link + store placed in THIS pass and returns — leaving nothing behind.
+fn place_plan(
+    plan: &[PlanNode],
+    root_id: &str,
+    ledger: &mut HashMap<String, InstalledEntry>,
+    on: &dyn Fn(InstallProgress),
+    cancel: &Cancel,
+    mut place: impl FnMut(&str) -> Result<(String, Vec<String>), String>,
+    mut undo: impl FnMut(&[String], &[String]),
+) -> Result<InstallOutcome, String> {
+    let nodes = plan.iter().filter(|n| !n.already_installed).count() as u64;
     // Links + content stores placed in THIS pass, for rollback if a later node
-    // fails (the stores are freshly unpacked here, so dropping them on rollback
-    // truly leaves nothing behind — they aren't shared with a prior install).
+    // fails or a cancel arrives (the stores are freshly unpacked here, so dropping
+    // them truly leaves nothing — they aren't shared with a prior install).
     let mut placed_links: Vec<String> = Vec::new();
     let mut placed_stores: Vec<String> = Vec::new();
     let mut total_links = 0usize;
     let mut installed_deps: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
+    let mut node_index = 0u64;
 
     for node in plan {
         warnings.extend(node.warnings.iter().cloned());
@@ -290,45 +357,38 @@ fn install_plan(
             continue;
         }
 
-        let (parts_owner, parts_name) = node
-            .id
-            .split_once('/')
-            .ok_or_else(|| format!("invalid mod id in plan: {}", node.id))?;
-        match place_one(parts_owner, parts_name, token, roots) {
+        // A cancel that arrives before a node starts rolls this pass back.
+        if cancel.is_cancelled() {
+            undo(&placed_links, &placed_stores);
+            return Err(CANCELLED.to_string());
+        }
+        node_index += 1;
+        on(InstallProgress::phase(&node.id, InstallPhase::Download, node_index, nodes));
+
+        match place(&node.id) {
             Ok((store, links)) => {
+                on(InstallProgress::phase(&node.id, InstallPhase::Link, node_index, nodes));
                 placed_links.extend(links.iter().cloned());
                 placed_stores.push(store.clone());
                 total_links += links.len();
                 ledger.insert(
                     node.id.clone(),
-                    InstalledEntry {
-                        store,
-                        links,
-                        deps: node.deps.clone(),
-                        explicit: is_root,
-                    },
+                    InstalledEntry { store, links, deps: node.deps.clone(), explicit: is_root },
                 );
                 if !is_root {
                     installed_deps.push(node.id.clone());
                 }
             }
             Err(e) => {
-                rollback(&placed_links);
-                for store in &placed_stores {
-                    let _ = std::fs::remove_dir_all(store);
-                }
-                return Err(format!("installing {}: {e}", node.id));
+                undo(&placed_links, &placed_stores);
+                // A cancel surfacing from inside the download stays `CANCELLED`;
+                // a genuine failure names the node.
+                return Err(if e == CANCELLED { e } else { format!("installing {}: {e}", node.id) });
             }
         }
     }
 
-    write_ledger(&ledger);
-    Ok(InstallOutcome {
-        root: root_id,
-        installed_deps,
-        links: total_links,
-        warnings,
-    })
+    Ok(InstallOutcome { root: root_id.to_string(), installed_deps, links: total_links, warnings })
 }
 
 /// The ids of installed mods that declare `id` among their dependencies — the
@@ -472,7 +532,89 @@ mod tests {
     fn install_refuses_without_a_token() {
         // The install core takes the session token, so the sign-in gate is
         // exercised without touching the global keyring (model `Library.Install`).
-        assert_eq!(install_with(None, "octocat", "cool-mod").unwrap_err(), SIGN_IN_REQUIRED);
+        let err = install_with(None, "octocat", "cool-mod", &crate::progress::no_progress(), &Cancel::new())
+            .unwrap_err();
+        assert_eq!(err, SIGN_IN_REQUIRED);
+    }
+
+    /// A to-place plan node fixture (not already installed).
+    fn node(id: &str, deps: &[&str]) -> PlanNode {
+        PlanNode {
+            id: id.to_string(),
+            deps: deps.iter().map(|d| (*d).to_string()).collect(),
+            already_installed: false,
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn place_plan_emits_per_node_download_then_link_progress() {
+        // Two nodes to place (a dep then the root). Each emits Download → Link with
+        // its 1-based node index of the count.
+        let plan = vec![node("o/dep", &[]), node("o/root", &["o/dep"])];
+        let mut ledger = HashMap::new();
+        let events = std::cell::RefCell::new(Vec::new());
+
+        let outcome = place_plan(
+            &plan,
+            "o/root",
+            &mut ledger,
+            &|p| events.borrow_mut().push(p),
+            &Cancel::new(),
+            // Fake placer: each node "places" one link into a fake store.
+            |id| Ok((format!("/store/{id}"), vec![format!("/link/{id}")])),
+            |_, _| {}, // a clean install never rolls back (asserted via the outcome)
+        )
+        .expect("clean install");
+
+        assert_eq!(outcome.links, 2);
+        assert_eq!(outcome.installed_deps, vec!["o/dep".to_string()], "the dep was pulled in");
+        let seq: Vec<(String, InstallPhase, u64, u64)> =
+            events.into_inner().into_iter().map(|e| (e.id, e.phase, e.node, e.nodes)).collect();
+        assert_eq!(
+            seq,
+            vec![
+                ("o/dep".to_string(), InstallPhase::Download, 1, 2),
+                ("o/dep".to_string(), InstallPhase::Link, 1, 2),
+                ("o/root".to_string(), InstallPhase::Download, 2, 2),
+                ("o/root".to_string(), InstallPhase::Link, 2, 2),
+            ]
+        );
+        assert!(ledger.contains_key("o/dep") && ledger.contains_key("o/root"));
+    }
+
+    #[test]
+    fn place_plan_cancelled_mid_pass_rolls_back_what_it_placed() {
+        // Node 1 places, then a cancel arrives (the placer flips the token, as a
+        // real download would observe it); node 2 is never placed and node 1's
+        // link + store are rolled back. Nothing is recorded.
+        let plan = vec![node("o/dep", &[]), node("o/root", &["o/dep"])];
+        let mut ledger = HashMap::new();
+        let cancel = Cancel::new();
+        let undone = std::cell::RefCell::new(Vec::<(Vec<String>, Vec<String>)>::new());
+
+        let err = place_plan(
+            &plan,
+            "o/root",
+            &mut ledger,
+            &crate::progress::no_progress(),
+            &cancel,
+            |id| {
+                // The first node places; cancel then arrives before the second.
+                cancel.cancel();
+                Ok((format!("/store/{id}"), vec![format!("/link/{id}")]))
+            },
+            |links, stores| undone.borrow_mut().push((links.to_vec(), stores.to_vec())),
+        )
+        .expect_err("a cancelled pass errors");
+
+        assert_eq!(err, CANCELLED);
+        let undone = undone.into_inner();
+        assert_eq!(undone.len(), 1, "rollback ran once");
+        let (links, stores) = undone.into_iter().next().expect("one rollback");
+        assert_eq!(links, vec!["/link/o/dep".to_string()], "node 1's link is rolled back");
+        assert_eq!(stores, vec!["/store/o/dep".to_string()], "node 1's store is rolled back");
+        assert!(!ledger.contains_key("o/root"), "the un-placed node was never recorded");
     }
 
     #[test]

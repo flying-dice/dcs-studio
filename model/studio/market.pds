@@ -510,3 +510,15 @@ feature HostileCountsArePreempted for studio::market::Library {
   when "install resolves the payload"
   then "it is refused up front, before any volume is downloaded"
 }
+
+/// Cancelling an in-flight install rolls THIS pass back to nothing (issue #62
+/// phase 2). The cancel signal is observed before each plan node and between volume
+/// downloads, so a multi-GiB install aborts promptly; the rollback removes every
+/// link placed and content store unpacked this pass, and the ledger — written only
+/// on success — records nothing.
+feature CancellingAnInstallLeavesNothing for studio::market::Library {
+  given "a user installing a mod, with its dependency graph placing node by node"
+  when "the user cancels mid-install"
+  then "the download aborts promptly and every link placed + content store unpacked this pass is rolled back"
+  and "the ledger records nothing, so no half-installed mod is left behind"
+}

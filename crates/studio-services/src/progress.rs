@@ -93,6 +93,37 @@ impl PublishProgress {
     }
 }
 
+/// The phase an install has reached for a given mod (issue #62 UI feedback):
+/// `Download` repeats per volume with `part`/`parts`/`bytes`; `Extract` and `Link`
+/// are per-mod steps; `Discover` fires once up front.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum InstallPhase {
+    Discover,
+    Download,
+    Extract,
+    Link,
+}
+
+/// One install progress event. `id` is the `owner/name` being placed; `node`/`nodes`
+/// are the 1-based plan-node index and count, so the UI shows "installing k of N".
+/// (Per-volume download byte detail is layered on in the download-emit slice.)
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct InstallProgress {
+    pub id: String,
+    pub phase: InstallPhase,
+    pub node: u64,
+    pub nodes: u64,
+}
+
+impl InstallProgress {
+    /// A per-mod phase event for plan node `node` of `nodes`.
+    #[must_use]
+    pub fn phase(id: &str, phase: InstallPhase, node: u64, nodes: u64) -> Self {
+        Self { id: id.to_string(), phase, node, nodes }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +159,12 @@ mod tests {
         assert!(json.contains(r#""step":"upload""#));
         assert!(json.contains(r#""part":1"#) && json.contains(r#""parts":3"#));
         assert!(json.contains(r#""total_bytes":3000"#));
+    }
+
+    #[test]
+    fn install_progress_serializes_id_kebab_phase_and_node_count() {
+        let ev = InstallProgress::phase("octocat/cool-mod", InstallPhase::Download, 2, 3);
+        let json = serde_json::to_string(&ev).unwrap();
+        assert_eq!(json, r#"{"id":"octocat/cool-mod","phase":"download","node":2,"nodes":3}"#);
     }
 }
