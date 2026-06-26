@@ -50,12 +50,10 @@ base64 = "0.22"
 # (issue #10/#12); same crate the signed-package writer uses. Kept for the
 # legacy single-`.zip` payload read path on the install side.
 zip = "2"
-# Package a large release payload as a 7-Zip multi-volume archive on publish and
-# re-stitch it on install (issue #62) — pure-Rust read+write 7z. `compress` is the
-# writer surface (publish); `util` brings the streaming decompress helpers and the
-# `ArchiveReader` install side reads through a chained seek-reader over the volumes.
-# Pinned to 0.20.x: 0.21 raised the MSRV to 1.93, above CI's rust:1.92.
-sevenz-rust2 = { version = "0.20", default-features = false, features = ["compress", "util"] }
+# The 7-Zip multi-volume payload facade (issue #62): packaging + split on publish,
+# completeness check + chained-reader reassembly + capped extraction on install.
+# The ONE crate that depends on `sevenz-rust2`; studio-services drives it.
+studio-archive = { path = "../studio-archive" }
 # Free-space pre-flight before an install download (issue #62): refuse up front
 # when the disk can't hold the payload + extracted tree. Tiny, cross-platform.
 fs2 = "0.4"

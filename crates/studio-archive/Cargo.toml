@@ -1,0 +1,39 @@
+# studio-archive — the 7-Zip multi-volume payload facade (issue #62). The ONE
+# crate that depends on `sevenz-rust2`: the publish side packages + byte-splits a
+# `.7z` into GitHub-safe volumes; the install side verifies a volume set from the
+# `.001` start header, reassembles the volumes through a chained seek-reader, and
+# extracts them under the untrusted-payload guards. Lean by design — no GitHub, no
+# manifest, no store/ledger policy; only the archive mechanism. Edition 2021 to
+# match the service crates; the engine crates' pedantic lints are deliberately NOT
+# taken — just the workspace safety set below.
+[package]
+name = "studio-archive"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "studio_archive"
+path = "src/lib.rs"
+
+[lints.clippy]
+# Safety / no-shortcuts (production): `unwrap`/`expect`/panic → a propagated
+# `Result`, a safe fallback, or a guarded precondition. Pedantic intentionally
+# NOT taken; test `unwrap`/`expect`/`dbg` exempt via clippy.toml.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+indexing_slicing = "warn"
+clone_on_copy = "warn"
+needless_borrow = "warn"
+needless_lifetimes = "warn"
+
+[dependencies]
+# Pure-Rust read+write 7z. `compress` is the writer (publish); the reader
+# (`ArchiveReader`) is always available and decodes via lzma-rust2's decoder.
+# Pinned to 0.20.x: 0.21 raised the MSRV to 1.93, above CI's rust:1.92.
+sevenz-rust2 = { version = "0.20", default-features = false, features = ["compress"] }

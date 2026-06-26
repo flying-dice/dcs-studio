@@ -11,14 +11,12 @@
 //! ureq + git are blocking — callers run this off the UI thread.
 
 use std::fs::File;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::Deserialize;
-use sevenz_rust2::{ArchiveEntry, ArchiveWriter};
 
 use crate::github_http::{self, API_BASE};
 use dcs_studio_project::{DISCOVERY_TOPIC, LIBRARY_TOPIC, MANIFEST_FILE, Manifest};
@@ -732,7 +730,7 @@ fn package_release(
         Ok(if archive_len <= sized.bytes {
             vec![archive] // small payload stays a single `.7z`
         } else {
-            split_into_volumes(&archive, sized.bytes)?
+            studio_archive::split_into_volumes(&archive, sized.bytes)?
         })
     })();
     match built {
@@ -776,10 +774,12 @@ fn package_payload_7z(out_dir: &Path, root: &Path, repo_name: &str, tag: &str, m
     }
 }
 
-/// Write the manifest + every `[[install]]` source into the `.7z` at `archive`.
+/// Write the manifest + every `[[install]]` source into the `.7z` at `archive`,
+/// through the `studio_archive` writer facade (the one place that names the 7-Zip
+/// dependency). Publish keeps the source-tree policy — what to include, and the
+/// symlink / special-file refusals — while the facade owns the archive mechanism.
 fn write_payload_7z(archive: &Path, root: &Path, manifest: &Manifest) -> Result<(), String> {
-    let mut writer =
-        ArchiveWriter::create(archive).map_err(|e| format!("create 7z payload: {e}"))?;
+    let mut writer = studio_archive::SevenZipWriter::create(archive)?;
     add_file_entry(&mut writer, root, Path::new(MANIFEST_FILE))?;
     for rule in &manifest.install {
         let rel = Path::new(&rule.source);
@@ -797,28 +797,23 @@ fn write_payload_7z(archive: &Path, root: &Path, manifest: &Manifest) -> Result<
             return Err(format!("install source is neither a file nor a directory: {}", rule.source));
         }
     }
-    writer.finish().map_err(|e| format!("finish 7z payload: {e}"))?;
+    writer.finish()?;
     Ok(())
 }
 
 /// Add `root/rel` to the archive under its forward-slashed project-relative path,
 /// streaming the file rather than buffering it. UTF-8 entry names preserve
 /// non-ASCII (e.g. Cyrillic) filenames byte-for-byte.
-fn add_file_entry(writer: &mut ArchiveWriter<File>, root: &Path, rel: &Path) -> Result<(), String> {
+fn add_file_entry(writer: &mut studio_archive::SevenZipWriter, root: &Path, rel: &Path) -> Result<(), String> {
     let abs = root.join(rel);
     let name = rel.to_string_lossy().replace('\\', "/");
-    let file = File::open(&abs).map_err(|e| format!("read {}: {e}", rel.display()))?;
-    let entry = ArchiveEntry::from_path(&abs, name);
-    writer
-        .push_archive_entry(entry, Some(file))
-        .map_err(|e| format!("7z entry {}: {e}", rel.display()))?;
-    Ok(())
+    writer.push_file(&name, &abs)
 }
 
 /// Recursively add every file under `root/rel`, in sorted order for determinism,
 /// refusing any symlink or other special file (fifo / socket / device) so nothing
 /// is silently omitted from the payload — at parity with the top-level guard.
-fn add_dir_entries(writer: &mut ArchiveWriter<File>, root: &Path, rel: &Path) -> Result<(), String> {
+fn add_dir_entries(writer: &mut studio_archive::SevenZipWriter, root: &Path, rel: &Path) -> Result<(), String> {
     let dir = root.join(rel);
     let mut names: Vec<_> = std::fs::read_dir(&dir)
         .map_err(|e| format!("read dir {}: {e}", dir.display()))?
@@ -848,63 +843,10 @@ fn add_dir_entries(writer: &mut ArchiveWriter<File>, root: &Path, rel: &Path) ->
     Ok(())
 }
 
-/// Byte-split `archive` into ordered `<archive>.001`, `.002`, … volumes of
-/// `volume_size` bytes each (the last is the remainder), streamed through a
-/// fixed buffer so the payload is never fully in RAM. Concatenating the volumes
-/// reproduces `archive` exactly, so `7z x <base>.7z.001` reassembles natively.
-/// Removes `archive`; returns the volume paths in order.
-fn split_into_volumes(archive: &Path, volume_size: u64) -> Result<Vec<PathBuf>, String> {
-    let total = std::fs::metadata(archive)
-        .map_err(|e| format!("stat payload: {e}"))?
-        .len();
-    let mut src = File::open(archive).map_err(|e| format!("open payload: {e}"))?;
-    let count = total.div_ceil(volume_size);
-    let mut volumes = Vec::new();
-    for index in 1..=count {
-        let vol = volume_path(archive, index);
-        if let Err(e) = write_one_volume(&mut src, &vol, volume_size, total, index) {
-            // A mid-split failure (e.g. ENOSPC) must leak nothing — at parity
-            // with `package_payload_7z`'s self-clean: drop the partial volume,
-            // every volume already written, and the source `.7z`.
-            drop(src);
-            let _ = std::fs::remove_file(&vol);
-            for written in &volumes {
-                let _ = std::fs::remove_file(written);
-            }
-            let _ = std::fs::remove_file(archive);
-            return Err(e);
-        }
-        volumes.push(vol);
-    }
-    drop(src);
-    let _ = std::fs::remove_file(archive); // the volumes supersede the whole `.7z`
-    Ok(volumes)
-}
-
-/// Copy the `index`-th `volume_size`-byte slice of `src` (the last is the
-/// remainder) into a fresh volume file at `vol`, streamed through a fixed buffer
-/// so the payload is never fully in RAM.
-fn write_one_volume(src: &mut File, vol: &Path, volume_size: u64, total: u64, index: u64) -> Result<(), String> {
-    let mut out = File::create(vol).map_err(|e| format!("create volume {index}: {e}"))?;
-    let want = volume_size.min(total - (index - 1) * volume_size);
-    let copied =
-        std::io::copy(&mut src.take(want), &mut out).map_err(|e| format!("write volume {index}: {e}"))?;
-    if copied != want {
-        return Err(format!("payload split short at volume {index}: {copied} of {want} bytes"));
-    }
-    Ok(())
-}
-
-/// The `index`-th volume path: `<archive>.001`, `.002`, … (3-digit minimum,
-/// 7-Zip's own naming).
-fn volume_path(archive: &Path, index: u64) -> PathBuf {
-    PathBuf::from(format!("{}.{index:03}", archive.display()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, BufReader, Write as _};
+    use std::io::{BufRead, BufReader, Read as _, Write as _};
     use std::net::{TcpListener, TcpStream};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1015,35 +957,9 @@ mod tests {
         assert_eq!(payload_base("mod", "v1/0 beta"), "dcs-studio-mod-v1-0-beta");
     }
 
-    #[test]
-    fn volume_path_pads_to_three_digits() {
-        let base = Path::new("/tmp/dcs-studio-mod-v1.7z");
-        assert_eq!(volume_path(base, 1), PathBuf::from("/tmp/dcs-studio-mod-v1.7z.001"));
-        assert_eq!(volume_path(base, 42), PathBuf::from("/tmp/dcs-studio-mod-v1.7z.042"));
-        // Past 999 it widens rather than truncating, so lexical order is preserved.
-        assert_eq!(volume_path(base, 1000), PathBuf::from("/tmp/dcs-studio-mod-v1.7z.1000"));
-    }
-
-    #[test]
-    fn split_into_volumes_round_trips_and_sizes_each_volume() {
-        let tree = TempTree::new("split");
-        // 2500 bytes split at 1000 → 1000 + 1000 + 500.
-        let original: Vec<u8> = (0..2500u32).map(|i| (i % 251) as u8).collect();
-        let archive = tree.write("payload.7z", &original);
-        let volumes = split_into_volumes(&archive, 1000).expect("split");
-        let sizes: Vec<u64> = volumes
-            .iter()
-            .map(|v| std::fs::metadata(v).expect("volume exists").len())
-            .collect();
-        assert_eq!(sizes, vec![1000, 1000, 500]);
-        // The whole-archive temp is removed; the volumes concatenate back to it.
-        assert!(!archive.exists(), "the source `.7z` is removed after split");
-        let restitched: Vec<u8> = volumes
-            .iter()
-            .flat_map(|v| std::fs::read(v).expect("read volume"))
-            .collect();
-        assert_eq!(restitched, original, "volumes reassemble the original byte-for-byte");
-    }
+    // The `.7z` packaging mechanism (writer) + the byte-split into volumes — and
+    // their round-trip / sizing / cleanup tests — live in `studio_archive`; publish
+    // keeps only the source-tree policy tests below.
 
     #[cfg(unix)]
     #[test]
@@ -1145,23 +1061,6 @@ mod tests {
         assert_eq!(name_of(&a), name_of(&b), "asset name is stable across runs");
         a.cleanup();
         b.cleanup();
-    }
-
-    #[test]
-    fn split_into_volumes_cleans_up_on_a_mid_split_error() {
-        let tree = TempTree::new("splitfail");
-        let original: Vec<u8> = (0..2500u32).map(|i| (i % 251) as u8).collect();
-        let archive = tree.write("payload.7z", &original);
-        // Make the second volume path un-creatable (a directory already sits
-        // there), so writing volume 2 fails after volume 1 was written.
-        let vol2 = volume_path(&archive, 2);
-        std::fs::create_dir(&vol2).expect("pre-create vol2 as a dir");
-        let err = split_into_volumes(&archive, 1000).expect_err("split fails at volume 2");
-        assert!(err.contains("volume 2"), "error names the failing volume: {err}");
-        // Nothing leaks: the partial first volume and the source `.7z` are gone.
-        assert!(!volume_path(&archive, 1).exists(), "partial volume 1 is cleaned");
-        assert!(!archive.exists(), "source archive is cleaned");
-        let _ = std::fs::remove_dir(&vol2);
     }
 
     // --- faked-transport REST orchestration (issue #62 review) --------------
