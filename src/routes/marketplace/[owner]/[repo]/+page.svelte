@@ -6,6 +6,7 @@
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import { marketplace } from "$lib/marketplace.svelte";
+  import { productId } from "$lib/market-util";
   import { cargolua } from "$lib/cargolua.svelte";
   import { app } from "$lib/state.svelte";
   import { renderMarkdown } from "$lib/lang/markdown";
@@ -325,7 +326,7 @@
                 size="sm"
                 class="w-full gap-1.5"
                 disabled={marketplace.installBusy}
-                onclick={() => marketplace.install(owner, repo)}
+                onclick={() => marketplace.install(product.author, product.name)}
                 data-testid="product-install"
               >
                 {#if marketplace.installBusy}
@@ -334,7 +335,7 @@
                   <Download class="size-3.5" /> Install
                 {/if}
               </Button>
-              {#if marketplace.installingId === product.repo}
+              {#if marketplace.installingId === productId(product)}
                 {@const p = marketplace.installProgress}
                 <div class="mt-2 rounded-lg border border-border bg-card p-2.5" data-testid="product-install-progress">
                   <div class="flex items-center justify-between gap-2">
