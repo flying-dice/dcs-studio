@@ -299,3 +299,15 @@ feature ManifestOnlyProjectPublishesWithoutAPayload for studio::publish::Publish
   then "only the `dcs-studio.toml` asset is uploaded, with no payload volumes"
   and "the release succeeds"
 }
+
+/// Cancelling an in-flight publish rolls the run back to nothing — distinct from a
+/// genuine failure, which leaves the draft for an idempotent re-publish (issue #62
+/// phase 2). The cancel signal is observed between steps and before each asset
+/// upload; the rollback drops the draft, cascading its already-uploaded assets.
+feature CancellingAPublishLeavesNothing for studio::publish::Publisher {
+  given "an author publishing a release, with assets uploading to a draft"
+  when "the author cancels mid-upload"
+  then "the upload aborts promptly and the draft release (with every asset uploaded this run) is removed"
+  and "nothing is left published"
+  but "a genuine upload failure instead leaves the draft in place, so a re-publish is idempotent"
+}

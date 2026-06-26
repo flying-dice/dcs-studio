@@ -19,6 +19,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::github_http::{self, API_BASE};
+use crate::progress::{Cancel, PublishProgress, PublishStep};
 use dcs_studio_project::{DISCOVERY_TOPIC, LIBRARY_TOPIC, MANIFEST_FILE, Manifest};
 
 const UPLOADS_BASE: &str = "https://uploads.github.com";
@@ -372,6 +373,17 @@ fn set_release_draft(repo: &RepoInfo, release_id: u64, draft: bool, token: &str)
     Ok(())
 }
 
+/// Delete a release by id (`DELETE .../releases/{id}`) — cascades its assets. Used
+/// to roll back a draft when the author CANCELS an in-flight publish, so a cancel
+/// leaves nothing published and nothing half-uploaded.
+fn delete_release(repo: &RepoInfo, release_id: u64, token: &str) -> Result<(), String> {
+    github_http::delete(&repo_api(repo, &format!("/releases/{release_id}")), token)
+        .set("Accept", github_http::ACCEPT_JSON)
+        .call()
+        .map_err(|e| rest_error("delete release", e))?;
+    Ok(())
+}
+
 /// A transient failure worth retrying: a 5xx status or a transport-level error.
 fn is_transient(e: &ureq::Error) -> bool {
     matches!(e, ureq::Error::Status(code, _) if *code >= 500)
@@ -553,8 +565,27 @@ fn parse_repo_url(url: &str) -> Result<RepoInfo, String> {
 
 // --- orchestration (model Publisher) ----------------------------------------
 
+/// The `public_repo`-scoped publishing token. A seam, like [`api_base`]: production
+/// reads it from the keyring (the signed-in session); a test points
+/// `PUBLISH_TOKEN_OVERRIDE` at a fake so the orchestrator runs against faked
+/// transport without the keyring — the one reach the mock can't otherwise satisfy.
+#[cfg(not(test))]
 fn publish_token() -> Result<String, String> {
     crate::github::current_token()
+        .ok_or_else(|| "Sign in and authorize publishing first.".to_string())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Per-test override of the publishing token, set by `MockGitHub::start` so the
+    /// orchestrator (`publish_release_with_progress`) runs against faked transport
+    /// without reaching the keyring. `None` reproduces the logged-out error.
+    static PUBLISH_TOKEN_OVERRIDE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+fn publish_token() -> Result<String, String> {
+    PUBLISH_TOKEN_OVERRIDE
+        .with(|o| o.borrow().clone())
         .ok_or_else(|| "Sign in and authorize publishing first.".to_string())
 }
 
@@ -586,6 +617,22 @@ pub fn share(root: &str, as_library: bool) -> Result<RepoInfo, String> {
 /// first, so a re-publish is idempotent); and only once every asset has landed,
 /// flip the release to published.
 pub fn publish_release(root: &str, tag: &str) -> Result<ReleaseInfo, String> {
+    publish_release_with_progress(root, tag, &crate::progress::no_progress(), &Cancel::new())
+}
+
+/// [`publish_release`] with a progress sink + a cancel token (issue #62 phase 2):
+/// emit each step (package → split → draft → upload part k/N → publish) as it runs,
+/// and observe `cancel` between steps and before each asset upload + the publish
+/// flip. A USER CANCEL deletes the draft (cascading its assets) so nothing is left
+/// published or half-uploaded; a genuine failure leaves the draft for an idempotent
+/// re-publish. The bare [`publish_release`] passes a no-op sink + a never-cancelled
+/// token, so the CLI/tests are untouched.
+pub fn publish_release_with_progress(
+    root: &str,
+    tag: &str,
+    on: &dyn Fn(PublishProgress),
+    cancel: &Cancel,
+) -> Result<ReleaseInfo, String> {
     let root = Path::new(root);
     let token = publish_token()?;
     let repo = repo_of_project(root)?;
@@ -596,21 +643,42 @@ pub fn publish_release(root: &str, tag: &str) -> Result<ReleaseInfo, String> {
     let manifest = dcs_studio_project::manifest::load(root)?;
 
     // Package + split first: a packaging failure must touch nothing on GitHub.
+    cancel.check()?;
+    on(PublishProgress::step(PublishStep::Package));
     let packaged = package_release(root, &repo.name, tag, &manifest, &manifest_path)?;
+    if packaged.volume_paths.len() > 1 {
+        on(PublishProgress::step(PublishStep::Split));
+    }
 
+    cancel.check()?;
+    on(PublishProgress::step(PublishStep::Draft));
     let release = find_or_create_draft(&repo, tag, &token)?;
     // Upload every asset, then flip the draft to published — published only once
     // every asset has landed, so a failure partway leaves the draft, never a
     // half-populated public release.
     let result = (|| {
-        upload_release_assets(&repo, &release, &packaged, tag, &token)?;
+        upload_release_assets(&repo, &release, &packaged, tag, &token, on, cancel)?;
+        cancel.check()?;
+        on(PublishProgress::step(PublishStep::Publish));
         set_release_draft(&repo, release.id, false, &token)
     })();
     // `packaged` drops at scope end, removing the per-run temp dir on every path
     // (success here, an upload failure, or the draft lookup above having failed).
     // The manifest lives in the project, never a temp.
-    result?;
-    Ok(release.info)
+    match result {
+        Ok(()) => Ok(release.info),
+        Err(e) if e == crate::progress::CANCELLED => {
+            // Roll back THIS run: drop the draft (cascades its assets) so a cancel
+            // leaves nothing — no half-uploaded draft to confuse the next publish.
+            // Best-effort: a failed rollback (e.g. a 5xx on the delete) is swallowed
+            // so the user's cancel still surfaces as CANCELLED, never masked behind a
+            // delete error. A draft that survives a failed rollback is exactly what a
+            // genuine failure leaves — the next publish re-drafts it idempotently.
+            let _ = delete_release(&repo, release.id, &token);
+            Err(e)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Upload the standalone manifest + every payload volume as assets of `release`.
@@ -628,7 +696,12 @@ fn upload_release_assets(
     packaged: &PackagedRelease,
     tag: &str,
     token: &str,
+    on: &dyn Fn(PublishProgress),
+    cancel: &Cancel,
 ) -> Result<(), String> {
+    // A cancel that arrives before the upload begins must not even purge the prior
+    // asset family — bail with the draft untouched.
+    cancel.check()?;
     let manifest_name = asset_filename(&packaged.manifest_path)?;
     let payload_archive = payload_archive_name(&repo.name, tag);
     let volume_prefix = format!("{payload_archive}."); // `<base>.7z.` → every volume
@@ -640,11 +713,38 @@ fn upload_release_assets(
             delete_asset(repo, old.id, token)?;
         }
     }
-    // The standalone manifest first, then every payload volume.
-    let assets = std::iter::once(&packaged.manifest_path).chain(&packaged.volume_paths);
-    for asset in assets {
+    // The standalone manifest first, then every payload volume. Each upload emits an
+    // `Upload` event (part k of N + cumulative bytes) and is cancel-checked first, so
+    // an in-flight cancel aborts promptly between parts.
+    let assets: Vec<&Path> = std::iter::once(&packaged.manifest_path)
+        .chain(&packaged.volume_paths)
+        .map(PathBuf::as_path)
+        .collect();
+    let parts = assets.len() as u64;
+    let total_bytes: u64 = assets.iter().filter_map(|&p| std::fs::metadata(p).ok()).map(|m| m.len()).sum();
+    let mut bytes = 0u64;
+    for (index, asset) in assets.iter().copied().enumerate() {
+        cancel.check()?;
+        on(PublishProgress {
+            step: PublishStep::Upload,
+            detail: asset_filename(asset).ok().map(str::to_string),
+            part: Some(index as u64 + 1),
+            parts: Some(parts),
+            bytes: Some(bytes),
+            total_bytes: Some(total_bytes),
+        });
         upload_asset(repo, release.id, asset, token)?;
+        bytes += std::fs::metadata(asset).map(|m| m.len()).unwrap_or(0);
     }
+    // A terminal `Upload` event with every byte accounted for, so the UI bar fills.
+    on(PublishProgress {
+        step: PublishStep::Upload,
+        detail: None,
+        part: Some(parts),
+        parts: Some(parts),
+        bytes: Some(bytes),
+        total_bytes: Some(total_bytes),
+    });
     Ok(())
 }
 
@@ -1152,6 +1252,13 @@ mod tests {
             }
             return (204, String::new());
         }
+        // Delete a release: DELETE .../releases/{id} — cascades its assets (the
+        // cancel-rollback path). Checked after the asset-delete arm above.
+        if method == "DELETE" && path.contains("/releases/") {
+            let rid = release_id_in(path);
+            fake.releases.retain(|r| r.id != rid);
+            return (204, String::new());
+        }
         // Asset collection: .../releases/{id}/assets  (GET list, POST upload)
         if path.ends_with("/assets") {
             let rid = release_id_in(path);
@@ -1232,10 +1339,13 @@ mod tests {
                     }
                 }
             });
-            // Point the publish flow's REST + uploads base at this server.
+            // Point the publish flow's REST + uploads base — and the publishing
+            // token — at this server, so a test drives the orchestrator end-to-end
+            // against faked transport with no keyring reach.
             let base = format!("http://{addr}");
             API_BASE_OVERRIDE.with(|o| *o.borrow_mut() = Some(base.clone()));
             UPLOADS_BASE_OVERRIDE.with(|o| *o.borrow_mut() = Some(base));
+            PUBLISH_TOKEN_OVERRIDE.with(|o| *o.borrow_mut() = Some("test-token".to_string()));
             MockGitHub { addr, fake, shutdown, handle: Some(handle) }
         }
         fn lock(&self) -> std::sync::MutexGuard<'_, Fake> {
@@ -1246,6 +1356,7 @@ mod tests {
         fn drop(&mut self) {
             API_BASE_OVERRIDE.with(|o| *o.borrow_mut() = None);
             UPLOADS_BASE_OVERRIDE.with(|o| *o.borrow_mut() = None);
+            PUBLISH_TOKEN_OVERRIDE.with(|o| *o.borrow_mut() = None);
             self.shutdown.store(true, Ordering::Relaxed);
             // Unblock the pending accept() so the server thread sees shutdown.
             let _ = TcpStream::connect(&self.addr);
@@ -1398,7 +1509,8 @@ mod tests {
         let release =
             ReleaseRef { id: rid, draft: true, info: ReleaseInfo { tag: "v1".to_string(), html_url: "x".to_string() } };
 
-        upload_release_assets(&test_repo(), &release, &packaged, "v1", "tok").expect("upload");
+        upload_release_assets(&test_repo(), &release, &packaged, "v1", "tok", &|_| {}, &Cancel::new())
+            .expect("upload");
 
         let names = mock.lock().asset_names(rid);
         assert!(names.iter().any(|n| n == "dcs-studio.toml"), "manifest re-uploaded");
@@ -1410,6 +1522,168 @@ mod tests {
         );
         assert!(names.iter().any(|n| n == "NOTES.md"), "an unrelated asset is left untouched");
         assert_eq!(names.len(), 4, "complete asset set — no orphans, no duplicates");
+    }
+
+    /// A fresh draft release on the mock + a packaged (manifest + two volumes) ready
+    /// to upload — the fixture the progress/cancel tests share.
+    fn draft_with_payload(mock: &MockGitHub) -> (u64, TempTree, PackagedRelease, ReleaseRef) {
+        let rid = {
+            let mut f = mock.lock();
+            let id = f.alloc_id();
+            f.releases.push(FakeRelease { id, tag: "v1".to_string(), draft: true, assets: Vec::new() });
+            id
+        };
+        let tree = TempTree::new("prog");
+        let manifest_path = tree.write("dcs-studio.toml", b"x"); // 1 byte
+        let v1 = tree.write("dcs-studio-cool-mod-v1.7z.001", b"aaaa"); // 4 bytes
+        let v2 = tree.write("dcs-studio-cool-mod-v1.7z.002", b"bb"); // 2 bytes
+        let packaged = PackagedRelease { manifest_path, temp_dir: None, volume_paths: vec![v1, v2] };
+        let release = ReleaseRef {
+            id: rid,
+            draft: true,
+            info: ReleaseInfo { tag: "v1".to_string(), html_url: "x".to_string() },
+        };
+        (rid, tree, packaged, release)
+    }
+
+    #[test]
+    fn upload_emits_ordered_per_part_progress_with_cumulative_bytes() {
+        let mock = MockGitHub::start();
+        let (_rid, _tree, packaged, release) = draft_with_payload(&mock);
+        let events = std::cell::RefCell::new(Vec::new());
+
+        upload_release_assets(
+            &test_repo(),
+            &release,
+            &packaged,
+            "v1",
+            "tok",
+            &|p| events.borrow_mut().push(p),
+            &Cancel::new(),
+        )
+        .expect("upload");
+
+        let uploads: Vec<PublishProgress> =
+            events.into_inner().into_iter().filter(|e| e.step == PublishStep::Upload).collect();
+        // 3 part-starts (manifest 1B, v1 4B, v2 2B) + 1 terminal; cumulative bytes
+        // 0 → 1 → 5 → 7, total always 7.
+        let seq: Vec<(Option<u64>, Option<u64>)> = uploads.iter().map(|e| (e.part, e.bytes)).collect();
+        assert_eq!(
+            seq,
+            vec![(Some(1), Some(0)), (Some(2), Some(1)), (Some(3), Some(5)), (Some(3), Some(7))]
+        );
+        assert!(uploads.iter().all(|e| e.parts == Some(3) && e.total_bytes == Some(7)));
+    }
+
+    #[test]
+    fn a_pre_cancelled_upload_aborts_before_any_asset_is_touched() {
+        let mock = MockGitHub::start();
+        let (_rid, _tree, packaged, release) = draft_with_payload(&mock);
+        let cancel = Cancel::new();
+        cancel.cancel();
+
+        let err = upload_release_assets(&test_repo(), &release, &packaged, "v1", "tok", &|_| {}, &cancel)
+            .expect_err("a cancelled upload aborts");
+        assert_eq!(err, crate::progress::CANCELLED);
+
+        // Nothing was mutated: no asset POST/DELETE reached the server.
+        let mutated = mock
+            .lock()
+            .hits
+            .iter()
+            .filter(|h| (h.method == "POST" || h.method == "DELETE") && h.path.contains("/assets"))
+            .count();
+        assert_eq!(mutated, 0, "cancel aborts before purge or upload");
+    }
+
+    #[test]
+    fn delete_release_drops_the_draft_so_a_cancel_leaves_nothing() {
+        let mock = MockGitHub::start();
+        let rid = {
+            let mut f = mock.lock();
+            let id = f.alloc_id();
+            f.releases.push(FakeRelease {
+                id,
+                tag: "v1".to_string(),
+                draft: true,
+                assets: vec![FakeAsset { id: 99, name: "dcs-studio.toml".to_string() }],
+            });
+            id
+        };
+
+        delete_release(&test_repo(), rid, "tok").expect("delete release");
+
+        assert!(
+            mock.lock().releases.iter().all(|r| r.id != rid),
+            "the draft (and its assets) are gone — a cancel leaves nothing published"
+        );
+    }
+
+    /// `git init` a project tree and point its `origin` at `url`, so `repo_of_project`
+    /// (which shells `git remote get-url origin`) resolves the owner/name — no network,
+    /// no commit needed.
+    fn init_git_origin(root: &Path, url: &str) {
+        git(root, &["init"]).expect("git init");
+        git(root, &["remote", "add", "origin", url]).expect("git remote add origin");
+    }
+
+    #[test]
+    fn publish_release_with_progress_cancelled_mid_upload_deletes_the_draft_and_never_publishes() {
+        // The orchestrator end-to-end: the cancel→rollback wiring + ordered step
+        // emissions + inter-step checks that the component tests above exercise only
+        // in isolation. A real on-disk project (git origin → repo_of_project, a
+        // loadable manifest, one small [[install]] source → a single `.7z`, so
+        // manifest + payload = two upload parts) on the mock backend.
+        let mock = MockGitHub::start();
+        let tree = TempTree::new("orchestrator");
+        tree.write(
+            "dcs-studio.toml",
+            b"[project]\nname = \"x\"\n\n[[install]]\nsource = \"scripts\"\ndest = \"{SavedGames}/x\"\n",
+        );
+        tree.write("scripts/a.lua", b"return 1\n");
+        init_git_origin(&tree.0, "https://github.com/octocat/cool-mod");
+
+        // The user cancels while part 1 (the manifest) uploads: the sink flips the
+        // token on the first Upload event, so the `cancel.check` before part 2 trips
+        // mid-flight — the draft is created and part 1 lands, then the publish aborts.
+        let cancel = Cancel::new();
+        let trip = cancel.clone();
+        let events = std::cell::RefCell::new(Vec::new());
+        let on = |p: PublishProgress| {
+            if p.step == PublishStep::Upload && p.part == Some(1) {
+                trip.cancel();
+            }
+            events.borrow_mut().push(p);
+        };
+
+        let err = publish_release_with_progress(tree.0.to_str().expect("utf-8 path"), "v1", &on, &cancel)
+            .expect_err("a mid-upload cancel aborts the publish");
+        assert_eq!(err, crate::progress::CANCELLED, "a user cancel surfaces the sentinel");
+
+        // Ordered emissions up to the cancel: package → draft → upload(part 1). No
+        // split (single archive), no publish (the draft→published flip never runs).
+        let steps: Vec<PublishStep> = events.into_inner().iter().map(|e| e.step).collect();
+        assert_eq!(
+            steps,
+            vec![PublishStep::Package, PublishStep::Draft, PublishStep::Upload],
+            "the orchestrator emits the ordered prefix and stops at the cancel",
+        );
+
+        let f = mock.lock();
+        // Rollback ran: the draft (cascading the one uploaded asset) is deleted, so a
+        // cancel leaves nothing published and nothing half-uploaded.
+        assert!(f.releases.is_empty(), "the draft is rolled back — a cancel leaves nothing");
+        assert!(
+            f.hits.iter().any(|h| {
+                h.method == "DELETE" && h.path.contains("/releases/") && !h.path.contains("/assets/")
+            }),
+            "rollback issues DELETE /releases/{{id}}",
+        );
+        // The release was never flipped to published (no PATCH draft=false).
+        assert!(
+            !f.hits.iter().any(|h| h.method == "PATCH"),
+            "a cancelled publish never flips the draft to published",
+        );
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub mod linker;
 pub mod logs;
 pub mod market;
 pub mod mission;
+pub mod progress;
 pub mod publish;
 pub mod term;
 pub mod types;
