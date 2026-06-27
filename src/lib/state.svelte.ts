@@ -28,6 +28,7 @@ import { reconcileBuffer, fsKey } from "./workspace-util";
 import { dcsLink } from "./dcs-link.svelte";
 import { fileWatcher } from "./file-watcher.svelte";
 import { lang } from "./lang/intel.svelte";
+import { cargoTomlExists } from "./lang/rust-analyzer";
 import { saveWithFormat } from "./save-format";
 import { todos } from "./todos.svelte";
 import { bookmarks } from "./bookmarks.svelte";
@@ -210,6 +211,15 @@ class AppState {
 
   // Workspace
   rootPath = $state<string | null>(null);
+
+  /**
+   * Whether the open project is a Rust project — a Cargo.toml at the root
+   * (model studio::core Workbench.IsRustProject, matching the backend
+   * Builder.IsRustProject). Gates the Build affordance (toolbar button +
+   * Run -> Build Project + ⌘F9). Re-probed on project open and tree refresh;
+   * defaults false so a non-project / pre-probe state never offers Build.
+   */
+  isRustProject = $state(false);
   rootName = $state<string>("");
 
   // Recently opened projects (most-recent first), persisted to localStorage.
@@ -377,6 +387,9 @@ class AppState {
         if (!confirmed) return;
       }
       this.rootPath = path;
+      // Build affordance gate (issue #69): hide until proven Rust, then probe.
+      this.isRustProject = false;
+      void this.refreshIsRustProject();
       this.rootName = await this.projectOps.basename(path);
       this.openFiles = [];
       this.activePath = null;
@@ -433,6 +446,7 @@ class AppState {
       }
       this.rootPath = null;
       this.rootName = "";
+      this.isRustProject = false;
       this.openFiles = [];
       this.activePath = null;
       void watchStop().catch((e) => console.error("watch stop failed:", e));
@@ -640,6 +654,31 @@ class AppState {
   /** Bump the tree-refresh signal after a filesystem mutation. */
   refreshTree() {
     this.treeVersion += 1;
+    // A mutation may have added/removed the root Cargo.toml — re-probe so the
+    // Build affordance follows (issue #69).
+    void this.refreshIsRustProject();
+  }
+
+  /**
+   * Re-probe whether the open project is a Rust project — a Cargo.toml at the
+   * root (model studio::core Workbench.IsRustProject) — and update the reactive
+   * signal the Build affordance reads. Fail-safe: any probe error reads as
+   * not-Rust (Build hidden). Guarded against a project switch landing mid-probe,
+   * so a stale result never overwrites the current project's state.
+   */
+  private async refreshIsRustProject(): Promise<void> {
+    const root = this.rootPath;
+    if (!root) {
+      this.isRustProject = false;
+      return;
+    }
+    let result = false;
+    try {
+      result = await cargoTomlExists(root);
+    } catch {
+      result = false;
+    }
+    if (this.rootPath === root) this.isRustProject = result;
   }
 
   /**
