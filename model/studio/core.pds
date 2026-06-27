@@ -543,6 +543,17 @@ public container Workbench for studio::core::Studio {
 
   /// Persist both side-panel widths to localStorage.
   PersistPanelWidths(): void;
+
+  /// Open in-file find/replace over the ACTIVE document: the editor's own find
+  /// panel (CodeMirror's maintained search — no custom search engine) opens
+  /// with the query field focused, scoped to the active buffer only. ⌘F /
+  /// Ctrl+F is owned by the editor; the webview's native find is suppressed so
+  /// it never shadows this. Find next/previous (wrapping), match highlight + a
+  /// match count, case / whole-word / regex options (an invalid regex flagged
+  /// inline, never a crash), and Replace / Replace All (Replace All a single
+  /// undo step) are the search component's own contract. Closing returns focus
+  /// to the document. Project-wide search is separate (#68).
+  public OpenFind(): void;
 }
 
 /// The developer runs the file they are editing — or any file in the tree —
@@ -562,6 +573,17 @@ feature BuildAffordanceOnlyForRustProjects for studio::core::Workbench {
   when "the workbench renders the Build affordances"
   then "the toolbar Build button is hidden"
   and "the Run menu Build Project item is disabled"
+}
+
+/// ⌘F / Ctrl+F opens the editor's in-file find/replace over the active
+/// document — the editor owns the gesture, not the webview's native find, and
+/// the scope is the active buffer only (project-wide search is #68).
+feature InFileFindOpensInEditor for studio::core::Workbench {
+  given "a text file is open and focused in the editor"
+  when "the developer presses ⌘F / Ctrl+F"
+  then "the editor's find panel opens with the query field focused"
+  and "find and replace act only on the active document"
+  but "the webview's native find does not open"
 }
 
 /// Saving is a no-op unless the buffer actually changed.

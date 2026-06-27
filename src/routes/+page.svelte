@@ -223,6 +223,10 @@
         { label: "Cut", shortcut: "⌘X", action: () => app.editCut(), disabled: () => !app.canCopy, testId: "menu-cut" },
         { label: "Copy", shortcut: "⌘C", action: () => app.editCopy(), disabled: () => !app.canCopy, testId: "menu-copy" },
         { label: "Paste", shortcut: "⌘V", action: () => app.editPaste(), disabled: () => !app.canEdit, testId: "menu-paste" },
+        { sep: true },
+        // In-file find/replace (issue #73). One panel does both (CodeMirror's
+        // search), so one honest entry; disabled when no text editor is active.
+        { label: "Find / Replace…", shortcut: "⌘F", action: () => app.editFind(), disabled: () => !app.canEdit, testId: "menu-find" },
       ],
     },
     {
@@ -301,6 +305,18 @@
         void build.start(app.rootPath);
         openOutput();
       }
+      return;
+    }
+    // In-file find (⌘F / Ctrl+F) — the editor owns it (issue #73). When the
+    // editor is focused its own CodeMirror searchKeymap already opened the panel
+    // and called preventDefault; `defaultPrevented` says so (this window handler
+    // runs after CM's, on the bubble), so don't double-fire. Otherwise, with a
+    // text editor active, open it here and suppress the webview's native find.
+    // With no editor active the key is left alone.
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "f") {
+      if (e.defaultPrevented || !app.canEdit) return;
+      e.preventDefault();
+      app.editFind();
       return;
     }
     // Run (⇧F10) / Debug (⇧F9) — match the Run menu + toolbar.
