@@ -33,6 +33,11 @@
   const ui = new ToolActions();
   const launchUi = new ToolActions();
 
+  // Dev builds hint the cargo command that produces the source DLL; a packaged
+  // install always ships it bundled, so its absence means a broken install
+  // (mirrors studio-services dll_missing_message; issue #70).
+  const isDevBuild = import.meta.env.DEV;
+
   const anythingInstalled = $derived(
     !!status && (status.dll_installed || status.hook_installed),
   );
@@ -263,7 +268,11 @@
         </Button>
         {#if !status.source_available}
           <p class="text-[11px] leading-snug text-amber-500">
-            Build the DCS Studio DLL: cargo build -p dcs-bridge --release
+            {#if isDevBuild}
+              Build the DCS Studio DLL: cargo build -p dcs-bridge --release
+            {:else}
+              Bridge DLL missing from this install — please reinstall DCS Studio.
+            {/if}
           </p>
         {/if}
         {#if anythingInstalled}

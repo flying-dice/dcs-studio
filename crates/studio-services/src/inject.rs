@@ -49,15 +49,18 @@ pub struct InjectionStatus {
     hook_dest: String,
 }
 
-/// Resolve the freshly built bridge DLL next to (or near) the running exe.
-/// Packaging can later add a bundled-resource path as the preferred source;
-/// for now we probe the cargo target-dir layouts.
+/// Resolve the bridge DLL. The preferred source is the DLL bundled next to the
+/// packaged exe (a Tauri bundle resource — `crates/app/tauri.conf.json`
+/// `bundle.resources`, staged by `scripts/prepare-sidecar.mjs`); dev builds fall
+/// back to the cargo target-dir layouts.
 fn source_dll_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe_dir = exe.parent()?;
     let candidates = [
-        // Packaged app / DLL built with the same profile as the app.
+        // Packaged app: the bundled resource sits next to the exe.
         exe_dir.join("dcs_studio.dll"),
+        // Defensive: some bundler/NSIS layouts nest resources under `resources/`.
+        exe_dir.join("resources/dcs_studio.dll"),
         // Dev: app runs from target/debug, DLL built --release.
         exe_dir.join("../release/dcs_studio.dll"),
         // Extra fallbacks for nested target layouts.
@@ -65,6 +68,22 @@ fn source_dll_path() -> Option<PathBuf> {
         exe_dir.join("../debug/dcs_studio.dll"),
     ];
     candidates.into_iter().find(|p| p.is_file())
+}
+
+/// Build-aware DLL-missing message. A packaged install always ships the bridge
+/// DLL bundled next to the exe, so its absence means a broken install — ask the
+/// user to reinstall. A dev build instead hints the command that produces the
+/// source DLL.
+fn dll_missing_message() -> String {
+    dll_missing_message_for(cfg!(debug_assertions))
+}
+
+fn dll_missing_message_for(is_dev_build: bool) -> String {
+    if is_dev_build {
+        "DCS Studio bridge DLL not built — run `cargo build -p dcs-bridge --release`".to_string()
+    } else {
+        "Bridge DLL missing from this install — please reinstall DCS Studio".to_string()
+    }
 }
 
 /// Normalise CRLF to LF so a checked-out-with-CRLF hook never reads as
@@ -162,9 +181,7 @@ pub fn injection_status(write_dir: &str) -> InjectionStatus {
 
 /// Install (or update) the bridge DLL + hook into `write_dir`.
 pub fn inject(write_dir: &str) -> Result<InjectionStatus, String> {
-    let source_dll = source_dll_path().ok_or_else(|| {
-        "DCS Studio DLL not built — run `cargo build -p dcs-bridge --release`".to_string()
-    })?;
+    let source_dll = source_dll_path().ok_or_else(dll_missing_message)?;
 
     let dll_dest = Path::new(write_dir).join(DLL_REL);
     let hook_dest = Path::new(write_dir).join(HOOK_REL);
@@ -219,7 +236,7 @@ pub fn eject(write_dir: &str) -> Result<InjectionStatus, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalise_eol, DLL_REL, LEGACY_DLL_REL};
+    use super::{dll_missing_message_for, normalise_eol, DLL_REL, LEGACY_DLL_REL};
 
     #[test]
     fn eol_normalisation_makes_crlf_and_lf_hooks_compare_equal() {
@@ -228,6 +245,17 @@ mod tests {
             normalise_eol("line one\nline two\n")
         );
         assert_ne!(normalise_eol("a\nb"), normalise_eol("a\nc"));
+    }
+
+    #[test]
+    fn dll_missing_message_is_build_aware() {
+        let dev = dll_missing_message_for(true);
+        assert!(dev.contains("cargo build -p dcs-bridge --release"));
+
+        let packaged = dll_missing_message_for(false);
+        assert!(packaged.to_lowercase().contains("reinstall"));
+        // The dev-only build hint must never leak into the packaged message.
+        assert!(!packaged.contains("cargo build"));
     }
 
     #[test]

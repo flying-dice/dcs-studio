@@ -50,8 +50,9 @@ public container Injector for studio::core::Studio {
   public Inject(writeDir: string): Result<studio::inject::InjectionStatus, studio::inject::InjectError> {
     source = Option<string> from self.SourceDllPath()
     if (source.isNone) {
-      notBuilt = studio::inject::InjectError from { "Bridge DLL not built" }
-      return Err(notBuilt)
+      message = string from self.DllMissingMessage()
+      missing = studio::inject::InjectError from { message }
+      return Err(missing)
     }
     copied = Result<void, studio::inject::InjectError> from self.CopyDll(source.value, writeDir)
     if (copied.isErr) {
@@ -65,8 +66,15 @@ public container Injector for studio::core::Studio {
     return Ok(refreshed)
   }
 
-  /// Resolve the freshly built dcs_studio.dll next to (or near) the exe.
+  /// Resolve the bridge DLL. Preferred source: the DLL bundled next to the
+  /// packaged exe (a Tauri bundle resource); dev builds fall back to the
+  /// cargo target-dir layouts.
   SourceDllPath(): Option<string>;
+
+  /// The DLL-missing message, build-aware: a packaged install asks the user
+  /// to reinstall (the bundled DLL should always be present); a dev build
+  /// hints `cargo build -p dcs-bridge --release`, which produces the source DLL.
+  DllMissingMessage(): string;
 
   /// Copy to Mods/tech/DcsStudio/bin/dcs_studio.dll, creating dirs on demand.
   CopyDll(source: string, writeDir: string): Result<void, studio::inject::InjectError>;
@@ -103,4 +111,12 @@ feature LockedDllSurfaces for studio::inject::Injector {
   given "DCS is running with the bridge DLL loaded"
   when "the developer injects an update"
   then "the locked-file copy failure is surfaced, not swallowed"
+}
+
+/// A packaged install ships the bridge DLL next to the exe, so injection is
+/// available out of the box — no source checkout or cargo build.
+feature BundledDllAvailableInRelease for studio::inject::Injector {
+  given "a packaged install with the bridge DLL bundled next to the exe"
+  when "the user opens the Inject panel"
+  then "the source DLL is resolved and injection is available"
 }
