@@ -9,10 +9,10 @@
   import { productId } from "$lib/market-util";
   import { cargolua } from "$lib/cargolua.svelte";
   import { app } from "$lib/state.svelte";
-  import { renderMarkdown } from "$lib/lang/markdown";
   import { readTextFile, writeTextFile, type InstallProgress } from "$lib/api";
   import { errorMessage } from "$lib/utils";
   import GithubAuth from "$lib/components/GithubAuth.svelte";
+  import Prose from "$lib/components/Prose.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import {
@@ -250,8 +250,7 @@
             <BookOpen class="size-3.5" /> Readme
           </div>
           {#if product.readme}
-            <!-- eslint-disable-next-line svelte/no-at-html-tags — sanitized by renderMarkdown (DOMPurify) -->
-            <div class="readme mt-2 text-[13px] leading-relaxed">{@html renderMarkdown(product.readme)}</div>
+            <Prose source={product.readme} class="mt-2 text-[13px] leading-relaxed" />
           {:else}
             <p class="mt-2 text-[12px] text-muted-foreground">This repo has no README.</p>
           {/if}
@@ -473,50 +472,3 @@
     </ScrollArea>
   {/if}
 </div>
-
-<style>
-  /* Minimal README typography (no Tailwind typography plugin in the project). */
-  .readme :global(h1),
-  .readme :global(h2),
-  .readme :global(h3) {
-    font-weight: 600;
-    margin: 1.2em 0 0.5em;
-    line-height: 1.25;
-  }
-  .readme :global(h1) { font-size: 1.4em; }
-  .readme :global(h2) { font-size: 1.2em; }
-  .readme :global(h3) { font-size: 1.05em; }
-  .readme :global(p) { margin: 0.6em 0; }
-  .readme :global(ul),
-  .readme :global(ol) { margin: 0.6em 0; padding-left: 1.4em; }
-  .readme :global(ul) { list-style: disc; }
-  .readme :global(ol) { list-style: decimal; }
-  .readme :global(li) { margin: 0.2em 0; }
-  .readme :global(a) { color: var(--foreground); text-decoration: underline; text-underline-offset: 2px; }
-  .readme :global(code) {
-    font-family: var(--font-mono);
-    font-size: 0.9em;
-    background: var(--muted);
-    padding: 0.1em 0.35em;
-    border-radius: 4px;
-  }
-  .readme :global(pre) {
-    background: var(--muted);
-    padding: 0.8em;
-    border-radius: 8px;
-    overflow-x: auto;
-    margin: 0.8em 0;
-  }
-  .readme :global(pre code) { background: transparent; padding: 0; }
-  .readme :global(img) { max-width: 100%; height: auto; }
-  .readme :global(blockquote) {
-    border-left: 3px solid var(--border);
-    padding-left: 0.9em;
-    color: var(--muted-foreground);
-    margin: 0.8em 0;
-  }
-  .readme :global(table) { border-collapse: collapse; margin: 0.8em 0; }
-  .readme :global(th),
-  .readme :global(td) { border: 1px solid var(--border); padding: 0.3em 0.6em; }
-  .readme :global(hr) { border: none; border-top: 1px solid var(--border); margin: 1.2em 0; }
-</style>

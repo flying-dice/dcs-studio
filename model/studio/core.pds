@@ -977,3 +977,24 @@ feature InapplicableTabMenuItemsDisable for studio::core::Workbench {
   and "Close to the Right is disabled on the last tab"
   and "Close Saved is disabled when every open tab has unsaved edits"
 }
+
+/// Help -> Guides (issue #72) opens an in-app docs browser: a category index on
+/// the left, the selected guide rendered (reusing the Marketplace Markdown
+/// renderer) on the right. The menu entry always opens the viewer — never a
+/// no-op (cf. #59).
+feature HelpGuidesBrowser for studio::core::Workbench {
+  given "the app is open"
+  when "the developer chooses Help -> Guides"
+  then "a modal opens with the category index on the left and the first guide rendered on the right"
+  but "Escape, a backdrop click, or Close dismisses it and returns focus to where it was"
+}
+
+/// The guide series is vendored in-repo and shipped in the bundle, so the
+/// browser works offline; the index also links the existing About and
+/// MCP-server-setup help surfaces.
+feature GuidesShipOfflineAndLinkExistingHelp for studio::core::Workbench {
+  given "the guides modal is open with no network connection"
+  when "the developer selects a guide from the index"
+  then "its Markdown renders from in-bundle content with no network fetch"
+  but "the index also links to About and to the MCP server setup help"
+}

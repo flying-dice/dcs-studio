@@ -34,6 +34,7 @@
   import McpHelpModal from "$lib/components/McpHelpModal.svelte";
   import AboutModal from "$lib/components/AboutModal.svelte";
   import SearchOverlay from "$lib/components/SearchOverlay.svelte";
+  import GuidesModal from "$lib/components/GuidesModal.svelte";
   import PanelResizeHandle from "$lib/components/PanelResizeHandle.svelte";
   import { newRootFile } from "$lib/tree-actions";
   import { lang } from "$lib/lang/intel.svelte";
@@ -95,6 +96,8 @@
   let mcpHelpOpen = $state(false);
   // About dialog (Help → About DCS Studio, issue #59).
   let aboutOpen = $state(false);
+  // Guides browser (Help → Guides…, issue #72).
+  let guidesOpen = $state(false);
 
   // Read the cached GitHub session first (for the header chip), then open the project
   // the app was launched with (`--open <path>`), if any.
@@ -273,6 +276,8 @@
     {
       label: "Help",
       items: [
+        { label: "Guides…", action: () => (guidesOpen = true), testId: "menu-guides" },
+        { sep: true },
         { label: "About DCS Studio", action: () => (aboutOpen = true), testId: "menu-about" },
       ],
     },
@@ -941,5 +946,17 @@
   <McpHelpModal open={mcpHelpOpen} onClose={() => (mcpHelpOpen = false)} />
   <AboutModal open={aboutOpen} onClose={() => (aboutOpen = false)} />
   <SearchOverlay />
+  <GuidesModal
+    open={guidesOpen}
+    onClose={() => (guidesOpen = false)}
+    onOpenAbout={() => {
+      guidesOpen = false;
+      aboutOpen = true;
+    }}
+    onOpenMcpHelp={() => {
+      guidesOpen = false;
+      mcpHelpOpen = true;
+    }}
+  />
 </Tooltip.Provider>
 {/if}

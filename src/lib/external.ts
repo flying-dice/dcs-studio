@@ -54,20 +54,38 @@ function rustDocUrl(href: string): string | null {
     : `https://doc.rust-lang.org/std/index.html?search=${encodeURIComponent(name)}`;
 }
 
-/** Delegate clicks on links inside `el` (rendered markdown — hover cards, the
- *  Problems panel) so they never navigate the Tauri webview out of the app. The
- *  container is *content*, not navigation, so every link click is intercepted: a
- *  genuine `http(s)`/`mailto` link opens externally ({@link openExternal}); an
- *  unresolved rust-analyzer doc link (a bare item name — which otherwise
- *  navigated the webview to `localhost/<href>` and 404'd) opens the Rust docs;
- *  anything else is swallowed. */
-export function openLinksExternally(el: HTMLElement): void {
+/** Shared core: intercept every link click inside `el` so a bare `<a href>`
+ *  never navigates the Tauri webview out of the app. An `http(s)`/`mailto` href
+ *  opens externally ({@link openExternal}); any other href is handed to
+ *  `resolveOther`, whose result (a URL to open, or `null` to swallow) decides
+ *  the rest. The container is *content*, not navigation, so the default click
+ *  is always prevented. */
+function interceptLinkClicks(
+  el: HTMLElement,
+  resolveOther: (href: string) => string | null,
+): void {
   el.addEventListener("click", (event) => {
     const anchor = (event.target as Element | null)?.closest("a");
     if (!anchor) return;
     event.preventDefault();
     const href = anchor.getAttribute("href") ?? "";
-    const target = /^(https?|mailto):/i.test(href) ? href : rustDocUrl(href);
+    const target = /^(https?|mailto):/i.test(href) ? href : resolveOther(href);
     if (target) void openExternal(target);
   });
+}
+
+/** Link handling for rendered hover/doc cards (rust-analyzer): `http(s)`/`mailto`
+ *  opens externally; an unresolved rust-analyzer doc link — a bare item name
+ *  that would otherwise navigate the webview to `localhost/<href>` and 404 —
+ *  opens the Rust docs; anything else is swallowed. */
+export function openLinksExternally(el: HTMLElement): void {
+  interceptLinkClicks(el, rustDocUrl);
+}
+
+/** Link handling for rendered prose (Marketplace READMEs, Help → Guides):
+ *  `http(s)`/`mailto` opens externally; everything else — in-page `#fragment`
+ *  anchors and relative links — is swallowed rather than mis-routed, because
+ *  prose carries none of the rust-analyzer doc-link semantics above. */
+export function openContentLinksExternally(el: HTMLElement): void {
+  interceptLinkClicks(el, () => null);
 }
