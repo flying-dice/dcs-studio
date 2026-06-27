@@ -276,6 +276,97 @@ public container Workbench for studio::core::Studio {
   /// re-activate a neighbour if it was the active tab.
   RemoveTab(doc: studio::core::Document): void;
 
+  /// Close every tab except the right-clicked one, keeping it as the active
+  /// tab (editor tab context menu → Close Others). Each other tab routes
+  /// through CloseFile, so a dirty one still prompts before its edits are
+  /// discarded; declining keeps just that tab. Activating the kept tab first
+  /// holds focus on it even when a decline leaves another tab open.
+  #[manual]
+  public CloseOtherTabs(path: string): void {
+    self.ActivateByPath(path)
+    others = studio::core::Document[] from self.TabsExcept(path)
+    for (tab in others) {
+      self.CloseFile(tab.path)
+    }
+  }
+
+  /// Close every tab positioned after the right-clicked one; tabs before it
+  /// stay (editor tab context menu → Close to the Right). Each routes through
+  /// CloseFile, so a dirty one still prompts, and CloseFile's neighbour
+  /// activation keeps a live tab in view.
+  #[manual]
+  public CloseTabsToRight(path: string): void {
+    rightward = studio::core::Document[] from self.TabsAfter(path)
+    for (tab in rightward) {
+      self.CloseFile(tab.path)
+    }
+  }
+
+  /// Close every open tab (editor tab context menu → Close All). Each routes
+  /// through CloseFile, so every dirty tab prompts before its edits are
+  /// discarded; with all tabs clean this returns to the no-file-open state.
+  #[manual]
+  public CloseAllTabs(): void {
+    tabs = studio::core::Document[] from self.AllTabs()
+    for (tab in tabs) {
+      self.CloseFile(tab.path)
+    }
+  }
+
+  /// Close every unmodified tab, leaving tabs with unsaved edits open (editor
+  /// tab context menu → Close Saved). Clean tabs never prompt and dirty tabs
+  /// are skipped, so nothing is ever discarded.
+  #[manual]
+  public CloseSavedTabs(): void {
+    clean = studio::core::Document[] from self.CleanTabs()
+    for (tab in clean) {
+      self.CloseFile(tab.path)
+    }
+  }
+
+  /// Make the tab for `path` the active one, if it is open — the Close Others
+  /// anchor, so the kept tab takes focus.
+  ActivateByPath(path: string): void;
+
+  /// Every open tab except the one at `path`, in tab-strip order.
+  TabsExcept(path: string): studio::core::Document[];
+
+  /// Every open tab positioned after the one at `path` in tab-strip order;
+  /// empty when `path` is the last tab.
+  TabsAfter(path: string): studio::core::Document[];
+
+  /// Every open tab, in tab-strip order.
+  AllTabs(): studio::core::Document[];
+
+  /// Every open tab with no unsaved edits — its buffer matches its on-disk
+  /// baseline.
+  CleanTabs(): studio::core::Document[];
+
+  /// Copy the right-clicked tab's absolute path to the clipboard, so the
+  /// developer can paste it without leaving the editor (editor tab context
+  /// menu → Copy Path).
+  #[manual]
+  public CopyTabPath(path: string): void {
+    self.WriteClipboard(path)
+  }
+
+  /// Copy the right-clicked tab's path relative to the project root to the
+  /// clipboard (editor tab context menu → Copy Relative Path). With no project
+  /// open, or a path outside the root, the absolute path is copied unchanged.
+  #[manual]
+  public CopyTabRelativePath(path: string): void {
+    relative = string from self.RelativeToRoot(path)
+    self.WriteClipboard(relative)
+  }
+
+  /// Reduce an absolute workspace path to one relative to the project root —
+  /// the root prefix and its trailing separator stripped. A path that is the
+  /// root, lies outside it, or has no project open is returned unchanged.
+  RelativeToRoot(path: string): string;
+
+  /// Place text on the system clipboard.
+  WriteClipboard(text: string): void;
+
   /// Persist the ACTIVE tab's buffer to the ACTIVE tab's path — never any
   /// other tab's. A clean buffer, no open tab, or a write already in
   /// flight is a no-op. The buffer is captured before the write starts, so
@@ -813,4 +904,33 @@ feature DatabaseEmptyStateDeepLinksToRecipes for studio::core::Workbench {
   given "the Database panel shows its empty state with no databases discovered"
   when "the developer follows the Browse SQLite recipes link"
   then "the Recipes panel opens focused on the SQLite category"
+}
+
+/// The editor tab right-click menu manages tabs in bulk without leaving the
+/// editor. Every bulk close routes through the same dirty-prompt path as the
+/// × button (CloseFile), so unsaved work is never silently lost.
+feature TabContextMenuClosesInBulk for studio::core::Workbench {
+  given "several editor tabs are open, some with unsaved edits"
+  when "the developer picks Close Others, Close to the Right, or Close All from a tab's right-click menu"
+  then "the targeted tabs close, each dirty one prompting before its edits are discarded"
+  and "Close Others keeps the right-clicked tab and makes it active"
+  but "Close Saved closes only the unmodified tabs and never prompts, leaving every dirty tab open"
+}
+
+/// The tab right-click menu grabs a file's path without leaving the editor.
+feature TabContextMenuCopiesPath for studio::core::Workbench {
+  given "an editor tab is open in a project"
+  when "the developer picks Copy Path or Copy Relative Path from its right-click menu"
+  then "Copy Path places the tab's absolute path on the clipboard"
+  and "Copy Relative Path places the path relative to the project root on the clipboard"
+}
+
+/// Tab-menu items that cannot apply to the right-clicked tab are disabled
+/// rather than offered as clicks that do nothing.
+feature InapplicableTabMenuItemsDisable for studio::core::Workbench {
+  given "the editor tab right-click menu is open"
+  when "only one tab is open, or the right-clicked tab is the last one, or no unmodified tab exists"
+  then "Close Others is disabled when a single tab is open"
+  and "Close to the Right is disabled on the last tab"
+  and "Close Saved is disabled when every open tab has unsaved edits"
 }
