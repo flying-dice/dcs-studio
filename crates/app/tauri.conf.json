@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "dcs-studio",
+        "title": "DCS Studio",
         "width": 1280,
         "height": 800
       }
