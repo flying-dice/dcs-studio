@@ -5,7 +5,7 @@ All notable changes to DCS Studio are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - 2026-06-24
+## [0.1.0] - 2026-06-27
 
 First release. A desktop IDE for DCS World mission and mod development — a
 Tauri + SvelteKit shell with a CodeMirror editor and a live link into a running
@@ -39,4 +39,4 @@ sim.
   loopback so agents like Claude Code can drive the project, workspace, and
   live sim.
 
-[0.1.0]: https://gitlab.beluga-sirius.ts.net/flying-dice/dcs-studio/-/releases/v0.1.0
+[0.1.0]: https://github.com/flying-dice/dcs-studio/releases/tag/v0.1.0
