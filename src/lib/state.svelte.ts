@@ -29,6 +29,7 @@ import { dcsLink } from "./dcs-link.svelte";
 import { fileWatcher } from "./file-watcher.svelte";
 import { lang } from "./lang/intel.svelte";
 import { cargoTomlExists } from "./lang/rust-analyzer";
+import { Superseder } from "./supersede";
 import { saveWithFormat } from "./save-format";
 import { todos } from "./todos.svelte";
 import { bookmarks } from "./bookmarks.svelte";
@@ -220,6 +221,11 @@ class AppState {
    * defaults false so a non-project / pre-probe state never offers Build.
    */
   isRustProject = $state(false);
+
+  /** Latest-wins coordinator for the Cargo.toml probe: overlapping same-root
+   * probes (FileTree's 5s poll + focus/visibility vs a tree mutation) must not
+   * resolve out of order and re-show Build for a non-Rust project (issue #69). */
+  private readonly rustProbe = new Superseder();
   rootName = $state<string>("");
 
   // Recently opened projects (most-recent first), persisted to localStorage.
@@ -672,13 +678,15 @@ class AppState {
       this.isRustProject = false;
       return;
     }
-    let result = false;
-    try {
-      result = await cargoTomlExists(root);
-    } catch {
-      result = false;
-    }
-    if (this.rootPath === root) this.isRustProject = result;
+    // Latest-probe-wins: overlapping same-root probes (FileTree's 5s poll +
+    // focus/visibility events vs a tree mutation) can resolve out of order, so
+    // apply only the most recent probe's result — and only if the project
+    // hasn't switched. Fail-safe (probe error → not Rust) lives in Superseder.
+    const { value, current } = await this.rustProbe.run(
+      () => cargoTomlExists(root),
+      false,
+    );
+    if (current && this.rootPath === root) this.isRustProject = value;
   }
 
   /**
