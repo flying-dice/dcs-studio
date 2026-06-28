@@ -248,6 +248,7 @@
               openOutput();
             }
           },
+          disabled: () => !app.isRustProject,
         },
         { sep: true },
         {
@@ -289,6 +290,17 @@
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
       e.preventDefault();
       void newRootFile();
+      return;
+    }
+    // Build Project (⌘/Ctrl+F9) — Rust projects only, matching the toolbar
+    // Build button + the Run menu item's gate (issue #69). A no-project or
+    // non-Rust workspace makes the shortcut do nothing.
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "F9") {
+      e.preventDefault();
+      if (app.isRustProject && app.rootPath) {
+        void build.start(app.rootPath);
+        openOutput();
+      }
       return;
     }
     // Run (⇧F10) / Debug (⇧F9) — match the Run menu + toolbar.
@@ -483,12 +495,14 @@
         <Separator orientation="vertical" class="mx-1 !h-4" />
         {@render headerBtn(Search, "Search")}
         <Separator orientation="vertical" class="mx-1 !h-4" />
-        {@render actionBtn(
-          Hammer, "Build",
-          () => { if (app.rootPath) { void build.start(app.rootPath); openOutput(); } },
-          build.running || !app.rootPath,
-          build.running,
-        )}
+        {#if app.isRustProject}
+          {@render actionBtn(
+            Hammer, "Build",
+            () => { if (app.rootPath) { void build.start(app.rootPath); openOutput(); } },
+            build.running || !app.rootPath,
+            build.running,
+          )}
+        {/if}
         {@render actionBtn(
           PackageCheck, "Install",
           () => { if (app.rootPath) { void installer.install(app.rootPath); openOutput(); } },

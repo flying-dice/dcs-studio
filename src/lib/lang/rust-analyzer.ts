@@ -31,8 +31,10 @@ async function connectViaHost(
   return LspClient.start("rust-analyzer", program, [], root);
 }
 
-/** Production Cargo.toml probe through the backend fs commands. */
-function cargoTomlExists(root: string): Promise<boolean> {
+/** Production Cargo.toml probe through the backend fs commands. The canonical
+ * "is this a Rust project" test — also reused by the Build affordance gate
+ * (`state.svelte.ts`, issue #69) so the UI and this provider agree. */
+export function cargoTomlExists(root: string): Promise<boolean> {
   return pathExists(`${root.replace(/[\\/]+$/, "")}/Cargo.toml`);
 }
 
