@@ -22,6 +22,7 @@
 #![cfg_attr(test, allow(clippy::indexing_slicing, clippy::panic, clippy::print_stderr))]
 
 pub mod detect;
+pub mod find;
 pub mod install;
 pub mod logging;
 pub mod luadef;

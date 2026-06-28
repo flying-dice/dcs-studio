@@ -1,0 +1,163 @@
+//! studio::search — project-wide find-in-files behind the IDE's floating
+//! search overlay (issue #68): text matched across every non-ignored file in
+//! the workspace, grouped by file, each result navigating the editor to its
+//! line and column. The dead top-right Search button (and Ctrl+Shift+F) opens
+//! the overlay; ⌘F is reserved for in-file find (#73).
+//!
+//! The walk mirrors the TodoScanner (studio::todos): the `ignore`-crate
+//! gitignore-aware walker, files over 1 MiB skipped, non-UTF-8 (binary) files
+//! skipped, and a search never fails — an unreadable file simply contributes
+//! nothing. Matching is literal or regex with case-sensitive and whole-word
+//! options; only a malformed regex (regex mode) fails, surfaced as an inline
+//! hint rather than a crash. The match total is capped to bound memory and
+//! render cost; hitting the cap flags the result set truncated.
+//!
+//! v1 searches files on disk — unsaved buffer edits are not reflected — and
+//! replace-across-files is deferred to a follow-up.
+
+/// The hard cap on matches a single search returns. Reaching it stops the
+/// walk and flags the outcome truncated, so a runaway query bounds memory and
+/// render cost instead of silently dropping the overflow.
+public constant SEARCH_MATCH_CAP = 2000
+
+/// One match. `line` is 1-based; `column` is the 1-based UTF-16 start column
+/// (the editor caret's coordinate, so a jump lands exactly on the match);
+/// `length` is the match's UTF-16 length (the highlight span, which a JS
+/// string slices natively); `text` is the matched line, the row's label.
+public data SearchMatch { path: string, line: number, column: number, length: number, text: string }
+
+/// A completed search: the matches in path-then-line order and whether the
+/// cap clipped the result set (drives the "results truncated" notice).
+public data SearchOutcome { matches: studio::search::SearchMatch[], truncated: bool }
+
+/// A query and its match options. `caseSensitive` and `wholeWord` refine both
+/// literal and regex matching; `regex` treats `query` as a pattern rather than
+/// literal text.
+public data SearchQuery { query: string, caseSensitive: bool, wholeWord: bool, regex: bool }
+
+/// Why a search could not run: only a malformed regex in regex mode (the
+/// literal matcher never fails). Surfaced as an inline invalid-pattern hint,
+/// never a crash.
+public data SearchError { message: string }
+
+/// Project-wide find-in-files behind the floating search overlay. The walk,
+/// matcher, and cap run in Rust (dcs-studio-project::find, reached through a
+/// thin Tauri command); this container owns when a search runs, how its
+/// outcome reaches the overlay, and how a result navigates the editor.
+/// Debouncing the input and superseding an in-flight search when the query
+/// changes are the store's concern, not the model's (same split as the
+/// TodoScanner's generation counter).
+public container FindInFiles for studio::core::Studio {
+  /// Run a project-wide search and publish its outcome to the overlay. A
+  /// blank query (empty or whitespace) clears results without walking. With
+  /// no workspace open there is nothing to search. A malformed regex
+  /// publishes an inline invalid-pattern hint in place of results — never a
+  /// crash. Otherwise the matches (capped, path-then-line order) and the
+  /// truncated flag are published.
+  #[manual]
+  public RunSearch(query: studio::search::SearchQuery): void {
+    blank = bool from self.IsBlank(query)
+    if (blank) {
+      self.PublishResults(self.EmptyOutcome())
+      return
+    }
+    root = Option<string> from self.WorkspaceRoot()
+    if (root.isNone) {
+      return
+    }
+    found = Result<studio::search::SearchOutcome, studio::search::SearchError> from self.Search(root.value, query)
+    if (found.isErr) {
+      self.PublishInvalid(found.error)
+      return
+    }
+    self.PublishResults(found.value)
+  }
+
+  /// A result navigates to its match: the file opens and the caret lands on
+  /// the match's line and column. The overlay stays open for continued
+  /// browsing — the click path; the keyboard path closes it (a store
+  /// concern, not modeled here). Same open+jump mechanics as the Todos and
+  /// Problems panels.
+  #[manual]
+  public OpenMatch(hit: studio::search::SearchMatch): void {
+    studio::core::Workbench.OpenFile(hit.path)
+    self.JumpTo(hit)
+  }
+
+  /// The walk-and-match engine: every non-ignored file under `root`
+  /// (gitignore-aware, hidden/.git skipped, files over 1 MiB skipped,
+  /// non-UTF-8 skipped — the TodoScanner rules), matched per the query's
+  /// literal/regex and case/whole-word options, in path-then-line order and
+  /// capped at SEARCH_MATCH_CAP. Only a malformed regex fails; an unreadable
+  /// file contributes nothing.
+  Search(root: string, query: studio::search::SearchQuery): Result<studio::search::SearchOutcome, studio::search::SearchError>;
+
+  /// The tracked workspace root, if a project is open.
+  WorkspaceRoot(): Option<string>;
+
+  /// Whether `query` has no searchable text (empty or whitespace only) — the
+  /// guard that clears results without a walk.
+  IsBlank(query: studio::search::SearchQuery): bool;
+
+  /// The empty outcome published for a blank query: no matches, not truncated.
+  EmptyOutcome(): studio::search::SearchOutcome;
+
+  /// Hand the outcome to the overlay: results grouped by file with a total
+  /// match/file count and, when truncated, the refine-your-search notice.
+  PublishResults(outcome: studio::search::SearchOutcome): void;
+
+  /// Surface an inline invalid-pattern hint in place of results.
+  PublishInvalid(error: studio::search::SearchError): void;
+
+  /// Place the editor caret on the match's line and column and reveal it.
+  JumpTo(hit: studio::search::SearchMatch): void;
+}
+
+/// Typing a query surfaces matches from across the workspace, grouped by file.
+feature FindAcrossWorkspace for studio::search::FindInFiles {
+  given "a project is open"
+  when "the developer types a query into the search overlay"
+  then "matches from every non-ignored file appear, grouped by file"
+  and "each result shows its line number and the matched line"
+  and "a total match and file count is shown"
+}
+
+/// The match options refine the result set.
+feature SearchHonorsMatchOptions for studio::search::FindInFiles {
+  given "the search overlay shows results for a query"
+  when "the developer toggles case-sensitive, whole-word, or regex"
+  then "the results update to honor the active options"
+}
+
+/// A malformed regex shows a hint instead of crashing.
+feature InvalidRegexShowsHint for studio::search::FindInFiles {
+  given "regex mode is on"
+  when "the developer types an invalid pattern"
+  then "an inline invalid-pattern hint is shown in place of results"
+  and "the search does not crash"
+}
+
+/// The walk skips what the TodoScanner skips.
+feature SearchSkipsIgnoredAndNonText for studio::search::FindInFiles {
+  given "the workspace contains a gitignored path, a file over 1 MiB, and a binary file"
+  when "the developer searches"
+  then "none of those files are searched"
+  but "matches in normal non-ignored files still surface"
+}
+
+/// The match cap is never a silent truncation.
+feature SearchResultsCapped for studio::search::FindInFiles {
+  given "a query whose matches exceed SEARCH_MATCH_CAP"
+  when "the developer searches"
+  then "the results stop at the cap"
+  and "the outcome is flagged truncated so the overlay shows a refine-your-search notice"
+}
+
+/// A result navigates to its match; the overlay stays open after a click.
+feature MatchClickNavigatesEditor for studio::search::FindInFiles {
+  given "the search overlay lists a match in a file not currently open"
+  when "the developer clicks the result"
+  then "that file opens in the editor"
+  and "the caret lands on the match's line and column"
+  and "the overlay stays open for continued browsing"
+}

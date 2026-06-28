@@ -1555,6 +1555,7 @@ dependencies = [
  "dcs-lua-fmt",
  "dcs-lua-syntax",
  "ignore",
+ "regex",
  "serde",
  "serde_json",
  "toml 0.8.2",

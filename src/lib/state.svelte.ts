@@ -33,6 +33,7 @@ import { cargoTomlExists } from "./lang/rust-analyzer";
 import { Superseder } from "./supersede";
 import { saveWithFormat } from "./save-format";
 import { todos } from "./todos.svelte";
+import { find } from "./search.svelte";
 import { bookmarks } from "./bookmarks.svelte";
 import { database } from "./database.svelte";
 import { marketplace } from "./marketplace.svelte";
@@ -414,6 +415,9 @@ class AppState {
       // …and rescan comment tags for the Todos panel (model/studio/todos.pds
       // RefreshAll) — equally fire-and-forget and non-fatal.
       void todos.refreshAll(path);
+      // …and clear any search overlay state from the previous workspace
+      // (model/studio/search.pds) — a new root means stale results/query.
+      find.reset();
       // …and restore this project's bookmarks (model/studio/bookmarks.pds
       // LoadProject), keyed by the canonical root — synchronous, localStorage.
       bookmarks.load(path);
@@ -460,6 +464,7 @@ class AppState {
       void watchStop().catch((e) => console.error("watch stop failed:", e));
       this.projectOps.resetWorkspace();
       todos.reset();
+      find.reset();
       bookmarks.reset();
       database.reset();
     } finally {
