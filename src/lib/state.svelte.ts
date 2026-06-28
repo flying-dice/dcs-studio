@@ -34,6 +34,7 @@ import { saveWithFormat } from "./save-format";
 import { todos } from "./todos.svelte";
 import { bookmarks } from "./bookmarks.svelte";
 import { database } from "./database.svelte";
+import { search } from "./search.svelte";
 import { marketplace } from "./marketplace.svelte";
 import { publish } from "./publish.svelte";
 import type { Extension } from "@codemirror/state";
@@ -461,6 +462,7 @@ class AppState {
       todos.reset();
       bookmarks.reset();
       database.reset();
+      search.reset();
     } finally {
       this.switching = false;
     }

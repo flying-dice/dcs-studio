@@ -31,6 +31,7 @@
   import EditorTabs from "$lib/components/EditorTabs.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
   import GithubAuth from "$lib/components/GithubAuth.svelte";
+  import SearchOverlay from "$lib/components/SearchOverlay.svelte";
   import McpHelpModal from "$lib/components/McpHelpModal.svelte";
   import AboutModal from "$lib/components/AboutModal.svelte";
   import PanelResizeHandle from "$lib/components/PanelResizeHandle.svelte";
@@ -41,6 +42,7 @@
   import { debug } from "$lib/debug-session.svelte";
   import { runConfig } from "$lib/run-config.svelte";
   import { recipes } from "$lib/recipes.svelte";
+  import { search } from "$lib/search.svelte";
   import { typeSync } from "$lib/types-sync.svelte";
   import { typeSyncIndicator } from "$lib/types-sync-classify";
   import { cn } from "$lib/utils.js";
@@ -287,6 +289,13 @@
       app.saveFile();
       return;
     }
+    // Project-wide search (Ctrl/⌘+Shift+F). ⌘F stays free for in-file find
+    // (#73). No-ops with no project open — openSearch guards on the root.
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      search.openOverlay(app.rootPath);
+      return;
+    }
     // New File (⌘N) — the menu's File → New File. preventDefault stops the
     // webview/browser from opening a new window. newRootFile no-ops with no
     // project open, so a stray ⌘N on the Welcome screen is harmless (Welcome
@@ -431,7 +440,7 @@
   </Tooltip.Root>
 {/snippet}
 
-{#snippet headerBtn(Icon: LucideIcon, label: string)}
+{#snippet headerBtn(Icon: LucideIcon, label: string, onclick: () => void, disabled: boolean)}
   <Tooltip.Root>
     <Tooltip.Trigger>
       {#snippet child({ props })}
@@ -441,6 +450,8 @@
           size="icon-sm"
           class="text-muted-foreground hover:text-foreground"
           aria-label={label}
+          {onclick}
+          {disabled}
         >
           <Icon />
         </Button>
@@ -509,7 +520,11 @@
              Debug / Stop), in the app's top toolbar. -->
         <RunWidget />
         <Separator orientation="vertical" class="mx-1 !h-4" />
-        {@render headerBtn(Search, "Search")}
+        {@render headerBtn(
+          Search, "Search",
+          () => search.openOverlay(app.rootPath),
+          !app.rootPath,
+        )}
         <Separator orientation="vertical" class="mx-1 !h-4" />
         {#if app.isRustProject}
           {@render actionBtn(
@@ -929,5 +944,6 @@
   </div>
   <McpHelpModal open={mcpHelpOpen} onClose={() => (mcpHelpOpen = false)} />
   <AboutModal open={aboutOpen} onClose={() => (aboutOpen = false)} />
+  <SearchOverlay />
 </Tooltip.Provider>
 {/if}

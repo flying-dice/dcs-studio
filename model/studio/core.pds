@@ -15,6 +15,10 @@ public constant PANEL_WIDTH_MIN = 180
 /// Widest a side panel may be dragged — keeps the center editor visible.
 public constant PANEL_WIDTH_MAX = 520
 
+/// Most hits the project-wide find-in-files overlay collects before it stops
+/// and flags the result set truncated (issue #68).
+public constant SEARCH_MATCH_CAP = 2000
+
 /// One open editor tab. Each tab owns its own buffer — text, undo history,
 /// selection, scroll — so no edit or undo in one tab can ever leak into
 /// another. `savedText` is the on-disk baseline; it diverges from `text`
@@ -40,6 +44,25 @@ public system Studio;
 /// A batch of workspace paths that changed on disk, delivered by the fs watcher
 /// (issue #40) — drives the tree refresh + open-buffer reconciliation.
 public data FsChanged { paths: string[] }
+
+/// Match options for a project-wide search: case sensitivity, whole-word, and
+/// regex vs literal (issue #68).
+public data SearchOptions { caseSensitive: bool, wholeWord: bool, regex: bool }
+
+/// One project-wide search hit. `line` is 1-based; `column` is 1-based and
+/// `length` is a span, both counting UTF-16 code units — the editor caret's
+/// coordinates plus the matched span the overlay highlights. `text` is the
+/// matching line (the result row's content).
+public data SearchHit { path: string, line: number, column: number, length: number, text: string }
+
+/// The outcome of a workspace search: the hits (capped at SEARCH_MATCH_CAP) and
+/// whether that cap truncated them — the overlay shows a refine-your-search
+/// notice when true.
+public data SearchResult { matches: studio::core::SearchHit[], truncated: bool }
+
+/// Why a search produced no result list rather than hits: an invalid regex
+/// pattern, surfaced as an inline hint in the overlay (never a crash).
+public data SearchError { message: string }
 
 /// SvelteKit UI: welcome screen, file tree, CodeMirror editor, tool-window
 /// stripes, status bar, Lua console, and the injection / mission-scripting
@@ -554,6 +577,105 @@ public container Workbench for studio::core::Studio {
   /// undo step) are the search component's own contract. Closing returns focus
   /// to the document. Project-wide search is separate (#68).
   public OpenFind(): void;
+  /// Open the project-wide find-in-files overlay (the top-right Search button
+  /// or Ctrl+Shift+F). With no project open there is nothing to search, so the
+  /// overlay never opens. In a plain browser (no desktop backend) the overlay
+  /// opens but reports that search requires the desktop app rather than failing
+  /// silently (issue #68).
+  #[manual]
+  public OpenSearch(): void {
+    root = Option<string> from self.ActiveRoot()
+    if (root.isNone) {
+      return
+    }
+    self.RevealSearchOverlay()
+    native = bool from self.InTauri()
+    if (!native) {
+      self.PublishSearchUnavailable()
+    }
+  }
+
+  /// Run a workspace search for `query` under the active project root with the
+  /// given options and publish the outcome to the overlay. An empty query
+  /// clears the results without searching. Outside the desktop backend the
+  /// overlay reports search-unavailable. An invalid regex yields the inline
+  /// pattern hint (no results, no crash); otherwise the (possibly truncated)
+  /// hits are shown. The Rust walk (SearchWorkspace) skips ignored, oversized,
+  /// and non-text files — the same rules as the Todos scanner.
+  #[manual]
+  public FindInFiles(query: string, options: studio::core::SearchOptions): void {
+    native = bool from self.InTauri()
+    if (!native) {
+      self.PublishSearchUnavailable()
+      return
+    }
+    root = Option<string> from self.ActiveRoot()
+    if (root.isNone) {
+      return
+    }
+    empty = bool from self.QueryIsEmpty(query)
+    if (empty) {
+      self.PublishSearch(self.EmptySearch())
+      return
+    }
+    found = Result<studio::core::SearchResult, studio::core::SearchError> from self.SearchWorkspace(root.value, query, options)
+    if (found.isErr) {
+      self.PublishSearchError(found.error)
+      return
+    }
+    self.PublishSearch(found.value)
+  }
+
+  /// A search hit navigates to its match: the file opens and the caret lands on
+  /// the hit's line and column. A click keeps the overlay open for continued
+  /// browsing; activating with Enter dismisses it.
+  #[manual]
+  public OpenSearchHit(hit: studio::core::SearchHit, keepOpen: bool): void {
+    self.OpenFile(hit.path)
+    self.JumpToHit(hit)
+    if (!keepOpen) {
+      self.HideSearchOverlay()
+    }
+  }
+
+  /// Walk the active workspace for `query` (Rust scan via the gitignore-aware
+  /// walker: ignored paths, files over 1 MiB, and non-UTF-8 files skipped),
+  /// capped at SEARCH_MATCH_CAP hits with the truncated flag set when the cap
+  /// trips. An invalid regex pattern returns Err.
+  SearchWorkspace(root: string, query: string, options: studio::core::SearchOptions): Result<studio::core::SearchResult, studio::core::SearchError>;
+
+  /// The active project workspace root, if any — the search guard (no root, no
+  /// overlay).
+  ActiveRoot(): Option<string>;
+
+  /// Whether `query` is empty after trimming — an empty query clears results
+  /// rather than running a search.
+  QueryIsEmpty(query: string): bool;
+
+  /// Reveal the floating search overlay over the editor with the query field
+  /// focused.
+  RevealSearchOverlay(): void;
+
+  /// Dismiss the search overlay and return focus to the editor.
+  HideSearchOverlay(): void;
+
+  /// Hand the search outcome to the overlay: hits grouped by file with a
+  /// per-file count, the total match/file count, and the truncated notice.
+  PublishSearch(result: studio::core::SearchResult): void;
+
+  /// Show the inline invalid-pattern hint instead of results.
+  PublishSearchError(error: studio::core::SearchError): void;
+
+  /// Report that search requires the desktop app (plain-browser fallback).
+  PublishSearchUnavailable(): void;
+
+  /// The empty outcome published when the query is cleared (no hits, not
+  /// truncated).
+  EmptySearch(): studio::core::SearchResult;
+
+  /// Place the editor caret on the hit's line and column and scroll it into
+  /// view.
+  JumpToHit(hit: studio::core::SearchHit): void;
 }
 
 /// The developer runs the file they are editing — or any file in the tree —
@@ -853,4 +975,54 @@ feature DatabaseEmptyStateDeepLinksToRecipes for studio::core::Workbench {
   given "the Database panel shows its empty state with no databases discovered"
   when "the developer follows the Browse SQLite recipes link"
   then "the Recipes panel opens focused on the SQLite category"
+}
+
+/// Project-wide find-in-files: the search overlay lists matches from every
+/// non-ignored file, grouped by file, honouring the same skip rules as the
+/// Todos scanner (issue #68).
+feature SearchAcrossWorkspace for studio::core::Workbench {
+  given "a project is open and the search overlay is open"
+  when "the developer types a query"
+  then "matches from every non-ignored file appear, grouped by file with the line and column of each"
+  and "ignored, oversized, and non-text files contribute nothing"
+}
+
+/// A search hit navigates the editor; a click keeps browsing while Enter
+/// dismisses the overlay.
+feature SearchResultNavigatesEditor for studio::core::Workbench {
+  given "the search overlay lists a hit in a file not currently open"
+  when "the developer activates the hit"
+  then "that file opens with the caret on the hit's line and column"
+  but "a click keeps the overlay open while Enter dismisses it"
+}
+
+/// An invalid regex shows an inline hint instead of results — never a crash.
+feature InvalidSearchPatternShowsHint for studio::core::Workbench {
+  given "the search overlay is in regex mode"
+  when "the developer types an invalid pattern"
+  then "an inline invalid-pattern hint is shown instead of results"
+  and "the search does not crash"
+}
+
+/// Matches past the cap are truncated, with a notice — never silently dropped.
+feature SearchCapTruncatesWithNotice for studio::core::Workbench {
+  given "a query whose matches exceed SEARCH_MATCH_CAP"
+  when "the search runs"
+  then "the hits stop at the cap and a refine-your-search notice is shown"
+}
+
+/// Search needs an open project: the Search button and Ctrl+Shift+F do nothing
+/// on the welcome screen.
+feature SearchNeedsOpenProject for studio::core::Workbench {
+  given "no project is open"
+  when "the developer triggers search via the Search button or Ctrl+Shift+F"
+  then "no overlay opens"
+}
+
+/// In a plain browser there is no filesystem backend, so search reports that it
+/// requires the desktop app rather than failing silently.
+feature SearchRequiresDesktopApp for studio::core::Workbench {
+  given "the app runs in a plain browser with no desktop backend"
+  when "the developer opens search"
+  then "the overlay reports that search requires the desktop app rather than failing silently"
 }

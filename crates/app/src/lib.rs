@@ -7,6 +7,7 @@ mod cargolua;
 mod database_cmd;
 mod dcs;
 mod deeplink;
+mod find_cmd;
 mod format;
 mod fs;
 mod github;
@@ -213,6 +214,7 @@ pub fn run() {
             term::term_default_shell,
             todos_cmd::scan_todos,
             todos_cmd::scan_file_todos,
+            find_cmd::find_in_files,
             database_cmd::db_write_dir,
             database_cmd::db_discover,
             database_cmd::db_tables,
