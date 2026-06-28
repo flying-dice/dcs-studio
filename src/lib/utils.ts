@@ -24,6 +24,17 @@ export function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+/** The message from a caught Tauri command rejection: the backend serialises
+ *  its error type as `{ message }` (e.g. `SearchError`, `DbError`), so unwrap
+ *  that string before falling back to the generic formatter. */
+export function commandErrorMessage(error: unknown): string {
+	if (typeof error === "object" && error !== null && "message" in error) {
+		const message = (error as { message: unknown }).message;
+		if (typeof message === "string") return message;
+	}
+	return errorMessage(error);
+}
+
 /** The final path segment (basename) of `path`, splitting on either slash; the
  *  whole path when it has no separator. The sync companion to api's async
  *  `basename` (which round-trips to the backend). */
