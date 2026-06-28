@@ -177,6 +177,15 @@ public container Workbench for studio::core::Studio {
   /// passes through unchanged.
   CanonicalPath(path: string): string;
 
+  /// Whether the open project is a Rust project — a Cargo.toml at the workspace
+  /// root, matching the backend definition (studio::build Builder.IsRustProject).
+  /// Drives the Build affordance: the toolbar Build button is shown only when
+  /// true, and the Run -> Build Project item (with its Cmd/Ctrl+F9 shortcut) is
+  /// enabled only when true. Re-probed on project open and after every tree
+  /// refresh, so adding or removing the root Cargo.toml flips it. Fail-safe: a
+  /// probe failure reads as not-Rust, hiding Build.
+  IsRustProject(): bool;
+
   /// The already-open tab for `path`, if any — opening never duplicates tabs.
   FindOpen(path: string): Option<studio::core::Document>;
 
@@ -544,6 +553,15 @@ feature RunFileInDcs for studio::core::Workbench {
   when "the developer runs it in DCS (Run control, shortcut, or tree action)"
   then "the file's content executes in the DCS GUI/hooks environment"
   and "the result (or Lua error) is appended to the console log"
+}
+
+/// Build is offered only for Rust projects, so the toolbar never shows an action
+/// that could only no-op (studio::build Builder.RunBuild no-ops a non-Rust root).
+feature BuildAffordanceOnlyForRustProjects for studio::core::Workbench {
+  given "a project is open without a Cargo.toml at its root"
+  when "the workbench renders the Build affordances"
+  then "the toolbar Build button is hidden"
+  and "the Run menu Build Project item is disabled"
 }
 
 /// Saving is a no-op unless the buffer actually changed.
