@@ -130,6 +130,9 @@ export class SearchSession {
   /** Dismiss the overlay (model `HideSearchOverlay`); editor focus returns in
    * the component. */
   close(): void {
+    // Supersede any in-flight search so its result can't publish into a closed
+    // overlay and leave stale `matches` behind for the next open. (MR !76)
+    this.generation++;
     this.open = false;
     if (this.debounceTimer !== null) {
       clearTimeout(this.debounceTimer);
@@ -178,6 +181,13 @@ export class SearchSession {
     }
     const root = this.root;
     if (root === null) return;
+    // Bump the generation BEFORE the empty-query branch so clearing the query
+    // (like any new run) supersedes an in-flight search: a slow backend
+    // resolving after the query was cleared must not publish stale hits.
+    // Keyboard nav (move/selected/activate) acts on `matches` regardless of
+    // what the overlay renders, so a stale list is user-reachable —
+    // clear → ↓ → Enter would open a file for a query that is gone. (MR !76)
+    const generation = ++this.generation;
     if (this.query.trim() === "") {
       this.matches = [];
       this.truncated = false;
@@ -186,7 +196,6 @@ export class SearchSession {
       this.status = "idle";
       return;
     }
-    const generation = ++this.generation;
     this.status = "searching";
     const options: SearchOptions = {
       caseSensitive: this.options.caseSensitive,
