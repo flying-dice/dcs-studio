@@ -110,6 +110,33 @@ test("Esc dismisses the overlay and it can be reopened", async ({ page }) => {
   await expect(page.getByTestId("search-overlay")).toBeVisible();
 });
 
+test("Esc returns focus to the editor (Dismiss AC)", async ({ page }) => {
+  // Open a match so the real editor mounts and takes focus — the jump's reveal
+  // calls view.focus(). Select the first result and press Enter.
+  const input = page.getByTestId("search-input");
+  await input.fill("gauge");
+  await expect(page.getByTestId("search-result")).toHaveCount(4);
+  await input.press("Enter");
+  await expect(page.getByTestId("search-overlay")).toBeHidden();
+  await expect(page.getByTestId("lab-status")).toContainText("active: alpha.lua");
+  const editor = page.locator(".cm-content");
+  await expect(editor).toBeFocused();
+
+  // Reopen from the keyboard (Ctrl+Shift+F) so the editor still holds focus as
+  // the overlay opens — the AC scenario, "the editor had focus". The "open
+  // search" button can't stand in here: clicking it moves focus off the editor
+  // first.
+  await page.keyboard.press("Control+Shift+F");
+  await expect(page.getByTestId("search-overlay")).toBeVisible();
+  await expect(input).toBeFocused();
+
+  // Bare Esc, no result selected: the overlay closes AND editor focus returns —
+  // keystrokes go back to the editor, not stranded on <body> (issue #68 Dismiss).
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("search-overlay")).toBeHidden();
+  await expect(editor).toBeFocused();
+});
+
 test("a query with no matches shows the empty state, not an error", async ({
   page,
 }) => {

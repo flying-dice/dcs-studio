@@ -20,7 +20,13 @@
   // browsing (model OpenMatch); Enter opens and closes.
   function openHit(hit: SearchMatch, closeAfter: boolean) {
     app.openFile(hit.path, fileName(hit.path), { line: hit.line, col: hit.column });
-    if (closeAfter) store.dismiss();
+    // The jump reveals the file and focuses the editor (Editor.svelte view.focus).
+    // Flag it so the dismiss below restores nothing — otherwise focus would snap
+    // back to the overlay's opener instead of the line the user jumped to.
+    if (closeAfter) {
+      handedToEditor = true;
+      store.dismiss();
+    }
   }
 
   type Row =
@@ -52,13 +58,32 @@
   let inputEl = $state<HTMLInputElement | null>(null);
   let listEl = $state<HTMLElement | null>(null);
 
-  // Focus (and select) the query field whenever the overlay opens, so the
-  // overlay appears with the query field focused (AC) and re-opening replaces
-  // the prior query.
+  // The element that held focus before the overlay stole it (the editor on
+  // Ctrl+Shift+F, the toolbar Search button on a click). Plain fields, not
+  // $state — focus is an imperative side effect, never rendered.
+  let priorFocus: HTMLElement | null = null;
+  // Set by the Enter-jump that closes the overlay (a row click keeps it open):
+  // the reveal already moved focus into the editor, so the restore stands down.
+  let handedToEditor = false;
+
+  // On open: remember the outgoing focus owner, then focus (and select) the
+  // query field — so the overlay appears focused (AC) and re-opening replaces
+  // the prior query. On a bare dismiss (Esc / click-outside / close button):
+  // hand focus back to that owner so editor focus returns (AC #68 Dismiss); the
+  // jump path opts out via handedToEditor. `??=` captures once per open (before
+  // the input grabs focus); `isConnected` skips a target torn down while open
+  // (e.g. a project switch closed the editor).
   $effect(() => {
-    if (store.open && inputEl) {
-      inputEl.focus();
-      inputEl.select();
+    if (store.open) {
+      if (inputEl) {
+        priorFocus ??= document.activeElement as HTMLElement | null;
+        inputEl.focus();
+        inputEl.select();
+      }
+    } else {
+      if (priorFocus && !handedToEditor && priorFocus.isConnected) priorFocus.focus();
+      priorFocus = null;
+      handedToEditor = false;
     }
   });
 

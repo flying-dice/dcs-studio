@@ -89,6 +89,17 @@
   };
   const store = new FindInFiles(backend, true);
 
+  // Mirror the app's Ctrl+Shift+F entry (+page.svelte) so the e2e can open the
+  // overlay from the keyboard without moving focus — the path that proves
+  // editor focus returns on dismiss. The "open search" button can't: clicking
+  // it steals focus from the editor first.
+  function onWindowKeydown(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      store.openSearch("lab");
+    }
+  }
+
   async function readFile(path: string) {
     const text = FILES.get(path);
     if (text === undefined) throw new Error(`no lab file: ${path}`);
@@ -120,6 +131,8 @@
     })();
   });
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
 
 <div class="flex h-screen flex-col gap-2 p-3" data-testid="search-lab">
   <div class="text-xs text-muted-foreground" data-testid="lab-status">
