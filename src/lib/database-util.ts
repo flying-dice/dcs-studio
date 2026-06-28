@@ -4,7 +4,7 @@
 // "(capped)" summary, and DbError unwrapping. (Byte sizing reuses
 // `formatBytes` from ./utils — no duplicate.)
 
-import { errorMessage } from "./utils";
+import { commandErrorMessage } from "./utils";
 
 /** A discovered SQLite file under the DCS write root (wire shape of the
  *  Rust `DatabaseFile`, camelCase). */
@@ -59,9 +59,5 @@ export function resultSummary(result: Pick<QueryResult, "rowCount" | "capped">):
  *  `DbError` as `{ message }`, so unwrap that before falling back to the
  *  generic formatter. */
 export function messageOf(error: unknown): string {
-  if (typeof error === "object" && error !== null && "message" in error) {
-    const message = (error as { message: unknown }).message;
-    if (typeof message === "string") return message;
-  }
-  return errorMessage(error);
+  return commandErrorMessage(error);
 }
