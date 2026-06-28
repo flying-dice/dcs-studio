@@ -72,6 +72,12 @@ app:
     - 'TRIPLE=$(rustc -vV | sed -n "s/^host: //p")'
     - mkdir -p crates/app/binaries
     - cp target/debug/lua-analyzer "crates/app/binaries/lua-analyzer-$TRIPLE"
+    # tauri-build also validates + copies bundle.resources at build-script time
+    # (like externalBin above), so the app crate won't compile unless the bridge
+    # DLL resource exists. It is a Windows artifact never loaded here and
+    # prepare-sidecar does not run in this Linux CI — stage an empty placeholder
+    # so the resource copy succeeds (#70).
+    - touch crates/app/dcs_studio.dll
     - cargo test -p dcs-studio --lib --tests
     - rustup component add clippy
     - cargo clippy -p dcs-studio --all-targets -- -D warnings
@@ -143,6 +149,7 @@ gui-smoke:
     - 'TRIPLE=$(rustc -vV | sed -n "s/^host: //p")'
     - mkdir -p crates/app/binaries
     - cp target/debug/lua-analyzer "crates/app/binaries/lua-analyzer-$TRIPLE"
+    - touch crates/app/dcs_studio.dll # bundle resource placeholder (see app job; #70)
     - cargo build -p dcs-studio # the runnable app binary (frontend embedded)
     - cargo install tauri-driver --locked
     # CARGO_HOME is $CI_PROJECT_DIR/.cargo, so the driver lands in .cargo/bin —

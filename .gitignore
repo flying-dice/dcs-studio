@@ -28,5 +28,8 @@ vite.config.ts.timestamp-*
 # Tauri sidecar binaries staged by scripts/prepare-sidecar.mjs (built, not
 # source); the bundler picks them up during `tauri build`.
 /crates/app/binaries/
+# Bridge runtime DLL staged by scripts/prepare-sidecar.mjs as the
+# `dcs_studio.dll` bundle resource (built, not source).
+/crates/app/dcs_studio.dll
 /.playwright-mcp
 test-results/

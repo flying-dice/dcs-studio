@@ -20,7 +20,7 @@
     "test:report": "playwright show-report",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri",
-    "pretauri:dev": "cargo build -p lua-analyzer",
+    "pretauri:dev": "pnpm sidecar && cargo build -p lua-analyzer",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "sidecar": "node scripts/prepare-sidecar.mjs"
