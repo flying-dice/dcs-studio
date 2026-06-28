@@ -20,6 +20,15 @@ auto-update to. Implements issue #54.
   (`crates/app/tauri.conf.json` → `plugins.updater.endpoints`) on startup and
   installs a newer signed build automatically (`check_for_updates`, `lib.rs`).
 - **Target:** Windows x86_64 only (`bundle.targets: ["nsis"]`). No macOS/Linux.
+- **The in-DCS bridge runtime ships in the bundle** (#70). `crates/dcs-bridge`
+  builds `dcs_studio.dll`; `scripts/prepare-sidecar.mjs` (run by
+  `beforeBuildCommand`) builds it `--release` and stages it as the
+  `dcs_studio.dll` bundle resource (`crates/app/tauri.conf.json` →
+  `bundle.resources`), so the installer drops it next to the app exe where the
+  Injection Manager resolves it (`source_dll_path()`). Without it an installed
+  release cannot inject or launch DCS. Two release guards enforce this: a static
+  check that the resource is declared, and a post-build check that `pnpm sidecar`
+  staged the DLL.
 - **Code signing (Authenticate) is deferred** (#54). Updater signing (minisign,
   below) is separate and **required** — it is what makes auto-update trustworthy.
 

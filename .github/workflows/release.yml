@@ -65,6 +65,20 @@ jobs:
             exit 1
           }
 
+      # The in-DCS bridge runtime (dcs_studio.dll) must ship in the bundle, or an
+      # installed release cannot inject or launch DCS (#70). Static check that the
+      # bundle still declares the resource; the post-build staging guard confirms
+      # `pnpm sidecar` actually produced it.
+      - name: Guard — bridge DLL is declared as a bundle resource
+        shell: pwsh
+        run: |
+          $conf = Get-Content crates/app/tauri.conf.json -Raw | ConvertFrom-Json
+          $resources = @($conf.bundle.resources)
+          if (-not ($resources | Where-Object { $_ -like '*dcs_studio.dll' })) {
+            Write-Host '::error::crates/app/tauri.conf.json bundle.resources no longer includes dcs_studio.dll. The in-DCS bridge runtime would not ship, so an installed release cannot inject or launch DCS (issue #70). Restore the resource entry before tagging.'
+            exit 1
+          }
+
       - name: Install Rust (stable, MSVC)
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -105,3 +119,14 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           args: --target x86_64-pc-windows-msvc
+
+      # Confirm beforeBuildCommand's `pnpm sidecar` (scripts/prepare-sidecar.mjs)
+      # actually built + staged the bridge DLL the bundle resource points at — a
+      # clear failure instead of an opaque bundler "resource not found" (#70).
+      - name: Guard — bridge DLL was staged into the build
+        shell: pwsh
+        run: |
+          if (-not (Test-Path crates/app/dcs_studio.dll)) {
+            Write-Host '::error::crates/app/dcs_studio.dll was not staged by `pnpm sidecar` (scripts/prepare-sidecar.mjs). The bundled bridge runtime is missing, so the published installer cannot inject or launch DCS (issue #70).'
+            exit 1
+          }
