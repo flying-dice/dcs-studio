@@ -25,6 +25,7 @@ import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import { canonicalPath } from "./paths";
 import { writeLocalStorage } from "./local-storage";
 import { reconcileBuffer, fsKey } from "./workspace-util";
+import { allTabPaths, otherTabPaths, rightwardTabPaths, cleanTabPaths } from "./tab-close";
 import { dcsLink } from "./dcs-link.svelte";
 import { fileWatcher } from "./file-watcher.svelte";
 import { lang } from "./lang/intel.svelte";
@@ -753,6 +754,47 @@ class AppState {
   /** Close the active tab, if any (File → Close Editor, tab × button). */
   closeActiveFile() {
     if (this.activePath) void this.closeFile(this.activePath);
+  }
+
+  /**
+   * Close every tab except `path` (tab context menu → Close Others), keeping
+   * it as the active tab. The kept tab is activated first so it holds focus
+   * even when a dirty other tab's close is declined; each other tab routes
+   * through `closeFile`, so a dirty one still prompts before its edits are
+   * discarded.
+   */
+  async closeOthers(path: string): Promise<void> {
+    this.activateFile(path);
+    for (const p of otherTabPaths(this.openFiles, path)) await this.closeFile(p);
+  }
+
+  /**
+   * Close every tab to the right of `path` (tab context menu → Close to the
+   * Right); tabs before it stay. Each routes through `closeFile`, so a dirty
+   * one still prompts, and `closeFile`'s neighbour activation keeps a live tab
+   * in view.
+   */
+  async closeToRight(path: string): Promise<void> {
+    for (const p of rightwardTabPaths(this.openFiles, path)) await this.closeFile(p);
+  }
+
+  /**
+   * Close every open tab (tab context menu → Close All). Each routes through
+   * `closeFile`, so every dirty tab prompts before its edits are discarded;
+   * declining keeps that tab. With all tabs clean this returns to the
+   * no-file-open state.
+   */
+  async closeAll(): Promise<void> {
+    for (const p of allTabPaths(this.openFiles)) await this.closeFile(p);
+  }
+
+  /**
+   * Close every unmodified tab, leaving tabs with unsaved edits open (tab
+   * context menu → Close Saved). Clean tabs never prompt and dirty tabs are
+   * skipped, so nothing is ever discarded.
+   */
+  async closeSaved(): Promise<void> {
+    for (const p of cleanTabPaths(this.openFiles)) await this.closeFile(p);
   }
 
   /**
