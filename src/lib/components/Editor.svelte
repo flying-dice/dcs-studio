@@ -23,6 +23,7 @@
   } from "$lib/editor/bookmark-gutter";
   import { bookmarks } from "$lib/bookmarks.svelte";
   import { editorCommands } from "$lib/editor/commands";
+  import { searchExtensions, openSearchPanel } from "$lib/editor/search";
   import {
     refactorExtensions,
     renameRequestFacet,
@@ -117,6 +118,10 @@
         // The IDE's editor-function keymap (toggle comment, move/duplicate
         // line) — an owned, documented contract, not a basicSetup default.
         editorCommands,
+        // In-file find/replace (issue #73): CodeMirror's maintained search,
+        // ⌘F/Ctrl+F owned at high precedence (model OpenFind). Scope is this
+        // tab's buffer only — project-wide search is separate (#68).
+        searchExtensions,
         // Format Document / Selection (Shift-Alt-F) over the shared dcs-lua
         // engine, reached through the Tauri command for this tab's file.
         formatKeymap,
@@ -228,6 +233,11 @@
       cut: cutSelection,
       copy: copySelection,
       paste: () => void pasteClipboard(),
+      // Open in-file find/replace (issue #73). openSearchPanel focuses the query
+      // field itself, so — unlike undo/redo — the view is not refocused.
+      find: () => {
+        if (view) openSearchPanel(view);
+      },
     });
     // Right-click the breakpoint gutter → open an inline condition editor.
     setConditionHandler((path, line, x, y) => {

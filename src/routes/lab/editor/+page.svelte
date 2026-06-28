@@ -16,6 +16,7 @@
   import { StreamLanguage } from "@codemirror/language";
   import { lua } from "@codemirror/legacy-modes/mode/lua";
   import { editorCommands } from "$lib/editor/commands";
+  import { searchExtensions } from "$lib/editor/search";
   import {
     formatKeymap,
     formatterFacet,
@@ -54,6 +55,14 @@
     { key: "Shift-Alt-ArrowDown", run: swallow },
   ]);
 
+  // The same ownership guard for in-file find (issue #73): basicSetup's
+  // searchKeymap already binds Mod-f to openSearchPanel, so without this decoy
+  // the find spec would stay green even if `searchExtensions` were deleted —
+  // it would fall through to the library default. This swallows Mod-f at default
+  // precedence, placed before basicSetup, so only `searchExtensions` (Prec.high)
+  // can open the panel. Delete `searchExtensions` and the find spec goes red.
+  const searchKeymapShadow = keymap.of([{ key: "Mod-f", run: swallow }]);
+
   let host: HTMLDivElement;
   let docText = $state(INITIAL);
   let ready = $state(false);
@@ -88,9 +97,13 @@
         doc: INITIAL,
         extensions: [
           baseKeymapShadow,
+          searchKeymapShadow,
           basicSetup,
           StreamLanguage.define(lua),
           editorCommands,
+          // In-file find/replace (issue #73) — the same wiring the real editor
+          // uses; the searchKeymapShadow above makes the spec guard it.
+          searchExtensions,
           // Format Document / Selection (Shift-Alt-F), backed by the stub.
           // Shift-Alt-F is not a basicSetup default, so removing formatKeymap
           // makes the key inert and the format specs go red — no decoy needed.

@@ -136,6 +136,7 @@ export interface EditorCommandBus {
   cut(): void;
   copy(): void;
   paste(): void;
+  find(): void;
 }
 
 const RECENTS_KEY = "dcs.recents";
@@ -948,6 +949,13 @@ class AppState {
   }
   editPaste() {
     if (this.canEdit) this.editorBus?.paste();
+  }
+  /** Open in-file find/replace over the active buffer (issue #73). Reached from
+   * the Edit menu and the global ⌘F when the editor isn't focused; the editor's
+   * own ⌘F keymap opens the panel directly. No-op unless an editable text editor
+   * is active (model OpenFind). */
+  editFind() {
+    if (this.canEdit) this.editorBus?.find();
   }
 
   /**

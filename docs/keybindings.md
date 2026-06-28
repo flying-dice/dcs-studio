@@ -49,6 +49,23 @@ These actions, plus **Run in DCS** and Cut/Copy/Paste/Format, are also on the
 editor's right-click context menu (issue #17). The language entries are disabled
 until the engine is ready.
 
+## Find / Replace (issue #73)
+
+In-file find/replace over the **active document only** (project-wide search is
+issue #68). Owned by `src/lib/editor/search.ts` (the `searchExtensions` wiring
+over CodeMirror's maintained `@codemirror/search` — no custom engine); exercised
+by `e2e-lang/editor-find.spec.ts`. The panel docks at the top and does both find
+and replace.
+
+| Action            | Keybinding              | Notes                                                                 |
+| ----------------- | ----------------------- | --------------------------------------------------------------------- |
+| Find / Replace    | `Mod-f`                 | Opens the find panel over the active buffer, query field focused. Also **Edit → Find / Replace** (disabled when no text editor is open). The editor owns `Mod-f`; the webview's native find is suppressed (global handler in `routes/+page.svelte`). |
+| Find next / prev  | `Enter` / `Shift-Enter` | In the panel; wraps at the ends. Outside it: `F3` / `Mod-g` (next), `Shift-F3` / `Shift-Mod-g` (previous). |
+| Close find        | `Esc`                   | Closes the panel and returns focus to the document.                   |
+
+Case-sensitive / whole-word / regex toggles live in the panel; an invalid regex
+is flagged inline (never a crash). **Replace All** is a single undo step.
+
 ## Run in DCS (issue #47)
 
 Owned by `src/lib/components/Editor.svelte` (the `Mod-Enter` keymap) and the
@@ -68,8 +85,9 @@ no-op. One carries its own shortcut:
 | -------- | ---------- | --------------------------------------------------------------------- |
 | New File | `Mod-n`    | Creates `untitled.lua` (then `untitled-2.lua`, …) under the project root and opens it; rename it in the tree. File → New File. |
 
-**Edit menu** — Undo / Redo / Cut / Copy / Paste act on the focused editor and
-are **disabled when no text editor is open**. Their keys (`Mod-z` / `Mod-Shift-z`
+**Edit menu** — Undo / Redo / Cut / Copy / Paste / Find / Replace act on the
+focused editor and are **disabled when no text editor is open** (Find / Replace
+is detailed above). Their keys (`Mod-z` / `Mod-Shift-z`
 and the platform clipboard keys) come from CodeMirror's `basicSetup`; the menu
 routes the same commands through the app store, so the entries are live rather
 than decoration. **Help → About** opens the About dialog (app name, real
