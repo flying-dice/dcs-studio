@@ -351,8 +351,8 @@ public container Workbench for studio::core::Studio {
   }
 
   /// Copy the right-clicked tab's path relative to the project root to the
-  /// clipboard (editor tab context menu → Copy Relative Path). With no project
-  /// open, or a path outside the root, the absolute path is copied unchanged.
+  /// clipboard (editor tab context menu → Copy Relative Path). A path outside
+  /// the root is copied unchanged; see RelativeToRoot for the exact reduction.
   #[manual]
   public CopyTabRelativePath(path: string): void {
     relative = string from self.RelativeToRoot(path)
@@ -360,8 +360,11 @@ public container Workbench for studio::core::Studio {
   }
 
   /// Reduce an absolute workspace path to one relative to the project root —
-  /// the root prefix and its trailing separator stripped. A path that is the
-  /// root, lies outside it, or has no project open is returned unchanged.
+  /// the root prefix and any separators immediately following it stripped. A
+  /// path outside the root is returned unchanged; a path equal to the root
+  /// reduces to the empty string; with no project open, only leading
+  /// separators are stripped. (In practice callers pass a file path with a
+  /// project open, so the latter two edge cases do not arise.)
   RelativeToRoot(path: string): string;
 
   /// Place text on the system clipboard.
