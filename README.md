@@ -1,0 +1,108 @@
+# DCS Studio (VS Code extension) — preview
+
+A bootstrap of the DCS Studio toolchain as a VS Code extension, focused on the
+**mod-consumer experience**: browsing and installing community mods from the
+Marketplace. It ships with sample data so the full UX runs offline, with no DCS
+install, no GitHub sign-in and no Rust backend.
+
+## Run it
+
+```
+npm install
+npm run compile
+```
+
+Then press **F5** ("Run Extension") to launch an Extension Development Host. In
+the new window:
+
+- Click the **DCS Studio** icon in the activity bar → **Browse the Marketplace**,
+  or
+- Run **DCS Studio: Open Marketplace** from the Command Palette, or
+- Click **DCS Marketplace** in the status bar.
+
+### What you can try
+
+- **Storefront** — search, filter by tag (click a card tag or use the dropdown),
+  sort by stars/name, refresh.
+- **Product page** — click any card. Rendered README, install plan (source →
+  DCS folder), dependencies, required stock modules (with owned/missing
+  verdicts), download size and release assets.
+- **Install flow** — click **Install** to watch the simulated per-node
+  download → link progress, then the card flips to **Installed** with an
+  Uninstall action. Libraries show **Add as dependency** instead.
+- **MissionScripting.lua** — a stub preview of the file the sanitization manager
+  will edit (a planned port).
+- **My Mods shortcut** — in My Mods, click **Add shortcut** (or run **DCS
+  Studio: Add My Mods Shortcut**) to put a Desktop / Start Menu shortcut down
+  that launches straight into My Mods in its own window — no project, no folder
+  picker. Under the hood it's a `vscode://dcs-studio.dcs-studio/mymods` deep
+  link opened with `--new-window`.
+
+## Debug Lua inside DCS
+
+Full VS Code debugging (breakpoints, stepping, variables, watch, debug
+console) for scripts running **inside the sim**, in both Lua environments:
+
+- **Mission** — the mission scripting sandbox (`trigger.action`, `coalition`,
+  `world`, …). Needs a running mission and a desanitized
+  `MissionScripting.lua` (command: **DCS Studio: Desanitize
+  MissionScripting.lua**, then restart DCS).
+- **GUI (hooks)** — the GameGUI state (`DCS.*`, `net.*`) where GUI hooks live.
+
+### Use it
+
+1. **DCS Studio: Launch DCS (with bridge)** (or Inject + start DCS yourself)
+   and wait for the status bar to show the bridge online.
+2. Open a `.lua` file, set breakpoints in the gutter.
+3. Click the **run/debug dropdown** in the editor title (▷) and pick **Debug
+   Lua in DCS Mission** / **Run Lua in DCS Mission** (or the GUI variants) —
+   or press **F5** (defaults to the mission environment; add a `dcs-lua`
+   launch configuration to customize).
+
+While paused you get the call stack, Locals/Upvalues/Globals scopes with lazy
+table expansion, conditional breakpoints, watches, hover evaluation, and real
+assignment from the Debug Console (`x = 42` writes through `debug.setlocal`).
+`print(...)` output streams to the Debug Console. Step Over/Into/Out, Pause
+(break-all) and Stop (kills a runaway loop) all work; an uncaught error pauses
+with the crash frames inspectable (`pauseOnError: false` disables that).
+
+### How it works
+
+The bridge DLL (`dcs_studio.dll`) holds the breakpoint registry and
+pause/resume flags as process-wide statics, and its WebSocket server keeps
+accepting editor requests on a background thread even while the sim thread is
+frozen at a breakpoint. The debug engine (embedded in
+`bridge/Scripts/Hooks/DcsStudio.lua`) runs your chunk under a scoped
+`debug.sethook` line hook; for mission sessions the GameGUI hook injects the
+engine into the mission state via `a_do_script`, where it pumps the RPC queue
+itself (`jsonrpc.process_queue`) while paused. The VS Code side is an inline
+Debug Adapter (`src/debug/adapter.ts`) that maps DAP onto the bridge's
+`debug_*` JSON-RPC and polls `debug_state` (250 ms) for stop/termination —
+a held breakpoint auto-continues after 30 s if the editor vanishes, so a
+crashed editor can never freeze the sim forever.
+
+After changing the hook or DLL, re-run **DCS Studio: Inject Bridge into DCS**
+(or Launch, which injects) and restart DCS to pick it up.
+
+## How this maps to the real port
+
+| Preview piece | Real extension |
+| --- | --- |
+| `media/marketplace.js` mock data | JSON-RPC to a headless Rust sidecar wrapping `studio-services` |
+| Simulated install progress | `market_install_with_progress` over the sidecar; real junction/symlink linking |
+| Webview storefront | Same webview shell; data comes from the sidecar instead of `__BOOTSTRAP__` |
+| MissionScripting stub | CodeLens/editor-title sanitize toggle over the real file |
+
+The storefront layout and states are a faithful reproduction of the current
+SvelteKit `/marketplace` route and product page, retimed to VS Code theme tokens
+so it feels native in light and dark.
+
+## Layout
+
+```
+src/extension.ts              activation, launcher view, commands, status bar
+src/marketplace/panel.ts      webview host: CSP shell, data bootstrap, host messages
+src/marketplace/mockData.ts   sample MarketListing / ProductDetail (real shapes)
+src/mission/missionPanel.ts   MissionScripting.lua stub (planned port)
+media/marketplace.{css,js}    storefront SPA (grid, product page, install sim)
+```

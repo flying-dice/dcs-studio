@@ -1,0 +1,7 @@
+# mlua `module` mode does not link Lua into the cdylib — DCS provides the
+# symbols at load time. On Windows the linker still needs an import lib to
+# resolve `lua_*`: pin it to the vendored DCS Lua 5.1 import lib. `relative` is
+# resolved against this crate directory (the parent of `.cargo`).
+[env]
+LUA_LIB_NAME = "lua"
+LUA_LIB = { value = "lua5.1", relative = true }

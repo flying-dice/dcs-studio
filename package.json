@@ -1,0 +1,387 @@
+{
+  "name": "dcs-studio",
+  "displayName": "DCS Studio",
+  "description": "DCS World mod tooling for VS Code — Marketplace, DCS link, injection & launch, guided publish.",
+  "version": "0.13.0",
+  "publisher": "dcs-studio",
+  "private": true,
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/flying-dice/dcs-studio.git"
+  },
+  "bugs": {
+    "url": "https://github.com/flying-dice/dcs-studio/issues"
+  },
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.125.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onUri"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "lua",
+        "extensions": [
+          ".lua"
+        ],
+        "aliases": [
+          "Lua"
+        ]
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "lua"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "dcs-lua",
+        "label": "DCS World Lua",
+        "languages": [
+          "lua"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Lua script to run inside DCS.",
+                "default": "${file}"
+              },
+              "env": {
+                "type": "string",
+                "enum": [
+                  "mission",
+                  "gui"
+                ],
+                "enumDescriptions": [
+                  "The mission scripting environment (trigger.action, coalition, world…). Needs a running mission and a desanitized MissionScripting.lua.",
+                  "The GameGUI hooks environment (DCS.*, net.*) the bridge runs in."
+                ],
+                "description": "Which DCS Lua environment runs the script.",
+                "default": "mission"
+              },
+              "pauseOnError": {
+                "type": "boolean",
+                "description": "Pause with the frames inspectable when the script hits an uncaught error.",
+                "default": true
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "dcs-lua",
+            "request": "launch",
+            "name": "DCS: Debug Mission Script",
+            "program": "${file}",
+            "env": "mission"
+          },
+          {
+            "type": "dcs-lua",
+            "request": "launch",
+            "name": "DCS: Debug Hook (GUI) Script",
+            "program": "${file}",
+            "env": "gui"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "DCS: Debug Mission Script",
+            "description": "Run the current Lua file in the DCS mission scripting environment with breakpoints.",
+            "body": {
+              "type": "dcs-lua",
+              "request": "launch",
+              "name": "DCS: Debug Mission Script",
+              "program": "^\"\\${file}\"",
+              "env": "mission"
+            }
+          },
+          {
+            "label": "DCS: Debug Hook (GUI) Script",
+            "description": "Run the current Lua file in the DCS GameGUI hooks environment with breakpoints.",
+            "body": {
+              "type": "dcs-lua",
+              "request": "launch",
+              "name": "DCS: Debug Hook (GUI) Script",
+              "program": "^\"\\${file}\"",
+              "env": "gui"
+            }
+          }
+        ]
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dcs-studio",
+          "title": "DCS Studio",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "dcs-studio": [
+        {
+          "id": "dcsStudio.launcher",
+          "name": "DCS Studio",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "dcs.setup.open",
+        "title": "Set DCS Paths…",
+        "category": "DCS Studio",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "dcs.manifest.author",
+        "title": "Create a Mod (manifest or new project)",
+        "category": "DCS Studio",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "dcs.project.new",
+        "title": "New Project from Template…",
+        "category": "DCS Studio",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "dcs.manifest.openForm",
+        "title": "Open Manifest Form (beside editor)",
+        "category": "DCS Studio",
+        "icon": "$(layout-sidebar-right)"
+      },
+      {
+        "command": "dcs.publish.open",
+        "title": "Publish Mod to GitHub…",
+        "category": "DCS Studio",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "dcs.marketplace.open",
+        "title": "Open Marketplace",
+        "category": "DCS Studio",
+        "icon": "$(package)"
+      },
+      {
+        "command": "dcs.mymods.open",
+        "title": "My Mods",
+        "category": "DCS Studio",
+        "icon": "$(layers)"
+      },
+      {
+        "command": "dcs.docs.open",
+        "title": "Open Documentation",
+        "category": "DCS Studio",
+        "icon": "$(book)"
+      },
+      {
+        "command": "dcs.skills.open",
+        "title": "Manage Agent Skills",
+        "category": "DCS Studio",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "dcs.mymods.createShortcut",
+        "title": "Add My Mods Shortcut (Desktop / Start Menu)",
+        "category": "DCS Studio",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "dcs.marketplace.refresh",
+        "title": "Refresh Marketplace",
+        "category": "DCS Studio",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "dcs.mission.open",
+        "title": "Open MissionScripting.lua",
+        "category": "DCS Studio",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "dcs.mission.desanitize",
+        "title": "Desanitize MissionScripting.lua",
+        "category": "DCS Studio",
+        "icon": "$(unlock)"
+      },
+      {
+        "command": "dcs.mission.sanitize",
+        "title": "Re-sanitize MissionScripting.lua",
+        "category": "DCS Studio",
+        "icon": "$(lock)"
+      },
+      {
+        "command": "dcs.mission.restore",
+        "title": "Restore MissionScripting.lua from backup",
+        "category": "DCS Studio",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "dcs.bridge.console",
+        "title": "Open Lua Console",
+        "category": "DCS Studio",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "dcs.bridge.inject",
+        "title": "Inject Bridge into DCS",
+        "category": "DCS Studio",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "dcs.bridge.eject",
+        "title": "Eject Bridge from DCS",
+        "category": "DCS Studio",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "dcs.bridge.launch",
+        "title": "Launch DCS (with bridge)",
+        "category": "DCS Studio",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "dcs.bridge.build",
+        "title": "Build Bridge (cargo)",
+        "category": "DCS Studio",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "dcs.debug.debugMission",
+        "title": "Debug Lua in DCS Mission",
+        "category": "DCS Studio",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "dcs.debug.runMission",
+        "title": "Run Lua in DCS Mission",
+        "category": "DCS Studio",
+        "icon": "$(play)"
+      },
+      {
+        "command": "dcs.debug.debugGui",
+        "title": "Debug Lua in DCS GUI (Hooks)",
+        "category": "DCS Studio",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "dcs.debug.runGui",
+        "title": "Run Lua in DCS GUI (Hooks)",
+        "category": "DCS Studio",
+        "icon": "$(play)"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "dcs.debug.debugMission",
+          "when": "resourceLangId == lua && resourceFilename != MissionScripting.lua",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dcs.debug.runMission",
+          "when": "resourceLangId == lua && resourceFilename != MissionScripting.lua",
+          "group": "navigation@2"
+        },
+        {
+          "command": "dcs.debug.debugGui",
+          "when": "resourceLangId == lua && resourceFilename != MissionScripting.lua",
+          "group": "navigation@3"
+        },
+        {
+          "command": "dcs.debug.runGui",
+          "when": "resourceLangId == lua && resourceFilename != MissionScripting.lua",
+          "group": "navigation@4"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "dcs.manifest.openForm",
+          "when": "resourceFilename == dcs-studio.toml",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dcs.publish.open",
+          "when": "resourceFilename == dcs-studio.toml",
+          "group": "navigation@2"
+        },
+        {
+          "command": "dcs.mission.desanitize",
+          "when": "resourceFilename == MissionScripting.lua",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dcs.mission.sanitize",
+          "when": "resourceFilename == MissionScripting.lua",
+          "group": "navigation@2"
+        },
+        {
+          "command": "dcs.mission.restore",
+          "when": "resourceFilename == MissionScripting.lua",
+          "group": "1_dcs@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DCS Studio",
+      "properties": {
+        "dcsStudio.discoveryTopic": {
+          "type": "string",
+          "default": "dcs-studio",
+          "markdownDescription": "GitHub topic the Marketplace searches to discover mods. The real marker is `dcs-studio`; override only for testing against a topic that has repos."
+        },
+        "dcsStudio.savedGamesPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to your DCS **Saved Games** folder (the `{SavedGames}` install root). Leave empty to use `%USERPROFILE%\\Saved Games\\DCS`."
+        },
+        "dcsStudio.gameInstallPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to your DCS **game install** folder (the `{GameInstall}` install root). Leave empty to leave `{GameInstall}` rules unresolved."
+        },
+        "dcsStudio.dataDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The **DCS Studio data dir** — where subscribed mods are downloaded and unpacked; symlinks are maintained from here into the DCS folders. Leave empty to use `%USERPROFILE%\\DCSStudio\\mods`."
+        },
+        "dcsStudio.sevenZipPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the **7-Zip** executable (`7z.exe`) used to package and unpack mod payloads. Leave empty to auto-detect it on PATH or under `Program Files\\7-Zip`."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "dev": "node scripts/dev.mjs",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.125.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.10"
+  }
+}

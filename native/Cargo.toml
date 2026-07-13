@@ -1,0 +1,36 @@
+# The in-DCS bridge, ported self-contained into the extension repo (from
+# dcs-studio's crates/dcs-bridge). Produces dcs_studio.dll — an mlua cdylib +
+# actix WebSocket JSON-RPC server loaded by the GameGUI hook. The two former
+# path deps (dcs-bridge-client, dcs-studio-project) are vendored down to the
+# three modules actually used — src/protocol.rs, src/luadef.rs, src/path_guard.rs
+# — so nothing here pulls in the Lua language engine.
+[package]
+name = "dcs-bridge"
+version = "0.1.4"
+edition = "2021"
+license = "MIT"
+
+# The package keeps the name `dcs-bridge`, but the cdylib is `dcs_studio.dll`:
+# mlua derives `luaopen_dcs_studio` from the lib name and `require("dcs_studio")`
+# resolves the DLL basename.
+[lib]
+name = "dcs_studio"
+crate-type = ["cdylib"]
+
+[features]
+# Gates src/luadef.rs's round-trip tests, which need dcs-studio's
+# dcs-lua-syntax parser crate (not ported into this repo).
+luadef-roundtrip = []
+
+[dependencies]
+mlua = { version = "0.10", features = ["lua51", "module", "serialize", "macros"] }
+tokio = { version = "1", features = ["full"] }
+actix-web = "4"
+actix-ws = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+# Bundled SQLite (vendored C compiled via `cc`) — no external sqlite3.dll.
+rusqlite = { version = "0.32", features = ["bundled"] }
+log = "0.4"
+log4rs = "1"

@@ -1,0 +1,9 @@
+node_modules/
+out/
+*.vsix
+.vscode-test/
+.dev-sandbox/
+.claude/settings.local.json
+native/target/
+coverage/
+.playwright-mcp/

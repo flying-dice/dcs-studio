@@ -1,0 +1,1094 @@
+<style>
+:root, :root[data-theme="light"] {
+  --vscode-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Variable", system-ui, sans-serif;
+  --vscode-editor-font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  --vscode-editor-background: #ffffff;
+  --vscode-foreground: #3b3b3b;
+  --vscode-editorWidget-background: #f8f8f8;
+  --vscode-panel-border: #e5e5e5;
+  --vscode-descriptionForeground: #767676;
+  --vscode-textLink-foreground: #005fb8;
+  --vscode-toolbar-hoverBackground: rgba(184,184,184,0.31);
+  --vscode-input-background: #ffffff;
+  --vscode-input-foreground: #3b3b3b;
+  --vscode-input-border: #cecece;
+  --vscode-focusBorder: #005fb8;
+  --vscode-button-background: #005fb8;
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: #0258a8;
+  --vscode-button-secondaryBackground: #e9e9e9;
+  --vscode-button-secondaryForeground: #3b3b3b;
+  --vscode-button-secondaryHoverBackground: #d8d8d8;
+  --vscode-badge-background: #d4d4d4;
+  --vscode-badge-foreground: #3b3b3b;
+  --vscode-editor-inactiveSelectionBackground: #e5ebf1;
+  --vscode-editorWarning-foreground: #bf8803;
+  --vscode-testing-iconPassed: #3d8c40;
+  --vscode-progressBar-background: #005fb8;
+  --vscode-textCodeBlock-background: rgba(0,0,0,0.05);
+  --vscode-inputValidation-errorBackground: rgba(190,70,70,0.12);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --vscode-editor-background: #1f1f1f;
+    --vscode-foreground: #cccccc;
+    --vscode-editorWidget-background: #252526;
+    --vscode-panel-border: #2b2b2b;
+    --vscode-descriptionForeground: #9d9d9d;
+    --vscode-textLink-foreground: #4daafc;
+    --vscode-toolbar-hoverBackground: rgba(90,93,94,0.31);
+    --vscode-input-background: #313131;
+    --vscode-input-foreground: #cccccc;
+    --vscode-input-border: #3c3c3c;
+    --vscode-focusBorder: #0078d4;
+    --vscode-button-background: #0078d4;
+    --vscode-button-foreground: #ffffff;
+    --vscode-button-hoverBackground: #026ec1;
+    --vscode-button-secondaryBackground: #313131;
+    --vscode-button-secondaryForeground: #cccccc;
+    --vscode-button-secondaryHoverBackground: #3c3c3c;
+    --vscode-badge-background: #616161;
+    --vscode-badge-foreground: #f8f8f8;
+    --vscode-editor-inactiveSelectionBackground: #3a3d41;
+    --vscode-editorWarning-foreground: #cca700;
+    --vscode-testing-iconPassed: #73c991;
+    --vscode-progressBar-background: #0078d4;
+    --vscode-textCodeBlock-background: rgba(255,255,255,0.06);
+    --vscode-inputValidation-errorBackground: rgba(190,70,70,0.2);
+  }
+}
+:root[data-theme="dark"] {
+  --vscode-editor-background: #1f1f1f;
+  --vscode-foreground: #cccccc;
+  --vscode-editorWidget-background: #252526;
+  --vscode-panel-border: #2b2b2b;
+  --vscode-descriptionForeground: #9d9d9d;
+  --vscode-textLink-foreground: #4daafc;
+  --vscode-toolbar-hoverBackground: rgba(90,93,94,0.31);
+  --vscode-input-background: #313131;
+  --vscode-input-foreground: #cccccc;
+  --vscode-input-border: #3c3c3c;
+  --vscode-focusBorder: #0078d4;
+  --vscode-button-background: #0078d4;
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: #026ec1;
+  --vscode-button-secondaryBackground: #313131;
+  --vscode-button-secondaryForeground: #cccccc;
+  --vscode-button-secondaryHoverBackground: #3c3c3c;
+  --vscode-badge-background: #616161;
+  --vscode-badge-foreground: #f8f8f8;
+  --vscode-editor-inactiveSelectionBackground: #3a3d41;
+  --vscode-editorWarning-foreground: #cca700;
+  --vscode-testing-iconPassed: #73c991;
+  --vscode-progressBar-background: #0078d4;
+  --vscode-textCodeBlock-background: rgba(255,255,255,0.06);
+  --vscode-inputValidation-errorBackground: rgba(190,70,70,0.2);
+}
+html, body { height: 100%; }
+
+:root {
+  --brand: color-mix(in srgb, var(--vscode-textLink-foreground) 90%, transparent);
+  --card: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
+  --muted: var(--vscode-descriptionForeground);
+  --radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.mono {
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+/* ── Top bar ── */
+header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--vscode-editor-background);
+}
+
+.brand-kicker {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.28em;
+  color: var(--muted);
+}
+
+.brand-title {
+  font-weight: 600;
+}
+
+.spacer {
+  margin-left: auto;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--vscode-foreground);
+}
+.icon-btn:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+/* ── Toolbar ── */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 49px;
+  z-index: 4;
+  background: var(--vscode-editor-background);
+}
+
+.search {
+  position: relative;
+  flex: 1;
+  min-width: 180px;
+}
+.search input {
+  width: 100%;
+  padding: 6px 10px 6px 30px;
+  border-radius: 6px;
+  border: 1px solid var(--vscode-input-border, var(--border));
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  outline: none;
+  font-size: 13px;
+}
+.search input:focus {
+  border-color: var(--vscode-focusBorder);
+}
+.search .glass {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+select {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--vscode-input-border, var(--border));
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font-size: 12px;
+  outline: none;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+.btn:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+.btn.secondary {
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  border-color: var(--border);
+}
+.btn.secondary:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn.block {
+  width: 100%;
+  justify-content: center;
+}
+
+/* ── Grid ── */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  padding: 16px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 12px;
+  transition: border-color 0.12s ease;
+}
+.card:hover {
+  border-color: color-mix(in srgb, var(--vscode-foreground) 30%, transparent);
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  width: 100%;
+}
+
+.avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  background: var(--vscode-editor-inactiveSelectionBackground, rgba(128, 128, 128, 0.2));
+  object-fit: cover;
+}
+.avatar.lg {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+}
+
+.card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.card-title {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-author {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 10px;
+  color: var(--muted);
+}
+.stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 10px;
+  color: var(--muted);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.badge {
+  border-radius: 4px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  padding: 1px 6px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.blurb {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 10px;
+}
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: none;
+  border-radius: 4px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  padding: 2px 6px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.85;
+}
+.tag:hover {
+  opacity: 1;
+}
+
+.card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.link {
+  background: none;
+  border: none;
+  color: var(--vscode-textLink-foreground);
+  font-size: 11px;
+  padding: 0;
+}
+.link:hover {
+  text-decoration: underline;
+}
+.link.muted {
+  color: var(--muted);
+}
+
+.who {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.market-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 10%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Sign-in wall ── */
+.wall {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  text-align: center;
+  padding: 72px 24px;
+  min-height: 50vh;
+}
+.wall-lock {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted);
+}
+.wall h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.wall p {
+  margin: 0;
+  max-width: 30rem;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.wall .btn {
+  margin-top: 4px;
+}
+
+/* ── States ── */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  color: var(--muted);
+  padding: 80px 24px;
+  font-size: 13px;
+}
+.spin {
+  display: inline-block;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Product page ── */
+.product {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 24px;
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 24px;
+}
+@media (max-width: 820px) {
+  .product {
+    grid-template-columns: 1fr;
+  }
+}
+
+.product h1 {
+  margin: 0;
+  font-size: 20px;
+}
+.product-meta {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.product-desc {
+  color: var(--muted);
+  margin-top: 12px;
+}
+
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--muted);
+  margin: 22px 0 8px;
+}
+
+.aside-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 12px;
+}
+.aside-card + .aside-card {
+  margin-top: 14px;
+}
+.aside-card .section-label {
+  margin-top: 0;
+}
+
+.note {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+.note.warn {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+.note.ok {
+  color: var(--vscode-testing-iconPassed, #3fb950);
+}
+
+.installed-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--vscode-testing-iconPassed, #3fb950);
+  font-size: 12px;
+}
+
+.plan-item {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.plan-item:last-child {
+  border-bottom: none;
+}
+.plan-dest {
+  color: var(--muted);
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  padding: 5px 0;
+}
+.kv .name {
+  font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+.progress .bar {
+  height: 4px;
+  border-radius: 4px;
+  background: var(--vscode-progressBar-background, rgba(128, 128, 128, 0.3));
+  overflow: hidden;
+  margin-top: 8px;
+}
+.progress .bar > span {
+  display: block;
+  height: 100%;
+  background: var(--vscode-textLink-foreground);
+  width: 0;
+  transition: width 0.25s ease;
+}
+
+/* ── Markdown (README) ── */
+.prose {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.prose h1,
+.prose h2,
+.prose h3 {
+  line-height: 1.3;
+  margin: 20px 0 8px;
+}
+.prose h1 {
+  font-size: 18px;
+}
+.prose h2 {
+  font-size: 15px;
+}
+.prose h3 {
+  font-size: 13px;
+}
+.prose p {
+  margin: 8px 0;
+}
+.prose ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+.prose li {
+  margin: 3px 0;
+}
+.prose code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.prose pre {
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.prose pre code {
+  background: none;
+  padding: 0;
+}
+.prose blockquote {
+  margin: 10px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+.prose a {
+  color: var(--vscode-textLink-foreground);
+}
+
+.codicon-inline {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  vertical-align: -2px;
+}
+
+#previewbar{display:flex;align-items:center;gap:10px;padding:6px 14px;font-size:12px;font-family:var(--vscode-font-family);color:var(--vscode-descriptionForeground);background:var(--vscode-editorWidget-background);border-bottom:1px solid var(--vscode-panel-border)}
+#previewbar b{color:var(--vscode-foreground);font-weight:600}
+#toast{position:fixed;right:16px;bottom:16px;z-index:50;display:flex;flex-direction:column;gap:8px}
+#toast .t{background:var(--vscode-editorWidget-background);border:1px solid var(--vscode-panel-border);border-left:3px solid var(--vscode-textLink-foreground);color:var(--vscode-foreground);font-family:var(--vscode-font-family);font-size:12px;padding:9px 12px;border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+</style>
+
+<div id="previewbar"><b>DCS Marketplace</b> — standalone preview of the extension webview · real flow (sign-in wall → discovery → product), simulated data</div>
+<div id="app"></div>
+<div id="toast"></div>
+
+<script>window.__PREVIEW__ = {"listings":[{"repo":"viper-drivers/f16-weapons-expansion","name":"F-16C Weapons Expansion","author":"viper-drivers","description":"Adds JSOW-C1, GBU-53/B StormBreaker and an expanded HARM tables loadout to the Viper. Ships a rearm-menu integration script.","labels":["script","weapons","aircraft"],"repo_url":"https://github.com/viper-drivers/f16-weapons-expansion","avatar_url":"https://avatars.githubusercontent.com/u/9919?s=96","stars":342,"is_library":false},{"repo":"syria-collective/syria-4k-textures","name":"Syria 4K Terrain Textures","author":"syria-collective","description":"High-resolution ground textures for the Syria map — reworked farmland, urban tiling and coastline detail. Big download, big payoff.","labels":["texture","terrain"],"repo_url":"https://github.com/syria-collective/syria-4k-textures","avatar_url":"https://avatars.githubusercontent.com/u/1024?s=96","stars":512,"is_library":false},{"repo":"hoggit-liveries/usaf-aggressors","name":"USAF Aggressor Liveries Pack","author":"hoggit-liveries","description":"16 accurate Aggressor schemes (Flanker, Splinter, Ghost) for the F-16C and F-15E, with roughmet maps.","labels":["livery","aircraft"],"repo_url":"https://github.com/hoggit-liveries/usaf-aggressors","avatar_url":"https://avatars.githubusercontent.com/u/2048?s=96","stars":289,"is_library":false},{"repo":"dcs-scripting/moose-lite","name":"MOOSE Lite","author":"dcs-scripting","description":"A trimmed MOOSE core for mission scripting — spawning, zones and scheduling without the full framework weight. Dependency-only.","labels":["script","framework"],"repo_url":"https://github.com/dcs-scripting/moose-lite","avatar_url":"https://avatars.githubusercontent.com/u/3072?s=96","stars":1203,"is_library":true},{"repo":"kneeboard-lab/dynamic-kneeboards","name":"Dynamic Kneeboards","author":"kneeboard-lab","description":"Generates per-flight kneeboard pages (comms ladder, bullseye, weather) at mission start from the briefing data.","labels":["kneeboard","script"],"repo_url":"https://github.com/kneeboard-lab/dynamic-kneeboards","avatar_url":"https://avatars.githubusercontent.com/u/4096?s=96","stars":176,"is_library":false},{"repo":"carrier-ops/supercarrier-plus","name":"Supercarrier Plus","author":"carrier-ops","description":"Deck crew callouts, case I/II/III recovery marshal automation and an LSO grade log for the Supercarrier module.","labels":["mission","script","naval"],"repo_url":"https://github.com/carrier-ops/supercarrier-plus","avatar_url":"https://avatars.githubusercontent.com/u/5120?s=96","stars":431,"is_library":false},{"repo":"sound-mods/immersive-cockpit-audio","name":"Immersive Cockpit Audio","author":"sound-mods","description":"Re-sampled switch, relay and hydraulic sounds for the Hornet and Viper pits. Drop-in sound folder, no scripting.","labels":["sound"],"repo_url":"https://github.com/sound-mods/immersive-cockpit-audio","avatar_url":"https://avatars.githubusercontent.com/u/6144?s=96","stars":98,"is_library":false},{"repo":"mission-makers/operation-eastern-storm","name":"Operation Eastern Storm","author":"mission-makers","description":"A 12-mission dynamic campaign over Syria for the F/A-18C. Persistent frontline, randomized threats and a branching storyline.","labels":["campaign","mission"],"repo_url":"https://github.com/mission-makers/operation-eastern-storm","avatar_url":"https://avatars.githubusercontent.com/u/7168?s=96","stars":254,"is_library":false},{"repo":"utils/dcs-lua-common","name":"dcs-lua-common","author":"utils","description":"Shared Lua helpers (vec math, table utils, logging) used by several DCS Studio mods. Add it as a dependency, not an install.","labels":["script","library"],"repo_url":"https://github.com/utils/dcs-lua-common","avatar_url":"https://avatars.githubusercontent.com/u/8192?s=96","stars":67,"is_library":true},{"repo":"weather-systems/real-weather-injector","name":"Real Weather Injector","author":"weather-systems","description":"Pulls live METAR at mission start and sets DCS weather, wind layers and QNH to match a chosen real-world airfield.","labels":["weather","script"],"repo_url":"https://github.com/weather-systems/real-weather-injector","avatar_url":"https://avatars.githubusercontent.com/u/9216?s=96","stars":388,"is_library":false},{"repo":"viper-drivers/hud-color-tweaks","name":"HUD Color Tweaks","author":"viper-drivers","description":"Adjustable HUD and MFD phosphor colors for the F-16C. Simple texture swap with a few presets.","labels":["texture","aircraft"],"repo_url":"https://github.com/viper-drivers/hud-color-tweaks","avatar_url":"https://avatars.githubusercontent.com/u/10240?s=96","stars":143,"is_library":false},{"repo":"training/bfm-trainer","name":"BFM Trainer","author":"training","description":"An adaptive dogfight trainer: the AI adversary scales its aggression to your last three engagements and logs your Ps.","labels":["mission","training","script"],"repo_url":"https://github.com/training/bfm-trainer","avatar_url":"https://avatars.githubusercontent.com/u/11264?s=96","stars":201,"is_library":false}],"products":{"viper-drivers/f16-weapons-expansion":{"repo":"viper-drivers/f16-weapons-expansion","name":"F-16C Weapons Expansion","author":"viper-drivers","description":"Adds JSOW-C1, GBU-53/B StormBreaker and an expanded HARM tables loadout to the Viper.","repo_url":"https://github.com/viper-drivers/f16-weapons-expansion","avatar_url":"https://avatars.githubusercontent.com/u/9919?s=96","stars":342,"release_tag":"v2.3.1","release_url":"https://github.com/viper-drivers/f16-weapons-expansion/releases/tag/v2.3.1","readme":"# F-16C Weapons Expansion\n\nExtra air-to-ground stores for the DCS **F-16C Viper**, wired into the rearm\nmenu so you can load them from the ground crew.\n\n## What you get\n\n- **AGM-154C JSOW-C1** — moving-target capable glide bomb\n- **GBU-53/B StormBreaker** — 40nm standoff, tri-mode seeker\n- Expanded **HARM** threat tables (updated emitter list)\n- A rearm-menu integration script (no mission editing required)\n\n## How it works\n\nThe mod links a Lua script into your Saved Games `Scripts` folder and a small\nloadout definition into the aircraft's mod tree. On mission start it registers\nthe new pylons:\n\n```lua\nlocal wx = require(\"weapons_expansion\")\nwx.register({ jsow = true, stormbreaker = true })\n```\n\n## Notes\n\nMultiplayer: all clients need the mod installed for the loadouts to sync.\n","assets":[{"name":"f16-weapons-expansion-v2.3.1.zip","size":4404019.2},{"name":"dcs-studio.toml","size":1126.4}],"download_size":4404019.2,"installable":true,"is_library":false,"installs":[{"source":"Scripts/WeaponsExpansion","dest":"Saved Games/DCS/Scripts/WeaponsExpansion"},{"source":"Mods/tech/F16Weapons","dest":"Saved Games/DCS/Mods/tech/F16Weapons"}],"dependencies":[{"id":"utils/dcs-lua-common","name":"dcs-lua-common","version":"*","optional":false}],"requires":[{"id":"ed/f16c","name":"F-16C Viper","installed":true}]},"dcs-scripting/moose-lite":{"repo":"dcs-scripting/moose-lite","name":"MOOSE Lite","author":"dcs-scripting","description":"A trimmed MOOSE core for mission scripting.","repo_url":"https://github.com/dcs-scripting/moose-lite","avatar_url":"https://avatars.githubusercontent.com/u/3072?s=96","stars":1203,"release_tag":"v0.9.0","release_url":"https://github.com/dcs-scripting/moose-lite/releases/tag/v0.9.0","readme":"# MOOSE Lite\n\nA dependency-only library. Add it to your project's `CargoLua.toml` and\n`require` the pieces you need — it does **not** install anything into DCS on its\nown.\n\n## Modules\n\n- `Spawn` — group spawning with schedules\n- `Zone` — trigger/polygon zones\n- `Scheduler` — frame-accurate timers\n\n## Usage\n\n```lua\nlocal Spawn = require(\"moose_lite.spawn\")\nSpawn.new(\"Red CAP\"):Schedule(300)\n```\n","assets":[],"download_size":0,"installable":false,"is_library":true,"installs":[],"dependencies":[],"requires":[]},"mission-makers/operation-eastern-storm":{"repo":"mission-makers/operation-eastern-storm","name":"Operation Eastern Storm","author":"mission-makers","description":"A 12-mission dynamic campaign over Syria for the F/A-18C.","repo_url":"https://github.com/mission-makers/operation-eastern-storm","avatar_url":"https://avatars.githubusercontent.com/u/7168?s=96","stars":254,"release_tag":"1.4.0","release_url":"https://github.com/mission-makers/operation-eastern-storm/releases/tag/1.4.0","readme":"# Operation Eastern Storm\n\nA branching 12-mission campaign for the **F/A-18C Hornet** over the Syria map.\n\n- Persistent frontline that moves with your success\n- Randomized SAM and CAP placement each replay\n- Voiced briefings and a running intel picture\n\nInstall, then find it under **Campaigns** in the DCS main menu.\n","assets":[{"name":"operation-eastern-storm-1.4.0.zip","size":134217728},{"name":"dcs-studio.toml","size":921.6}],"download_size":134217728,"installable":true,"is_library":false,"installs":[{"source":"Campaigns/EasternStorm","dest":"Saved Games/DCS/Missions/Campaigns/EasternStorm"}],"dependencies":[],"requires":[{"id":"ed/syria","name":"Syria Map","installed":false},{"id":"ed/fa18c","name":"F/A-18C Hornet","installed":true}]},"syria-collective/syria-4k-textures":{"repo":"syria-collective/syria-4k-textures","name":"Syria 4K Terrain Textures","author":"syria-collective","description":"High-resolution ground textures for the Syria map.","repo_url":"https://github.com/syria-collective/syria-4k-textures","avatar_url":"https://avatars.githubusercontent.com/u/1024?s=96","stars":512,"release_tag":"2026.02","release_url":"https://github.com/syria-collective/syria-4k-textures/releases/tag/2026.02","readme":"# Syria 4K Terrain Textures\n\nReworked ground textures for the **Syria** map. Sharper farmland tiling, richer\nurban detail and reworked coastlines.\n\n> This is a large download (~1.8 GB unpacked). Make sure you have the Syria map\n> installed before applying.\n\n## Performance\n\n4K textures increase VRAM use. If you're on 8 GB, try the 2K variant in the\nreleases page instead.\n","assets":[{"name":"syria-4k-2026.02.zip","size":1932735283.2},{"name":"dcs-studio.toml","size":716.8}],"download_size":1932735283.2,"installable":true,"is_library":false,"installs":[{"source":"Textures/Syria4K","dest":"Saved Games/DCS/Mods/terrains/Syria/Textures"}],"dependencies":[],"requires":[{"id":"ed/syria","name":"Syria Map","installed":false}]}}};</script>
+<script>
+const D = window.__PREVIEW__;
+function reply(msg, delay) { setTimeout(() => window.dispatchEvent(new MessageEvent("message", { data: msg })), delay || 0); }
+function productFor(repo) {
+  if (D.products[repo]) return D.products[repo];
+  const l = D.listings.find((x) => x.repo === repo);
+  return {
+    repo: l.repo, name: l.name, author: l.author, description: l.description,
+    repo_url: l.repo_url, avatar_url: l.avatar_url, stars: l.stars,
+    readme: "# " + l.name + "\n\n" + l.description,
+    release_tag: l.is_library ? null : "v1.0.0", release_url: l.repo_url + "/releases",
+    assets: l.is_library ? [] : [{ name: l.name.replace(/\s+/g,"-").toLowerCase()+".zip", size: 6291456 }, { name: "dcs-studio.toml", size: 900 }],
+    download_size: l.is_library ? 0 : 6292356,
+    installable: !l.is_library, is_library: l.is_library,
+    installs: [], dependencies: [], requires: [],
+  };
+}
+window.acquireVsCodeApi = function () {
+  let s = {};
+  return {
+    getState: () => s,
+    setState: (v) => { s = v; },
+    postMessage: (m) => {
+      if (!m) return;
+      if (m.type === "ready") return reply({ type: "auth", signedIn: false, browsing: false, topic: "dcs-studio" });
+      if (m.type === "signIn") { reply({ type: "auth", signedIn: true, browsing: false, login: "you (preview)", topic: "dcs-studio" }); reply({ type: "listings:busy" }, 10); reply({ type: "listings", listings: D.listings }, 500); return; }
+      if (m.type === "browseAnon") { reply({ type: "auth", signedIn: false, browsing: true, topic: "dcs-studio" }); reply({ type: "listings:busy" }, 10); reply({ type: "listings", listings: D.listings }, 500); return; }
+      if (m.type === "discover") { reply({ type: "listings:busy" }); reply({ type: "listings", listings: D.listings }, 450); return; }
+      if (m.type === "openProduct") { reply({ type: "product:busy", repo: m.repo }); reply({ type: "product", product: productFor(m.repo) }, 450); return; }
+      if (m.type === "openExternal" && m.url) { toast("Opening " + m.url.replace(/^https?:\/\//, "") + " …"); try { window.open(m.url, "_blank"); } catch (e) {} return; }
+      if (m.type === "install") return toast("Install for <b>" + (m.name||"this mod") + "</b> — the release install (plan preview) is the next step.");
+    },
+  };
+};
+function toast(html) {
+  const wrap = document.getElementById("toast");
+  const el = document.createElement("div");
+  el.className = "t"; el.innerHTML = html;
+  wrap.appendChild(el);
+  setTimeout(() => el.remove(), 3400);
+}
+</script>
+<script>// @ts-nocheck
+// Storefront SPA. The webview owns view state (grid, product page, search/tag/
+// sort); the extension host owns GitHub (auth, topic discovery, product loads)
+// and answers messages. Sign-in gated with a browse-without-signing-in fallback,
+// mirroring dcs-studio's /marketplace.
+(function () {
+  const vscode = acquireVsCodeApi();
+  const app = document.getElementById("app");
+
+  const persisted = vscode.getState() || {};
+  const state = {
+    // auth
+    signedIn: false,
+    browsing: false,
+    login: null,
+    topic: "dcs-studio",
+    authKnown: false,
+    // listings
+    listings: [],
+    listBusy: false,
+    listError: null,
+    // product
+    view: persisted.view || "list",
+    repo: persisted.repo || null,
+    product: null,
+    productBusy: false,
+    productError: null,
+    // filters
+    query: "",
+    activeTag: "",
+    sort: "stars",
+  };
+
+  const post = (m) => vscode.postMessage(m);
+  const save = () => vscode.setState({ view: state.view, repo: state.repo });
+
+  // ── Icons ──
+  const I = {
+    search: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`,
+    star: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15 9 22 9.3 16.5 14 18.5 21 12 17 5.5 21 7.5 14 2 9.3 9 9"/></svg>`,
+    tag: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.6 2.6 21 11a2 2 0 0 1 0 2.8l-6.2 6.2a2 2 0 0 1-2.8 0L3.6 11.6A2 2 0 0 1 3 10.2V4a1 1 0 0 1 1-1h6.2a2 2 0 0 1 1.4.6Z"/><circle cx="7.5" cy="7.5" r="1"/></svg>`,
+    back: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>`,
+    refresh: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>`,
+    ext: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`,
+    download: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>`,
+    check: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`,
+    hd: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 18h.01M10 18h.01"/><path d="m6 14 3-9h6l3 9"/></svg>`,
+    book: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>`,
+    box: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5V8Z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg>`,
+    lib: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3h4v18H4zM10 3h4v18h-4zM17 4l3 16-3.6.7L14 5z"/></svg>`,
+    warn: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>`,
+    lock: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
+    github: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.4 9.4 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.35 4.8-4.58 5.05.36.32.68.94.68 1.9 0 1.37-.01 2.480-.01 2.81 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>`,
+  };
+
+  // ── Helpers ──
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]),
+    );
+  }
+  function fmtBytes(n) {
+    if (!n || n <= 0) return "—";
+    const u = ["B", "KB", "MB", "GB", "TB"];
+    let v = n, i = 0;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
+  }
+  function initialsAvatar(name) {
+    const initials = name.split(/[\s/-]+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="48" height="48" rx="8" fill="#3a3d41"/><text x="50%" y="54%" font-size="18" fill="#c8c8c8" font-family="sans-serif" text-anchor="middle" dominant-baseline="middle">${initials}</text></svg>`;
+    return "data:image/svg+xml;base64," + btoa(svg);
+  }
+  function md(src) {
+    if (!src) return "";
+    const lines = src.replace(/\r\n/g, "\n").split("\n");
+    let html = "", inCode = false, inList = false;
+    const inline = (t) =>
+      esc(t)
+        .replace(/`([^`]+)`/g, "<code>$1</code>")
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>")
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+    for (const line of lines) {
+      if (line.trim().startsWith("```")) {
+        if (inCode) { html += "</code></pre>"; inCode = false; }
+        else { if (inList) { html += "</ul>"; inList = false; } html += "<pre><code>"; inCode = true; }
+        continue;
+      }
+      if (inCode) { html += esc(line) + "\n"; continue; }
+      const h = line.match(/^(#{1,3})\s+(.*)/);
+      if (h) { if (inList) { html += "</ul>"; inList = false; } html += `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`; continue; }
+      if (/^\s*[-*]\s+/.test(line)) { if (!inList) { html += "<ul>"; inList = true; } html += `<li>${inline(line.replace(/^\s*[-*]\s+/, ""))}</li>`; continue; }
+      if (inList) { html += "</ul>"; inList = false; }
+      if (/^\s*>\s?/.test(line)) { html += `<blockquote>${inline(line.replace(/^\s*>\s?/, ""))}</blockquote>`; continue; }
+      if (line.trim() === "") continue;
+      html += `<p>${inline(line)}</p>`;
+    }
+    if (inList) html += "</ul>";
+    if (inCode) html += "</code></pre>";
+    return html;
+  }
+
+  // ── Render dispatch ──
+  function render() {
+    if (state.view === "product") renderProduct();
+    else renderList();
+  }
+
+  // ── List / wall ──
+  function renderList() {
+    if (!state.authKnown) {
+      app.innerHTML = shell(`<div class="empty"><span class="spin">${I.refresh}</span> Connecting…</div>`);
+      return;
+    }
+    if (!state.signedIn && !state.browsing) return renderWall();
+
+    const allTags = [...new Set(state.listings.flatMap((m) => m.labels))].sort();
+    const grid = gridHtml();
+    app.innerHTML = `
+      <header>
+        <span class="brand-kicker">DCS&nbsp;Studio</span>
+        <span class="brand-title">Marketplace</span>
+        <span class="spacer"></span>
+        <span class="who mono">${state.signedIn ? esc(state.login || "signed in") : "browsing as guest"}</span>
+      </header>
+      <div class="toolbar">
+        <div class="search">
+          <span class="glass">${I.search}</span>
+          <input id="q" placeholder="Search mods…" spellcheck="false" autocomplete="off" value="${esc(state.query)}" />
+        </div>
+        <select id="tag" aria-label="Filter by tag">
+          <option value="">All tags</option>
+          ${allTags.map((t) => `<option value="${esc(t)}" ${t === state.activeTag ? "selected" : ""}>${esc(t)}</option>`).join("")}
+        </select>
+        <select id="sort" aria-label="Sort">
+          <option value="stars" ${state.sort === "stars" ? "selected" : ""}>Most stars</option>
+          <option value="name" ${state.sort === "name" ? "selected" : ""}>Name</option>
+        </select>
+        <button class="btn secondary" id="refresh" ${state.listBusy ? "disabled" : ""}>${state.listBusy ? `<span class="spin">${I.refresh}</span>` : I.refresh} Refresh</button>
+      </div>
+      ${state.listError ? `<div class="market-error">${I.warn} ${esc(state.listError)}</div>` : ""}
+      <div id="gridwrap">${grid}</div>
+    `;
+    document.getElementById("q").addEventListener("input", (e) => {
+      state.query = e.target.value;
+      document.getElementById("gridwrap").innerHTML = gridHtml();
+      bindCards();
+    });
+    document.getElementById("tag").addEventListener("change", (e) => { state.activeTag = e.target.value; renderList(); });
+    document.getElementById("sort").addEventListener("change", (e) => { state.sort = e.target.value; renderList(); });
+    document.getElementById("refresh").addEventListener("click", () => post({ type: "discover", force: true }));
+    bindCards();
+  }
+
+  function shell(inner) {
+    return `<header><span class="brand-kicker">DCS&nbsp;Studio</span><span class="brand-title">Marketplace</span></header>${inner}`;
+  }
+
+  function renderWall() {
+    app.innerHTML = `
+      <header><span class="brand-kicker">DCS&nbsp;Studio</span><span class="brand-title">Marketplace</span></header>
+      <div class="wall">
+        <div class="wall-lock">${I.lock}</div>
+        <h2>Sign in to browse the Marketplace</h2>
+        <p>Discovery searches GitHub for public repositories tagged <span class="mono">${esc(state.topic)}</span>. Signing in raises the rate limit and lets you install into your DCS folders.</p>
+        <button class="btn" id="signin">${I.github} Sign in with GitHub</button>
+        <button class="link" id="anon">Browse without signing in</button>
+      </div>`;
+    document.getElementById("signin").addEventListener("click", () => post({ type: "signIn" }));
+    document.getElementById("anon").addEventListener("click", () => post({ type: "browseAnon" }));
+  }
+
+  function filtered() {
+    const q = state.query.trim().toLowerCase();
+    return state.listings
+      .filter((m) => {
+        if (state.activeTag && !m.labels.includes(state.activeTag)) return false;
+        if (!q) return true;
+        return (
+          m.name.toLowerCase().includes(q) ||
+          m.author.toLowerCase().includes(q) ||
+          m.description.toLowerCase().includes(q) ||
+          m.labels.some((l) => l.toLowerCase().includes(q))
+        );
+      })
+      .sort((a, b) => (state.sort === "stars" ? b.stars - a.stars : a.name.localeCompare(b.name)));
+  }
+
+  function gridHtml() {
+    if (state.listBusy && state.listings.length === 0)
+      return `<div class="empty"><span class="spin">${I.refresh}</span> Searching GitHub…</div>`;
+    const xs = filtered();
+    if (xs.length === 0) {
+      if (state.listings.length === 0)
+        return `<div class="empty">No public repos are tagged <span class="mono">${esc(state.topic)}</span> yet. Publish one by adding the <span class="mono">${esc(state.topic)}</span> topic to a GitHub repo.</div>`;
+      return `<div class="empty">No mods match your search.</div>`;
+    }
+    return `<div class="grid">${xs.map(card).join("")}</div>`;
+  }
+
+  function card(m) {
+    return `
+      <div class="card">
+        <button class="card-head" data-open="${esc(m.repo)}">
+          <img class="avatar" src="${esc(m.avatar_url)}" alt="" data-fallback="${esc(m.name)}" />
+          <span style="min-width:0;flex:1">
+            <span class="card-title-row">
+              <span class="card-title">${esc(m.name)}</span>
+              ${m.is_library ? `<span class="badge">library</span>` : ""}
+            </span>
+            <span class="card-author">by ${esc(m.author)}</span>
+          </span>
+          <span class="stars">${I.star}${m.stars}</span>
+        </button>
+        ${m.description ? `<div class="blurb">${esc(m.description)}</div>` : ""}
+        ${m.labels.length ? `<div class="tags">${m.labels.slice(0, 6).map((l) => `<button class="tag" data-tag="${esc(l)}">${I.tag}${esc(l)}</button>`).join("")}</div>` : ""}
+        <div class="card-foot">
+          <button class="link" data-open="${esc(m.repo)}">Details</button>
+          <button class="link muted" data-github="${esc(m.repo_url)}">GitHub ${I.ext}</button>
+        </div>
+      </div>`;
+  }
+
+  function bindCards() {
+    document.querySelectorAll("img[data-fallback]").forEach((img) =>
+      img.addEventListener("error", () => (img.src = initialsAvatar(img.getAttribute("data-fallback")))),
+    );
+    document.querySelectorAll("[data-open]").forEach((el) =>
+      el.addEventListener("click", () => openProduct(el.getAttribute("data-open"))),
+    );
+    document.querySelectorAll("[data-tag]").forEach((el) =>
+      el.addEventListener("click", (e) => { e.stopPropagation(); state.activeTag = el.getAttribute("data-tag"); renderList(); }),
+    );
+    document.querySelectorAll("[data-github]").forEach((el) =>
+      el.addEventListener("click", (e) => { e.stopPropagation(); post({ type: "openExternal", url: el.getAttribute("data-github") }); }),
+    );
+  }
+
+  // ── Product ──
+  function openProduct(repo) {
+    state.view = "product";
+    state.repo = repo;
+    state.product = null;
+    state.productBusy = true;
+    state.productError = null;
+    save();
+    post({ type: "openProduct", repo });
+    renderProduct();
+  }
+
+  function renderProduct() {
+    if (state.productBusy) {
+      app.innerHTML = productShell(`<div class="empty"><span class="spin">${I.refresh}</span> Loading ${esc(state.repo || "")}…</div>`);
+      wireBack();
+      return;
+    }
+    if (state.productError) {
+      app.innerHTML = productShell(`<div class="empty"><p class="market-error" style="border:none;background:none">${I.warn} ${esc(state.productError)}</p><button class="btn secondary" id="retry">Try again</button></div>`);
+      wireBack();
+      const r = document.getElementById("retry");
+      if (r) r.addEventListener("click", () => openProduct(state.repo));
+      return;
+    }
+    const p = state.product;
+    if (!p) { state.view = "list"; return renderList(); }
+
+    let action = "";
+    if (p.is_library) {
+      action = `<div class="installed-row">${I.lib} Library</div>
+        <button class="btn block" id="adddep" style="margin-top:10px">Add as dependency</button>
+        <p class="note">A dependency-only library — added to a project's CargoLua.toml, not installed into DCS.</p>`;
+    } else if (!p.installable) {
+      action = `<p class="note warn">${I.warn} Not installable — the latest release ships no <span class="mono">dcs-studio.toml</span>${p.release_tag ? "" : " (no release yet)"}.</p>`;
+    } else {
+      action = `<button class="btn block" id="install">${I.download} Install</button>
+        <p class="note">The release ships a <span class="mono">dcs-studio.toml</span>. Install resolves its plan and links files into your DCS folders — plan preview is the next step.</p>`;
+    }
+
+    app.innerHTML = `
+      <header>
+        <button class="icon-btn" id="back" title="Back to Marketplace">${I.back}</button>
+        <span class="brand-kicker">Marketplace</span>
+        <span class="spacer"></span>
+      </header>
+      <div class="product">
+        <main>
+          <div style="display:flex;gap:12px;align-items:flex-start">
+            <img class="avatar lg" src="${esc(p.avatar_url)}" alt="" data-fallback="${esc(p.name)}" />
+            <div style="min-width:0">
+              <h1>${esc(p.name)}</h1>
+              <div class="product-meta">
+                <span>by ${esc(p.author)}</span>
+                <span>${I.star}${p.stars}</span>
+                ${p.release_tag ? `<span>${esc(p.release_tag)}</span>` : ""}
+              </div>
+            </div>
+          </div>
+          ${p.description ? `<p class="product-desc">${esc(p.description)}</p>` : ""}
+          <div class="section-label">${I.book} Readme</div>
+          <div class="prose">${p.readme ? md(p.readme) : "<p class='note'>This repo has no README.</p>"}</div>
+        </main>
+        <aside>
+          <div class="aside-card">${action}</div>
+          <div class="aside-card">
+            <div class="section-label">${I.hd} Download</div>
+            <div>${fmtBytes(p.download_size)}</div>
+            ${p.assets.length
+              ? `<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">${p.assets.map((a) => `<div class="kv"><span class="name">${I.box} ${esc(a.name)}</span><span class="mono" style="color:var(--muted)">${fmtBytes(a.size)}</span></div>`).join("")}</div>`
+              : `<p class="note">No release assets.</p>`}
+          </div>
+          <button class="btn secondary block" id="viewgh" style="margin-top:14px">View on GitHub ${I.ext}</button>
+        </aside>
+      </div>`;
+
+    document.querySelectorAll("img[data-fallback]").forEach((img) =>
+      img.addEventListener("error", () => (img.src = initialsAvatar(img.getAttribute("data-fallback")))),
+    );
+    wireBack();
+    document.getElementById("viewgh").addEventListener("click", () => post({ type: "openExternal", url: p.repo_url }));
+    const inst = document.getElementById("install");
+    if (inst) inst.addEventListener("click", () => post({ type: "install", name: p.name }));
+    const dep = document.getElementById("adddep");
+    if (dep) dep.addEventListener("click", () => post({ type: "install", name: p.name }));
+  }
+
+  function productShell(inner) {
+    return `<header><button class="icon-btn" id="back" title="Back to Marketplace">${I.back}</button><span class="brand-kicker">Marketplace</span></header>${inner}`;
+  }
+  function wireBack() {
+    const b = document.getElementById("back");
+    if (b) b.addEventListener("click", () => { state.view = "list"; state.repo = null; save(); renderList(); });
+  }
+
+  // ── Host messages ──
+  window.addEventListener("message", (e) => {
+    const m = e.data;
+    switch (m.type) {
+      case "auth":
+        state.authKnown = true;
+        state.signedIn = m.signedIn;
+        state.browsing = m.browsing;
+        state.login = m.login || null;
+        state.topic = m.topic || state.topic;
+        if (state.view === "list") renderList();
+        break;
+      case "listings:busy":
+        state.listBusy = true;
+        state.listError = null;
+        if (state.view === "list") renderList();
+        break;
+      case "listings":
+        state.listBusy = false;
+        state.listings = m.listings || [];
+        state.listError = null;
+        if (state.view === "list") renderList();
+        break;
+      case "listings:error":
+        state.listBusy = false;
+        state.listError = m.message;
+        if (state.view === "list") renderList();
+        break;
+      case "product:busy":
+        if (state.repo === m.repo) { state.productBusy = true; state.productError = null; if (state.view === "product") renderProduct(); }
+        break;
+      case "product":
+        state.productBusy = false;
+        state.product = m.product;
+        state.repo = m.product.repo;
+        if (state.view === "product") renderProduct();
+        break;
+      case "product:error":
+        if (state.repo === m.repo) { state.productBusy = false; state.productError = m.message; if (state.view === "product") renderProduct(); }
+        break;
+    }
+  });
+
+  // ── Boot ──
+  render();
+  post({ type: "ready" });
+  if (state.view === "product" && state.repo) openProduct(state.repo);
+})();
+</script>

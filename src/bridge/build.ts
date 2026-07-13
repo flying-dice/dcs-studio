@@ -1,0 +1,49 @@
+import * as vscode from "vscode";
+import * as path from "path";
+import * as fs from "fs";
+import { spawn } from "child_process";
+import { showError } from "../errors";
+
+// Build the ported bridge crate (native/) into dcs_studio.dll. Requires the
+// user's Rust toolchain + MSVC. The extension ships a prebuilt DLL too, so this
+// is only needed when the bridge source is changed.
+export async function buildBridge(ctx: vscode.ExtensionContext): Promise<void> {
+  const nativeDir = path.join(ctx.extensionUri.fsPath, "native");
+  if (!fs.existsSync(path.join(nativeDir, "Cargo.toml"))) {
+    void showError("Bridge source (native/) is not present in this build.");
+    return;
+  }
+  const out = vscode.window.createOutputChannel("DCS Studio Bridge Build");
+  out.show(true);
+  out.appendLine(`$ cargo build --release   (cwd: ${nativeDir})`);
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "Building DCS bridge (cargo build --release)…",
+      cancellable: false,
+    },
+    () =>
+      new Promise<void>((resolve) => {
+        const proc = spawn("cargo", ["build", "--release"], { cwd: nativeDir, shell: true });
+        proc.stdout.on("data", (d) => out.append(d.toString()));
+        proc.stderr.on("data", (d) => out.append(d.toString()));
+        proc.on("error", (e) => {
+          out.appendLine(`\nFailed to start cargo: ${e.message}`);
+          void showError("Could not run cargo. Is the Rust toolchain installed and on PATH?", e);
+          resolve();
+        });
+        proc.on("exit", (code) => {
+          out.appendLine(`\ncargo exited with code ${code}`);
+          if (code === 0) {
+            void vscode.window.showInformationMessage(
+              "Bridge built. Run DCS Studio: Inject, or Launch DCS, to use it.",
+            );
+          } else {
+            void showError("Bridge build failed — see the 'DCS Studio Bridge Build' output.");
+          }
+          resolve();
+        });
+      }),
+  );
+}

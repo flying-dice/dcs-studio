@@ -1,0 +1,85 @@
+:root {
+  --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
+  --card: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  --muted: var(--vscode-descriptionForeground);
+  --mono: var(--vscode-editor-font-family, monospace);
+  --ok: var(--vscode-testing-iconPassed, #3fb950);
+  --warn: var(--vscode-editorWarning-foreground, #cca700);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+}
+.mono { font-family: var(--mono); }
+
+header {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 18px; border-bottom: 1px solid var(--border);
+  background: var(--vscode-editor-background);
+}
+.kicker {
+  font-family: var(--mono); font-size: 9px; text-transform: uppercase;
+  letter-spacing: 0.28em; color: var(--muted);
+}
+.title { font-weight: 600; font-size: 15px; }
+.spacer { margin-left: auto; }
+
+.wrap { max-width: 760px; margin: 0 auto; padding: 20px 18px 40px; display: flex; flex-direction: column; gap: 18px; }
+.intro { color: var(--muted); font-size: 13px; line-height: 1.55; }
+
+.card { border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: 16px; }
+.card h2 { margin: 0 0 2px; font-size: 14px; }
+.card .sub { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+
+.pathrow { display: flex; gap: 8px; margin-bottom: 10px; }
+.pathrow input {
+  flex: 1; padding: 7px 10px; border-radius: 6px;
+  border: 1px solid var(--vscode-input-border, var(--border));
+  background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+  font-family: var(--mono); font-size: 12.5px; outline: none;
+}
+.pathrow input:focus { border-color: var(--vscode-focusBorder); }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 13px; border-radius: 6px; border: 1px solid transparent;
+  font-size: 12px; cursor: pointer;
+  background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+}
+.btn:hover { background: var(--vscode-button-hoverBackground); }
+.btn.secondary {
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  border-color: var(--border);
+}
+.btn.secondary:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground)); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+
+.detected-label { font-size: 11px; color: var(--muted); margin: 6px 0 6px; text-transform: uppercase; letter-spacing: 0.08em; }
+.cand {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  text-align: left; padding: 9px 11px; margin-bottom: 6px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--vscode-editor-background); color: inherit; cursor: pointer;
+  font-family: inherit; font-size: 12.5px;
+}
+.cand:hover { border-color: color-mix(in srgb, var(--vscode-foreground) 30%, transparent); }
+.cand.selected { border-color: var(--vscode-focusBorder); background: var(--vscode-editor-inactiveSelectionBackground, rgba(128,128,128,0.12)); }
+.cand .cname { font-weight: 600; }
+.cand .cpath { font-family: var(--mono); font-size: 11px; color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill { font-size: 10px; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+.pill.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.pill.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.none { color: var(--muted); font-size: 12px; font-style: italic; }
+
+.status-line { display: flex; align-items: center; gap: 7px; margin-top: 8px; font-size: 12px; }
+.status-line.ok { color: var(--ok); }
+.status-line.warn { color: var(--warn); }
+
+.actions { display: flex; gap: 10px; align-items: center; }
+.saved-note { color: var(--ok); font-size: 12px; }

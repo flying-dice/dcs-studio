@@ -1,0 +1,62 @@
+:root {
+  --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
+  --card: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  --muted: var(--vscode-descriptionForeground);
+  --mono: var(--vscode-editor-font-family, monospace);
+  --ok: var(--vscode-testing-iconPassed, #3fb950);
+  --warn: var(--vscode-editorWarning-foreground, #cca700);
+  --err: var(--vscode-errorForeground, #f14c4c);
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: var(--vscode-font-family); font-size: 13px; color: var(--vscode-foreground); background: var(--vscode-editor-background); }
+.mono { font-family: var(--mono); }
+
+header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--vscode-editor-background); }
+.kicker { font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.28em; color: var(--muted); }
+.title { font-weight: 600; font-size: 15px; }
+.spacer { margin-left: auto; }
+
+.wrap { max-width: 780px; margin: 0 auto; padding: 20px 18px 40px; display: flex; flex-direction: column; gap: 18px; }
+.card { border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: 16px; }
+.card h2 { margin: 0 0 3px; font-size: 14px; }
+.card .sub { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+
+.checks { display: flex; flex-direction: column; gap: 6px; }
+.check { display: flex; align-items: center; gap: 9px; font-size: 12.5px; }
+.check .cdot { width: 8px; height: 8px; border-radius: 999px; flex-shrink: 0; }
+.cdot.ok { background: var(--ok); } .cdot.warn { background: var(--warn); } .cdot.error { background: var(--err); }
+.check .clabel { font-weight: 600; min-width: 120px; }
+.check .cdetail { color: var(--muted); font-family: var(--mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Per-item breakdown under a check (aligned with the detail column: dot 8 + gap 9 + label 120 + gap 9). */
+.citem { margin: -2px 0 0 146px; color: var(--muted); font-family: var(--mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.citem.error { color: var(--err); }
+.citem.warn { color: var(--warn); }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+@media (max-width: 620px) { .grid2 { grid-template-columns: 1fr; } }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field.full { grid-column: 1 / -1; }
+.lbl { font-size: 11px; color: var(--muted); }
+.in { width: 100%; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--vscode-input-border, var(--border)); background: var(--vscode-input-background); color: var(--vscode-input-foreground); font-size: 13px; font-family: var(--mono); outline: none; }
+.in:focus { border-color: var(--vscode-focusBorder); }
+textarea.in { resize: vertical; min-height: 52px; font-family: inherit; }
+.check-row { display: flex; align-items: center; gap: 8px; }
+.check-row input { width: 15px; height: 15px; accent-color: var(--vscode-button-background); }
+
+.btn { display: inline-flex; align-items: center; gap: 7px; padding: 8px 15px; border: none; border-radius: 6px; font-size: 12.5px; cursor: pointer; background: var(--vscode-button-background); color: var(--vscode-button-foreground); margin-top: 12px; }
+.btn:hover { background: var(--vscode-button-hoverBackground); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.secondary { background: var(--vscode-button-secondaryBackground, transparent); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); border: 1px solid var(--border); }
+.btn.link { background: none; color: var(--vscode-textLink-foreground); padding: 0; margin: 0; }
+.btn.link:hover { text-decoration: underline; }
+
+.result { margin-top: 10px; font-size: 12px; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border); }
+.result.ok { border-left: 3px solid var(--ok); }
+.result .assets { margin-top: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.note { font-size: 11px; color: var(--muted); margin-top: 6px; }
+.blocked { color: var(--warn); font-size: 12px; margin-top: 8px; }
+
+.log { margin-top: 12px; font-family: var(--mono); font-size: 11.5px; background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.1)); border-radius: 8px; padding: 10px 12px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; display: none; }
+.log.show { display: block; }
+.spin { display: inline-block; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }

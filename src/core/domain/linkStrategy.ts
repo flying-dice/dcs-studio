@@ -1,0 +1,53 @@
+// Pure link-strategy decision, extracted from the linker adapter. Given the
+// probed facts about a link (platform, whether the target is a directory, whether
+// link and target share a volume root), decide which OS primitive to use. The
+// adapter performs the actual syscall and maps failures to messages; this module
+// only decides, so the matrix is trivially testable.
+
+import { parse } from "node:path";
+
+/**
+ * The link primitive to use:
+ * - `symlink-dir` / `symlink-file` — non-Windows symlink (typed dir/file).
+ * - `junction` — Windows directory link (no elevation needed).
+ * - `hardlink` — Windows same-volume file link.
+ * - `symlink-cross` — Windows cross-volume file: symlink, elevating on EPERM.
+ */
+export type LinkStrategy = "symlink-dir" | "symlink-file" | "junction" | "hardlink" | "symlink-cross";
+
+/** Facts probed from the filesystem that drive the strategy choice. */
+export interface LinkFacts {
+  isWindows: boolean;
+  isDir: boolean;
+  sameVolume: boolean;
+}
+
+/** Whether `link` and `target` sit on the same volume root (case-insensitive). */
+export function sameVolume(link: string, target: string): boolean {
+  return parse(link).root.toLowerCase() === parse(target).root.toLowerCase();
+}
+
+/** Choose the link primitive for the probed facts. */
+export function chooseLinkStrategy(f: LinkFacts): LinkStrategy {
+  if (!f.isWindows) return f.isDir ? "symlink-dir" : "symlink-file";
+  if (f.isDir) return "junction";
+  return f.sameVolume ? "hardlink" : "symlink-cross";
+}
+
+/** Facts probed about an already-existing link destination. */
+export interface DestFacts {
+  srcIsDir: boolean;
+  destIsDir: boolean;
+  /** lstat reports junctions/symlinks as symbolic links, never real dirs. */
+  destIsSymlink: boolean;
+}
+
+/**
+ * Whether an existing destination is merged into rather than a conflict: only a
+ * real directory (not a junction/symlink) with a directory source — e.g. Saved
+ * Games\Scripts\Hooks — is entered and each child linked individually, so shared
+ * DCS folders never block an enable and a disable removes only our links.
+ */
+export function shouldMergeInto(f: DestFacts): boolean {
+  return f.srcIsDir && f.destIsDir && !f.destIsSymlink;
+}

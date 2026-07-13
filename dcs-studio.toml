@@ -1,0 +1,7 @@
+[project]
+name = "dcs-studio-vsc"
+version = "0.1.0"
+
+[[install]]
+source = "dist"
+dest = "{SavedGames}/Scripts/dcs-studio-vsc"

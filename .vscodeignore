@@ -1,0 +1,15 @@
+.vscode/**
+src/**
+node_modules/**
+tsconfig.json
+**/*.map
+.gitignore
+preview.html
+preview-author.html
+package-lock.json
+native/target/**
+bridge/dcs-studio-bridge.lua
+preview-nav.html
+preview-skills.html
+scripts/**
+.dev-sandbox/**

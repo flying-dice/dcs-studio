@@ -1,0 +1,295 @@
+<style>
+:root, :root[data-theme="light"] {
+  --vscode-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Variable", system-ui, sans-serif;
+  --vscode-editor-font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  --vscode-editor-background: #ffffff;
+  --vscode-foreground: #3b3b3b;
+  --vscode-editorWidget-background: #f8f8f8;
+  --vscode-panel-border: #e5e5e5;
+  --vscode-descriptionForeground: #767676;
+  --vscode-textLink-foreground: #005fb8;
+  --vscode-toolbar-hoverBackground: rgba(184,184,184,0.31);
+  --vscode-input-background: #ffffff;
+  --vscode-input-foreground: #3b3b3b;
+  --vscode-input-border: #cecece;
+  --vscode-focusBorder: #005fb8;
+  --vscode-button-background: #005fb8;
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: #0258a8;
+  --vscode-button-secondaryBackground: #e9e9e9;
+  --vscode-button-secondaryForeground: #3b3b3b;
+  --vscode-button-secondaryHoverBackground: #d8d8d8;
+  --vscode-badge-background: #d4d4d4;
+  --vscode-badge-foreground: #3b3b3b;
+  --vscode-editor-inactiveSelectionBackground: #e5ebf1;
+  --vscode-editorWarning-foreground: #bf8803;
+  --vscode-testing-iconPassed: #3d8c40;
+  --vscode-progressBar-background: #005fb8;
+  --vscode-textCodeBlock-background: rgba(0,0,0,0.05);
+  --vscode-inputValidation-errorBackground: rgba(190,70,70,0.12);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --vscode-editor-background: #1f1f1f;
+    --vscode-foreground: #cccccc;
+    --vscode-editorWidget-background: #252526;
+    --vscode-panel-border: #2b2b2b;
+    --vscode-descriptionForeground: #9d9d9d;
+    --vscode-textLink-foreground: #4daafc;
+    --vscode-toolbar-hoverBackground: rgba(90,93,94,0.31);
+    --vscode-input-background: #313131;
+    --vscode-input-foreground: #cccccc;
+    --vscode-input-border: #3c3c3c;
+    --vscode-focusBorder: #0078d4;
+    --vscode-button-background: #0078d4;
+    --vscode-button-foreground: #ffffff;
+    --vscode-button-hoverBackground: #026ec1;
+    --vscode-button-secondaryBackground: #313131;
+    --vscode-button-secondaryForeground: #cccccc;
+    --vscode-button-secondaryHoverBackground: #3c3c3c;
+    --vscode-badge-background: #616161;
+    --vscode-badge-foreground: #f8f8f8;
+    --vscode-editor-inactiveSelectionBackground: #3a3d41;
+    --vscode-editorWarning-foreground: #cca700;
+    --vscode-testing-iconPassed: #73c991;
+    --vscode-progressBar-background: #0078d4;
+    --vscode-textCodeBlock-background: rgba(255,255,255,0.06);
+    --vscode-inputValidation-errorBackground: rgba(190,70,70,0.2);
+  }
+}
+:root[data-theme="dark"] {
+  --vscode-editor-background: #1f1f1f;
+  --vscode-foreground: #cccccc;
+  --vscode-editorWidget-background: #252526;
+  --vscode-panel-border: #2b2b2b;
+  --vscode-descriptionForeground: #9d9d9d;
+  --vscode-textLink-foreground: #4daafc;
+  --vscode-toolbar-hoverBackground: rgba(90,93,94,0.31);
+  --vscode-input-background: #313131;
+  --vscode-input-foreground: #cccccc;
+  --vscode-input-border: #3c3c3c;
+  --vscode-focusBorder: #0078d4;
+  --vscode-button-background: #0078d4;
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: #026ec1;
+  --vscode-button-secondaryBackground: #313131;
+  --vscode-button-secondaryForeground: #cccccc;
+  --vscode-button-secondaryHoverBackground: #3c3c3c;
+  --vscode-badge-background: #616161;
+  --vscode-badge-foreground: #f8f8f8;
+  --vscode-editor-inactiveSelectionBackground: #3a3d41;
+  --vscode-editorWarning-foreground: #cca700;
+  --vscode-testing-iconPassed: #73c991;
+  --vscode-progressBar-background: #0078d4;
+  --vscode-textCodeBlock-background: rgba(255,255,255,0.06);
+  --vscode-inputValidation-errorBackground: rgba(190,70,70,0.2);
+}
+html, body { height: 100%; }
+
+:root {
+  --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.22));
+  --muted: var(--vscode-descriptionForeground);
+  --accent: var(--vscode-textLink-foreground);
+  --hover: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+  --active: var(--vscode-list-activeSelectionBackground, rgba(128, 128, 128, 0.2));
+  --ok: var(--vscode-testing-iconPassed, #3fb950);
+  --warn: var(--vscode-charts-yellow, #cca700);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+#app { display: flex; flex-direction: column; min-height: 100vh; }
+
+/* Brand header */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 14px 14px;
+}
+.brand img { width: 30px; height: 30px; border-radius: 7px; }
+.brand .names { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+.brand .kicker {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.26em; color: var(--muted);
+}
+.brand .word { font-weight: 700; font-size: 14px; letter-spacing: 0.01em; }
+
+.rule { height: 1px; background: var(--border); margin: 0 14px; }
+
+/* Nav */
+nav { display: flex; flex-direction: column; padding: 10px 8px; gap: 2px; flex: 1; }
+.nav-item {
+  display: flex; align-items: center; gap: 11px;
+  width: 100%; text-align: left;
+  padding: 9px 10px; border: none; border-radius: 8px;
+  background: transparent; color: inherit; cursor: pointer;
+  position: relative;
+  font-family: inherit;
+}
+.nav-item:hover { background: var(--hover); }
+.nav-item:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.nav-item.active { background: var(--active); }
+.nav-item.active::before {
+  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px;
+  width: 3px; border-radius: 3px; background: var(--accent);
+}
+.nav-item .ico { width: 18px; height: 18px; flex-shrink: 0; color: var(--muted); }
+.nav-item.active .ico, .nav-item:hover .ico { color: var(--vscode-foreground); }
+.nav-item .txt { min-width: 0; display: flex; flex-direction: column; }
+.nav-item .label { font-weight: 600; font-size: 13px; }
+.nav-item .desc {
+  font-size: 11px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nav-item .chev { margin-left: auto; color: var(--muted); opacity: 0; transition: opacity 0.1s; }
+.nav-item:hover .chev, .nav-item.active .chev { opacity: 0.7; }
+
+.spacer-divider { margin: 8px 8px; height: 1px; background: var(--border); }
+
+/* Status footer */
+.footer {
+  display: flex; align-items: center; gap: 8px;
+  padding: 11px 16px; border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.dot { width: 8px; height: 8px; border-radius: 999px; background: var(--muted); flex-shrink: 0; }
+.dot.off { background: var(--muted); }
+.dot.menu { background: var(--warn); }
+.dot.mission { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
+.footer .flabel { color: var(--muted); }
+.footer .ftime { margin-left: auto; font-family: var(--vscode-editor-font-family, monospace); font-size: 10.5px; color: var(--muted); }
+
+body { background: var(--vscode-editor-background) !important; }
+#app { width: 300px; min-height: 100vh; background: var(--vscode-sideBar-background, #252526); border-right: 1px solid var(--vscode-panel-border); }
+#previewbar{position:fixed;top:0;right:0;left:301px;padding:8px 16px;font-size:12px;font-family:var(--vscode-font-family);color:var(--vscode-descriptionForeground)}
+#toast{position:fixed;right:16px;bottom:16px;z-index:50;display:flex;flex-direction:column;gap:8px}
+#toast .t{background:var(--vscode-editorWidget-background,#252526);border:1px solid var(--vscode-panel-border);border-left:3px solid var(--vscode-textLink-foreground);color:var(--vscode-foreground);font-family:var(--vscode-font-family);font-size:12px;padding:9px 12px;border-radius:6px}
+</style>
+
+<div id="previewbar">DCS Studio sidebar — website-style page navigation (WebviewView). Click a row; the footer cycles bridge states.</div>
+<div id="app"></div>
+<div id="toast"></div>
+<script>
+window.__LOGO__ = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAAQDElEQVR4nO3dX1YUSRbH8RuR6MzDCMwCoKtXILOCLh/7zBnBFViuQGYFjSuQHYgrEJzTpx+tXkHDCrrEDdDYT1oZMRFZBQ2I/LMqM+LG9/MwIji2UJW/jLg3MsIKgGJZAVAsAgAoGAEAFIwAAApGAAAFIwCAghEAQMEIAKBgBABQMAIAKBgBABSMAAAKRgAABSMAgIIRAEDBCACgYAQAUDACACgYAQAUjAAACkYAAAUjAICCLYgS/l1vWT7Kw5PfO+/Wwi/LF/7Ysjd+7Wt/h/HSl6yZ/fD9HX31q97sh1+ar1tjh80n78l78+NoJCiSESXqvdWtEAM/Cb7BJECMM6Pwzhg1IUFAqKYmAMZ7K8PwzfwgmAtvZEgw6KNmCoD5aqZH4X8i52uRT82oayRehjEcqvv2VwIhP4wAMEOGQMgMAYA5aoqOO/a+3SMM0kQAoCWEQYoIAHRgGgaL9rV5NDoSdIaFQOhAXIvht92x+73eXX3lf+n1BJ0gANAhvxw6CwP3qf59vLvyxv+v1xe0igBAEoyRDefqd+O3K+/Ge6tPBa0gAJCUuN7AiN+p91Z/DyOCDcFcEQBIlO+FEcGbOCLwP/fWBHNBACBpcUTgxvVvYUTwsnngCzNFACATfrPpGuytPhfMDAGAjISuQWgfhhD4jWnBbBAAyJBfc2MXOwYDwTchAJApvxzqA6+a9QPUBu6MAEDWmvUDx44pwR0RAFAgtAwnnQJ2hLolAgCK+K3m2QKmBDdGAECX+GzBsXtHCNwMAQCFQpfg2P1OXeB6BACU8suxVcjzBFcjAKBYCIHJ8wQDwaUIAKgX1wuwhPhyBAAK4bdjh0BwDgGAcoQOASFwHgGAshAC5xAAKA8hcIoAQJkIgQYBgHIRAgQACld4CBAAQMEhQAAAUQyBvdVtKQwBAJzyz0tbNkwAAGfEZcMlHVFGAAAXOOfelPIo8YIgRQfeyHZlqpF8m+XwZm7eyF78mhHphQ8fCq7RPEocNxv9l/bjywmABFlbbZn/jHZlNs79PXGnnPpjvWG86YdU6Icx73eCS/he/UcdOwNPRDGmAGma210n3tEWHn/YqdYPB9XGYS+EzaPw2deCL8Qdh0NnYEsUIwAKF0YawxgGdrH6Z3jH/1e8eS84w/+keVchAgCNODKoHh9ux1FBqD88Iwj+EuooancaJgDwhWaKQBCc4Zen9QB1CAB81YUg+EMK1tQD3q5uijIEAK4Vg8Au2Z4X+VVK5uUn/0uvJ4oQALiRpnuw/qEfugZPyg2CMBX4rGsqoCcAjOyEN+Ze8+bMf7iabMEprk9oguB+9X3sGpQWBsZLX1NXwIhicU137eue8WYt/K4vmayC8152q6XqWU6r0OLP2nm3FobJa158L7yxfhC1zJFdtN9rWCWYZQDEBI4HPkx+F16MBfvI/Hu0f+3/L8zf3Cc3CG/SzRDlS5K98L1b+yT28iVRJw/WhFZaf/qpXlkrEM2Lav1wSxKVZQCM91aG5+8wt/shT1Z3eSVHSaf9BrtM7Km743ooRTyXkPZogSIgWhcvBrtY9cOHB6KeD2Hnkt1oJNcA+CtNQ8EvTAFm9eAMWlJYCDxNtX2YZQBUttpuqs+hCh370zeZ/yM9TQjcrzZKWGSUavswy8eBp0WvviB75sfRyP8cOgif3VBHYfZy0/ZhP7WCLTUAdC6O4Gxl1T5xdyK0pJMrPBMASEK8MzbPHCh2MgqQhBAASEZ85kD75iSpjQIIACQlbk6ieXlxaqMAAgDJqe5XA82dgZRGAQQAkhM7A6EoOBClUhoFEABI0mRXZL31AOfcQBJAACBZdtFu6t2SLI3VgQQAktWsFFQ8FWieTO0YAYCkTVbOqZ0KPJeOEQBInr1vt3R2Bfxy16cREwBIXuwKiJFkH6n9Jl46XQJNACALzaYnCguCRmS9y2IgAYBseOu3RCH32XU2CiAAkI3mWQGNbUEvT6UjBACyonMU4Ne6mgYQAMiK1lFAV9MAAgDZ0TgK8L45t6J1BACyUz2o1G0C23QDOjiCnABAdiZ77CtcHfhn+/tcEgDIkrX6toJ3zq1JywgAZKl5XFhZMdBL+3UAAgD5MqJqFNDFgaoEALKlcRrgf+61Og0gAJCt5lFhbU8JOmm1E0AAIGve+KEocuYY9VYQAMiaMWYoujACAG7K3tNVBwidAGoAwE01m4XgzggAZE/zSULzRgAge0bMSJQI38tDaREBgPwZ2Rc1PEVA4DassYoCoF1FBoD3vtVh1jxZy5tfk1DP2JMWLYhyzTPWHyVc8PWy86YfPrURPtuTxMXCVpgPDr/8vO8bb3rhw2Vb2Y3JwRnlaZbM1rLkvFtztVuLC+nT1jy+PLrsK6evqfFH1WI1kBYl/2O7jfimcGP3ru151Mx584ddsr3Jc+/5qPdWt8I//oqjr83ILtgn5t+jG49axrsrb4zpdu/8WbC2epRiWKuZAsQTVty4/i37iz8ysp3bxX8zvhcC+sYXs/9fb0PDxZ8yFQEQ7jw/GS+vRANv3jeHYBQuvKbPnavfCOYqiRqAf7uyHubna2HeO6oW7d5Vdz//tvdDnM/LveogrgKrd1fDhe8HokSY129Kpuyi3XbH7to/c/JxfC3N49HpIp5Yr6mP3XqYCw+ko00y52bh8vl/1zqvAcRh3tmkj1XQhfUP54Z9473Vp+EfuilfrJOOC0DSL+hdcBDmg1vh10tDroSiXrzQQ1C8a/bDNzKMn5sUNrN7LRtxfn/1H5Cj29Q92tT5COCSfdDOzeGvLizl94axC9Ug1TdDW8LFv30S5mHq1p981kuucg7t5GsAXeyTNk+lX/yRz/ROrxErAYGC5bAQSGE7DEhDciMAY8y5DR4qW+0IVAmv6bYgCdmvBAxdhL6r3U6oJn0nGnizU20cPpOCaXtNY6ejelA9SXFxV/Y1gFiBtX+zfdEi9MAnnY9yNa/pko1dggNRoOl0/Cmtn/pzEyqKgHFBkK5dYa5aT1+G6d1SzVObqaILkCC2uJpMAwRzp/5x4BwZMcWvFWh7f/xSMQJIkLV2KIVre3vsubNptrMJgDQVv/YhjIJaPyhznlJdAUoAIDmTAzIV7OuQAWoASI6r1c3/k21nMgJAcryyvQB8wlM6AgDJUTf/T7irQwAgKf6XXk/d/N+kuRtQRAAgKfXnui/KpHxwCQGApJjJ2Q2qpLxjEF0ApEbV/F8Sf6CJEQCSMZ3/90SVtJd1EwBIhsb5vzd+KAljCoB0eH2nAFX3qqEkjBEAkhCH/0ZkXXRpDq+RhDECQBLcZ6fu7i+XnO6cGgIAafDyXJTJ4bFupgDo3GT3H2XVf2/+MP8Z7UriCAB0rva1vj0QjSR/8UcEADrVFP9OzwfUI/X23wlqAOiU++S2RKHqQcUIALjKdOXfU1EmHnGf4iEgl2EEgM5ovfvnMv+PGAGgE9N9/9Td/WP1f+Hxhx3JBAGATtR1/VI0yujuHxEAaF3o+29orPxHdsFmdfIxAYBW+Xe9ZefcK9HIm/ep7v//NRQB0Sp3HAt/Svf8t5LV3T9iBIDWTJf8qlvz3wjFP/vA7khmCAC0Yjr0fyNaheJfLr3/swiABGk8Gbf+WL/RfNxXbsW/E9QAEuSNV7UxZr23uiXKTvs5y4v8mlvx7wQjgAQZZ74XJcZvVwbhEtH3tN9ZRnYkUwRAijJbTPI1036/zpbfidD6y2nl30UEQIJy2EnmOnGpr9p+/1kZtv7OIgDSlF01+azm4h+7d5qLfo1MW39nEQCYqdjrL+Lij4xs59j6O4sAwMzEgp9zdRkXf2AX82z9nUUAJMh5tyaZCa2+l+oLfueY17nf/SPWASTIT3rmWdxd4gq/ZpGP4j7/l8wLDXf/SE0AmOYQBh0LaML38lAy4Y7dphGdj/Z+xUG1frglShhRIt6J5E9Zq33dM970Lnx52Ys/HVaHbzrOUZO+yLyR4ZV/wMmRMWY/tAx/lX/Ifn3s1sP31Yu/b/M8+mZfv7H0mn9SnLp4OTv/P/25N6+J8d9J9syRN/7Wq/7C978fRg0vUps2qAmAu2qWqSpaqRY3pFxY/5DsMVvh572jciuwGzEvUhs9FFMDaEYIH8/f9cMdqx/X3YfiVXbi+vPph0fNoZqhJx3bUlUHc9PLfrYT9bLz5kJBs7yLv3mtjOwsPD7ckcSoGQGEO8t2uJgfhqFWGIL67KroF1lbPbrs85cN75th+N9DEMxxeBn/G+6Texp+xn2t23ldKS76qexAbrNIy4bXJPGHhNQEwHhvZRi+GRVFwHjHCMP4viTAv11Zr50MjBGFp/feXAzkNmsrbaENmKDQBej0rjFdyhuH6gPn/bIpvFIUCrLPNF78EQGQoC4eBjoZ4ku86Md1TzBlXqc4d58VAiBNrbSKztzp++5TnX3dZNYmU7HDgShGACQormWQOYgXfD12D5siXpjThzt9EWv278Sb99WSVV/3IAASFDoZL8d7q74ydiR3FFuc0w+XQ+V+Lfyda/GCb6bzxa/+uEas+N+zGxrW+l+HAEiSjxfqjvO1zMJknUOGix06Ett9ue7xd1sEAHCOeREq/iq2ZLsJAgA4ZV5retDnJggAYOLALtpNKQwBAMSi35Ltl1D0u0jFjkCxvaVlGTDaFyr+RV78UScNoXp39VUoTQ8EuJ0DiRu/GBlZYydV+n/IfqkX7yx0MwXg4sftHNiFqpjWXJs6mQKceZYduJo37+1i1efin4/O1oTFh0/qz3U/bhU13TZqOYetutCulB6N1iiLRaHxsImrvj7Zi86/FCh0tz34LuXkqFqqnlEz+IuiHYFW4puE0QOuFJ/tz/kwz1lTsw7AT/bGAy4VpxLV/VBI/HE0EpxiIRAKYF4sFLbE96YIAOg13cizpId7bosAgFYH9l45j/XeFQEAjQ6atQNU+69FAECZ5pHegeBGOB4cOjQnI5n/cvHfDiMAZK9p8f3N0uK7AwIA+Yp3fStbC48PWz8PUQsCAFnirj8bBADywl1/pggAZMS8tkt2k/be7BAASF4z3LfVltYDOrtEACBdYbjvrd/k6b35IQCQnqanL9thuL/NcH++CACkgwu/dQQAuseF3xkCAN3hwu8cAYAuHPhw4VeLdpcLv1sEAFoU+vjW7tDOSwcBgHk7EGN27INw4XO3Tw4BgHmYXPT3whCftfpJIwDw7bx53+zdb2S3elAxr88IAYC7iId07oeLfljdq4bc5fNFAOByk7v6yIQLPfzuKBTvhmLliE02dVETANVCtSmuOVsQt8UR28XiMB2gYGwKChSMAAAKRgAABSMAgIIRAEDBCACgYAQAUDACACgYAQAUjAAACkYAAAUjAICCEQBAwQgAoGAEAFAwAgAoGAEAFIwAAApGAAAFIwCAghEAQMEIAKBgBABQMAIAKBgBABSMAAAKRgAABSMAgIIRAEDBCACgYAQAUDACACgYAQAUjAAACkYAAAUjAICCEQBAwQgAoGAEAFCw/wNkW/1X1OEPoQAAAABJRU5ErkJggg==";
+window.acquireVsCodeApi = function () {
+  return {
+    getState: () => ({}), setState: () => {},
+    postMessage: (m) => { if (m && m.type === "run") toast("→ runs command <b>" + m.command + "</b>"); },
+  };
+};
+function toast(html){ const w=document.getElementById("toast"); const e=document.createElement("div"); e.className="t"; e.innerHTML=html; w.appendChild(e); setTimeout(()=>e.remove(),2600); }
+// Simulate the bridge status cycle so the footer shows all three states.
+const states = [
+  { connected:false, dcsTime:null },
+  { connected:true, dcsTime:0 },
+  { connected:true, dcsTime:213 },
+];
+let si=0;
+setInterval(()=>{ si=(si+1)%states.length; window.dispatchEvent(new MessageEvent("message",{data:{type:"status",status:states[si]}})); }, 2200);
+</script>
+<script>// @ts-nocheck
+// Website-style sidebar navigation. Each row runs a command in the host; a
+// footer reflects the live bridge status.
+(function () {
+  const vscode = acquireVsCodeApi();
+  const app = document.getElementById("app");
+
+  const I = {
+    store: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l1.5-5h15L21 9M4 9h16v10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9Z"/><path d="M9 9v2a3 3 0 0 1-6 0V9m18 0v2a3 3 0 0 1-6 0V9M9 9v2a3 3 0 0 0 6 0V9"/></svg>`,
+    edit: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"/></svg>`,
+    layers: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg>`,
+    terminal: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>`,
+    shield: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3Z"/></svg>`,
+    gear: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`,
+    chev: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`,
+  };
+
+  // In the requested order. Settings is separated to the bottom, website-style.
+  const ITEMS = [
+    { id: "browse", label: "Browse Mods", desc: "Discover & install community mods", command: "dcs.marketplace.open", icon: "store" },
+    { id: "mymods", label: "My Mods", desc: "Enable, update & remove installed mods", command: "dcs.mymods.open", icon: "layers" },
+    { id: "create", label: "Create a Mod", desc: "Author a dcs-studio.toml", command: "dcs.manifest.author", icon: "edit" },
+    { id: "console", label: "DCS Console", desc: "Run Lua in the live sim", command: "dcs.bridge.console", icon: "terminal" },
+    { id: "mission", label: "MissionScripting", desc: "Sanitization toggle", command: "dcs.mission.open", icon: "shield" },
+    { id: "settings", label: "Settings", desc: "DCS paths & options", command: "dcs.setup.open", icon: "gear", footer: true },
+  ];
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  }
+
+  function itemHtml(it) {
+    return `
+      <button class="nav-item" data-id="${it.id}" data-command="${it.command}" title="${esc(it.label)}">
+        ${I[it.icon]}
+        <span class="txt">
+          <span class="label">${esc(it.label)}</span>
+          <span class="desc">${esc(it.desc)}</span>
+        </span>
+        <span class="chev">${I.chev}</span>
+      </button>`;
+  }
+
+  const main = ITEMS.filter((i) => !i.footer);
+  const footer = ITEMS.filter((i) => i.footer);
+
+  app.innerHTML = `
+    <div class="brand">
+      <img src="${window.__LOGO__}" alt="" />
+      <span class="names">
+        <span class="kicker">DCS&nbsp;Studio</span>
+        <span class="word">DCS Studio</span>
+      </span>
+    </div>
+    <div class="rule"></div>
+    <nav>
+      ${main.map(itemHtml).join("")}
+      <div class="spacer-divider"></div>
+      ${footer.map(itemHtml).join("")}
+    </nav>
+    <div class="footer">
+      <span class="dot off" id="dot"></span>
+      <span class="flabel" id="flabel">Bridge offline</span>
+      <span class="ftime" id="ftime"></span>
+    </div>
+  `;
+
+  let active = null;
+  app.querySelectorAll(".nav-item").forEach((el) => {
+    el.addEventListener("click", () => {
+      if (active) active.classList.remove("active");
+      el.classList.add("active");
+      active = el;
+      vscode.postMessage({ type: "run", command: el.dataset.command });
+    });
+  });
+
+  const dot = document.getElementById("dot");
+  const flabel = document.getElementById("flabel");
+  const ftime = document.getElementById("ftime");
+  window.addEventListener("message", (e) => {
+    const m = e.data;
+    if (!m || m.type !== "status") return;
+    const s = m.status;
+    if (!s.connected) {
+      dot.className = "dot off";
+      flabel.textContent = "Bridge offline";
+      ftime.textContent = "";
+    } else if (s.dcsTime && s.dcsTime > 0) {
+      dot.className = "dot mission";
+      flabel.textContent = "Mission running";
+      ftime.textContent = "t " + s.dcsTime.toFixed(0) + "s";
+    } else {
+      dot.className = "dot menu";
+      flabel.textContent = "At menu";
+      ftime.textContent = "";
+    }
+  });
+})();
+</script>
