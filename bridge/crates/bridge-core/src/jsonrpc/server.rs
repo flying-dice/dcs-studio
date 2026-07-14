@@ -59,27 +59,32 @@ pub struct AppData {
 }
 
 /// Identity reported by `/health` and `rpc.discover`, so an agent probing
-/// 25569/25570 can tell the two bridges apart.
+/// 25569/25570 can tell the two bridges apart. `host`/`port` populate the
+/// OpenRPC `servers` block `rpc.discover` returns.
 #[derive(Debug, Clone)]
 pub struct ServiceInfo {
     pub name: String,
     pub env: String,
     pub version: String,
+    pub host: String,
+    pub port: u16,
 }
 
 impl Default for ServiceInfo {
     fn default() -> Self {
-        ServiceInfo::for_env(None)
+        ServiceInfo::new(None, "127.0.0.1", 0)
     }
 }
 
 impl ServiceInfo {
-    fn for_env(env: Option<&str>) -> Self {
+    fn new(env: Option<&str>, host: &str, port: u16) -> Self {
         let env = env.unwrap_or("gui").to_string();
         ServiceInfo {
             name: format!("dcs-studio-{env}"),
             env,
             version: env!("CARGO_PKG_VERSION").to_string(),
+            host: host.to_string(),
+            port,
         }
     }
 }
@@ -127,7 +132,7 @@ impl AppData {
 
 impl JsonRpcServer {
     fn new(config: ServerConfig) -> Result<Self, actix_web::Error> {
-        let service = ServiceInfo::for_env(config.env.as_deref());
+        let service = ServiceInfo::new(config.env.as_deref(), &config.host, config.port);
         let app_data = Data::new(Mutex::new(AppData::new(
             get_timeout_duration_from_config(&config),
             service,
@@ -527,18 +532,21 @@ fn process_request(
 
     // `rpc.discover` is answered by the server itself, before the router
     // lookup — every bridge (and every transport: POST /rpc and WS alike)
-    // gets the catalog for free.
+    // gets the OpenRPC document for free. Per the OpenRPC spec, rpc.discover
+    // returns the service's OpenRPC description, generated here from the exact
+    // methods the router registered.
     if request.method == "rpc.discover" {
         let Some(id) = request.id else {
             return Ok(None);
         };
-        let result = serde_json::json!({
-            "service": service.name,
-            "env": service.env,
-            "version": service.version,
-            "transport": { "rpc": "POST /rpc", "ws": "GET /ws", "health": "GET /health" },
-            "methods": router.catalog(),
-        });
+        let result = crate::jsonrpc::openrpc::build_document(
+            &service.name,
+            &service.version,
+            &service.env,
+            &service.host,
+            service.port,
+            &router.methods_sorted(),
+        );
         return Ok(Some(JsonRpcResponse {
             jsonrpc: JSON_RPC_VERSION.to_string(),
             id,

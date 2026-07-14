@@ -1,3 +1,4 @@
+pub mod openrpc;
 pub mod router;
 pub mod server;
 

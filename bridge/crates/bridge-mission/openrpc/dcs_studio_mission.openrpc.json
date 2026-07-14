@@ -1,0 +1,373 @@
+{
+  "info": {
+    "description": "In-DCS DCS Studio JSON-RPC bridge for the mission environment.",
+    "title": "dcs-studio-mission",
+    "version": "0.2.0",
+    "x-dcs-env": "mission"
+  },
+  "methods": [
+    {
+      "description": "Lines printed in the mission state since sequence `after` (0/absent = from the start), as { lines = { { seq, text }, ... }, latest }. Each bridge has its own ring: mission prints are only readable here.",
+      "name": "console_read",
+      "params": [
+        {
+          "name": "after",
+          "required": false,
+          "schema": {
+            "type": "number"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Drop every breakpoint and condition held by this bridge.",
+      "name": "debug_clear_breakpoints",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Resume a paused session: mode continue | step_over | step_into | step_out.",
+      "name": "debug_continue",
+      "params": [
+        {
+          "name": "mode",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Evaluate an expression in a paused frame (locals → upvalues → globals). A top-level `name = value` assigns for real.",
+      "name": "debug_eval",
+      "params": [
+        {
+          "name": "frame",
+          "required": false,
+          "schema": {
+            "type": "number"
+          }
+        },
+        {
+          "name": "expr",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Lazily expand a variables/scope ref from the pause snapshot or the inspector.",
+      "name": "debug_expand",
+      "params": [
+        {
+          "name": "ref",
+          "required": true,
+          "schema": {
+            "type": "number"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Evaluate an expression against the live mission globals and register the result for lazy exploration (no pause needed).",
+      "name": "debug_inspect",
+      "params": [
+        {
+          "name": "expr",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Drop every inspection ref, releasing the held values.",
+      "name": "debug_inspect_clear",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Break at the next line of debugged code (manual pause).",
+      "name": "debug_pause",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Run a chunk under the debugger in the mission state. Blocks for the whole session (the engine answers this bridge's RPCs itself while running/paused); poll debug_state instead of awaiting this call.",
+      "name": "debug_run",
+      "params": [
+        {
+          "name": "code",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Chunkname; \"=<abs path>\" lines breakpoints up with the IDE.",
+          "name": "source",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "pause_on_error",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Replace one source's breakpoints (+ per-line conditions): { source, breakpoints = { { line, condition? }, ... } }.",
+      "name": "debug_set_breakpoints",
+      "params": [
+        {
+          "name": "source",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "breakpoints",
+          "required": true,
+          "schema": {
+            "type": "array"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Poll the session: { paused, running, snapshot?, error? }. Also the liveness signal that keeps a held pause alive.",
+      "name": "debug_state",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Terminate the running chunk (unwinds a runaway/looping run).",
+      "name": "debug_stop",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Introspect the live mission-state API in _G (env, timer, trigger, world, coalition, ...) as dotted .d.lua statements.",
+      "name": "dump_globals",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "The generated EmmyLua (.d.lua) type definitions for this bridge's own Lua surface.",
+      "name": "emit_dlua",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Run Lua in the mission scripting state and return the result. print() output streams into console_read.",
+      "name": "eval",
+      "params": [
+        {
+          "description": "Lua source to run.",
+          "name": "code",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Liveness check. dcs_time is mission model time; it stops advancing while the sim is paused. NOTE: this bridge's queue pump runs on model time too — requests queue (until the 30s server timeout) while the sim is paused or between missions.",
+      "name": "ping",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Drop every explorer ref held by this state.",
+      "name": "repl_clear",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Console eval in the mission state: { ok, result?, err? }.",
+      "name": "repl_eval",
+      "params": [
+        {
+          "name": "code",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Expand a ref handed out by repl_inspect/repl_expand: { ok, variables }.",
+      "name": "repl_expand",
+      "params": [
+        {
+          "name": "ref",
+          "required": true,
+          "schema": {
+            "type": "number"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Write the full JSON of a value (by ref or expression) to a file under <writedir>Temp\\ and return { path, bytes }.",
+      "name": "repl_export",
+      "params": [
+        {
+          "name": "expr",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "ref",
+          "required": false,
+          "schema": {
+            "type": "number"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Evaluate an expression and register the result for lazy drill-down: { ok, type, value, ref }.",
+      "name": "repl_inspect",
+      "params": [
+        {
+          "name": "expr",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "Resolve a function ref's real parameter names (never runs the function): { ok, params?, native?, err? }.",
+      "name": "repl_signature",
+      "params": [
+        {
+          "name": "ref",
+          "required": true,
+          "schema": {
+            "type": "number"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {}
+      }
+    },
+    {
+      "description": "The OpenRPC service description for this bridge — every JSON-RPC method it serves, with parameters and results. Per the OpenRPC spec, rpc.discover returns the service's OpenRPC document.",
+      "name": "rpc.discover",
+      "params": [],
+      "result": {
+        "description": "The OpenRPC document describing this bridge.",
+        "name": "OpenRPC Schema",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "summary": "Returns this OpenRPC document."
+    }
+  ],
+  "openrpc": "1.3.2",
+  "servers": [
+    {
+      "name": "rpc",
+      "url": "http://127.0.0.1:25570/rpc"
+    },
+    {
+      "name": "ws",
+      "url": "ws://127.0.0.1:25570/ws"
+    }
+  ]
+}

@@ -321,4 +321,10 @@ function dcs_studio_mission.emit_dlua() end
 ---@return string
 function dcs_studio_mission.dump_globals() end
 
+--- Register this bridge's JSON-RPC method set on `router`. `deps` injects the runtime touchpoints (bridge exports, debug engine, console runtime); the hook/mission init pass live values, the OpenRPC golden test passes stubs. The single source of truth behind rpc.discover.
+---@param router dcs_studio_mission.jsonrpc.JsonRpcRouter
+---@param deps table
+---@return table
+function dcs_studio_mission.register_methods(router, deps) end
+
 return dcs_studio_mission

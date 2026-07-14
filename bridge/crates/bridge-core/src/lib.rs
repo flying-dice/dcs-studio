@@ -42,6 +42,17 @@ pub(crate) const RT_SOURCE: &str = include_str!("../lua/rt.lua");
 /// by [`bootstrap`] with the exports table as the chunk argument.
 const DEBUG_ENGINE_SOURCE: &str = include_str!("../lua/debug_engine.lua");
 
+/// The GUI bridge's JSON-RPC method registration chunk — a
+/// `function(router, deps)` exposed as `bridge.register_methods`. The GameGUI
+/// hook and the OpenRPC golden test load the SAME source, so the checked-in
+/// document can't drift from what the DLL registers.
+const GUI_METHODS_SOURCE: &str = include_str!("../lua/gui_methods.lua");
+
+/// The mission bridge's JSON-RPC method registration chunk (see
+/// [`GUI_METHODS_SOURCE`]); loaded by the embedded mission init and the golden
+/// test alike.
+const MISSION_METHODS_SOURCE: &str = include_str!("../lua/mission_methods.lua");
+
 /// Which Lua state this DLL serves — parametrizes names, logging, and the
 /// curated `dump_globals` roots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +87,23 @@ impl BridgeKind {
         match self {
             BridgeKind::Gui => "gui",
             BridgeKind::Mission => "mission",
+        }
+    }
+
+    /// The loopback port this bridge's JSON-RPC server binds by convention —
+    /// used to populate the OpenRPC `servers` block in the golden document.
+    pub fn default_port(self) -> u16 {
+        match self {
+            BridgeKind::Gui => 25569,
+            BridgeKind::Mission => 25570,
+        }
+    }
+
+    /// The `register_methods(router, deps)` chunk source for this bridge.
+    fn methods_source(self) -> &'static str {
+        match self {
+            BridgeKind::Gui => GUI_METHODS_SOURCE,
+            BridgeKind::Mission => MISSION_METHODS_SOURCE,
         }
     }
 
@@ -162,6 +190,11 @@ pub fn bootstrap(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<LuaTab
         lua.create_function(move |lua, ()| Ok(globals::dump_globals(lua, roots)))?,
     )?;
 
+    // Expose `register_methods(router, deps)` — the single source of truth for
+    // this bridge's JSON-RPC method set, shared by the live hook/init and the
+    // OpenRPC golden test. Recorded in the surface as a root function.
+    exports.set("register_methods", load_register_methods(lua, kind)?)?;
+
     // Install the console/REPL runtime into this state (idempotent via its
     // version guard).
     lua.load(RT_SOURCE).set_name("=dcs_studio_rt").exec()?;
@@ -194,6 +227,16 @@ fn get_logger_file_path(lua: &Lua, kind: BridgeKind) -> LuaResult<PathBuf> {
     Ok(format!("./{}", kind.log_file_name()).into())
 }
 
+/// Load this bridge's `register_methods(router, deps)` chunk into `lua`.
+fn load_register_methods(lua: &Lua, kind: BridgeKind) -> LuaResult<LuaFunction> {
+    lua.load(kind.methods_source())
+        .set_name(match kind {
+            BridgeKind::Gui => "=dcs_studio_gui_methods",
+            BridgeKind::Mission => "=dcs_studio_mission_methods",
+        })
+        .eval::<LuaFunction>()
+}
+
 /// Render the `.d.lua` for `kind`'s surface on a fresh Lua state — the
 /// per-cdylib golden tests pin their checked-in `types/<module>.d.lua` to this.
 pub fn emit_surface_dlua(kind: BridgeKind, version: &str) -> LuaResult<String> {
@@ -201,6 +244,33 @@ pub fn emit_surface_dlua(kind: BridgeKind, version: &str) -> LuaResult<String> {
     let exports = lua.create_table()?;
     let doc = surface::build(&lua, &exports, kind, version)?;
     Ok(luadef::emit_dlua(&doc))
+}
+
+/// Render the OpenRPC document for `kind`'s bridge as pretty JSON on a fresh
+/// Lua state — the per-cdylib golden tests pin their checked-in
+/// `openrpc/<module>.openrpc.json` to this, and the meta-schema test validates
+/// it. Runs the SAME `register_methods` chunk the live DLL registers, against a
+/// stub router with an empty `deps` (handlers are created, never called, so no
+/// DCS API is needed to enumerate the method set).
+pub fn emit_openrpc_json(kind: BridgeKind, version: &str) -> LuaResult<String> {
+    let lua = Lua::new();
+    let register = load_register_methods(&lua, kind)?;
+    let router = lua.create_userdata(crate::jsonrpc::router::JsonRpcRouter::default())?;
+    let deps = lua.create_table()?;
+    register.call::<mlua::Value>((&router, deps))?;
+
+    let doc = {
+        let router = router.borrow::<crate::jsonrpc::router::JsonRpcRouter>()?;
+        crate::jsonrpc::openrpc::build_document(
+            kind.service_name(),
+            version,
+            kind.env_name(),
+            "127.0.0.1",
+            kind.default_port(),
+            &router.methods_sorted(),
+        )
+    };
+    serde_json::to_string_pretty(&doc).map_err(mlua::Error::external)
 }
 
 /// The DCS write dir. Prefers `lfs.writedir()`; in the mission state after

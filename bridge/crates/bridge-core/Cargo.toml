@@ -26,3 +26,8 @@ toml.workspace = true
 rusqlite.workspace = true
 log.workspace = true
 log4rs.workspace = true
+
+[dev-dependencies]
+# Validates the generated OpenRPC document against the vendored official
+# meta-schema (tests/openrpc_meta_schema.rs).
+jsonschema = { version = "0.26", default-features = false }

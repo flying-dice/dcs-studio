@@ -26,7 +26,7 @@ pub fn dcs_studio_mission(lua: &Lua) -> LuaResult<LuaTable> {
 
 #[cfg(test)]
 mod tests {
-    use dcs_bridge_core::{emit_surface_dlua, BridgeKind};
+    use dcs_bridge_core::{emit_openrpc_json, emit_surface_dlua, BridgeKind};
 
     /// The checked-in golden: regenerated from the live surface. mlua tests
     /// need a real Lua 5.1 at runtime: on Windows that is DCS's own `lua.dll`
@@ -37,8 +37,18 @@ mod tests {
         "/types/dcs_studio_mission.d.lua"
     );
 
+    /// The checked-in OpenRPC document `rpc.discover` returns for this bridge.
+    const OPENRPC_GOLDEN: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/openrpc/dcs_studio_mission.openrpc.json"
+    );
+
     fn live() -> String {
         emit_surface_dlua(BridgeKind::Mission, env!("CARGO_PKG_VERSION")).expect("surface")
+    }
+
+    fn live_openrpc() -> String {
+        emit_openrpc_json(BridgeKind::Mission, env!("CARGO_PKG_VERSION")).expect("openrpc")
     }
 
     #[test]
@@ -65,6 +75,30 @@ mod tests {
         assert_eq!(
             got, want,
             "types/dcs_studio_mission.d.lua drifted from the live surface — rerun regenerate_dlua_golden"
+        );
+    }
+
+    #[test]
+    #[ignore = "regeneration tool — rewrites the checked-in golden; run explicitly"]
+    fn regenerate_openrpc_golden() {
+        let tmp = format!("{OPENRPC_GOLDEN}.tmp");
+        std::fs::write(&tmp, live_openrpc()).expect("write openrpc golden tmp");
+        std::fs::rename(&tmp, OPENRPC_GOLDEN).expect("swap openrpc golden into place");
+    }
+
+    /// The checked-in OpenRPC document matches what `rpc.discover` generates
+    /// from the live method registration. On an intentional method-set change,
+    /// regenerate with [`regenerate_openrpc_golden`].
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn golden_matches_live_openrpc() {
+        let want = live_openrpc().replace("\r\n", "\n");
+        let got = std::fs::read_to_string(OPENRPC_GOLDEN)
+            .expect("read openrpc golden")
+            .replace("\r\n", "\n");
+        assert_eq!(
+            got, want,
+            "openrpc/dcs_studio_mission.openrpc.json drifted from rpc.discover — rerun regenerate_openrpc_golden"
         );
     }
 }

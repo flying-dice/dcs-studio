@@ -2,16 +2,21 @@ use log::debug;
 use mlua::prelude::{LuaFunction, LuaTable};
 use mlua::{Lua, LuaSerdeExt, UserData, UserDataMethods};
 use serde::Deserialize;
-use serde_json::{json, Value};
 use std::collections::HashMap;
 
 /// Discover metadata a Lua registration may attach to a method:
-/// `{ description = string, params = { { name, type, required?, description? }, ... } }`.
-/// Everything is optional — a bare `add_method(name, fn)` still catalogs the name.
+/// `{ summary?, description?, params?, result? }`, feeding the OpenRPC document
+/// `rpc.discover` returns. Everything is optional — a bare
+/// `add_method(name, fn)` still catalogs the name.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct MethodMeta {
+    /// A short one-line summary (OpenRPC `method.summary`).
+    pub summary: Option<String>,
+    /// A longer description (OpenRPC `method.description`).
     pub description: Option<String>,
     pub params: Option<Vec<ParamMeta>>,
+    /// The result content descriptor (OpenRPC `method.result`).
+    pub result: Option<ResultMeta>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -20,6 +25,17 @@ pub struct ParamMeta {
     #[serde(rename = "type")]
     pub ty: Option<String>,
     pub required: Option<bool>,
+    pub description: Option<String>,
+}
+
+/// The result descriptor a Lua registration may attach — becomes the OpenRPC
+/// `method.result` content descriptor. All fields optional; a missing result
+/// degrades to a permissive `{ name = "result", schema = {} }`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResultMeta {
+    pub name: Option<String>,
+    #[serde(rename = "type")]
+    pub ty: Option<String>,
     pub description: Option<String>,
 }
 
@@ -55,54 +71,18 @@ impl JsonRpcRouter {
         self.methods.get(name).map(|entry| &entry.handler)
     }
 
-    /// The machine-readable method catalog for `rpc.discover`: every
-    /// registered method (sorted by name, with whatever metadata the
-    /// registration attached) plus a synthetic `rpc.discover` entry.
-    pub fn catalog(&self) -> Value {
-        let mut names: Vec<&String> = self.methods.keys().collect();
-        names.sort();
-        let mut methods: Vec<Value> = names
-            .into_iter()
-            .map(|name| {
-                let meta = &self.methods[name].meta;
-                method_entry_json(name, meta)
-            })
+    /// Every registered method, sorted by name, paired with its metadata — the
+    /// single source the OpenRPC builder ([`crate::jsonrpc::openrpc`]) turns
+    /// into the `rpc.discover` document.
+    pub fn methods_sorted(&self) -> Vec<(&str, &MethodMeta)> {
+        let mut entries: Vec<(&str, &MethodMeta)> = self
+            .methods
+            .iter()
+            .map(|(name, entry)| (name.as_str(), &entry.meta))
             .collect();
-        methods.push(json!({
-            "name": "rpc.discover",
-            "description": "This catalog: every JSON-RPC method this bridge serves, with descriptions and parameters.",
-        }));
-        methods.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
-        Value::Array(methods)
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        entries
     }
-}
-
-fn method_entry_json(name: &str, meta: &MethodMeta) -> Value {
-    let mut entry = json!({ "name": name });
-    if let Some(description) = &meta.description {
-        entry["description"] = json!(description);
-    }
-    if let Some(params) = &meta.params {
-        entry["params"] = Value::Array(
-            params
-                .iter()
-                .map(|p| {
-                    let mut param = json!({ "name": p.name });
-                    if let Some(ty) = &p.ty {
-                        param["type"] = json!(ty);
-                    }
-                    if let Some(required) = p.required {
-                        param["required"] = json!(required);
-                    }
-                    if let Some(description) = &p.description {
-                        param["description"] = json!(description);
-                    }
-                    param
-                })
-                .collect(),
-        );
-    }
-    entry
 }
 
 impl UserData for JsonRpcRouter {
@@ -140,7 +120,7 @@ mod tests {
     // and it runs as an ordinary test.
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
-    fn catalog_lists_methods_sorted_with_meta_and_discover() {
+    fn methods_sorted_returns_names_alphabetical_with_meta() {
         let lua = Lua::new();
         let noop = lua.create_function(|_, ()| Ok(())).expect("fn");
         let mut router = JsonRpcRouter::new();
@@ -149,37 +129,35 @@ mod tests {
             "eval".into(),
             noop,
             MethodMeta {
-                description: Some("Run Lua".into()),
+                summary: Some("Run Lua".into()),
+                description: Some("Run Lua in this state.".into()),
                 params: Some(vec![ParamMeta {
                     name: "code".into(),
                     ty: Some("string".into()),
                     required: Some(true),
                     description: None,
                 }]),
+                result: Some(ResultMeta {
+                    name: Some("value".into()),
+                    ty: None,
+                    description: Some("The return value.".into()),
+                }),
             },
         );
 
-        let catalog = router.catalog();
-        let names: Vec<&str> = catalog
-            .as_array()
-            .expect("array")
-            .iter()
-            .map(|m| m["name"].as_str().expect("name"))
-            .collect();
-        assert_eq!(
-            names,
-            vec!["eval", "ping", "rpc.discover"],
-            "sorted + synthetic discover"
-        );
+        let methods = router.methods_sorted();
+        let names: Vec<&str> = methods.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, vec!["eval", "ping"], "alphabetical, no synthetic entry");
 
-        let eval = &catalog[0];
-        assert_eq!(eval["description"], "Run Lua");
-        assert_eq!(eval["params"][0]["name"], "code");
-        assert_eq!(eval["params"][0]["type"], "string");
-        assert_eq!(eval["params"][0]["required"], true);
-        // A bare registration catalogs just the name.
-        let ping = &catalog[1];
-        assert_eq!(ping["name"], "ping");
-        assert!(ping.get("description").is_none());
+        let (_, eval) = &methods[0];
+        assert_eq!(eval.summary.as_deref(), Some("Run Lua"));
+        assert_eq!(eval.params.as_ref().expect("params")[0].name, "code");
+        assert_eq!(
+            eval.result.as_ref().and_then(|r| r.name.as_deref()),
+            Some("value")
+        );
+        // A bare registration keeps default (empty) metadata.
+        let (_, ping) = &methods[1];
+        assert!(ping.description.is_none());
     }
 }

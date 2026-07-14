@@ -106,6 +106,23 @@ pub fn build(
         "Introspect the live DCS API in `_G` (this bridge's curated roots) and return it as dotted .d.lua statements the editor indexes.",
     );
 
+    // `register_methods` is the shared method-registration chunk, loaded and
+    // set on the exports table in bootstrap(). It is the single source of truth
+    // behind `rpc.discover`'s OpenRPC document (live and golden). Record its
+    // type here so the module self-describes it.
+    s.record_root_fn(
+        "register_methods",
+        &[
+            crate::facade::p("router", &format!("{module_name}.jsonrpc.JsonRpcRouter")),
+            crate::facade::p("deps", "table"),
+        ],
+        &[r("table")],
+        "Register this bridge's JSON-RPC method set on `router`. `deps` injects \
+         the runtime touchpoints (bridge exports, debug engine, console runtime); \
+         the hook/mission init pass live values, the OpenRPC golden test passes \
+         stubs. The single source of truth behind rpc.discover.",
+    );
+
     Ok(s.finish())
 }
 
