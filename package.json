@@ -334,6 +334,50 @@
           "group": "navigation@4"
         }
       ],
+      "explorer/context": [
+        {
+          "command": "dcs.debug.debugMission",
+          "when": "resourceLangId == lua && resourceFilename != MissionScripting.lua",
+          "group": "1_dcs@1"
+        },
+        {
+          "command": "dcs.debug.runMission",
+          "when": "resourceLangId == lua && resourceFilename != MissionScripting.lua",
+          "group": "1_dcs@2"
+        },
+        {
+          "command": "dcs.debug.debugGui",
+          "when": "resourceLangId == lua && resourceFilename != MissionScripting.lua",
+          "group": "1_dcs@3"
+        },
+        {
+          "command": "dcs.debug.runGui",
+          "when": "resourceLangId == lua && resourceFilename != MissionScripting.lua",
+          "group": "1_dcs@4"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "dcs.debug.debugMission",
+          "when": "resourceLangId == lua && resourceFilename != MissionScripting.lua",
+          "group": "1_dcs@1"
+        },
+        {
+          "command": "dcs.debug.runMission",
+          "when": "resourceLangId == lua && resourceFilename != MissionScripting.lua",
+          "group": "1_dcs@2"
+        },
+        {
+          "command": "dcs.debug.debugGui",
+          "when": "resourceLangId == lua && resourceFilename != MissionScripting.lua",
+          "group": "1_dcs@3"
+        },
+        {
+          "command": "dcs.debug.runGui",
+          "when": "resourceLangId == lua && resourceFilename != MissionScripting.lua",
+          "group": "1_dcs@4"
+        }
+      ],
       "editor/title": [
         {
           "command": "dcs.manifest.openForm",
