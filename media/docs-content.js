@@ -434,6 +434,28 @@ run_on = "after-sanitize"</code></pre>
 `,
         },
         {
+          id: "dcs-database",
+          title: "DCS Unit Database",
+          lede: "Query and export the DCS unit database (units, weapons, pylons) over the bridge.",
+          body: `
+<p>The GameGUI hook state carries the DCS <code>db</code> global — units, weapons, sensors and more. The GUI bridge exposes it over JSON-RPC, so agents and scripts can query it directly and the extension can dump it to a file. These methods are <strong>GUI-bridge only</strong> (port 25569) and need DCS loaded and <strong>foreground</strong> — the request queue pumps on the sim thread, so a backgrounded sim stalls calls until they time out.</p>
+<ul>
+  <li><code>db_categories</code> — the real categories inside <code>db.Units</code> (Planes, Helicopters, Ships, Cars, …).</li>
+  <li><code>db_unit_types { category?, filter? }</code> — light unit-type listing across one or all categories.</li>
+  <li><code>db_unit { type, raw? }</code> — one unit: a curated summary (attributes, performance, guns, and <strong>pylons with per-store CLSIDs resolved to weapon names</strong>) or the raw record.</li>
+  <li><code>db_weapons { filter? }</code> — the <code>db.Weapons</code> store listing (CLSID + display name + category).</li>
+  <li><code>db_export { what? }</code> — dump <em>all</em>, <em>weapons</em>, one <em>category</em> or one <em>unit</em> to a JSON file under the DCS write dir (a big dump never rides the socket).</li>
+</ul>
+<div class="note">
+  <p><strong>"Payloads" caveat.</strong> The mission editor's named loadout <em>presets</em> are not in <code>db</code>. The database's answer to "what can this unit carry" is its pylons plus each pylon's compatible store CLSIDs (cross-referenced against <code>db.Weapons</code>) — which is exactly what <code>db_unit</code> returns.</p>
+</div>
+<p>The <strong>Export DCS Unit Database</strong> command walks you through a quick-pick (everything / a category / a single unit / weapons) and saves the JSON where you choose. For interactive browsing, drill into <code>db</code> in the Lua Console's Explorer tab.</p>
+<div class="cmd-row">
+  <button class="cmd-btn" data-command="dcs.db.export">Export DCS Unit Database (JSON)…</button>
+</div>
+`,
+        },
+        {
           id: "mission-scripting",
           title: "MissionScripting Sanitization",
           lede: "DCS ships its mission scripting environment locked down. DCS Studio edits that lockdown safely, reversibly, and with a backup.",

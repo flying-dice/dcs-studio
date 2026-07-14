@@ -192,8 +192,42 @@ curl -s http://127.0.0.1:25570/rpc -H "Content-Type: application/json" \
 The full surface (per `rpc.discover`): `ping`, `eval`, `console_read`,
 `emit_dlua`, `dump_globals`, `repl_*` (eval/inspect/expand/clear/export),
 `debug_*` (run/state/continue/pause/stop/expand/eval/inspect/
-set_breakpoints/clear_breakpoints), plus `mission_boot` on the GUI bridge
-(re-dispatches the mission-bridge boot into a running mission).
+set_breakpoints/clear_breakpoints), plus `mission_boot` and the `db_*`
+methods on the GUI bridge (`mission_boot` re-dispatches the mission-bridge
+boot into a running mission).
+
+### DCS unit database (`db_*`, GUI bridge only)
+
+The GameGUI hook state carries the DCS `db` global (units, weapons, …), so
+these run on the **GUI bridge (25569) only** and need DCS loaded and
+**foreground** (the RPC queue pumps on the sim thread — a backgrounded sim
+stalls requests until the ~30s timeout). All return plain JSON.
+
+- `db_categories {}` → `{ categories: [{ name, entry_key, count }] }` — the real
+  categories inside `db.Units` (Planes, Helicopters, Ships, Cars, …), shape-
+  detected (GT_t/Skills and non-unit children are filtered out).
+- `db_unit_types { category?, filter? }` → `{ units: [{ type, display_name,
+  category }], truncated }` — light listing across one or all categories;
+  `filter` is a case-insensitive substring; capped at 2000 rows.
+- `db_unit { type, raw? }` → curated `{ unit: { type, display_name, category,
+  attributes, country_of_origin, crew_members, perf, guns, pylons } }`, where
+  `pylons[].stores[]` carry each store's `clsid` resolved against `db.Weapons`.
+  `raw = true` returns the whole record (depth-capped, cycle-safe copy).
+- `db_weapons { filter? }` → `{ weapons: [{ clsid, display_name, name,
+  category }], truncated }` — `db.Weapons.ByCLSID` listing; filter + 2000 cap.
+- `db_export { what? }` → `{ path, bytes }` — dumps `what` = `all` (default) |
+  `weapons` | `category:<name>` | `unit:<type>` to a JSON file under
+  `<writedir>Temp\` (a tens-of-MB dump never rides the socket; runs on the sim
+  thread, so `all` can stall for seconds).
+
+**"Payloads" caveat:** ME loadout *presets* (the named payloads in the mission
+editor) are **not** in `db`. The DB's answer to "what can this unit carry" is
+its **pylons + per-pylon compatible store CLSIDs** (cross-referenced against
+`db.Weapons`), which is what `db_unit`'s `pylons` gives you.
+
+The extension surfaces `db_export` as the command **"DCS Studio: Export DCS
+Unit Database (JSON)…"** (quick-pick: everything / a category / a single unit /
+weapons). Interactive browsing of `db` stays in the Lua Console explorer.
 
 ## Marketplace and publishing
 

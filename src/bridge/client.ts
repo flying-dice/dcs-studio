@@ -3,6 +3,11 @@ import { BridgeConnection, BridgeTransportPort } from "../core/ports/bridgeTrans
 import {
   BRIDGE_INITIAL_BACKOFF_MS,
   BridgeStatus,
+  DbCategory,
+  DbExportResult,
+  DbExportWhat,
+  DbUnitType,
+  DbWeapon,
   DebugEnv,
   DebugState,
   DebugValue,
@@ -154,6 +159,37 @@ export class BridgeClient {
   replExport(env: LuaEnv, spec: { ref?: number; expr?: string }): Promise<{ path: string; bytes: number }> {
     const params = { env, ref: spec.ref, expr: spec.expr };
     return this.replCall("repl_export", params, 35000);
+  }
+
+  // ── DCS unit database (db_*) — GUI bridge only; needs DCS loaded ──
+
+  /** The real categories inside db.Units (Planes, Helicopters, Ships, …). */
+  dbCategories(): Promise<{ categories: DbCategory[] }> {
+    return this.call("db_categories", {}) as Promise<{ categories: DbCategory[] }>;
+  }
+
+  /** Light unit-type listing across one or all categories; `filter` is a
+   * case-insensitive substring over type/display name (capped, `truncated`). */
+  dbUnitTypes(opts?: { category?: string; filter?: string }): Promise<{ units: DbUnitType[]; truncated: boolean }> {
+    return this.call("db_unit_types", opts ?? {}) as Promise<{ units: DbUnitType[]; truncated: boolean }>;
+  }
+
+  /** One unit record: curated summary, or the raw record with `raw = true`. */
+  dbUnit(type: string, raw = false): Promise<{ unit: unknown; category?: string; raw?: boolean }> {
+    return this.call("db_unit", { type, raw }) as Promise<{ unit: unknown; category?: string; raw?: boolean }>;
+  }
+
+  /** Light listing of db.Weapons.ByCLSID; `filter` is a case-insensitive
+   * substring over display name/name/CLSID (capped, `truncated`). */
+  dbWeapons(filter?: string): Promise<{ weapons: DbWeapon[]; truncated: boolean }> {
+    return this.call("db_weapons", filter ? { filter } : {}) as Promise<{ weapons: DbWeapon[]; truncated: boolean }>;
+  }
+
+  /** Dump part (or all) of the DB to a JSON file in the DCS write dir; returns
+   * its path — a big export never rides the WebSocket. Long timeout: the sim
+   * serializes on its own thread ("all" can take seconds). */
+  dbExport(what: DbExportWhat = "all"): Promise<DbExportResult> {
+    return this.call("db_export", { what }, 35000) as Promise<DbExportResult>;
   }
 
   // ── Debugger (drives this bridge's in-state engine) ──

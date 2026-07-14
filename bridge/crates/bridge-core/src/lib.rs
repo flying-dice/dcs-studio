@@ -287,3 +287,166 @@ pub(crate) fn get_lfs_writedir(lua: &Lua) -> LuaResult<String> {
         Err(_) => globals.get::<String>("__DCS_STUDIO_WRITEDIR"),
     }
 }
+
+#[cfg(test)]
+mod db_method_tests {
+    use super::GUI_METHODS_SOURCE;
+    use mlua::prelude::{LuaFunction, LuaResult};
+    use mlua::Lua;
+
+    // The GUI bridge's db_* handlers, driven against a SYNTHETIC `db` global
+    // shaped from the verified live data (array categories with singular entry
+    // keys; Pylons→Launchers→CLSID; a GT_t whose inner .type is numeric and a
+    // Skills list, both of which shape-detection must exclude; db.Weapons.ByCLSID).
+    // register_methods runs against a fake router that captures the handlers into
+    // the global `H`, so we can invoke them directly and assert on the returned
+    // plain-data tables. Gated like the rest of the mlua suite.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn db_methods_over_synthetic_db() -> LuaResult<()> {
+        let lua = Lua::new();
+        let register: LuaFunction = lua.load(GUI_METHODS_SOURCE).eval()?;
+        lua.globals().set("register_methods", register)?;
+        lua.load(SUITE).exec()?;
+        Ok(())
+    }
+
+    const SUITE: &str = r#"
+      -- ── synthetic db shaped like the live one ──
+      local function plane(t, dn) return {
+        type = t, DisplayName = dn, Name = t,
+        attribute = { [1] = 1, [2] = 2, [5] = "Air", [6] = "Planes", [7] = "Fighters" },
+        country_of_origin = "USA", crew_members = { {}, {} },
+        M_max = 100, H_max = 200, Mach_max = 2.5, ignore_me = "x",
+        Guns = { { name = "M61" } },
+        Pylons = {
+          { Number = 1, Order = 1, Type = 2, X = 1.5, Y = 2.5, Z = 3.5,
+            Launchers = { { CLSID = "{AIM}" }, { CLSID = "{UNKNOWN}" } } },
+        },
+        nested = { a = { b = { c = 1 } } },
+      } end
+
+      db = {
+        Units = {
+          Planes = { DefaultTask = {}, Tasks = {},
+            Plane = { plane("F-15C", "F-15C Eagle"), plane("Su-27", "Su-27 Flanker") } },
+          Ships = { Ship = { { type = "speedboat", DisplayName = "Speedboat",
+            Length = 10, Width = 3, MaxSpeed = 20 } } },
+          -- excluded: GT_t (inner .type is numeric), Skills (no record array)
+          GT_t = { WSN_t = { { type = 0, deviation_error_azimuth = 1 } } },
+          Skills = { "Average", "Good", "High" },
+          WWIIstructures = {},
+        },
+        Weapons = {
+          Categories = {},
+          ByCLSID = {
+            ["{AIM}"] = { CLSID = "{AIM}", displayName = "AIM-120C", name = "AIM_120C", category = 1 },
+            ["{MK}"]  = { CLSID = "{MK}",  displayName = "Mk-82",    name = "Mk_82",   category = 2 },
+          },
+        },
+      }
+
+      -- fake router: capture handlers by name
+      H = {}
+      local router = { add_method = function(_, name, fn, _meta) H[name] = fn end }
+
+      -- stub deps: RT.encode + guarded file writer for db_export
+      local captured = {}
+      local deps = {
+        bridge = { file = { write_text = function(rel, json) captured.rel = rel; captured.json = json; return true end } },
+        RT = { encode = function(v, pretty) captured.encoded = v; return "ENCODED" end },
+      }
+      lfs = { writedir = function() return "C:/wd/" end }
+
+      register_methods(router, deps)
+
+      local function eq(a, b, msg) if a ~= b then error((msg or "eq") .. ": got " .. tostring(a) .. " want " .. tostring(b), 2) end end
+
+      -- db_categories: only Planes + Ships (GT_t/Skills/WWIIstructures excluded)
+      local cats = H.db_categories().categories
+      eq(#cats, 2, "category count")
+      local seen = {}
+      for _, c in ipairs(cats) do seen[c.name] = c end
+      assert(seen.Planes and seen.Planes.entry_key == "Plane" and seen.Planes.count == 2, "Planes")
+      assert(seen.Ships and seen.Ships.entry_key == "Ship" and seen.Ships.count == 1, "Ships")
+      assert(not seen.GT_t and not seen.Skills and not seen.WWIIstructures, "excluded non-categories")
+      -- deterministic sort by name
+      eq(cats[1].name, "Planes", "sorted[1]"); eq(cats[2].name, "Ships", "sorted[2]")
+
+      -- db_unit_types: all, one category, case-insensitive filter
+      local all = H.db_unit_types({})
+      eq(#all.units, 3, "all units"); eq(all.truncated, false, "not truncated")
+      eq(#H.db_unit_types({ category = "Planes" }).units, 2, "planes only")
+      local eagle = H.db_unit_types({ filter = "EAGLE" })
+      eq(#eagle.units, 1, "filter by display"); eq(eagle.units[1].type, "F-15C", "eagle is F-15C")
+      local ok = pcall(function() return H.db_unit_types({ category = "Nope" }) end)
+      eq(ok, false, "unknown category errors")
+
+      -- db_unit curated (lowercase lookup)
+      local u = H.db_unit({ type = "f-15c" }).unit
+      eq(u.type, "F-15C", "unit type"); eq(u.category, "Planes", "unit category")
+      eq(u.display_name, "F-15C Eagle", "display")
+      eq(u.country_of_origin, "USA", "country"); eq(u.crew_members, 2, "crew count")
+      -- attributes: string values only, sorted
+      eq(#u.attributes, 3, "attr count")
+      eq(u.attributes[1], "Air"); eq(u.attributes[2], "Fighters"); eq(u.attributes[3], "Planes")
+      eq(u.perf.M_max, 100, "perf M_max"); eq(u.perf.H_max, 200, "perf H_max")
+      assert(u.perf.ignore_me == nil, "non-perf field excluded")
+      -- pylons + store resolution
+      eq(#u.pylons, 1, "one pylon")
+      local p = u.pylons[1]
+      eq(p.number, 1); eq(p.order, 1); eq(p.type, 2)
+      eq(p.position.x, 1.5); eq(p.position.y, 2.5); eq(p.position.z, 3.5)
+      eq(#p.stores, 2, "two stores")
+      eq(p.stores[1].clsid, "{AIM}"); eq(p.stores[1].weapon.display_name, "AIM-120C")
+      assert(p.stores[2].weapon == nil, "unknown CLSID → bare clsid, nil weapon")
+      eq(p.stores[2].clsid, "{UNKNOWN}")
+
+      -- db_unit raw: whole record, sanitized (nested preserved, guns present)
+      local raw = H.db_unit({ type = "F-15C", raw = true })
+      eq(raw.raw, true, "raw flag"); eq(raw.unit.type, "F-15C", "raw type")
+      eq(raw.unit.ignore_me, "x", "raw keeps unmapped fields")
+      eq(raw.unit.nested.a.b.c, 1, "raw keeps nested")
+
+      -- a unit without pylons/crew/country (ship)
+      local s = H.db_unit({ type = "speedboat" }).unit
+      assert(s.pylons == nil and s.country_of_origin == nil and s.crew_members == nil, "ship has no pylons/crew/country")
+
+      -- db_weapons + filter
+      local w = H.db_weapons({})
+      eq(#w.weapons, 2, "two weapons"); eq(w.truncated, false, "weapons not truncated")
+      local mk = H.db_weapons({ filter = "mk" })
+      eq(#mk.weapons, 1, "weapon filter"); eq(mk.weapons[1].display_name, "Mk-82", "Mk-82")
+
+      -- db_export: RT.encode + guarded write, path/bytes
+      local ex = H.db_export({ what = "weapons" })
+      eq(captured.encoded, db.Weapons, "export encodes weapons")
+      eq(ex.bytes, #("ENCODED"), "export bytes")
+      assert(ex.path == "C:/wd/" .. string.gsub(captured.rel, "/", "\\"), "export path")
+      assert(string.find(captured.rel, "^Temp/dcs%-studio%-db%-weapons%-"), "export filename: " .. captured.rel)
+      H.db_export({}) -- default "all"
+      eq(captured.encoded, db, "export all encodes db")
+      H.db_export({ what = "category:Planes" })
+      eq(captured.encoded, db.Units.Planes.Plane, "export category")
+      H.db_export({ what = "unit:F-15C" })
+      eq(captured.encoded.type, "F-15C", "export unit")
+      eq(pcall(function() return H.db_export({ what = "bogus" }) end), false, "bad what errors")
+
+      -- caps/truncation + cache invalidation on db identity change: a whole new
+      -- db table (fresh identity) must rebuild the category/type caches, and a
+      -- category over the 2000 cap flags `truncated`.
+      local cars = {}
+      for i = 1, 2001 do cars[i] = { type = "car" .. i, DisplayName = "Car " .. i } end
+      db = { Units = { Cars = { Car = cars } }, Weapons = db.Weapons }
+      local cats2 = H.db_categories().categories
+      eq(#cats2, 1, "cache invalidated on db identity change: only Cars now")
+      eq(cats2[1].name, "Cars", "rebuilt category is Cars")
+      local big = H.db_unit_types({ category = "Cars" })
+      eq(#big.units, 2000, "capped at 2000"); eq(big.truncated, true, "truncated flag")
+      assert(H.db_unit({ type = "car42" }).unit.type == "car42", "type index rebuilt for new db")
+
+      -- absent-db guard
+      db = nil
+      eq(pcall(function() return H.db_categories() end), false, "absent db errors")
+    "#;
+}

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   EXPORT_OPEN_LIMIT_BYTES,
+  dbExportFileBase,
   exportFileBase,
   shouldOpenExport,
 } from "../../src/core/domain/bridgeConsole";
@@ -42,5 +43,21 @@ describe("exportFileBase", () => {
 
   it("caps the base name at 60 characters", () => {
     expect(exportFileBase("a".repeat(80))).toBe("a".repeat(60));
+  });
+});
+
+describe("dbExportFileBase", () => {
+  it("names whole-DB and weapons exports", () => {
+    expect(dbExportFileBase("all")).toBe("dcs-db-all");
+    expect(dbExportFileBase("weapons")).toBe("dcs-db-weapons");
+  });
+
+  it("flattens the : separator in category/unit specs", () => {
+    expect(dbExportFileBase("category:Planes")).toBe("dcs-db-category-Planes");
+    expect(dbExportFileBase("unit:F-15C")).toBe("dcs-db-unit-F-15C");
+  });
+
+  it("sanitizes unsafe characters in the spec", () => {
+    expect(dbExportFileBase("unit:A/A weapon")).toBe("dcs-db-unit-A_A_weapon");
   });
 });

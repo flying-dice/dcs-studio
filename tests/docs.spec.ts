@@ -4,9 +4,10 @@ import { openPreview, expectSent, hostSend } from "./helpers";
 test.describe("docs preview", () => {
   test("renders the TOC from __DOCS__ and the first page by default", async ({ page }) => {
     await openPreview(page, "docs");
-    // media/docs-content.js currently defines 14 pages across 4 sections
-    // (includes the #12 "Scripting Sandbox & Trust" explainer).
-    await expect(page.getByTestId("toc-link")).toHaveCount(14);
+    // media/docs-content.js currently defines 15 pages across 4 sections
+    // (includes the #12 "Scripting Sandbox & Trust" explainer and the
+    // "DCS Unit Database" tools page).
+    await expect(page.getByTestId("toc-link")).toHaveCount(15);
     await expect(page.getByTestId("page-title")).toHaveText("Welcome to DCS Studio");
     await expect(page.getByTestId("page-body")).not.toBeEmpty();
   });

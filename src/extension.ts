@@ -23,6 +23,7 @@ import { LogPanel } from "./log/logPanel";
 import { injectCommand, ejectCommand } from "./bridge/deploy";
 import { launchDcs, launchCleanup } from "./bridge/launch";
 import { buildBridge } from "./bridge/build";
+import { dbExportCommand } from "./bridge/dbExport";
 import { SetupPanel } from "./setup/panel";
 import {
   DEBUG_TYPE,
@@ -253,6 +254,7 @@ export function activate(context: vscode.ExtensionContext): void {
       clients.reconnect();
     }),
     vscode.commands.registerCommand("dcs.bridge.build", () => buildBridge(context)),
+    vscode.commands.registerCommand("dcs.db.export", () => dbExportCommand(clients)),
   );
 
   // ── Debugger: run/debug Lua inside DCS (mission + hooks envs) over the bridges ──

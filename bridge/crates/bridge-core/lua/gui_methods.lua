@@ -413,6 +413,387 @@ end
     description = "Terminate the running chunk (unwinds a runaway/looping run).",
   })
 
+  -- ── DCS unit database (db) ──
+  -- The GameGUI hook state carries a rich `db` global directly (Units, Weapons,
+  -- …). These methods are GUI-bridge only and need the sim loaded; every
+  -- handler guards `type(db) == "table"`. Returns are plain data tables (no
+  -- cycles) safe for the Rust serializer, EXCEPT db_export which writes a file.
+  local RT = deps.RT
+
+  local DB_CAP = 2000 -- max rows a listing returns before it flags `truncated`
+  local RAW_MAX_DEPTH = 12 -- db_unit raw / guns sanitizer recursion guard
+
+  local function need_db()
+    if type(db) ~= "table" then
+      error(
+        "the DCS unit database (db) is not available here — db_* methods are GUI-bridge only and need DCS loaded (the sim must be foreground so its RPC queue pumps)",
+        0
+      )
+    end
+  end
+
+  -- Detect a real unit category inside a `db.Units` child: the child holds an
+  -- array-of-records under a singular key (Planes→Plane, Cars→Car), and a real
+  -- unit record's `.type` is a STRING (this is what excludes GT_t, whose
+  -- WSN_t[i].type is a number, plus Skills/WWIIstructures which have no such
+  -- inner array). Returns entry_key, array or nil.
+  local function detect_category(child)
+    for k, v in pairs(child) do
+      if type(v) == "table" and #v > 0 and type(v[1]) == "table" and type(v[1].type) == "string" then
+        return tostring(k), v
+      end
+    end
+    return nil
+  end
+
+  -- Category map + per-category type→record index, cached module-locally and
+  -- rebuilt when `db` changes identity (a fresh db table on reload).
+  local db_cache = nil
+  local function get_cache()
+    if db_cache and db_cache.db == db then
+      return db_cache
+    end
+    local categories, by_name = {}, {}
+    if type(db) == "table" and type(db.Units) == "table" then
+      for name, child in pairs(db.Units) do
+        if type(child) == "table" then
+          local entry_key, arr = detect_category(child)
+          if entry_key then
+            local entry = {
+              name = tostring(name),
+              entry_key = entry_key,
+              array = arr,
+              count = #arr,
+              type_index = nil,
+            }
+            categories[#categories + 1] = entry
+            by_name[entry.name] = entry
+          end
+        end
+      end
+      table.sort(categories, function(a, b) return a.name < b.name end)
+    end
+    db_cache = { db = db, categories = categories, by_name = by_name }
+    return db_cache
+  end
+
+  -- Lazy lowercase type→record index for one category.
+  local function type_index(entry)
+    if entry.type_index then
+      return entry.type_index
+    end
+    local idx = {}
+    for i = 1, #entry.array do
+      local rec = entry.array[i]
+      if type(rec) == "table" and type(rec.type) == "string" then
+        idx[string.lower(rec.type)] = rec
+      end
+    end
+    entry.type_index = idx
+    return idx
+  end
+
+  -- Depth-capped, cycle-safe deep copy into plain data (functions/userdata/
+  -- threads → their type name), so a raw record is safe for the Rust serializer
+  -- (which has no cycle guard). Integer-keyed tables keep their keys, so arrays
+  -- stay arrays.
+  local function sanitize(v, depth, seen)
+    local t = type(v)
+    if t == "table" then
+      if seen[v] then
+        return "<cycle>"
+      end
+      if depth <= 0 then
+        return "<max depth>"
+      end
+      seen[v] = true
+      local out = {}
+      for k, val in pairs(v) do
+        local kk = (type(k) == "string" or type(k) == "number") and k or tostring(k)
+        out[kk] = sanitize(val, depth - 1, seen)
+      end
+      seen[v] = nil
+      return out
+    elseif t == "function" or t == "userdata" or t == "thread" then
+      return t
+    end
+    return v -- string / number / boolean / nil
+  end
+
+  -- Human-readable attribute names: a unit's `attribute` table mixes numeric
+  -- ids and string names; the strings are the modder-facing attribute list.
+  local function attribute_names(rec)
+    local out = {}
+    if type(rec.attribute) == "table" then
+      for _, v in pairs(rec.attribute) do
+        if type(v) == "string" then
+          out[#out + 1] = v
+        end
+      end
+      table.sort(out)
+    end
+    return out
+  end
+
+  -- Curated numeric performance fields, read defensively across categories
+  -- (planes/helicopters/ships/cars use different subsets); only those present
+  -- as numbers appear.
+  local PERF_KEYS = {
+    "Mach_max", "M_max", "M_empty", "M_fuel_max", "M_nominal",
+    "V_max_h", "V_max_sea_level", "V_max", "V_max_cruise", "V_land", "V_take_off",
+    "MaxSpeed", "max_velocity", "Vy_max",
+    "H_max", "H_stat_max", "H_din_one_eng",
+    "range", "detection_range_max", "DetectionRange", "ThreatRange",
+    "mass", "life", "AmmoWeight",
+    "length", "height", "wing_span", "Length", "Width", "Height",
+    "RCS", "engines_count", "crew_members_count",
+  }
+  local function perf_fields(rec)
+    local out = {}
+    for _, key in ipairs(PERF_KEYS) do
+      if type(rec[key]) == "number" then
+        out[key] = rec[key]
+      end
+    end
+    return out
+  end
+
+  -- Resolve a store CLSID against db.Weapons.ByCLSID → curated weapon info, or
+  -- nil when unknown (the caller keeps the bare CLSID).
+  local function resolve_weapon(clsid)
+    local by = type(db.Weapons) == "table" and db.Weapons.ByCLSID
+    local w = type(by) == "table" and by[clsid]
+    if type(w) ~= "table" then
+      return nil
+    end
+    return { display_name = w.displayName, name = w.name, category = w.category }
+  end
+
+  -- Pylons → per-pylon compatible stores (the DB's answer to "payloads":
+  -- pylons + per-pylon store CLSIDs cross-referenced against db.Weapons; ME
+  -- loadout PRESETS are not in db).
+  local function pylons_of(rec)
+    if type(rec.Pylons) ~= "table" then
+      return nil
+    end
+    local out = {}
+    for i = 1, #rec.Pylons do
+      local p = rec.Pylons[i]
+      if type(p) == "table" then
+        local stores = {}
+        if type(p.Launchers) == "table" then
+          for j = 1, #p.Launchers do
+            local l = p.Launchers[j]
+            if type(l) == "table" and l.CLSID then
+              stores[#stores + 1] = { clsid = l.CLSID, weapon = resolve_weapon(l.CLSID) }
+            end
+          end
+        end
+        out[#out + 1] = {
+          number = p.Number,
+          order = p.Order,
+          type = p.Type,
+          position = { x = p.X, y = p.Y, z = p.Z },
+          stores = stores,
+        }
+      end
+    end
+    return out
+  end
+
+  router:add_method("db_categories", function()
+    need_db()
+    local cats = {}
+    for _, entry in ipairs(get_cache().categories) do
+      cats[#cats + 1] = { name = entry.name, entry_key = entry.entry_key, count = entry.count }
+    end
+    return { categories = cats }
+  end, {
+    summary = "List the DCS unit-database categories.",
+    description = "The real categories inside db.Units (Planes, Helicopters, Ships, Cars, …), shape-detected and filtered (GT_t/Skills and non-unit children are skipped). GUI bridge only; needs DCS loaded.",
+    result = { name = "categories", type = "table", description = "{ categories = { { name, entry_key, count }, ... } }" },
+  })
+
+  router:add_method("db_unit_types", function(params)
+    need_db()
+    local want_cat = params and params.category
+    local filter = params and params.filter and string.lower(tostring(params.filter))
+    local cache = get_cache()
+    local list, categories
+    if want_cat then
+      local entry = cache.by_name[tostring(want_cat)]
+      if not entry then
+        error("unknown category '" .. tostring(want_cat) .. "' (see db_categories)", 0)
+      end
+      categories = { entry }
+    else
+      categories = cache.categories
+    end
+    local units, truncated = {}, false
+    for _, entry in ipairs(categories) do
+      for i = 1, #entry.array do
+        local rec = entry.array[i]
+        if type(rec) == "table" and type(rec.type) == "string" then
+          local display = rec.DisplayName or rec.Name or rec.type
+          if not filter or string.find(string.lower(rec.type), filter, 1, true)
+            or string.find(string.lower(tostring(display)), filter, 1, true) then
+            if #units >= DB_CAP then
+              truncated = true
+              break
+            end
+            units[#units + 1] = { type = rec.type, display_name = display, category = entry.name }
+          end
+        end
+      end
+      if truncated then
+        break
+      end
+    end
+    return { units = units, truncated = truncated }
+  end, {
+    summary = "List unit types (optionally one category, optionally filtered).",
+    description = "Light listing across one or all categories: { units = { { type, display_name, category }, ... }, truncated }. `filter` is a case-insensitive substring over type/display name; capped at 2000 rows.",
+    params = {
+      { name = "category", type = "string", required = false, description = "Restrict to one category (name from db_categories)." },
+      { name = "filter", type = "string", required = false, description = "Case-insensitive substring over type/display name." },
+    },
+    result = { name = "units", type = "table", description = "{ units = { { type, display_name, category }, ... }, truncated }" },
+  })
+
+  router:add_method("db_unit", function(params)
+    need_db()
+    local want = params and params.type
+    if type(want) ~= "string" or want == "" then
+      error("db_unit needs a `type` (a unit type name; see db_unit_types)", 0)
+    end
+    local lower = string.lower(want)
+    local cache = get_cache()
+    local rec, cat_name
+    for _, entry in ipairs(cache.categories) do
+      local hit = type_index(entry)[lower]
+      if hit then
+        rec, cat_name = hit, entry.name
+        break
+      end
+    end
+    if not rec then
+      error("unknown unit type '" .. want .. "' (see db_unit_types)", 0)
+    end
+    if params and params.raw then
+      return { unit = sanitize(rec, RAW_MAX_DEPTH, {}), category = cat_name, raw = true }
+    end
+    local crew = type(rec.crew_members) == "table" and #rec.crew_members or nil
+    return {
+      unit = {
+        type = rec.type,
+        display_name = rec.DisplayName or rec.Name or rec.type,
+        category = cat_name,
+        attributes = attribute_names(rec),
+        country_of_origin = rec.country_of_origin,
+        crew_members = crew,
+        perf = perf_fields(rec),
+        guns = type(rec.Guns) == "table" and sanitize(rec.Guns, RAW_MAX_DEPTH, {}) or nil,
+        pylons = pylons_of(rec),
+      },
+    }
+  end, {
+    summary = "One unit record: curated summary, or the raw record.",
+    description = "Curated: { unit = { type, display_name, category, attributes, country_of_origin, crew_members, perf, guns, pylons } } where pylons carry per-store CLSIDs resolved against db.Weapons. `raw = true` returns the whole record deep-copied through a depth-capped, cycle-safe sanitizer. NB: ME loadout presets are NOT in db — 'payloads' here means pylons + compatible stores.",
+    params = {
+      { name = "type", type = "string", required = true, description = "The unit type name (see db_unit_types)." },
+      { name = "raw", type = "boolean", required = false, description = "Return the whole record (sanitized) instead of the curated view." },
+    },
+    result = { name = "unit", type = "table", description = "{ unit = { ... }, category?, raw? }" },
+  })
+
+  router:add_method("db_weapons", function(params)
+    need_db()
+    if type(db.Weapons) ~= "table" or type(db.Weapons.ByCLSID) ~= "table" then
+      error("db.Weapons.ByCLSID is not available", 0)
+    end
+    local filter = params and params.filter and string.lower(tostring(params.filter))
+    local weapons, truncated = {}, false
+    for clsid, w in pairs(db.Weapons.ByCLSID) do
+      if type(w) == "table" then
+        local display = w.displayName or w.name or clsid
+        local hay = string.lower(tostring(display) .. " " .. tostring(w.name or "") .. " " .. tostring(clsid))
+        if not filter or string.find(hay, filter, 1, true) then
+          if #weapons >= DB_CAP then
+            truncated = true
+            break
+          end
+          weapons[#weapons + 1] = {
+            clsid = w.CLSID or clsid,
+            display_name = display,
+            name = w.name,
+            category = w.category,
+          }
+        end
+      end
+    end
+    return { weapons = weapons, truncated = truncated }
+  end, {
+    summary = "List weapons/stores from db.Weapons (CLSID + display name).",
+    description = "Light listing of db.Weapons.ByCLSID: { weapons = { { clsid, display_name, name, category }, ... }, truncated }. `filter` is a case-insensitive substring over display name/name/CLSID; capped at 2000 rows.",
+    params = {
+      { name = "filter", type = "string", required = false, description = "Case-insensitive substring over display name/name/CLSID." },
+    },
+    result = { name = "weapons", type = "table", description = "{ weapons = { { clsid, display_name, name, category }, ... }, truncated }" },
+  })
+
+  local db_export_n = 0
+  router:add_method("db_export", function(params)
+    need_db()
+    local what = (params and params.what) or "all"
+    local value
+    if what == "all" then
+      value = db
+    elseif what == "weapons" then
+      value = db.Weapons
+    elseif string.sub(what, 1, 9) == "category:" then
+      local entry = get_cache().by_name[string.sub(what, 10)]
+      if not entry then
+        error("unknown category in '" .. what .. "' (see db_categories)", 0)
+      end
+      value = entry.array
+    elseif string.sub(what, 1, 5) == "unit:" then
+      local lower = string.lower(string.sub(what, 6))
+      for _, entry in ipairs(get_cache().categories) do
+        local hit = type_index(entry)[lower]
+        if hit then
+          value = hit
+          break
+        end
+      end
+      if not value then
+        error("unknown unit type in '" .. what .. "' (see db_unit_types)", 0)
+      end
+    else
+      error("db_export: `what` must be all | weapons | category:<name> | unit:<type>", 0)
+    end
+
+    -- RT.encode is cycle-safe (db is a deep graph with shared/cyclic tables);
+    -- write via the guarded file writer so a tens-of-MB dump never rides the
+    -- socket. Runs on the sim thread — `all` can stall for seconds.
+    local json = RT.encode(value, true)
+    db_export_n = db_export_n + 1
+    local tag = string.gsub(what, "[^%w]+", "-")
+    local rel = "Temp/dcs-studio-db-" .. tag .. "-" .. os.time() .. "-" .. db_export_n .. ".json"
+    local ok, werr = bridge.file.write_text(rel, json)
+    if not ok then
+      error("cannot write export: " .. tostring(werr), 0)
+    end
+    local writedir = (type(lfs) == "table" and lfs.writedir and lfs.writedir()) or ""
+    return { path = writedir .. string.gsub(rel, "/", "\\"), bytes = #json }
+  end, {
+    summary = "Dump part (or all) of the DCS database to a JSON file.",
+    description = "Write pretty JSON to <writedir>Temp\\dcs-studio-db-*.json and return { path, bytes } — a file, not a response payload, so a tens-of-MB dump never rides the WebSocket. `what` = all (default) | weapons | category:<name> | unit:<type>. Runs on the sim thread; `all` may stall for seconds (the 30s server timeout is the backstop).",
+    params = {
+      { name = "what", type = "string", required = false, description = "all (default) | weapons | category:<name> | unit:<type>." },
+    },
+    result = { name = "export", type = "table", description = "{ path, bytes }" },
+  })
+
   -- Self-heal the mission bridge: while a mission is running, re-dispatch the
   -- boot at most every 10s. The snippet is a no-op once booted, so this only
   -- matters when the first dispatch ran before the scripting state was ready.

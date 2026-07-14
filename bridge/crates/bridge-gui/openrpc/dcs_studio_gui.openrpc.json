@@ -24,6 +24,123 @@
       }
     },
     {
+      "description": "The real categories inside db.Units (Planes, Helicopters, Ships, Cars, …), shape-detected and filtered (GT_t/Skills and non-unit children are skipped). GUI bridge only; needs DCS loaded.",
+      "name": "db_categories",
+      "params": [],
+      "result": {
+        "description": "{ categories = { { name, entry_key, count }, ... } }",
+        "name": "categories",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "summary": "List the DCS unit-database categories."
+    },
+    {
+      "description": "Write pretty JSON to <writedir>Temp\\dcs-studio-db-*.json and return { path, bytes } — a file, not a response payload, so a tens-of-MB dump never rides the WebSocket. `what` = all (default) | weapons | category:<name> | unit:<type>. Runs on the sim thread; `all` may stall for seconds (the 30s server timeout is the backstop).",
+      "name": "db_export",
+      "params": [
+        {
+          "description": "all (default) | weapons | category:<name> | unit:<type>.",
+          "name": "what",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "description": "{ path, bytes }",
+        "name": "export",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "summary": "Dump part (or all) of the DCS database to a JSON file."
+    },
+    {
+      "description": "Curated: { unit = { type, display_name, category, attributes, country_of_origin, crew_members, perf, guns, pylons } } where pylons carry per-store CLSIDs resolved against db.Weapons. `raw = true` returns the whole record deep-copied through a depth-capped, cycle-safe sanitizer. NB: ME loadout presets are NOT in db — 'payloads' here means pylons + compatible stores.",
+      "name": "db_unit",
+      "params": [
+        {
+          "description": "The unit type name (see db_unit_types).",
+          "name": "type",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Return the whole record (sanitized) instead of the curated view.",
+          "name": "raw",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "description": "{ unit = { ... }, category?, raw? }",
+        "name": "unit",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "summary": "One unit record: curated summary, or the raw record."
+    },
+    {
+      "description": "Light listing across one or all categories: { units = { { type, display_name, category }, ... }, truncated }. `filter` is a case-insensitive substring over type/display name; capped at 2000 rows.",
+      "name": "db_unit_types",
+      "params": [
+        {
+          "description": "Restrict to one category (name from db_categories).",
+          "name": "category",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "Case-insensitive substring over type/display name.",
+          "name": "filter",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "description": "{ units = { { type, display_name, category }, ... }, truncated }",
+        "name": "units",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "summary": "List unit types (optionally one category, optionally filtered)."
+    },
+    {
+      "description": "Light listing of db.Weapons.ByCLSID: { weapons = { { clsid, display_name, name, category }, ... }, truncated }. `filter` is a case-insensitive substring over display name/name/CLSID; capped at 2000 rows.",
+      "name": "db_weapons",
+      "params": [
+        {
+          "description": "Case-insensitive substring over display name/name/CLSID.",
+          "name": "filter",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "description": "{ weapons = { { clsid, display_name, name, category }, ... }, truncated }",
+        "name": "weapons",
+        "schema": {
+          "type": "object"
+        }
+      },
+      "summary": "List weapons/stores from db.Weapons (CLSID + display name)."
+    },
+    {
       "description": "Drop every breakpoint and condition held by this bridge.",
       "name": "debug_clear_breakpoints",
       "params": [],

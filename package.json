@@ -281,6 +281,12 @@
         "icon": "$(tools)"
       },
       {
+        "command": "dcs.db.export",
+        "title": "Export DCS Unit Database (JSON)…",
+        "category": "DCS Studio",
+        "icon": "$(database)"
+      },
+      {
         "command": "dcs.debug.debugMission",
         "title": "Debug Lua in DCS Mission",
         "category": "DCS Studio",

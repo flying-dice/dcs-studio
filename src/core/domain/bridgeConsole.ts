@@ -24,3 +24,12 @@ export function exportFileBase(label?: string): string {
       .slice(0, 60) || "lua-export"
   );
 }
+
+/**
+ * Save-dialog file base for a `db_export` selection: `"dcs-db-"` + the `what`
+ * spec with its `:` separators flattened to `-`, run through
+ * [`exportFileBase`]. E.g. `"category:Planes"` → `"dcs-db-category-Planes"`.
+ */
+export function dbExportFileBase(what: string): string {
+  return exportFileBase("dcs-db-" + what.replace(/:/g, "-"));
+}
