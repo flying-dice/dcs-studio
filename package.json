@@ -2,7 +2,7 @@
   "name": "dcs-studio",
   "displayName": "DCS Studio",
   "description": "Build, debug, and publish DCS World mods and missions from VS Code — community marketplace, live in-sim Lua console & debugger, and one-click GitHub publishing.",
-  "version": "0.15.1",
+  "version": "0.16.0",
   "publisher": "flying-dice",
   "license": "MIT",
   "repository": {
