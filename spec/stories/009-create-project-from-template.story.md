@@ -35,10 +35,10 @@ Feature: New Project panel
 
       Examples:
         | template           | files                                                                                      |
-        | Blank Project      | dcs-studio.toml only, with commented [[install]] examples             |
-        | Lua Mission Script | dcs-studio.toml, Scripts/my-mod.lua sample, README.md; install rule → {SavedGames}/Scripts |
-        | Lua GameGUI Hook   | dcs-studio.toml, Scripts/Hooks/<ident>_hook.lua, README.md; install rule → {SavedGames}/Scripts/Hooks |
-        | Rust DLL Mod       | dcs-studio.toml (DLL + hook install rules), Cargo.toml, .cargo/config.toml, lua5.1/lua.lib, src/lib.rs, Scripts/Hooks/<ident>_hook.lua, README.md |
+        | Blank Project      | dcs-studio.toml only, with commented [[bundle]]/[[symlink]] examples   |
+        | Lua Mission Script | dcs-studio.toml, Scripts/my-mod.lua sample, README.md; bundle + symlink rule → {SavedGames}/Scripts |
+        | Lua GameGUI Hook   | dcs-studio.toml, Scripts/Hooks/<ident>_hook.lua, README.md; bundle + symlink rule → {SavedGames}/Scripts/Hooks |
+        | Rust DLL Mod       | dcs-studio.toml (DLL + hook bundle/symlink rules), Cargo.toml, .cargo/config.toml, lua5.1/lua.lib, src/lib.rs, Scripts/Hooks/<ident>_hook.lua, README.md |
 
     Scenario: Names become safe identifiers
       Given the project name contains spaces or punctuation

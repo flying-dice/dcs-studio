@@ -2,27 +2,29 @@ import { test, expect } from "@playwright/test";
 import { openPreview, expectSent, hostSend, sentMessages } from "./helpers";
 
 test.describe("manifest preview", () => {
-  test("seeds the form, normalizing legacy [[install]] into the new cards", async ({ page }) => {
+  test("seeds the Bundled content / Symlinks cards only from explicit [[bundle]]/[[symlink]] blocks", async ({
+    page,
+  }) => {
     await openPreview(page, "manifest");
     const nameInput = page.locator('[data-sec="project"][data-key="name"]');
     await expect(nameInput).toHaveValue("f16-weapons-expansion");
-    // One explicit [[bundle]] + one legacy [[install]] source → two bundle rows;
-    // one explicit [[symlink]] + the install-derived link → two symlink rows.
-    await expect(page.getByTestId("bundle-row")).toHaveCount(2);
-    await expect(page.getByTestId("symlink-row")).toHaveCount(2);
+    // The fixture also carries a legacy [[install]] block (extras-passthrough
+    // only, like [[dependencies]]) — it must not add rows to either card.
+    await expect(page.getByTestId("bundle-row")).toHaveCount(1);
+    await expect(page.getByTestId("symlink-row")).toHaveCount(1);
     await expect(page.getByTestId("req-row")).toHaveCount(1);
 
     const preview = page.getByTestId("toml-preview");
     await expect(preview).toContainText('name = "f16-weapons-expansion"');
-    // Emission is new-blocks-only: the legacy [[install]] is gone, its content
-    // now lives as a [[bundle]] path and a [[symlink]] (the migration path).
-    await expect(preview).not.toContainText("[[install]]");
     await expect(preview).toContainText("[[bundle]]");
     await expect(preview).toContainText("[[symlink]]");
-    await expect(preview).toContainText('path = "dist/scripts"');
+    // [[install]] is unmodeled — it round-trips verbatim through the extras
+    // passthrough, unchanged, and contributes no [[bundle]]/[[symlink]] content.
+    await expect(preview).toContainText("[[install]]");
+    await expect(preview).toContainText('source = "dist/scripts"');
     await expect(preview).toContainText('dest = "{SavedGames}/Scripts/WeaponsExpansion"');
-    // [[dependencies]] is not modeled by the form — it round-trips verbatim
-    // through the extras passthrough.
+    // [[dependencies]] is not modeled by the form either — it round-trips
+    // verbatim through the same extras passthrough.
     await expect(preview).toContainText("[[dependencies]]");
   });
 
@@ -162,24 +164,24 @@ test.describe("manifest preview", () => {
 
   test("add / remove bundle rows", async ({ page }) => {
     await openPreview(page, "manifest");
-    await expect(page.getByTestId("bundle-row")).toHaveCount(2);
+    await expect(page.getByTestId("bundle-row")).toHaveCount(1);
 
     await page.getByTestId("add-bundle-btn").click();
-    await expect(page.getByTestId("bundle-row")).toHaveCount(3);
+    await expect(page.getByTestId("bundle-row")).toHaveCount(2);
 
     await page.getByTestId("bundle-row").last().getByTestId("remove-row-btn").click();
-    await expect(page.getByTestId("bundle-row")).toHaveCount(2);
+    await expect(page.getByTestId("bundle-row")).toHaveCount(1);
   });
 
   test("add / remove symlink rows", async ({ page }) => {
     await openPreview(page, "manifest");
-    await expect(page.getByTestId("symlink-row")).toHaveCount(2);
+    await expect(page.getByTestId("symlink-row")).toHaveCount(1);
 
     await page.getByTestId("add-symlink-btn").click();
-    await expect(page.getByTestId("symlink-row")).toHaveCount(3);
+    await expect(page.getByTestId("symlink-row")).toHaveCount(2);
 
     await page.getByTestId("symlink-row").last().getByTestId("remove-row-btn").click();
-    await expect(page.getByTestId("symlink-row")).toHaveCount(2);
+    await expect(page.getByTestId("symlink-row")).toHaveCount(1);
   });
 
   test("a {GameInstall} root with no configured path shows the unresolved-root warning", async ({ page }) => {

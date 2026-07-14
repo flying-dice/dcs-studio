@@ -74,6 +74,26 @@ describe("computePreflight — manifest checks", () => {
       detail: "[project] name is required.",
     });
   });
+
+  it("errors when extras contain a legacy [[install]] section", () => {
+    const m = manifest({
+      extras: [`[[install]]\nsource = "Scripts/a.lua"\ndest = "{SavedGames}/Scripts/a.lua"`],
+    });
+    const checks = computePreflight(facts({ manifest: m }));
+    expect(byLabel(checks, "Manifest")).toEqual({
+      label: "Manifest",
+      level: "error",
+      detail: "[[install]] is no longer supported — replace each rule with [[bundle]] path = <source> and [[symlink]] source/dest.",
+    });
+  });
+
+  it("does not flag extras that merely mention install in passing (e.g. [[dependencies]])", () => {
+    const m = manifest({
+      extras: [`[[dependencies]]\nid = "owner/some-lib"\nversion = "*"`],
+    });
+    const checks = computePreflight(facts({ manifest: m }));
+    expect(byLabel(checks, "Manifest")).toBeUndefined();
+  });
 });
 
 describe("computePreflight — bundle paths", () => {

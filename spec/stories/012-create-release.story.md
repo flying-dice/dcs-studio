@@ -62,7 +62,7 @@ Feature: Create a release
       | condition                          | message                                                  |
       | the manifest cannot be read        | Cannot read dcs-studio.toml.                             |
       | 7-Zip is missing                   | 7z not found.                                            |
-      | an [[install]] source is missing   | Install source missing: <src> — build the project first. |
+      | a [[bundle]] path is missing        | Bundle path missing: <path> — build the project first.   |
 
   Scenario: Default release notes
     Given the notes textarea is left empty

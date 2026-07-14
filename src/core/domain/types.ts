@@ -89,11 +89,12 @@ export interface InstallRoots {
  * Parsed `dcs-studio.toml` model (mirrors media/manifest-core.js output).
  *
  * `bundle` is what gets packed into the release 7z; `symlink` is which links are
- * created on enable (each `source` a path inside the bundle). Legacy
- * `[[install]] {source,dest}` blocks are normalized at parse time into
- * `bundle {path:source}` + `symlink {source,dest}`, so nothing downstream sees
- * `install` — old published releases keep installing, new emission writes only
- * the split blocks.
+ * created on enable (each `source` a path inside the bundle). The legacy
+ * single-array install format (one `{source,dest}` rule meaning both pack and
+ * link) is NOT supported (pre-release breaking change, 2026-07): it is not
+ * parsed into `bundle`/`symlink` at all, falls through to `extras` like any
+ * unmodeled section, and publish preflight rejects a manifest whose extras
+ * contain one (see publishChecks.ts).
  */
 export interface ManifestModel {
   project: { name: string; version: string; author: string; description: string };

@@ -6,15 +6,17 @@
 // asserts the unresolved-warning testid off this).
 //
 // The bootstrap deliberately mixes several things so the preview exercises the
-// full parse surface: an explicit [[bundle]]/[[symlink]] pair (the new schema),
-// a legacy [[install]] block (proving normalization renders into the new
-// Bundled content / Symlinks cards), an [[entrypoint]] block (the Executables
-// card, incl. args/cwd), a [[mission_script]] block (the Mission scripts card),
-// and an unmodeled [[dependencies]] section (proving the extras round-trip is
-// preserved through emit).
+// full parse surface: an explicit [[bundle]]/[[symlink]] pair (the new schema,
+// the only source the Bundled content / Symlinks cards render from), an
+// [[entrypoint]] block (the Executables card, incl. args/cwd), a
+// [[mission_script]] block (the Mission scripts card), and two unmodeled
+// sections — [[install]] (pre-release breaking change, 2026-07: no longer
+// normalized into bundle/symlink, kept here only to prove it passes through
+// extras like any other unknown section) and [[dependencies]] — both proving
+// the extras round-trip is preserved through emit.
 window.__BOOTSTRAP__ = {
   rawText:
-    '[project]\nname = "f16-weapons-expansion"\nversion = "2.3.1"\nauthor = "viper-drivers"\ndescription = "Extra A/G stores for the F-16C, wired into the rearm menu."\n\n[[bundle]]\npath = "Mods/tech/F16Weapons"\n\n[[symlink]]\nsource = "Mods/tech/F16Weapons/entry.lua"\ndest = "{SavedGames}/Mods/tech/F16Weapons/entry.lua"\n\n[[install]]\nsource = "dist/scripts"\ndest = "{SavedGames}/Scripts/WeaponsExpansion"\n\n[[entrypoint]]\nid = "f16-tool"\nname = "F16 Config Tool"\nexe = "Mods/tech/F16Weapons/tool.exe"\nargs = ["--quiet"]\ncwd = "Mods/tech/F16Weapons"\n\n[[mission_script]]\nname = "F16 Weapons init"\npurpose = "Registers the extra stores at mission start"\npath = "Mods/tech/F16Weapons/init.lua"\nrun_on = "after-sanitize"\n\n[[dependencies]]\nid = "utils/dcs-lua-common"\nversion = "*"\n\n[[requires_module]]\nid = "F-16C_50"\nname = "F-16C Viper"\n',
+    '[project]\nname = "f16-weapons-expansion"\nversion = "2.3.1"\nauthor = "viper-drivers"\ndescription = "Extra A/G stores for the F-16C, wired into the rearm menu."\n\n[[bundle]]\npath = "Mods/tech/F16Weapons"\n\n[[symlink]]\nsource = "Mods/tech/F16Weapons/entry.lua"\ndest = "{SavedGames}/Mods/tech/F16Weapons/entry.lua"\n\n[[entrypoint]]\nid = "f16-tool"\nname = "F16 Config Tool"\nexe = "Mods/tech/F16Weapons/tool.exe"\nargs = ["--quiet"]\ncwd = "Mods/tech/F16Weapons"\n\n[[mission_script]]\nname = "F16 Weapons init"\npurpose = "Registers the extra stores at mission start"\npath = "Mods/tech/F16Weapons/init.lua"\nrun_on = "after-sanitize"\n\n[[install]]\nsource = "dist/scripts"\ndest = "{SavedGames}/Scripts/WeaponsExpansion"\n\n[[dependencies]]\nid = "utils/dcs-lua-common"\nversion = "*"\n\n[[requires_module]]\nid = "F-16C_50"\nname = "F-16C Viper"\n',
   targetPath: "E:\\projects\\f16-weapons-expansion\\dcs-studio.toml",
   roots: { savedGames: "C:\\Users\\jonat\\Saved Games\\DCS", gameInstall: "" },
 };

@@ -86,6 +86,16 @@ export function computePreflight(facts: PreflightFacts): Check[] {
         ? { label: "Project name", level: "ok", detail: m.project.name }
         : { label: "Project name", level: "error", detail: "[project] name is required." },
     );
+    // Pre-release breaking change (2026-07): [[install]] is no longer modeled —
+    // it parses into extras and installs nothing. Fail loudly rather than let a
+    // mod publish that silently does nothing on enable.
+    if (m.extras.some((x) => /^\s*\[\[install\]\]/m.test(x))) {
+      checks.push({
+        label: "Manifest",
+        level: "error",
+        detail: "[[install]] is no longer supported — replace each rule with [[bundle]] path = <source> and [[symlink]] source/dest.",
+      });
+    }
     if (!m.bundle.length) {
       checks.push({ label: "Bundle paths", level: "warn", detail: "No [[bundle]] paths — the release will ship only the manifest." });
     } else {

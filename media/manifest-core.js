@@ -14,18 +14,16 @@
   else root.DcsManifestCore = api;
 })(typeof self !== "undefined" ? self : this, function () {
   const ROOT_TOKENS = ["{SavedGames}", "{GameInstall}"];
-  // The array sections the model stores first-class and re-emits. `[[install]]`
-  // is NOT here: it is recognised for parse but NORMALIZED into bundle+symlink
-  // (see normalizeInstall) rather than stored, so emission only ever writes the
-  // new blocks — that IS the migration path. New array sections (a future
-  // [[entrypoint]] etc.) drop in by adding a name here and a create-case below.
+  // The array sections the model stores first-class and re-emits. New array
+  // sections (a future one) drop in by adding a name here and a create-case
+  // below. The pre-release `[[install]]` section is NOT supported: it falls
+  // through to `extras` like any unknown section — preserved verbatim, ignored
+  // functionally — and publish preflight rejects it (breaking change, 2026-07).
   const MODELED_ARRAYS = ["bundle", "symlink", "requires_module", "entrypoint", "mission_script"];
   // The two run timings a [[mission_script]] may declare; the first is the safe
   // default (sandboxed mission env). "before-sanitize" runs with the full,
   // unsanitized Lua environment — a security-sensitive capability.
   const MISSION_SCRIPT_RUN_ON = ["after-sanitize", "before-sanitize"];
-  // Legacy sections recognised only so the parser can normalize them away.
-  const LEGACY_ARRAYS = ["install"];
 
   function emptyModel() {
     return {
@@ -41,25 +39,6 @@
       mission_script: [],
       extras: [], // verbatim blocks for sections the form doesn't model
     };
-  }
-
-  /** Append `item` to `list` unless `eq` already matches an entry (dedupe). */
-  function pushUnique(list, item, eq) {
-    if (!list.some(eq)) list.push(item);
-  }
-
-  /**
-   * Fold legacy `[[install]] {source,dest}` rules into the new model: each is
-   * equivalent to `[[bundle]] path=source` + `[[symlink]] source/dest`. Explicit
-   * bundle/symlink blocks already parsed keep their order; install-derived
-   * entries are appended and identical duplicates dropped, so a manifest that
-   * carries BOTH forms merges cleanly.
-   */
-  function normalizeInstall(m, installRules) {
-    for (const r of installRules) {
-      pushUnique(m.bundle, { path: r.source }, (b) => b.path === r.source);
-      pushUnique(m.symlink, { source: r.source, dest: r.dest }, (s) => s.source === r.source && s.dest === r.dest);
-    }
   }
 
   /**
@@ -93,7 +72,6 @@
 
   function parseToml(text) {
     const m = emptyModel();
-    const installRules = []; // legacy [[install]] rows, normalized after the loop
     if (!text) return m;
     let cur = null;
     let sec = null;
@@ -108,12 +86,11 @@
       const a = t.match(/^\[(.+?)\]$/);
       if (aa || a) {
         const name = (aa ? aa[1] : a[1]).trim();
-        const modeled = aa ? MODELED_ARRAYS.includes(name) || LEGACY_ARRAYS.includes(name) : name === "project";
+        const modeled = aa ? MODELED_ARRAYS.includes(name) : name === "project";
         flush();
         if (modeled) {
           if (aa) {
-            if (name === "install") (cur = { source: "", dest: "" }), installRules.push(cur);
-            else if (name === "bundle") (cur = { path: "" }), m.bundle.push(cur);
+            if (name === "bundle") (cur = { path: "" }), m.bundle.push(cur);
             else if (name === "symlink") (cur = { source: "", dest: "" }), m.symlink.push(cur);
             else if (name === "entrypoint") (cur = { id: "", name: "", exe: "" }), m.entrypoint.push(cur);
             else if (name === "mission_script")
@@ -141,7 +118,6 @@
       // Lines before any section (e.g. a leading comment) are dropped in v1.
     }
     flush();
-    normalizeInstall(m, installRules);
     return m;
   }
 

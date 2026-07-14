@@ -24,10 +24,11 @@ Feature: Publish preflight
     When the Publish panel opens
     Then it runs and displays these checks with ok/warn/error dots:
       | Check           | Error condition and message                                          |
-      | Manifest        | "dcs-studio.toml not found in the workspace root." / "Could not parse dcs-studio.toml." |
+      | Manifest        | "dcs-studio.toml not found in the workspace root." / "Could not parse dcs-studio.toml." / rejects a manifest still using the legacy single-array install format — replace each rule with [[bundle]] + [[symlink]]. |
       | Project name    | "[project] name is required."                                        |
-      | Install rules   | warn: "No [[install]] rules — the release will ship only the manifest." |
-      | Install sources | "N of M source(s) missing — build the project first." or "N source(s) are symlinks (refused by the packager)." |
+      | Bundle paths    | warn: "No [[bundle]] paths — the release will ship only the manifest." |
+      | Bundle paths    | "N of M bundle path(s) missing — build the project first." or "N bundle path(s) are symlinks (refused by the packager)." |
+      | Symlink coverage | "N symlink source(s) not inside any [[bundle]] path."                |
       | 7-Zip           | "7z not found. Install 7-Zip (7-zip.org) and retry."                 |
       | git             | "git not found on PATH."                                             |
       | GitHub CLI      | "gh not found. Install from cli.github.com." / "gh is not signed in. Run: gh auth login" |

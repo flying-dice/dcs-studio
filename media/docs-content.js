@@ -294,22 +294,8 @@ dest = "{SavedGames}/Scripts/f16-weapons.lua"</code></pre>
   <p>A mod with <strong>no</strong> <code>[[bundle]]</code> paths publishes fine (with a warning) but ships only its manifest — useful for metadata-only packages. A mod may bundle content without linking any of it (an asset pack consumed by another mod).</p>
 </div>
 
-<h2>Legacy <code>[[install]]</code> (deprecated)</h2>
-<p>Older manifests used a single <code>[[install]] { source, dest }</code> array where one rule meant <em>both</em> "pack this" and "link this". That form still installs from old published releases and still loads in the editor, but it is deprecated in favour of the split blocks. Each legacy rule is exactly equivalent to a <code>[[bundle]]</code> plus a <code>[[symlink]]</code>:</p>
-<pre><code># legacy
-[[install]]
-source = "Scripts/mod.lua"
-dest = "{SavedGames}/Scripts/mod.lua"
-
-# equivalent modern form
-[[bundle]]
-path = "Scripts/mod.lua"
-
-[[symlink]]
-source = "Scripts/mod.lua"
-dest = "{SavedGames}/Scripts/mod.lua"</code></pre>
 <div class="note">
-  <p><strong>Migration:</strong> DCS Studio reads a legacy <code>[[install]]</code> file without rewriting it, but the moment you edit and save through the form it is re-emitted as <code>[[bundle]]</code> + <code>[[symlink]]</code> — that save <em>is</em> the migration, and it is one-way. A manifest may carry both forms at once; the legacy rules are folded in and identical entries de-duplicated.</p>
+  <p><strong>Breaking change (pre-release, 2026-07):</strong> the old <code>[[install]] { source, dest }</code> array — one rule meaning both "pack this" and "link this" — is no longer supported. It is not parsed, normalized, or migrated: it parses as an unrecognized section (preserved verbatim if the file already has one, but functionally inert), and publish preflight rejects any manifest whose extras contain a <code>[[install]]</code> section. If you have a manifest using the old form, open it in the manifest form and re-add each rule as a <code>[[bundle]]</code> path plus a <code>[[symlink]]</code> pair before publishing.</p>
 </div>
 
 <h2><code>[[entrypoint]]</code> — executables the mod can launch</h2>

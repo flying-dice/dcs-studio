@@ -8,7 +8,7 @@
 
 ## Context
 
-- Triggered by **Install** on a product page. The lifecycle is *subscribe* (download + unpack to `<dataDir>/<repo-key>`) then *enable* (create links into DCS per the manifest's `[[install]]` rules).
+- Triggered by **Install** on a product page. The lifecycle is *subscribe* (download + unpack to `<dataDir>/<repo-key>`) then *enable* (create links into DCS per the manifest's `[[symlink]]` rules).
 - Links use the dropzone strategy: directories become junctions, same-volume files hard links, cross-volume files symlinks (with a UAC elevation retry on permission errors).
 - A destination directory that already exists as a real folder (e.g. `Saved Games\Scripts\Hooks`) is merged into: each child of the source is linked individually (recursively), so shared DCS folders never block an install and disabling removes only the mod's own links.
 - Preconditions: 7-Zip available, a data dir (default `%USERPROFILE%\DCSStudio\mods`), and configured roots for every destination the manifest uses.

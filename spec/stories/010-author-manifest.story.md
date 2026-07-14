@@ -39,9 +39,11 @@ Feature: Manifest form panel
       Then the [project] card offers Name (required), Version, Author,
         and Description fields
 
-    Scenario: Install rules
-      Then the [[install]] card lets the user add and remove rules
-      And each rule has a project-relative Source,
+    Scenario: Bundle and symlink rules
+      Then the [[bundle]] card lets the user add and remove paths packed
+        into the release
+      And the [[symlink]] card lets the user add and remove link rules
+      And each symlink rule has a project-relative Source,
         a root selector ({SavedGames} or {GameInstall}) plus a rest path,
         and a live "→ <resolved absolute path>" preview
       And a rule under {GameInstall} with no configured game install path
@@ -70,8 +72,8 @@ Feature: Manifest form panel
       Examples:
         | condition                                | issue                                                            |
         | the project name is blank                | Project name is required.                                        |
-        | an install rule has an empty source      | Install rule N: source is empty.                                 |
-        | a {GameInstall} rule with no path set    | Install rule N: {GameInstall} is not configured (set dcsStudio.gameInstallPath). |
+        | a symlink rule has an empty source        | Symlink N: source is empty.                                      |
+        | a {GameInstall} rule with no path set    | Symlink N: {GameInstall} is not configured (set dcsStudio.gameInstallPath). |
 
     Scenario: Live roots
       When the user changes the DCS path settings

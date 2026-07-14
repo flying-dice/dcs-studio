@@ -53,7 +53,7 @@ Feature: Product page
   Rule: The aside states the install facts
 
     Scenario: Install plan
-      Given the release manifest declares [[install]] rules
+      Given the release manifest declares [[symlink]] rules
       Then an "Install plan" card lists each rule as
         source → resolved absolute destination on this machine
 

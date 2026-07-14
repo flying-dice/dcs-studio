@@ -46,7 +46,7 @@ Feature: My Mods panel
     Scenario: Enabling a mod
       Given a mod is disabled
       When the user switches its toggle on
-      Then links are created per the mod's [[install]] rules
+      Then links are created per the mod's [[symlink]] rules
       And a toast confirms "Enabled <repo>."
       And if any link fails, all links created so far are rolled back
 

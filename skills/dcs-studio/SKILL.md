@@ -24,20 +24,31 @@ author = ""
 description = ""
 dcs_min_version = "2.9.0"
 
-# Install rules: copy matching sources to a destination under a named root.
-[[install]]
+# [[bundle]] declares what gets packed into the release archive (paths
+# relative to the project root). [[symlink]] declares which links are
+# created into DCS on enable — each source must be inside a bundled path.
+[[bundle]]
+path = "Scripts/my-mod.lua"
+
+[[symlink]]
 source = "Scripts/my-mod.lua"
 dest = "{SavedGames}/Scripts/my-mod.lua"
 ```
 
-Install destinations use **named roots**, resolved per-machine at install
+> **Breaking change (pre-release, 2026-07):** the old `[[install]]
+> { source, dest }` array is no longer supported. It is not parsed,
+> normalized, or migrated — publish preflight rejects any manifest whose
+> extras still contain a `[[install]]` section. Re-author each rule as a
+> `[[bundle]]` path plus a `[[symlink]]` pair.
+
+Symlink destinations use **named roots**, resolved per-machine at install
 time — never hard-code absolute paths:
 
 - `{SavedGames}` → the user's DCS "Saved Games" folder (e.g. `%USERPROFILE%\Saved Games\DCS`)
 - `{GameInstall}` → the DCS game install directory
 
-Keep every file the mod ships covered by an `[[install]]` rule; the
-installer copies exactly what the rules name.
+Keep every file the mod ships covered by a `[[bundle]]` path, and link
+whichever of it needs to land in DCS with a `[[symlink]]` rule.
 
 Opening `dcs-studio.toml` in VS Code auto-opens a two-way-bound authoring
 form beside the text editor. Bump `[project] version` for every release.
@@ -189,9 +200,9 @@ symlink into the DCS folders per the install rules.
 To publish (`dcs.publish.open`): the guided flow runs preflight checks on
 the manifest, pushes the repo to GitHub, applies the `dcs-studio` topic,
 and cuts a versioned release with a packaged payload (7-Zip). Before
-publishing: bump `[project] version`, make sure `[[install]]` rules cover
-everything the mod needs at runtime, and fill in `author`/`description` —
-the Marketplace displays them.
+publishing: bump `[project] version`, make sure `[[bundle]]`/`[[symlink]]`
+rules cover everything the mod needs at runtime, and fill in
+`author`/`description` — the Marketplace displays them.
 
 ## Key commands reference
 
