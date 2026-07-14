@@ -71,6 +71,58 @@ test.describe("manifest preview", () => {
     await expect(page.getByTestId("entrypoint-row")).toHaveCount(1);
   });
 
+  test("seeds the Mission scripts card from a [[mission_script]] block, round-tripping fields", async ({ page }) => {
+    await openPreview(page, "manifest");
+    await expect(page.getByTestId("mission-script-row")).toHaveCount(1);
+
+    const row = page.getByTestId("mission-script-row").first();
+    await expect(row.locator('[data-key="name"]')).toHaveValue("F16 Weapons init");
+    await expect(row.locator('[data-key="purpose"]')).toHaveValue("Registers the extra stores at mission start");
+    await expect(row.locator('[data-key="path"]')).toHaveValue("Mods/tech/F16Weapons/init.lua");
+    await expect(row.locator('select[data-key="run_on"]')).toHaveValue("after-sanitize");
+    // after-sanitize is the safe timing — no warning marker.
+    await expect(row.getByTestId("before-sanitize-warning")).toHaveCount(0);
+
+    const preview = page.getByTestId("toml-preview");
+    await expect(preview).toContainText("[[mission_script]]");
+    await expect(preview).toContainText('name = "F16 Weapons init"');
+    await expect(preview).toContainText('path = "Mods/tech/F16Weapons/init.lua"');
+    await expect(preview).toContainText('run_on = "after-sanitize"');
+  });
+
+  test("switching run_on to before-sanitize shows the security warning and re-emits", async ({ page }) => {
+    await openPreview(page, "manifest");
+    const row = page.getByTestId("mission-script-row").first();
+    await row.locator('select[data-key="run_on"]').selectOption("before-sanitize");
+    await expect(row.getByTestId("before-sanitize-warning")).toBeVisible();
+    await expect(row.getByTestId("before-sanitize-warning")).toContainText("unsanitized");
+    await expect(page.getByTestId("toml-preview")).toContainText('run_on = "before-sanitize"');
+  });
+
+  test("a mission script path outside all bundled paths flags a coverage issue", async ({ page }) => {
+    await openPreview(page, "manifest");
+    const path = page.getByTestId("mission-script-row").first().locator('[data-key="path"]');
+    await path.fill("nowhere/init.lua");
+    await expect(page.getByTestId("validation-issues")).toContainText("path is not inside any bundled path");
+  });
+
+  test("clearing a mission script name flags a validation issue", async ({ page }) => {
+    await openPreview(page, "manifest");
+    await page.getByTestId("mission-script-row").first().locator('[data-key="name"]').fill("");
+    await expect(page.getByTestId("validation-issues")).toContainText("Mission script 1: name is empty.");
+  });
+
+  test("add / remove mission script rows", async ({ page }) => {
+    await openPreview(page, "manifest");
+    await expect(page.getByTestId("mission-script-row")).toHaveCount(1);
+
+    await page.getByTestId("add-mission-script-btn").click();
+    await expect(page.getByTestId("mission-script-row")).toHaveCount(2);
+
+    await page.getByTestId("mission-script-row").last().getByTestId("remove-row-btn").click();
+    await expect(page.getByTestId("mission-script-row")).toHaveCount(1);
+  });
+
   test("typing posts a debounced edit and updates the live TOML preview", async ({ page }) => {
     await openPreview(page, "manifest");
     const nameInput = page.locator('[data-sec="project"][data-key="name"]');

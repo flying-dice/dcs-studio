@@ -6,6 +6,8 @@ import {
   desanitizeMission,
   sanitizeMission,
   restoreMission,
+  installMissionHooks,
+  removeMissionHooks,
 } from "./mission/missionPanel";
 import { BridgeClient } from "./bridge/client";
 import { BridgeClients } from "./bridge/clients";
@@ -195,6 +197,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("dcs.mission.desanitize", () => void desanitizeMission(missionSanitize)),
     vscode.commands.registerCommand("dcs.mission.sanitize", () => void sanitizeMission(missionSanitize)),
     vscode.commands.registerCommand("dcs.mission.restore", () => void restoreMission(missionSanitize)),
+    vscode.commands.registerCommand("dcs.mission.hooks.install", () => void installMissionHooks(missionSanitize)),
+    vscode.commands.registerCommand("dcs.mission.hooks.remove", () => void removeMissionHooks(missionSanitize)),
   );
 
   // A storefront entry point that's always visible, mirroring the real app's

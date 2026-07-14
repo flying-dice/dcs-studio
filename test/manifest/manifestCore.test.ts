@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import DcsManifestCore from "../../media/manifest-core.js";
 
-const { parseToml, emitToml } = DcsManifestCore;
+const { parseToml, emitToml, MISSION_SCRIPT_RUN_ON } = DcsManifestCore;
 
 // manifest-core splits packaging ([[bundle]]) from linking ([[symlink]]) and
 // normalizes legacy [[install]] into the two on parse. These tests pin the
@@ -110,12 +110,90 @@ dest = "{SavedGames}/Scripts/a.lua"
     expect(reparsed.symlink).toEqual(model.symlink);
   });
 
-  it("an empty manifest yields empty bundle/symlink/entrypoint arrays", () => {
+  it("an empty manifest yields empty bundle/symlink/entrypoint/mission_script arrays", () => {
     const model = parseToml("");
     expect(model.bundle).toEqual([]);
     expect(model.symlink).toEqual([]);
     expect(model.requires_module).toEqual([]);
     expect(model.entrypoint).toEqual([]);
+    expect(model.mission_script).toEqual([]);
+  });
+});
+
+describe("manifest-core: [[mission_script]] blocks", () => {
+  it("exposes the two run_on values (safe default first)", () => {
+    expect(MISSION_SCRIPT_RUN_ON).toEqual(["after-sanitize", "before-sanitize"]);
+  });
+
+  it("parses name/purpose/path/run_on", () => {
+    const model = parseToml(`[project]
+name = "framework"
+
+[[bundle]]
+path = "Scripts/fw"
+
+[[mission_script]]
+name = "Loader"
+purpose = "Boots the framework"
+path = "Scripts/fw/loader.lua"
+run_on = "before-sanitize"
+`);
+    expect(model.mission_script).toEqual([
+      { name: "Loader", purpose: "Boots the framework", path: "Scripts/fw/loader.lua", run_on: "before-sanitize" },
+    ]);
+  });
+
+  it("defaults run_on to after-sanitize when omitted", () => {
+    const model = parseToml(`[project]
+name = "m"
+
+[[mission_script]]
+name = "S"
+path = "Scripts/s.lua"
+`);
+    expect(model.mission_script[0].run_on).toBe("after-sanitize");
+  });
+
+  it("emits name/path/run_on always and purpose only when present, round-tripping stably", () => {
+    const model = parseToml(`[project]
+name = "m"
+
+[[bundle]]
+path = "Scripts"
+
+[[mission_script]]
+name = "A"
+purpose = "does a"
+path = "Scripts/a.lua"
+run_on = "before-sanitize"
+
+[[mission_script]]
+name = "B"
+path = "Scripts/b.lua"
+run_on = "after-sanitize"
+`);
+    const emitted = emitToml(model);
+    expect(emitted).toContain("[[mission_script]]");
+    expect(emitted).toContain('name = "A"');
+    expect(emitted).toContain('purpose = "does a"');
+    expect(emitted).toContain('path = "Scripts/a.lua"');
+    expect(emitted).toContain('run_on = "before-sanitize"');
+    // The second block has no purpose — that line is omitted for it.
+    expect(emitted).not.toContain('purpose = "does b"');
+    const reparsed = parseToml(emitted);
+    expect(reparsed.mission_script).toEqual(model.mission_script);
+  });
+
+  it("emits a fallback run_on for a block whose value is blank", () => {
+    const model = parseToml(`[project]
+name = "m"
+
+[[mission_script]]
+name = "A"
+path = "Scripts/a.lua"
+run_on = ""
+`);
+    expect(emitToml(model)).toContain('run_on = "after-sanitize"');
   });
 });
 

@@ -15,6 +15,11 @@ import type {
   ManifestModel,
   Subscription,
 } from "../../src/core/domain/types";
+import {
+  BEFORE_SANITIZE_FILE,
+  AFTER_SANITIZE_FILE,
+  toPosix,
+} from "../../src/core/domain/missionScriptAggregator";
 
 // Full subscription-lifecycle tests against in-memory fake ports — no vscode, no
 // fs, no network. The fakes record every interaction so the tests can assert the
@@ -192,6 +197,7 @@ const MODEL: ManifestModel = {
   symlink: [{ source: "Scripts/X", dest: "{SavedGames}/Scripts/X" }],
   requires_module: [{ id: "ed/f16c" }],
   entrypoint: [],
+  mission_script: [],
   extras: [],
 };
 
@@ -205,6 +211,10 @@ const target = (over: Partial<InstallTarget> = {}): InstallTarget => ({
 
 const MOD_DIR = path.join(DATA, "Owner__Repo");
 const DL_DIR = path.join(MOD_DIR, ".download");
+// The managed aggregator files land under <savedGames>/Scripts (FakeRoots).
+const AGG_DIR = path.join("C:\\SG\\DCS", "Scripts");
+const BEFORE_AGG = path.join(AGG_DIR, BEFORE_SANITIZE_FILE);
+const AFTER_AGG = path.join(AGG_DIR, AFTER_SANITIZE_FILE);
 
 const seeded = (over: Partial<Subscription> = {}): Subscription => ({
   repo: "Owner/Repo",
@@ -214,6 +224,7 @@ const seeded = (over: Partial<Subscription> = {}): Subscription => ({
   enabled: false,
   links: [],
   entrypoints: [],
+  missionScripts: [],
   ...over,
 });
 
@@ -346,6 +357,7 @@ describe("subscribe", () => {
       enabled: false,
       links: [],
       entrypoints: [],
+      missionScripts: [],
     });
     expect(w.ledger.store["owner/repo"]).toEqual(sub);
 
@@ -403,6 +415,32 @@ describe("subscribe", () => {
     // No archive.unpacked manifest → readText throws → tolerant empty snapshot.
     const sub = await w.service.subscribe(target(), undefined, w.onProgress);
     expect(sub.entrypoints).toEqual([]);
+    expect(sub.missionScripts).toEqual([]);
+  });
+
+  it("snapshots the unpacked manifest's mission scripts onto the ledger entry", async () => {
+    const w = makeWorld();
+    const withMs: ManifestModel = {
+      ...MODEL,
+      mission_script: [{ name: "Loader", path: "Scripts/l.lua", run_on: "before-sanitize" }],
+    };
+    w.archive.unpacked.set("dcs-studio.toml", JSON.stringify(withMs));
+
+    const sub = await w.service.subscribe(target(), undefined, w.onProgress);
+
+    expect(sub.missionScripts).toEqual([{ name: "Loader", path: "Scripts/l.lua", run_on: "before-sanitize" }]);
+    expect(w.ledger.store["owner/repo"].missionScripts).toEqual(sub.missionScripts);
+  });
+
+  it("tolerates a manifest lacking the entrypoint/mission_script fields (older schema)", async () => {
+    const w = makeWorld();
+    const old = { project: MODEL.project, bundle: [], symlink: [], requires_module: [], extras: [] };
+    w.archive.unpacked.set("dcs-studio.toml", JSON.stringify(old));
+
+    const sub = await w.service.subscribe(target(), undefined, w.onProgress);
+
+    expect(sub.entrypoints).toEqual([]);
+    expect(sub.missionScripts).toEqual([]);
   });
 
   it("preserves the prior enabled state and links on re-subscribe (update path)", async () => {
@@ -509,6 +547,91 @@ describe("disable", () => {
       ],
     ]);
     expect(w.ledger.store["owner/repo"]).toMatchObject({ enabled: false, links: [] });
+  });
+});
+
+// ── aggregator regeneration ──────────────────────────────────────────────────
+
+const absScript = (rel: string) => toPosix(path.join(MOD_DIR, rel));
+
+describe("aggregator regeneration", () => {
+  it("enable regenerates both aggregator files, guarded, tagged, and split by run_on", async () => {
+    const w = makeWorld();
+    seedInstalled(w, {
+      missionScripts: [
+        { name: "Before", path: "Scripts/b.lua", run_on: "before-sanitize" },
+        { name: "After", path: "Scripts/a.lua", run_on: "after-sanitize" },
+      ],
+    });
+
+    await w.service.enable("Owner/Repo");
+
+    const before = w.fs.files.get(BEFORE_AGG)!;
+    const after = w.fs.files.get(AFTER_AGG)!;
+    expect(before).toContain("local function dofileifexist");
+    expect(before).toContain("-- Owner/Repo@v1.0.0");
+    expect(before).toContain(`dofileifexist([[${absScript("Scripts/b.lua")}]])`);
+    expect(before).not.toContain("Scripts/a.lua");
+    expect(after).toContain(`dofileifexist([[${absScript("Scripts/a.lua")}]])`);
+    expect(after).not.toContain("Scripts/b.lua");
+  });
+
+  it("disable regenerates the aggregators as guard-only (disabled mod excluded)", async () => {
+    const w = makeWorld();
+    w.ledger.store = {
+      "owner/repo": seeded({
+        enabled: true,
+        links: [{ id: "Owner/Repo:0", dest: "C:\\SG\\DCS\\Scripts\\X" }],
+        missionScripts: [{ name: "S", path: "Scripts/s.lua", run_on: "after-sanitize" }],
+      }),
+    };
+
+    await w.service.disable("Owner/Repo");
+
+    const after = w.fs.files.get(AFTER_AGG)!;
+    expect(after).toContain("local function dofileifexist"); // still a valid guard-only file
+    expect(after).not.toContain("Scripts/s.lua"); // no stale reference to the disabled mod
+  });
+
+  it("unsubscribe regenerates the aggregators without the removed mod's scripts", async () => {
+    const w = makeWorld();
+    w.ledger.store = {
+      "owner/repo": seeded({
+        enabled: true,
+        links: [],
+        missionScripts: [{ name: "S", path: "Scripts/s.lua", run_on: "before-sanitize" }],
+      }),
+    };
+
+    await w.service.unsubscribe("Owner/Repo");
+
+    const before = w.fs.files.get(BEFORE_AGG)!;
+    expect(before).toContain("local function dofileifexist");
+    expect(before).not.toContain("Scripts/s.lua");
+  });
+
+  it("only enabled mods contribute, and a legacy entry with no missionScripts field is tolerated", async () => {
+    const w = makeWorld();
+    seedInstalled(w, {
+      missionScripts: [{ name: "Live", path: "Scripts/live.lua", run_on: "after-sanitize" }],
+    });
+    // A disabled mod (must be skipped) and an enabled legacy entry whose
+    // missionScripts field predates this feature (must not throw).
+    w.ledger.store["disabled/mod"] = seeded({
+      repo: "disabled/mod",
+      enabled: false,
+      missionScripts: [{ name: "Ghost", path: "Scripts/ghost.lua", run_on: "after-sanitize" }],
+    });
+    w.ledger.store["legacy/mod"] = {
+      ...seeded({ repo: "legacy/mod", enabled: true }),
+      missionScripts: undefined as unknown as Subscription["missionScripts"],
+    };
+
+    await w.service.enable("Owner/Repo");
+
+    const after = w.fs.files.get(AFTER_AGG)!;
+    expect(after).toContain("Scripts/live.lua");
+    expect(after).not.toContain("Scripts/ghost.lua"); // disabled mod excluded
   });
 });
 

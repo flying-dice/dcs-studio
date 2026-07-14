@@ -9,7 +9,7 @@
   const boot = window.__BOOTSTRAP__;
   const app = document.getElementById("app");
 
-  const { ROOT_TOKENS, parseToml, emitToml, splitDest } = self.DcsManifestCore;
+  const { ROOT_TOKENS, MISSION_SCRIPT_RUN_ON, parseToml, emitToml, splitDest } = self.DcsManifestCore;
   let roots = boot.roots;
   const resolveDest = (dest) => self.DcsManifestCore.resolveDest(dest, roots);
 
@@ -66,6 +66,12 @@
       else if (!coveredByBundle(r.exe, bundlePaths))
         out.push(`Executable ${i + 1}: exe is not inside any bundled path.`);
     });
+    m.mission_script.forEach((r, i) => {
+      if (!r.name.trim()) out.push(`Mission script ${i + 1}: name is empty.`);
+      if (!r.path.trim()) out.push(`Mission script ${i + 1}: path is empty.`);
+      else if (!coveredByBundle(r.path, bundlePaths))
+        out.push(`Mission script ${i + 1}: path is not inside any bundled path.`);
+    });
     return out;
   }
 
@@ -103,6 +109,7 @@
           ${sectionBundle(m)}
           ${sectionSymlink(m)}
           ${sectionEntrypoint(m)}
+          ${sectionMissionScript(m)}
           ${sectionRequires(m)}
           ${extras ? passthroughNote(m) : ""}
         </div>
@@ -147,6 +154,7 @@
     symlink: "add-symlink-btn",
     requires_module: "add-required-module-btn",
     entrypoint: "add-entrypoint-btn",
+    mission_script: "add-mission-script-btn",
   };
 
   function sectionProject(m) {
@@ -246,6 +254,43 @@
       </section>`;
   }
 
+  function sectionMissionScript(m) {
+    const rows = m.mission_script
+      .map((r, i) => {
+        const before = r.run_on === "before-sanitize";
+        return `
+        <div class="row" data-testid="mission-script-row" data-row="mission_script-${i}">
+          <div class="row-grid two">
+            ${fieldRow("Name", "shown to subscribers", input("mission_script", i, "name", r.name, "My Framework loader"))}
+            ${fieldRow("Purpose", "optional; one line", input("mission_script", i, "purpose", r.purpose || "", "Boots the framework"))}
+          </div>
+          <div class="row-grid two">
+            ${fieldRow("Path", "inside a bundled path", input("mission_script", i, "path", r.path, "Scripts/my-framework/loader.lua"))}
+            <label class="field">
+              <span class="lbl">Run on<span class="hint">before or after the sanitize lockdown</span></span>
+              <select class="in" data-sec="mission_script" data-idx="${i}" data-key="run_on">
+                ${MISSION_SCRIPT_RUN_ON.map((t) => `<option value="${t}" ${t === r.run_on ? "selected" : ""}>${t}</option>`).join("")}
+              </select>
+            </label>
+          </div>
+          ${
+            before
+              ? `<div class="resolved warn-text" data-testid="before-sanitize-warning">${I.warn} Runs with the FULL unsanitized Lua environment (os/io/lfs/require) — arbitrary file and process access. Subscribers are warned before installing.</div>`
+              : ""
+          }
+          <button class="rm" data-testid="remove-row-btn" data-rm="mission_script" data-idx="${i}" title="Remove mission script">${I.x}</button>
+        </div>`;
+      })
+      .join("");
+    return `
+      <section class="card">
+        <div class="section-label">[[mission_script]] <span class="count">${m.mission_script.length}</span></div>
+        <p class="blurb">Lua scripts run at mission start via DCS Studio's managed <span class="mono">MissionScripting.lua</span> entrypoint. Each <span class="mono">path</span> is inside the bundled content. <span class="mono">before-sanitize</span> scripts run with the full unsanitized Lua environment — use only when a mod genuinely needs <span class="mono">os</span>/<span class="mono">io</span>/<span class="mono">lfs</span>.</p>
+        ${rows || `<p class="empty">No mission scripts.</p>`}
+        <button class="btn ghost add" data-testid="${ADD_TESTID.mission_script}" data-add="mission_script">${I.plus} Add mission script</button>
+      </section>`;
+  }
+
   function sectionRequires(m) {
     const rows = m.requires_module
       .map(
@@ -286,6 +331,12 @@
         } else if (key === "__args") {
           // One arg per line; blank lines dropped. Keeps args that contain spaces.
           state.model.entrypoint[i].args = el.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+        } else if (sec === "mission_script" && key === "run_on") {
+          // Full render so the before-sanitize warning marker toggles live.
+          state.model.mission_script[i].run_on = el.value;
+          render();
+          pushEdit();
+          return;
         } else state.model[sec][i][key] = el.value;
         changed();
       });
@@ -304,6 +355,8 @@
         else if (sec === "symlink") state.model.symlink.push({ source: "", dest: "{SavedGames}/Scripts/" });
         else if (sec === "requires_module") state.model.requires_module.push({ id: "", name: "" });
         else if (sec === "entrypoint") state.model.entrypoint.push({ id: "", name: "", exe: "" });
+        else if (sec === "mission_script")
+          state.model.mission_script.push({ name: "", purpose: "", path: "", run_on: "after-sanitize" });
         render();
         pushEdit();
       }),

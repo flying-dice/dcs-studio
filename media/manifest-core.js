@@ -19,7 +19,11 @@
   // (see normalizeInstall) rather than stored, so emission only ever writes the
   // new blocks — that IS the migration path. New array sections (a future
   // [[entrypoint]] etc.) drop in by adding a name here and a create-case below.
-  const MODELED_ARRAYS = ["bundle", "symlink", "requires_module", "entrypoint"];
+  const MODELED_ARRAYS = ["bundle", "symlink", "requires_module", "entrypoint", "mission_script"];
+  // The two run timings a [[mission_script]] may declare; the first is the safe
+  // default (sandboxed mission env). "before-sanitize" runs with the full,
+  // unsanitized Lua environment — a security-sensitive capability.
+  const MISSION_SCRIPT_RUN_ON = ["after-sanitize", "before-sanitize"];
   // Legacy sections recognised only so the parser can normalize them away.
   const LEGACY_ARRAYS = ["install"];
 
@@ -33,6 +37,8 @@
       requires_module: [],
       // Executable entrypoints the mod can launch as tracked processes.
       entrypoint: [],
+      // Lua scripts run at mission start via the managed MissionScripting.lua.
+      mission_script: [],
       extras: [], // verbatim blocks for sections the form doesn't model
     };
   }
@@ -110,6 +116,8 @@
             else if (name === "bundle") (cur = { path: "" }), m.bundle.push(cur);
             else if (name === "symlink") (cur = { source: "", dest: "" }), m.symlink.push(cur);
             else if (name === "entrypoint") (cur = { id: "", name: "", exe: "" }), m.entrypoint.push(cur);
+            else if (name === "mission_script")
+              (cur = { name: "", purpose: "", path: "", run_on: "after-sanitize" }), m.mission_script.push(cur);
             else (cur = { id: "", name: "" }), m.requires_module.push(cur);
           } else cur = m.project;
           sec = "modeled";
@@ -166,6 +174,11 @@
       if (r.args && r.args.length) L.push(`args = [${r.args.map(q).join(", ")}]`);
       if (r.cwd) L.push(`cwd = ${q(r.cwd)}`);
     }
+    for (const r of m.mission_script) {
+      L.push("", "[[mission_script]]", `name = ${q(r.name)}`);
+      if (r.purpose) L.push(`purpose = ${q(r.purpose)}`);
+      L.push(`path = ${q(r.path)}`, `run_on = ${q(r.run_on || "after-sanitize")}`);
+    }
     let out = L.join("\n") + "\n";
     if (m.extras && m.extras.length) out += "\n" + m.extras.join("\n\n") + "\n";
     return out;
@@ -191,5 +204,5 @@
     return dest;
   }
 
-  return { ROOT_TOKENS, emptyModel, parseVal, parseToml, q, emitToml, splitDest, winJoin, resolveDest };
+  return { ROOT_TOKENS, MISSION_SCRIPT_RUN_ON, emptyModel, parseVal, parseToml, q, emitToml, splitDest, winJoin, resolveDest };
 });

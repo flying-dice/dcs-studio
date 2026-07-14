@@ -11,6 +11,12 @@ import type { InstallTarget, InstallRoots, ProductAsset, Subscription } from "..
 import type { LinkDefinition } from "../domain/types";
 import { MANIFEST, keyOf, ledgerKey, sortedByName } from "../domain/subscriptions";
 import { selectPayloadVolumes } from "../domain/archivePolicy";
+import {
+  generateAggregator,
+  BEFORE_SANITIZE_FILE,
+  AFTER_SANITIZE_FILE,
+  type AggregatorEntry,
+} from "../domain/missionScriptAggregator";
 
 // The subscription lifecycle use-cases (Dropzone model): subscribe = download +
 // unpack into the data dir; enable = link the unpacked assets to their
@@ -126,16 +132,47 @@ export class SubscriptionService {
   }
 
   /**
-   * Read the unpacked manifest's `[[entrypoint]]` blocks for the ledger snapshot.
-   * Tolerant: an older payload without a manifest on disk yields no entrypoints.
+   * Read the unpacked manifest's `[[entrypoint]]` + `[[mission_script]]` blocks
+   * for the ledger snapshot. Tolerant: an older payload without a manifest on
+   * disk (or one predating these blocks) yields empty arrays.
    */
-  private async readEntrypoints(dir: string): Promise<Subscription["entrypoints"]> {
+  private async readSnapshot(dir: string): Promise<{
+    entrypoints: Subscription["entrypoints"];
+    missionScripts: Subscription["missionScripts"];
+  }> {
     try {
       const model = this.ports.manifest.parseToml(await this.ports.fs.readText(path.join(dir, MANIFEST)));
-      return model.entrypoint;
+      return { entrypoints: model.entrypoint ?? [], missionScripts: model.mission_script ?? [] };
     } catch {
-      return [];
+      return { entrypoints: [], missionScripts: [] };
     }
+  }
+
+  /**
+   * Regenerate BOTH managed aggregator files from scratch from the full set of
+   * currently-enabled subscriptions, so they always reflect current enabled
+   * state and never reference a disabled or uninstalled mod. Called after every
+   * enable/disable/unsubscribe. Each script's absolute path is its unpacked
+   * location (`<sub.dir>/<path>`); the `dofileifexist` guard tolerates it being
+   * absent. When no enabled mod has mission scripts the files are regenerated as
+   * guard-only (never deleted) so the MissionScripting.lua trigger keeps finding
+   * a valid, empty file. Uses the ledger snapshot — never re-fetches manifests.
+   */
+  private async regenerateAggregators(): Promise<void> {
+    const subs = await this.ports.ledger.load();
+    const before: AggregatorEntry[] = [];
+    const after: AggregatorEntry[] = [];
+    for (const sub of Object.values(subs)) {
+      if (!sub.enabled) continue;
+      for (const ms of sub.missionScripts ?? []) {
+        const entry: AggregatorEntry = { tag: `${sub.repo}@${sub.tag}`, absPath: path.join(sub.dir, ms.path) };
+        (ms.run_on === "before-sanitize" ? before : after).push(entry);
+      }
+    }
+    const scriptsDir = path.join(this.ports.roots.savedGames(), "Scripts");
+    await this.ports.fs.mkdirp(scriptsDir);
+    await this.ports.fs.writeText(path.join(scriptsDir, BEFORE_SANITIZE_FILE), generateAggregator(before));
+    await this.ports.fs.writeText(path.join(scriptsDir, AFTER_SANITIZE_FILE), generateAggregator(after));
   }
 
   /** Subscribe: download + unpack (does not enable/link). */
@@ -143,6 +180,9 @@ export class SubscriptionService {
     const dir = await this.downloadAndUnpack(target, token, onProgress);
     const subs = await this.ports.ledger.load();
     const existing = subs[ledgerKey(target.repo)];
+    // Snapshot declared entrypoints + mission scripts so My Mods can launch and
+    // the aggregators can regenerate without re-fetching manifests.
+    const snapshot = await this.readSnapshot(dir);
     const sub: Subscription = {
       repo: target.repo,
       name: target.name,
@@ -150,8 +190,8 @@ export class SubscriptionService {
       dir,
       enabled: existing?.enabled ?? false,
       links: existing?.links ?? [],
-      // Snapshot declared entrypoints so My Mods can launch without re-fetching.
-      entrypoints: await this.readEntrypoints(dir),
+      entrypoints: snapshot.entrypoints,
+      missionScripts: snapshot.missionScripts,
     };
     subs[ledgerKey(target.repo)] = sub;
     await this.ports.ledger.save(subs);
@@ -178,6 +218,7 @@ export class SubscriptionService {
     sub.enabled = true;
     sub.links = res.created.map((l) => ({ id: l.id, dest: l.dest }));
     await this.ports.ledger.save(subs);
+    await this.regenerateAggregators();
   }
 
   /** Disable: remove the links (keep the unpacked files). */
@@ -189,6 +230,7 @@ export class SubscriptionService {
     sub.enabled = false;
     sub.links = [];
     await this.ports.ledger.save(subs);
+    await this.regenerateAggregators();
   }
 
   /** One-click install: subscribe + enable (the Marketplace action). */
@@ -221,5 +263,6 @@ export class SubscriptionService {
     await this.ports.fs.remove(sub.dir);
     delete subs[ledgerKey(repo)];
     await this.ports.ledger.save(subs);
+    await this.regenerateAggregators();
   }
 }

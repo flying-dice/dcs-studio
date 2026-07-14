@@ -18,6 +18,7 @@ const sub = (over: Partial<Subscription> = {}): Subscription => ({
   enabled: false,
   links: [],
   entrypoints: [],
+  missionScripts: [],
   ...over,
 });
 

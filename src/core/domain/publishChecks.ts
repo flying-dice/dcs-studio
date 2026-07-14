@@ -160,6 +160,46 @@ export function computePreflight(facts: PreflightFacts): Check[] {
         });
       }
     }
+    // Mission scripts: each declares a Lua file run at mission start via the
+    // managed MissionScripting.lua entrypoint. The path must ship inside a
+    // bundle (or the aggregator would dofile a file the payload never sent),
+    // run_on must be one of the two known timings, and a name is required (it
+    // becomes the aggregator's tag and the subscriber-facing label). Pure check.
+    if (m.mission_script.length) {
+      const bundlePaths = m.bundle.map((b) => b.path);
+      const uncovered = m.mission_script.filter((s) => !isCoveredByBundle(s.path, bundlePaths)).map((s) => s.path);
+      const badRunOn = m.mission_script
+        .filter((s) => s.run_on !== "before-sanitize" && s.run_on !== "after-sanitize")
+        .map((s) => s.path || "(no path)");
+      const unnamed = m.mission_script.filter((s) => !s.name.trim()).length;
+      if (uncovered.length) {
+        checks.push({
+          label: "Mission scripts",
+          level: "error",
+          detail: `${uncovered.length} mission script path(s) not inside any [[bundle]] path.`,
+          items: uncovered.map((s) => `not bundled: ${s}`),
+        });
+      } else if (badRunOn.length) {
+        checks.push({
+          label: "Mission scripts",
+          level: "error",
+          detail: `${badRunOn.length} mission script(s) with an invalid run_on (must be "before-sanitize" or "after-sanitize").`,
+          items: badRunOn.map((s) => `invalid run_on: ${s}`),
+        });
+      } else if (unnamed) {
+        checks.push({
+          label: "Mission scripts",
+          level: "error",
+          detail: `${unnamed} mission script(s) with an empty name.`,
+        });
+      } else {
+        checks.push({
+          label: "Mission scripts",
+          level: "ok",
+          detail: `${m.mission_script.length} mission script(s) covered by bundled content.`,
+        });
+      }
+    }
   }
 
   checks.push(

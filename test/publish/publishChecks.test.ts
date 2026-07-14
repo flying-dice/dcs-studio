@@ -14,6 +14,7 @@ function manifest(over: Partial<ManifestModel> = {}): ManifestModel {
     symlink: [],
     requires_module: [],
     entrypoint: [],
+    mission_script: [],
     extras: [],
     ...over,
   };
@@ -298,6 +299,92 @@ describe("computePreflight — executables", () => {
     expect(checks.filter((c) => c.level === "error")).toEqual([]);
     expect(byLabel(checks, "Symlink coverage")).toBeUndefined();
     expect(byLabel(checks, "Executables")?.level).toBe("ok");
+  });
+});
+
+describe("computePreflight — mission scripts", () => {
+  it("emits no Mission scripts check when the manifest declares none", () => {
+    expect(byLabel(computePreflight(facts()), "Mission scripts")).toBeUndefined();
+  });
+
+  it("is ok when every path is bundled, run_on is valid, and names are set", () => {
+    const m = manifest({
+      bundle: [{ path: "Scripts" }],
+      mission_script: [
+        { name: "A", path: "Scripts/a.lua", run_on: "after-sanitize" },
+        { name: "B", path: "Scripts/b.lua", run_on: "before-sanitize" },
+      ],
+    });
+    expect(byLabel(computePreflight(facts({ manifest: m })), "Mission scripts")).toEqual({
+      label: "Mission scripts",
+      level: "ok",
+      detail: "2 mission script(s) covered by bundled content.",
+    });
+  });
+
+  it("errors listing mission script paths not inside any bundle path", () => {
+    const m = manifest({
+      bundle: [{ path: "Scripts" }],
+      mission_script: [{ name: "A", path: "elsewhere/a.lua", run_on: "after-sanitize" }],
+    });
+    expect(byLabel(computePreflight(facts({ manifest: m })), "Mission scripts")).toEqual({
+      label: "Mission scripts",
+      level: "error",
+      detail: "1 mission script path(s) not inside any [[bundle]] path.",
+      items: ["not bundled: elsewhere/a.lua"],
+    });
+  });
+
+  it("errors on an invalid run_on (when paths are covered)", () => {
+    const m = manifest({
+      bundle: [{ path: "Scripts" }],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mission_script: [{ name: "A", path: "Scripts/a.lua", run_on: "whenever" as any }],
+    });
+    expect(byLabel(computePreflight(facts({ manifest: m })), "Mission scripts")).toEqual({
+      label: "Mission scripts",
+      level: "error",
+      detail: '1 mission script(s) with an invalid run_on (must be "before-sanitize" or "after-sanitize").',
+      items: ["invalid run_on: Scripts/a.lua"],
+    });
+  });
+
+  it("labels a bad-run_on item as (no path) when its path is blank but bundle-covered", () => {
+    const m = manifest({
+      bundle: [{ path: "." }], // "." covers everything, including a blank path
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mission_script: [{ name: "A", path: "", run_on: "nope" as any }],
+    });
+    expect(byLabel(computePreflight(facts({ manifest: m })), "Mission scripts")).toEqual({
+      label: "Mission scripts",
+      level: "error",
+      detail: '1 mission script(s) with an invalid run_on (must be "before-sanitize" or "after-sanitize").',
+      items: ["invalid run_on: (no path)"],
+    });
+  });
+
+  it("errors on an empty name (when paths and run_on are valid)", () => {
+    const m = manifest({
+      bundle: [{ path: "Scripts" }],
+      mission_script: [{ name: "  ", path: "Scripts/a.lua", run_on: "after-sanitize" }],
+    });
+    expect(byLabel(computePreflight(facts({ manifest: m })), "Mission scripts")).toEqual({
+      label: "Mission scripts",
+      level: "error",
+      detail: "1 mission script(s) with an empty name.",
+    });
+  });
+
+  it("places Mission scripts after Executables in the check order", () => {
+    const m = manifest({
+      bundle: [{ path: "bin" }],
+      entrypoint: [{ id: "app", name: "A", exe: "bin/a.exe" }],
+      mission_script: [{ name: "S", path: "bin/s.lua", run_on: "after-sanitize" }],
+    });
+    const labels = computePreflight(
+      facts({ manifest: m, bundle: [{ source: "bin", missing: false, symlink: false }] }),
+    ).map((c) => c.label);
+    expect(labels).toEqual(["Project name", "Bundle paths", "Executables", "Mission scripts", "7-Zip", "git", "GitHub CLI"]);
   });
 });
 
