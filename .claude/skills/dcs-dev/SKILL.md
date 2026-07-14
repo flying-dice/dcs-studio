@@ -5,7 +5,7 @@ description: Work with DCS locally — deploy the bridge DLLs, launch/control/sh
 
 # DCS local development mode
 
-There are **two bridges**, built from the cargo workspace in `native/`:
+There are **two bridges**, built from the cargo workspace in `bridge/`:
 
 - **GUI bridge** — crate `dcs-bridge-gui` → `dcs_studio_gui.dll`, loaded by the `DcsStudio.lua` GameGUI hook. JSON-RPC on `127.0.0.1:25569`. Up whenever DCS runs; serves the `gui`/`server`/`config`/`export` environments. The `eval` RPC method is the control surface for driving DCS.
 - **Mission bridge** — crate `dcs-bridge-mission` → `dcs_studio_mission.dll`, `require`d into the mission scripting state by a boot snippet the GUI hook dispatches at mission start (needs a **desanitized MissionScripting.lua**). JSON-RPC on `127.0.0.1:25570`. Up only while a mission runs; serves the `mission` environment directly.
@@ -21,7 +21,7 @@ Shared code (debugger, JSON-RPC server/router, Lua surface) lives in crate `dcs-
 | Write dir | `C:\Users\jonat\Saved Games\DCS.openbeta` |
 | Hook (deployed) | `<writedir>\Scripts\Hooks\DcsStudio.lua` |
 | DLLs (deployed) | `<writedir>\Mods\tech\DcsStudio\bin\dcs_studio_gui.dll` + `dcs_studio_mission.dll` |
-| Hook (source of truth) | `bridge/Scripts/Hooks/DcsStudio.lua` (what the extension ships/injects) |
+| Hook (source of truth) | `bridge/hook/DcsStudio.lua` (what the extension ships/injects) |
 | MissionScripting.lua | `<install>\Scripts\MissionScripting.lua` (desanitize via the extension command, or toggle the sanitize block manually) |
 | DCS log | `<writedir>\Logs\dcs.log` (fresh each launch; hook + boot lines tagged `DCS-STUDIO`) |
 | Bridge logs | `<writedir>\Logs\dcs_studio_gui.log` and `dcs_studio_mission.log` (per-DLL, truncated on first load) |
@@ -30,10 +30,10 @@ Shared code (debugger, JSON-RPC server/router, Lua surface) lives in crate `dcs-
 ## Setup: build + deploy
 
 ```powershell
-.\native\deploy\deploy.ps1   # cargo build --release (both DLLs) + install DLLs & hook
+.\bridge\deploy\deploy.ps1   # cargo build --release (both DLLs) + install DLLs & hook
 ```
 
-The DLLs link against DCS's `lua.dll` via `native/.cargo/config.toml` (`LUA_LIB`/`LUA_LIB_NAME`) — do not remove that config. **The DLLs are file-locked while DCS runs** (the mission DLL from the first mission until process exit): shut DCS down (see teardown) before redeploying. Never edit the deployed hook copy — edit `bridge/Scripts/Hooks/DcsStudio.lua` and re-run deploy.ps1.
+The DLLs link against DCS's `lua.dll` via `bridge/.cargo/config.toml` (`LUA_LIB`/`LUA_LIB_NAME`) — do not remove that config. **The DLLs are file-locked while DCS runs** (the mission DLL from the first mission until process exit): shut DCS down (see teardown) before redeploying. Never edit the deployed hook copy — edit `bridge/hook/DcsStudio.lua` and re-run deploy.ps1.
 
 ## Launch
 
@@ -79,7 +79,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:25570/rpc -Method Post -ContentType appl
   -Body '{"jsonrpc":"2.0","method":"eval","id":"3","params":{"code":"return timer.getTime()"}}'
 ```
 
-GUI `eval` gives full hooks-API access (`DCS.*`, `net.*`, `lfs`, `log`) — start missions, inspect state, add ad-hoc probes without rebuilding. `mission_boot` (GUI bridge) re-dispatches the mission-bridge boot into a running mission. To grow the permanent RPC surface, add methods to the hook's router (GUI) or `native/crates/bridge-mission/lua/mission_init.lua` (mission) and redeploy.
+GUI `eval` gives full hooks-API access (`DCS.*`, `net.*`, `lfs`, `log`) — start missions, inspect state, add ad-hoc probes without rebuilding. `mission_boot` (GUI bridge) re-dispatches the mission-bridge boot into a running mission. To grow the permanent RPC surface, add methods to the hook's router (GUI) or `bridge/crates/bridge-mission/lua/mission_init.lua` (mission) and redeploy.
 
 ## Live test suites (run with the sim up)
 
@@ -87,7 +87,7 @@ Rust unit tests are Windows-gated on a real Lua 5.1 — put DCS's own `lua.dll` 
 
 ```powershell
 $env:PATH = "D:\Program Files\Eagle Dynamics\DCS World OpenBeta\bin;$env:PATH"
-cd native
+cd bridge
 cargo test --workspace -- --include-ignored --skip regenerate_dlua_golden
 ```
 
@@ -106,8 +106,8 @@ No `id` → notification, returns immediately; the process is gone within ~15 s 
 
 ## Test checklist for bridge/DLL changes
 
-1. `cd native; cargo test --workspace` (plus `--include-ignored` with lua.dll on PATH) for the Rust parts; `npm test` for the extension
-2. Shut down DCS if running → `.\native\deploy\deploy.ps1` → launch with `--no-launcher`
+1. `cd bridge; cargo test --workspace` (plus `--include-ignored` with lua.dll on PATH) for the Rust parts; `npm test` for the extension
+2. Shut down DCS if running → `.\bridge\deploy\deploy.ps1` → launch with `--no-launcher`
 3. Poll `:25569/health` until OK (≤5 min); for mission work, start a mission (desanitized MissionScripting.lua) and poll `:25570/health`
 4. Exercise the changed surface via `/rpc` (and `/ws` for client changes) on the right port
 5. On failure read the per-DLL bridge log first (Rust side), then `dcs.log` `DCS-STUDIO` lines (Lua side)
