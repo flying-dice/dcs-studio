@@ -1,7 +1,7 @@
-import * as vscode from "vscode";
+import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import * as fs from "fs";
+import * as vscode from "vscode";
 
 // Shared DCS path resolution, mirroring dcs-studio's detect: the Saved Games
 // write dir (where the bridge DLL + hook are injected) and the game install

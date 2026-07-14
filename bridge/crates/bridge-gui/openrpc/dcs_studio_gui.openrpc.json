@@ -2,7 +2,7 @@
   "info": {
     "description": "In-DCS DCS Studio JSON-RPC bridge for the gui environment.",
     "title": "dcs-studio-gui",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "x-dcs-env": "gui"
   },
   "methods": [
@@ -202,32 +202,6 @@
           }
         }
       ],
-      "result": {
-        "name": "result",
-        "schema": {}
-      }
-    },
-    {
-      "description": "Evaluate an expression against the live GUI globals and register the result for lazy exploration (no pause needed).",
-      "name": "debug_inspect",
-      "params": [
-        {
-          "name": "expr",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {}
-      }
-    },
-    {
-      "description": "Drop every inspection ref, releasing the held values.",
-      "name": "debug_inspect_clear",
-      "params": [],
       "result": {
         "name": "result",
         "schema": {}

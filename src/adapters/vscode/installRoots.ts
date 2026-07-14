@@ -1,5 +1,5 @@
+import { gameInstallDir, savedGamesDir } from "../../bridge/paths";
 import type { InstallRootsPort } from "../../core/ports/installRoots";
-import { savedGamesDir, gameInstallDir } from "../../bridge/paths";
 import { dataDir } from "../../install/dataDir";
 
 // VS Code adapter for `InstallRootsPort`, delegating to the existing settings-aware

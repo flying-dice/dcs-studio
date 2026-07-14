@@ -1,4 +1,4 @@
-//! The `sqlite` sub-namespace: an embedded SQLite database (bundled, no
+//! The `sqlite` sub-namespace: an embedded `SQLite` database (bundled, no
 //! external DLL) reachable from sim-side Lua. `sqlite.open(path)` returns a
 //! `Db` handle whose file is confined to the guarded DCS write root
 //! (`lfs.writedir()`); `:memory:` opens an ephemeral in-memory DB.
@@ -10,17 +10,15 @@
 //! the sim. Keep queries small and indexed — this is a dev tool, not OLAP.
 
 use crate::facade::{p, p_opt, r_named, Sub};
-use crate::get_lfs_writedir;
-use crate::path_guard::stays_under;
+use crate::path_guard::resolve_under_writedir;
 use mlua::prelude::{LuaTable, LuaValue};
 use mlua::{Function, IntoLuaMulti, Lua, Result, UserData, UserDataMethods};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::Connection;
 use std::cell::RefCell;
-use std::path::PathBuf;
 use std::time::Duration;
 
-/// An open SQLite database handle. The connection is held in a `RefCell<Option>`
+/// An open `SQLite` database handle. The connection is held in a `RefCell<Option>`
 /// so `close()` can drop it and every method briefly borrows it (and releases
 /// before any Lua re-entry, so a `transaction` callback can call back in).
 struct Db {
@@ -33,12 +31,7 @@ fn open_db(lua: &Lua, path: &str) -> std::result::Result<Db, String> {
     let conn = if path == ":memory:" {
         Connection::open_in_memory().map_err(|e| e.to_string())?
     } else {
-        if !stays_under(path) {
-            return Err(format!("path escapes the write root: {path}"));
-        }
-        let writedir =
-            get_lfs_writedir(lua).map_err(|e| format!("lfs.writedir() unavailable: {e}"))?;
-        let full = PathBuf::from(writedir).join(path);
+        let full = resolve_under_writedir(lua, path)?;
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }

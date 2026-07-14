@@ -1,14 +1,15 @@
 import * as path from "path";
-import type { GitPort } from "../ports/git";
-import type { GhPort } from "../ports/gh";
-import type { ArchivePort } from "../ports/archive";
-import type { FileSystemPort } from "../ports/filesystem";
-import type { ManifestPort } from "../ports/manifest";
-import type { ManifestModel, PackagedPayload } from "../domain/types";
 import { payloadBase } from "../domain/archivePolicy";
 import { fmtBytes } from "../domain/format";
-import { gitignoreNeedsEntry, gitignoreWithEntry } from "../domain/publishPolicy";
 import { DISCOVERY_TOPIC } from "../domain/githubMarketplace";
+import type { GhFacts } from "../domain/publishChecks";
+import { gitignoreNeedsEntry, gitignoreWithEntry } from "../domain/publishPolicy";
+import type { ManifestModel, PackagedPayload } from "../domain/types";
+import type { ArchivePort } from "../ports/archive";
+import type { FileSystemPort } from "../ports/filesystem";
+import type { GhPort } from "../ports/gh";
+import type { GitPort } from "../ports/git";
+import type { ManifestPort } from "../ports/manifest";
 
 // Publish orchestration, mirroring dcs-studio's Publisher, driven through ports:
 // git (local), gh (repo + release), archive (payload). Share creates the GitHub
@@ -51,8 +52,39 @@ export interface PublishPorts {
   manifest: ManifestPort;
 }
 
+/** Tool-availability facts the publish preflight panel renders, gathered
+ *  through the injected ports so the panel depends on this service (not the
+ *  concrete node adapters). */
+export interface PublishToolFacts {
+  /** The resolved 7-Zip command/path, or null when unavailable. */
+  sevenZip: string | null;
+  /** Whether git is available on PATH. */
+  gitAvailable: boolean;
+  /** gh CLI presence + auth. */
+  gh: GhFacts;
+}
+
 export class PublishService {
   constructor(private readonly ports: PublishPorts) {}
+
+  /** Gather the preflight tool facts (7-Zip, git, gh presence/auth) via the
+   *  ports, so the Publish panel reaches them through this service. */
+  async toolFacts(): Promise<PublishToolFacts> {
+    const { archive, git, gh } = this.ports;
+    const [sevenZip, gitAvailable, present, authed] = await Promise.all([
+      archive.available(),
+      git.isInstalled(),
+      gh.isInstalled(),
+      gh.isAuthed(),
+    ]);
+    return { sevenZip, gitAvailable, gh: { present, authed } };
+  }
+
+  /** The URL of `root`'s `remote` (default `origin`), or null — routed through
+   *  the git port for the panel's repo detection. */
+  remoteUrl(root: string, remote = "origin"): Promise<string | null> {
+    return this.ports.git.getRemoteUrl(root, remote);
+  }
 
   /** Guarantee `.gitignore` hides the `.dcs-studio/` working dir before committing. */
   private async ensureGitignore(root: string): Promise<void> {
@@ -127,13 +159,20 @@ export class PublishService {
       if (seen.has(b.path)) continue; // dedupe: one archive entry per path
       seen.add(b.path);
       const abs = path.join(root, b.path);
-      if (!(await fs.exists(abs))) throw new Error(`Bundle path missing: ${b.path} — build the project first.`);
+      if (!(await fs.exists(abs)))
+        throw new Error(`Bundle path missing: ${b.path} — build the project first.`);
       files.push(b.path);
     }
 
     const outDir = path.join(root, ".dcs-studio", "release");
     log("Packaging payload with 7-Zip…");
-    const packaged = await archive.packagePayload(root, files, outDir, payloadBase(opts.name, opts.tag), opts.volumeBytes);
+    const packaged = await archive.packagePayload(
+      root,
+      files,
+      outDir,
+      payloadBase(opts.name, opts.tag),
+      opts.volumeBytes,
+    );
     log(
       packaged.split
         ? `Split into ${packaged.volumes.length} volumes (${fmtBytes(packaged.totalBytes)} total).`

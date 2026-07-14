@@ -63,6 +63,12 @@ Write-Host "Using DCS write dir: $WriteDir"
 
 # 3. Copy the DLLs and the hook (creating directories as needed). A locked DLL
 #    means DCS is running — surface that instead of a raw IO error.
+#
+# LOCKSTEP: this install layout (DLL names above, Mods\tech\DcsStudio\bin,
+# Scripts\Hooks\DcsStudio.lua, and the stale artifacts below) is also encoded in
+# src/core/domain/bridgeDeploy.ts, which the extension's inject/eject use. The
+# two runtimes (PowerShell dev-deploy vs. the TS extension) can't share a
+# constant — change one, change the other.
 $binDir = Join-Path $WriteDir "Mods\tech\DcsStudio\bin"
 $hooksDir = Join-Path $WriteDir "Scripts\Hooks"
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null

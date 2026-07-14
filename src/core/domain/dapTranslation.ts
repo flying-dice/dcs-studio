@@ -5,13 +5,19 @@
 // state machine — lives here so it can be characterization-tested without a sim.
 
 import * as path from "path";
-import { DebugFrame, DebugSnapshot, DebugState, DebugValue, ReplVariable } from "./bridgeProtocol";
+import type {
+  DebugFrame,
+  DebugSnapshot,
+  DebugState,
+  DebugValue,
+  ReplVariable,
+} from "./debugProtocol";
 
 // ── Chunkname ↔ path ──
 
 /** Chunkname the sim sees for a file: "=<abs path>" (normalized by the DLL). */
 export function sourceId(fsPath: string): string {
-  return "=" + fsPath;
+  return `=${fsPath}`;
 }
 
 /** Map a snapshot chunkname back to a file path, if it names one. */
@@ -44,7 +50,9 @@ export interface StoredBreakpoint {
 export function toBridgeBreakpoints(
   bps: readonly StoredBreakpoint[],
 ): { line: number; condition?: string }[] {
-  return bps.map((b) => (b.condition ? { line: b.line, condition: b.condition } : { line: b.line }));
+  return bps.map((b) =>
+    b.condition ? { line: b.line, condition: b.condition } : { line: b.line },
+  );
 }
 
 /** DAP setBreakpoints response body: everything verified at its requested line. */
@@ -213,8 +221,10 @@ export function pollTransition(
       const isError = snap.stop_reason === "error";
       const reason = isError ? "exception" : (s.lastAction ?? "breakpoint");
       next.lastAction = undefined;
-      if (snap.cond_error) events.push({ type: "output", text: snap.cond_error, category: "stderr" });
-      if (isError && snap.error) events.push({ type: "output", text: snap.error, category: "stderr" });
+      if (snap.cond_error)
+        events.push({ type: "output", text: snap.cond_error, category: "stderr" });
+      if (isError && snap.error)
+        events.push({ type: "output", text: snap.error, category: "stderr" });
       events.push({
         type: "stopped",
         body: {

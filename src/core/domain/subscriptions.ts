@@ -1,4 +1,4 @@
-// Pure subscription domain: the ledger key rules, the data-dir key, the
+// Pure subscription domain: the ledger key rules, the data-dir folder name, the
 // Subscription/ModLink shapes (re-exported from the shared types module), plus
 // the two view/policy helpers the panels need (Subscription→DTO projection and
 // the "already up to date" rule) and the pure `uninstall-all.bat` renderer.
@@ -7,11 +7,11 @@
 // Subscription>`) and the generated `uninstall-all.bat` bytes are FROZEN — this
 // module is the single source of truth for both.
 
-import type { Subscription, ModLink, ManifestEntrypoint } from "./types";
+import type { ManifestEntrypoint, ModLink, Subscription } from "./types";
 
 // The Subscription/ModLink shapes live in the shared types module; re-export them
 // so subscription code can import everything it needs from one place.
-export type { Subscription, ModLink, ManifestEntrypoint };
+export type { ManifestEntrypoint, ModLink, Subscription };
 
 /** The manifest file name a subscribed mod ships (asset + on-disk). */
 export const MANIFEST = "dcs-studio.toml";
@@ -28,7 +28,7 @@ export function ledgerKey(repo: string): string {
  * The data-dir folder name for a repo — slashes replaced with `__` so a repo maps
  * to a single flat directory under `<dataDir>`. Distinct from the ledger key.
  */
-export function keyOf(repo: string): string {
+export function dataDirName(repo: string): string {
   return repo.replace(/[\\/]/g, "__");
 }
 
@@ -99,7 +99,9 @@ export function renderUninstallScript(
   for (const s of Object.values(subs)) {
     for (const l of s.links) {
       // A dir (junction) -> rmdir removes the link only; a file link -> del.
-      lines.push(`if exist ${q(l.dest + "\\")} ( rmdir ${q(l.dest)} ) else ( if exist ${q(l.dest)} del /f /q ${q(l.dest)} )`);
+      lines.push(
+        `if exist ${q(`${l.dest}\\`)} ( rmdir ${q(l.dest)} ) else ( if exist ${q(l.dest)} del /f /q ${q(l.dest)} )`,
+      );
     }
   }
   lines.push("echo Removing unpacked mod data...");
@@ -112,5 +114,5 @@ export function renderUninstallScript(
     "echo Done. All DCS Studio mods have been removed.",
     "pause",
   );
-  return lines.join("\r\n") + "\r\n";
+  return `${lines.join("\r\n")}\r\n`;
 }

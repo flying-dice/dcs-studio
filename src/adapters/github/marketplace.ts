@@ -1,6 +1,3 @@
-import type { MarketplacePort } from "../../core/ports/marketplace";
-import type { AuthPort } from "../../core/ports/auth";
-import type { MarketListing, ProductDetail } from "../../core/domain/types";
 import {
   ghErrorMessage,
   mapListing,
@@ -9,6 +6,9 @@ import {
   type RepoJson,
   type SearchItem,
 } from "../../core/domain/githubMarketplace";
+import type { MarketListing, ProductDetail } from "../../core/domain/types";
+import type { AuthPort } from "../../core/ports/auth";
+import type { MarketplacePort } from "../../core/ports/marketplace";
 
 // GitHub REST adapter for `MarketplacePort`. Discovery mirrors dcs-studio's
 // studio-services/market.rs: search public repos by the `dcs-studio` topic; the
@@ -70,7 +70,11 @@ async function discover(topic: string, token: string | undefined): Promise<Marke
  * `dcs-studio.toml` asset. The install PLAN (parsing that manifest) is the
  * install step; here `installs`/`requires` are left empty.
  */
-async function loadProduct(owner: string, name: string, token: string | undefined): Promise<ProductDetail> {
+async function loadProduct(
+  owner: string,
+  name: string,
+  token: string | undefined,
+): Promise<ProductDetail> {
   const repo = await ghJson<RepoJson>(`${API}/repos/${owner}/${name}`, token);
   if (!repo) throw new Error(`Repository ${owner}/${name} was not found.`);
   const readme = await ghText(`${API}/repos/${owner}/${name}/readme`, token);

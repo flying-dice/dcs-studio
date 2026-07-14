@@ -31,10 +31,6 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
   local MAX_TABLE_CHILDREN = 1000 -- cap children returned/previewed for one table
   local MAX_REFS = 100000 -- per-pause ref ceiling so a cyclic/huge tree can't pin unbounded memory
 
-  -- Refs above this are inspection refs (the persistent object-explorer
-  -- registry); below it are per-pause snapshot refs. expand() routes by it.
-  local INSPECT_BASE = 2000000000
-
   -- os.clock (CPU time) keeps ticking while a chunk holds the sim thread;
   -- timer.getTime (model time) does NOT, so under that fallback the throttled
   -- in-run drain and the idle auto-continue degrade (breakpoints still work).
@@ -47,11 +43,10 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
   local D = { version = 1, running = false, error = nil }
   D.pump = function() end -- the installer wires the env-specific RPC drain
 
-  -- Two handle registries, both mapping ref → captured value/scope and inspected
-  -- lazily via expand(). `vars` is the PER-PAUSE registry (snapshot fills it,
-  -- cleared on resume). `inspect` is the PERSISTENT object-explorer registry
-  -- (inspect() fills it; survives across calls until inspect_clear()).
-  local dbg = { vars = {}, n = 0, inspect = {}, inspect_n = 0 }
+  -- The per-pause handle registry: ref → captured value/scope, inspected lazily
+  -- via expand(). Snapshot fills `vars`, resume clears it — every ref is scoped
+  -- to one pause.
+  local dbg = { vars = {}, n = 0 }
 
   local function dbg_register(descriptor)
     -- Ceiling: a cyclic/huge table tree (e.g. expanding _G._G…) must not mint
@@ -62,15 +57,13 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
     return dbg.n
   end
 
-  -- Register into the persistent inspection registry, returning an offset ref.
-  local function dbg_register_inspect(descriptor)
-    if dbg.inspect_n >= MAX_REFS then return 0 end
-    dbg.inspect_n = dbg.inspect_n + 1
-    dbg.inspect[dbg.inspect_n] = descriptor
-    return INSPECT_BASE + dbg.inspect_n
-  end
-
-  -- A short, single-line preview of a value for the variables tree.
+  -- A short, single-line preview of a value for the variables tree. Deliberately
+  -- MIRRORS (does not share) rt.lua's `preview`: the two diverge on functions —
+  -- the debugger renders a bare "function" here, the REPL explorer shows arity —
+  -- and the engine stays self-contained: it must not depend on __DCS_STUDIO_RT
+  -- being the matching build inside a paused, possibly sanitized state. The
+  -- key-order comparator in D.expand mirrors rt.lua's key_order the same way.
+  -- Kept in sync by hand.
   local function dbg_preview(v)
     local t = type(v)
     if t == "string" then
@@ -190,22 +183,6 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
     return pcall(f)
   end
 
-  -- A `print` replacement that pipes into the DCS Studio console ring (this
-  -- DLL's statics, tailed by the IDE over this bridge's console_read) AS WELL
-  -- AS the original sink.
-  local function console_print_shim(prev)
-    return function(...)
-      local parts = {}
-      for i = 1, select("#", ...) do
-        parts[#parts + 1] = tostring(select(i, ...))
-      end
-      bridge.console.print(table.concat(parts, "\t"))
-      if prev then
-        pcall(prev, ...)
-      end
-    end
-  end
-
   -- Write `value` into `name` in paused frame `frame_idx`, for real: a local
   -- via debug.setlocal on the LIVE stack, an upvalue via debug.setupvalue
   -- (where the host provides it), else a global. The live level is found by
@@ -278,8 +255,11 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
     return true
   end
 
-  -- The editor's poll: paused/running/error + the pause snapshot. Also the
-  -- liveness signal that keeps a held pause alive.
+  -- The editor's poll: paused/running/error + the pause snapshot. SIDE EFFECT:
+  -- although it reads as a getter, it WRITES dbg.last_ping = clock() on every
+  -- call — this is the liveness heartbeat that keeps a held pause alive (hold_pause
+  -- auto-continues DEBUG_IDLE_SECONDS after the last poll). Its name is the RPC
+  -- surface `debug_state`, so it stays `state`; the write is intentional.
   function D.state()
     dbg.last_ping = clock()
     local snap = bridge.debug.paused()
@@ -289,32 +269,26 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
     return { paused = true, running = true, snapshot = snap }
   end
 
-  -- Lazily expand a variable/scope ref: a scope yields its variables; a table
-  -- value yields its children (each with its own ref if itself expandable). The
-  -- ref routes by range to the per-pause registry or the persistent inspection
-  -- registry, and children land in the same one as their parent.
+  -- Lazily expand a variable/scope ref from the per-pause registry: a scope
+  -- yields its variables; a table value yields its children (each with its own
+  -- ref if itself expandable), which land in the same registry as their parent.
   function D.expand(ref)
     ref = ref or 0
-    local registry, register
-    if ref >= INSPECT_BASE then
-      registry, register = dbg.inspect, dbg_register_inspect
-      ref = ref - INSPECT_BASE
-    else
-      registry, register = dbg.vars, dbg_register
-    end
-    local d = registry[ref]
+    local d = dbg.vars[ref]
     if not d then
       return { variables = {} }
     end
     local out = {}
     if d.kind == "scope" then
       for _, item in ipairs(d.items) do
-        table.insert(out, dbg_var(item.name, item.value, register))
+        table.insert(out, dbg_var(item.name, item.value, dbg_register))
       end
     elseif d.kind == "value" and type(d.value) == "table" then
       -- Collect up to the cap, then SORT for a stable, readable order (pairs()
       -- is hash order): numeric keys ascending first (so arrays stay 1,2,3),
-      -- then string keys alphabetically.
+      -- then string keys alphabetically. This comparator MIRRORS rt.lua's
+      -- key_order inline (see the dbg_preview lockstep note); kept in sync by
+      -- hand so the engine stays self-contained.
       local keys, truncated = {}, false
       for k in pairs(d.value) do
         if #keys >= MAX_TABLE_CHILDREN then
@@ -333,7 +307,7 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
         return tostring(a) < tostring(b)
       end)
       for _, k in ipairs(keys) do
-        table.insert(out, dbg_var(tostring(k), d.value[k], register))
+        table.insert(out, dbg_var(tostring(k), d.value[k], dbg_register))
       end
       if truncated then
         table.insert(out, { name = "…", type = "string", value = "(truncated)", ref = 0 })
@@ -379,36 +353,6 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
       ref = dbg_register({ kind = "value", value = res })
     end
     return { ok = true, type = type(res), value = dbg_preview(res), ref = ref }
-  end
-
-  -- Evaluate `expr` against this state's live global environment and register
-  -- the result for lazy exploration — the interactive object explorer, no pause
-  -- or breakpoint needed. The ref survives across calls until inspect_clear().
-  function D.inspect(expr)
-    expr = expr or ""
-    local f, err = loadstring("return " .. expr)
-    if not f then
-      f, err = loadstring(expr)
-    end
-    if not f then
-      return { ok = false, err = err or "compile error" }
-    end
-    local ok, res = pcall(f)
-    if not ok then
-      return { ok = false, err = tostring(res) }
-    end
-    local ref = 0
-    if dbg_expandable(res) then
-      ref = dbg_register_inspect({ kind = "value", value = res })
-    end
-    return { ok = true, type = type(res), value = dbg_preview(res), ref = ref }
-  end
-
-  -- Drop every inspection ref, releasing the held values.
-  function D.inspect_clear()
-    dbg.inspect = {}
-    dbg.inspect_n = 0
-    return { ok = true }
   end
 
   -- Replace the breakpoints for one source: { source, breakpoints = { { line,
@@ -684,9 +628,11 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
     bridge.debug.reset_session()
     dbg.last_ping = clock()
     -- Capture print for the debugged run by swapping AROUND the xpcall (no
-    -- wrapping pcall — on_error must snapshot the crash frames live).
+    -- wrapping pcall — on_error must snapshot the crash frames live). The shim is
+    -- rt.lua's shared print_shim (RT is installed before this engine); the
+    -- console ring is the sink.
     local prev_print = _G.print
-    _G.print = console_print_shim(prev_print)
+    _G.print = __DCS_STUDIO_RT.print_shim(bridge.console.print, prev_print)
     debug.sethook(hook, "l") -- line events only; depth is walked, never counted
     local ran_ok, run_err = xpcall(chunk, on_error)
     debug.sethook() -- always remove the scoped hook (double-off is harmless)

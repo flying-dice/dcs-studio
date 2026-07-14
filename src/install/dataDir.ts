@@ -1,6 +1,6 @@
-import * as vscode from "vscode";
 import * as os from "os";
 import * as path from "path";
+import * as vscode from "vscode";
 
 // The DCS Studio data dir: where subscribed mods are downloaded and unpacked.
 // Symlinks are maintained from here into the DCS folders. Configurable via

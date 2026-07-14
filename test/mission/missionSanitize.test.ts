@@ -1,14 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  ITEMS,
-  stripQuoted,
-  codeMatches,
-  lineState,
-  toggledLine,
-  backupPath,
-  scanItems,
-  applyDesired,
   allItems,
+  applyDesired,
+  backupPath,
+  codeMatches,
+  ITEMS,
+  lineState,
+  scanItems,
+  stripQuoted,
+  toggledLine,
 } from "../../src/core/domain/missionSanitize";
 
 // A realistic MissionScripting.lua body (the DCS-shipped shape).

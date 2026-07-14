@@ -19,7 +19,7 @@ pub fn register(sub: &mut Sub) -> Result<()> {
          (NaN/Inf, a function, …).",
         |lua: &Lua, (lua_value, opts): (LuaValue, Option<LuaTable>)| match to_json_string(
             &lua_value,
-            opt_bool(&opts, "pretty"),
+            opt_bool(opts.as_ref(), "pretty"),
         ) {
             Ok(json_string) => json_string.into_lua_multi(lua),
             Err(e) => (LuaValue::Nil, e.to_string()).into_lua_multi(lua),
@@ -33,15 +33,11 @@ pub fn register(sub: &mut Sub) -> Result<()> {
         "Encode a Lua value to JSON, coercing sim-unsafe values (NaN/Inf → null, \
          non-UTF-8 strings lossily) instead of failing. Never panics.",
         |lua: &Lua, lua_value: LuaValue| match serialize_lua_to_json(&lua_value) {
-            Some(value) => match serde_json::to_string(&value) {
+            Ok(value) => match serde_json::to_string(&value) {
                 Ok(json_string) => json_string.into_lua_multi(lua),
                 Err(e) => (LuaValue::Nil, e.to_string()).into_lua_multi(lua),
             },
-            None => (
-                LuaValue::Nil,
-                format!("Unsupported Lua value for JSON serialization {lua_value:?}"),
-            )
-                .into_lua_multi(lua),
+            Err(e) => (LuaValue::Nil, e).into_lua_multi(lua),
         },
     )?;
 

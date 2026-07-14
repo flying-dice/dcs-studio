@@ -1,4 +1,4 @@
-import type { LinkDefinition, InstalledLink, LinkResult, DisableResult } from "../domain/types";
+import type { DisableResult, InstalledLink, LinkDefinition, LinkResult } from "../domain/types";
 
 // Port: create/remove the links between unpacked assets and their DCS
 // destinations. Strategy (junction vs hard link vs elevated symlink) is entirely

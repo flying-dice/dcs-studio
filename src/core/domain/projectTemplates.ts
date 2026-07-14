@@ -68,13 +68,70 @@ export function slugify(name: string): string {
 // a Cargo package/lib name and a `pub fn` name), plus Lua 5.1 keywords.
 const KEYWORDS = new Set([
   // Rust
-  "as", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false", "fn",
-  "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
-  "return", "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe",
-  "use", "where", "while", "async", "await", "abstract", "become", "box", "do", "final",
-  "macro", "override", "priv", "try", "typeof", "unsized", "virtual", "yield", "gen",
+  "as",
+  "break",
+  "const",
+  "continue",
+  "crate",
+  "dyn",
+  "else",
+  "enum",
+  "extern",
+  "false",
+  "fn",
+  "for",
+  "if",
+  "impl",
+  "in",
+  "let",
+  "loop",
+  "match",
+  "mod",
+  "move",
+  "mut",
+  "pub",
+  "ref",
+  "return",
+  "self",
+  "Self",
+  "static",
+  "struct",
+  "super",
+  "trait",
+  "true",
+  "type",
+  "unsafe",
+  "use",
+  "where",
+  "while",
+  "async",
+  "await",
+  "abstract",
+  "become",
+  "box",
+  "do",
+  "final",
+  "macro",
+  "override",
+  "priv",
+  "try",
+  "typeof",
+  "unsized",
+  "virtual",
+  "yield",
+  "gen",
   // Lua 5.1
-  "and", "elseif", "end", "function", "local", "nil", "not", "or", "repeat", "then", "until",
+  "and",
+  "elseif",
+  "end",
+  "function",
+  "local",
+  "nil",
+  "not",
+  "or",
+  "repeat",
+  "then",
+  "until",
 ]);
 
 /**
@@ -115,7 +172,11 @@ dcs_min_version = "2.9.0"
 }
 
 /** Render a template's files, or `undefined` for an unknown id. */
-export function render(template: string, name: string, assets: TemplateAssets): TemplateFile[] | undefined {
+export function render(
+  template: string,
+  name: string,
+  assets: TemplateAssets,
+): TemplateFile[] | undefined {
   switch (template) {
     case "blank":
       return blank(name);
@@ -348,7 +409,8 @@ The hook logs under the \`${slug}\` tag via \`log.write\` into
 // content. Assembled by concatenation so the architecture boundary test's
 // import-regex never mistakes this template text for a real require() in core.
 function requireExpr(mod: string): string {
-  return "require" + `("${mod}")`;
+  // biome-ignore lint/style/useTemplate: concatenation is load-bearing — see the comment above
+  return 'require("' + mod + '")';
 }
 function rustDll(name: string, assets: TemplateAssets): TemplateFile[] {
   const slug = slugify(name);

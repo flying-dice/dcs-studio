@@ -10,6 +10,10 @@
 -- pump being blocked is fine.
 local bridge = ...
 
+-- The "DCS Studio: " env.error/env.info log prefix is shared BY LOCKSTEP with
+-- the mission-boot snippet in gui_methods.lua (mission_boot_source). It can't be
+-- factored out: that snippet runs in the bare trigger sandbox before this DLL
+-- (and rt.lua) exists there. Keep the literals identical by hand.
 local function report_error(msg)
   if type(env) == "table" and env.error then
     env.error("DCS Studio: " .. msg, true)
@@ -42,7 +46,7 @@ end
 -- (the IDE re-sends the full set per source anyway).
 bridge.debug.reset_session()
 
-local D = __DCS_STUDIO_DBG -- installed by bootstrap; nil if this state lacks the debug library
+local DBG = __DCS_STUDIO_DBG -- installed by bootstrap; nil if this state lacks the debug library
 local RT = assert(__DCS_STUDIO_RT, "console runtime failed to install in the mission state")
 
 local router = bridge.jsonrpc.JsonRpcRouter.new()
@@ -53,14 +57,14 @@ local router = bridge.jsonrpc.JsonRpcRouter.new()
 -- OpenRPC golden test.
 bridge.register_methods(router, {
   bridge = bridge,
-  D = D,
+  DBG = DBG,
   RT = RT,
 })
 
 -- While a debug session holds the sim thread, the engine drains this DLL's
 -- queue itself through this router.
-if D then
-  D.pump = function()
+if DBG then
+  DBG.pump = function()
     bridge.jsonrpc.process_queue(router)
   end
 end

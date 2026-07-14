@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import DcsManifestCore from "../../media/manifest-core.js";
 
 const { parseToml, emitToml, MISSION_SCRIPT_RUN_ON } = DcsManifestCore;
@@ -56,7 +56,10 @@ dest = "{SavedGames}/Mods/tech/f16-weapons/entry.lua"
 `);
     expect(model.bundle).toEqual([{ path: "Mods/tech/f16-weapons" }]);
     expect(model.symlink).toEqual([
-      { source: "Mods/tech/f16-weapons/entry.lua", dest: "{SavedGames}/Mods/tech/f16-weapons/entry.lua" },
+      {
+        source: "Mods/tech/f16-weapons/entry.lua",
+        dest: "{SavedGames}/Mods/tech/f16-weapons/entry.lua",
+      },
     ]);
   });
 
@@ -79,7 +82,10 @@ dest = "{SavedGames}/Scripts/legacy.lua"
     // folded in, deduped against, or otherwise interpreted.
     expect(model.bundle).toEqual([{ path: "Mods/tech/f16-weapons" }]);
     expect(model.symlink).toEqual([
-      { source: "Mods/tech/f16-weapons/entry.lua", dest: "{SavedGames}/Mods/tech/f16-weapons/entry.lua" },
+      {
+        source: "Mods/tech/f16-weapons/entry.lua",
+        dest: "{SavedGames}/Mods/tech/f16-weapons/entry.lua",
+      },
     ]);
     expect(model.extras).toHaveLength(1);
     expect(model.extras[0]).toContain("[[install]]");
@@ -138,7 +144,12 @@ path = "Scripts/fw/loader.lua"
 run_on = "before-sanitize"
 `);
     expect(model.mission_script).toEqual([
-      { name: "Loader", purpose: "Boots the framework", path: "Scripts/fw/loader.lua", run_on: "before-sanitize" },
+      {
+        name: "Loader",
+        purpose: "Boots the framework",
+        path: "Scripts/fw/loader.lua",
+        run_on: "before-sanitize",
+      },
     ]);
   });
 
@@ -212,7 +223,13 @@ args = ["--minimized", "-v"]
 cwd = "Server"
 `);
     expect(model.entrypoint).toEqual([
-      { id: "srs-server", name: "SRS Server", exe: "Server/SR-Server.exe", args: ["--minimized", "-v"], cwd: "Server" },
+      {
+        id: "srs-server",
+        name: "SRS Server",
+        exe: "Server/SR-Server.exe",
+        args: ["--minimized", "-v"],
+        cwd: "Server",
+      },
     ]);
   });
 

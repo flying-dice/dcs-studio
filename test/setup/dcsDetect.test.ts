@@ -1,15 +1,15 @@
-import { describe, it, expect } from "vitest";
 import * as path from "node:path";
+import { describe, expect, it } from "vitest";
 import {
-  parseRegistryQuery,
-  REGISTRY_INSTALL_KEYS,
-  isDcsSavedName,
-  compareSavedNames,
-  savedGameDetail,
-  programFilesInstallRoots,
-  installDetail,
   compareInstallNames,
+  compareSavedNames,
+  installDetail,
+  isDcsSavedName,
+  parseRegistryQuery,
+  programFilesInstallRoots,
+  REGISTRY_INSTALL_KEYS,
   roleProbePath,
+  savedGameDetail,
 } from "../../src/core/domain/dcsDetect";
 
 // Real `reg query "HKCU\Software\Eagle Dynamics" /s /v Path` shaped stdout (CRLF,

@@ -1,7 +1,7 @@
 // @ts-nocheck
 // DCS install selector. Shows detected userdata (Saved Games) + installation
 // candidates, lets you pick one or browse, validates, and saves to settings.
-(function () {
+(() => {
   const vscode = acquireVsCodeApi();
   const app = document.getElementById("app");
   const state = {
@@ -15,11 +15,7 @@
     installCandidates: [],
   };
 
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]),
-    );
-  }
+  const { esc } = dcsUi;
 
   function candList(items, current, which) {
     if (!items.length) {
@@ -44,7 +40,7 @@
     const list = which === "install" ? state.installCandidates : state.savedCandidates;
     const hit = list.find((c) => c.path.toLowerCase() === p.toLowerCase());
     if (hit) {
-      return `<div class="status-line ${hit.valid ? "ok" : "warn"}">${hit.valid ? "✔ " + hit.detail : "⚠ " + hit.detail}</div>`;
+      return `<div class="status-line ${hit.valid ? "ok" : "warn"}">${hit.valid ? `✔ ${hit.detail}` : `⚠ ${hit.detail}`}</div>`;
     }
     return "";
   }
@@ -103,7 +99,7 @@
             <input id="sevenInput" value="${esc(state.sevenZip)}" placeholder="Path to 7z.exe (auto-detect if empty)" spellcheck="false" />
             <button class="btn secondary" data-browse="sevenzip">Browse…</button>
           </div>
-          <div class="status-line ${state.sevenZipDetected ? "ok" : "warn"}">${state.sevenZipDetected ? "✔ Detected: " + esc(state.sevenZipDetected) : "⚠ 7z not found — set it here or install 7-Zip"}</div>
+          <div class="status-line ${state.sevenZipDetected ? "ok" : "warn"}">${state.sevenZipDetected ? `✔ Detected: ${esc(state.sevenZipDetected)}` : "⚠ 7z not found — set it here or install 7-Zip"}</div>
         </section>
 
         <div class="actions">
@@ -116,24 +112,34 @@
   }
 
   function bind() {
-    document.getElementById("redetect").addEventListener("click", () =>
-      vscode.postMessage({ type: "redetect" }),
-    );
-    document.getElementById("savedInput").addEventListener("input", (e) => (state.savedGames = e.target.value));
-    document.getElementById("installInput").addEventListener("input", (e) => (state.gameInstall = e.target.value));
-    document.getElementById("dataInput").addEventListener("input", (e) => (state.dataDir = e.target.value));
-    document.getElementById("sevenInput").addEventListener("input", (e) => (state.sevenZip = e.target.value));
-    document.querySelectorAll("[data-browse]").forEach((el) =>
-      el.addEventListener("click", () => vscode.postMessage({ type: "browse", which: el.dataset.browse })),
-    );
-    document.querySelectorAll("[data-pick]").forEach((el) =>
+    document
+      .getElementById("redetect")
+      .addEventListener("click", () => vscode.postMessage({ type: "redetect" }));
+    document
+      .getElementById("savedInput")
+      .addEventListener("input", (e) => (state.savedGames = e.target.value));
+    document
+      .getElementById("installInput")
+      .addEventListener("input", (e) => (state.gameInstall = e.target.value));
+    document
+      .getElementById("dataInput")
+      .addEventListener("input", (e) => (state.dataDir = e.target.value));
+    document
+      .getElementById("sevenInput")
+      .addEventListener("input", (e) => (state.sevenZip = e.target.value));
+    document.querySelectorAll("[data-browse]").forEach((el) => {
+      el.addEventListener("click", () =>
+        vscode.postMessage({ type: "browse", which: el.dataset.browse }),
+      );
+    });
+    document.querySelectorAll("[data-pick]").forEach((el) => {
       el.addEventListener("click", () => {
         const which = el.dataset.pick;
         if (which === "saved") state.savedGames = el.dataset.path;
         else state.gameInstall = el.dataset.path;
         render();
-      }),
-    );
+      });
+    });
     document.getElementById("save").addEventListener("click", () =>
       vscode.postMessage({
         type: "save",

@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
-import { gitRemoteUrlSync } from "../adapters/node/git";
+import type { PublishService, ReleaseOpts, ShareOpts } from "../core/app/publishService";
 import { parseRepoRemote } from "../core/domain/repoRemote";
-import { preflight, readManifest, Check } from "./preflight";
-import type { PublishService, ShareOpts, ReleaseOpts } from "../core/app/publishService";
+import { renderWebviewHtml } from "../webview/html";
+import { preflight, readManifest } from "./preflight";
 
 // The Publish panel: preflight checks, "Share to GitHub" (create repo + push),
 // and "Create a release" (7z-packaged, volume-split payload + standalone manifest).
@@ -38,23 +38,23 @@ export class PublishPanel {
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
-    this.pushInit();
+    void this.pushInit();
   }
 
-  private detectRepo(): { owner: string; name: string } | null {
+  private async detectRepo(): Promise<{ owner: string; name: string } | null> {
     if (!this.root) return null;
-    const url = gitRemoteUrlSync(this.root, "origin");
+    const url = await this.publish.remoteUrl(this.root, "origin");
     return url ? parseRepoRemote(url) : null;
   }
 
-  private pushInit(): void {
+  private async pushInit(): Promise<void> {
     if (!this.root) {
       this.post({ type: "nofolder" });
       return;
     }
-    const checks = preflight(this.context, this.root);
+    const checks = await preflight(this.context, this.root, this.publish);
     const m = readManifest(this.context, this.root);
-    const repo = this.detectRepo();
+    const repo = await this.detectRepo();
     this.post({
       type: "init",
       checks,
@@ -73,19 +73,22 @@ export class PublishPanel {
     url?: string;
   }): Promise<void> {
     if (!this.root) return;
+    const root = this.root; // narrowed once; the async closures below keep it
     switch (msg.type) {
       case "refresh":
-        this.pushInit();
+        await this.pushInit();
         break;
       case "share":
         await this.guard("share", async () => {
-          const res = await this.publish.share(this.root!, msg.opts as ShareOpts, (l) => this.log(l));
+          const res = await this.publish.share(root, msg.opts as ShareOpts, (l) => this.log(l));
           this.post({ type: "shareDone", result: res });
         });
         break;
       case "release":
         await this.guard("release", async () => {
-          const res = await this.publish.cutRelease(this.root!, msg.opts as ReleaseOpts, (l) => this.log(l));
+          const res = await this.publish.cutRelease(root, msg.opts as ReleaseOpts, (l) =>
+            this.log(l),
+          );
           this.post({ type: "releaseDone", result: res });
         });
         break;
@@ -101,7 +104,6 @@ export class PublishPanel {
       await fn();
     } catch (e) {
       this.log(`✖ ${e instanceof Error ? e.message : String(e)}`);
-      this.post({ type: "failed", scope, message: e instanceof Error ? e.message : String(e) });
     } finally {
       this.post({ type: "busy", scope, busy: false });
     }
@@ -121,35 +123,12 @@ export class PublishPanel {
   }
 
   private html(): string {
-    const webview = this.panel.webview;
-    const media = (f: string) =>
-      webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", f));
-    const nonce = getNonce();
-    const csp = [
-      `default-src 'none'`,
-      `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src 'nonce-${nonce}'`,
-    ].join("; ");
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="${csp}" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link href="${media("publish.css")}" rel="stylesheet" />
-  <title>Publish Mod</title>
-</head>
-<body>
-  <div id="app"></div>
-  <script nonce="${nonce}" src="${media("publish.js")}"></script>
-</body>
-</html>`;
+    return renderWebviewHtml({
+      webview: this.panel.webview,
+      extensionUri: this.context.extensionUri,
+      title: "Publish Mod",
+      styles: ["publish.css"],
+      scripts: ["publish.js"],
+    });
   }
-}
-
-function getNonce(): string {
-  let text = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) text += chars.charAt(Math.floor(Math.random() * chars.length));
-  return text;
 }

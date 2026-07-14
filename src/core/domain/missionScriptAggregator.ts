@@ -13,9 +13,9 @@
 // This module is PURE (no I/O, no path resolution against roots): the app layer
 // resolves each script's absolute unpacked path and hands entries here.
 
-import { BEFORE_SANITIZE_FILE, AFTER_SANITIZE_FILE } from "./missionScriptTrigger";
+import { AFTER_SANITIZE_FILE, BEFORE_SANITIZE_FILE } from "./missionScriptTrigger";
 
-export { BEFORE_SANITIZE_FILE, AFTER_SANITIZE_FILE };
+export { AFTER_SANITIZE_FILE, BEFORE_SANITIZE_FILE };
 
 /** One resolved mission-script entry to aggregate. */
 export interface AggregatorEntry {
@@ -58,5 +58,5 @@ export function generateAggregator(entries: AggregatorEntry[]): string {
   for (const e of entries) {
     parts.push(`-- ${e.tag}\ndofileifexist([[${toPosix(e.absPath)}]])`);
   }
-  return parts.join("\n\n") + "\n";
+  return `${parts.join("\n\n")}\n`;
 }

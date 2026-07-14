@@ -5,42 +5,15 @@
 -- openrpc document cannot drift from what the DLL registers.
 --
 -- `deps` injects the touchpoints a headless test cannot provide: the exports
--- table (`deps.bridge`), the debug engine (`deps.D`, may be nil), and the
--- console runtime (`deps.RT`). Live globals (timer, lfs, env, __DCS_STUDIO_WRITEDIR)
--- are read from inside handler bodies only, never at registration time, so
--- registering against a stub router needs no mission API at all.
+-- table (`deps.bridge`), the debug engine (`deps.DBG`, may be nil), and the
+-- console runtime (`deps.RT`, which owns the shared print/envelope/export
+-- helpers). Live globals (timer, lfs, env, __DCS_STUDIO_WRITEDIR) are read from
+-- inside handler bodies only, never at registration time, so registering
+-- against a stub router needs no mission API at all.
 return function(router, deps)
   local bridge = deps.bridge
-  local D = deps.D
+  local DBG = deps.DBG
   local RT = deps.RT
-
-  -- A `print` replacement that pipes into this DLL's console ring (tailed by
-  -- the IDE via console_read on THIS bridge) AS WELL AS the original sink.
-  local function console_print_shim(prev)
-    return function(...)
-      local parts = {}
-      for i = 1, select("#", ...) do
-        parts[#parts + 1] = tostring(select(i, ...))
-      end
-      bridge.console.print(table.concat(parts, "\t"))
-      if prev then
-        pcall(prev, ...)
-      end
-    end
-  end
-
-  -- Run `fn` with `print` captured, restoring it on every path. NOT used by
-  -- debug_run: the engine swaps print around its own xpcall instead.
-  local function with_print_capture(fn, ...)
-    local prev = _G.print
-    _G.print = console_print_shim(prev)
-    local results = { pcall(fn, ...) }
-    _G.print = prev
-    if not results[1] then
-      error(results[2], 0)
-    end
-    return unpack(results, 2)
-  end
 
   router:add_method("ping", function()
     return { pong = true, dcs_time = (type(timer) == "table" and timer.getTime and timer.getTime()) or 0 }
@@ -53,7 +26,9 @@ return function(router, deps)
     if not f then
       error("loadstring: " .. tostring(err))
     end
-    return with_print_capture(f)
+    -- print() output streams into the console ring via RT.with_print_capture
+    -- (the shared shim, with bridge.console.print as the sink).
+    return RT.with_print_capture(bridge.console.print, f)
   end, {
     description = "Run Lua in the mission scripting state and return the result. print() output streams into console_read.",
     params = { { name = "code", type = "string", required = true, description = "Lua source to run." } },
@@ -79,52 +54,44 @@ return function(router, deps)
   })
 
   -- Console/REPL explorer: this bridge serves ONE environment (the mission
-  -- state), so there is no env parameter — the runtime runs right here.
-  -- Remote print() output rides in the envelope and is fed to the console ring.
-  local function rt_envelope(json_text)
-    local tbl = bridge.json.decode(json_text)
-    if type(tbl) ~= "table" then
-      error("mission runtime returned: " .. string.sub(tostring(json_text), 1, 400), 0)
-    end
-    if type(tbl.prints) == "table" then
-      for _, line in ipairs(tbl.prints) do
-        bridge.console.print(line)
-      end
-      tbl.prints = nil
-    end
-    return tbl
+  -- state), so there is no env parameter — the runtime runs right here, and this
+  -- only DECODES the envelope its RT.*_json call already produced (the GUI bridge,
+  -- which tunnels into remote states, runs the call first). Shared decoder in
+  -- rt.lua; remote print() output rides in the envelope and is fed to the console.
+  local function decode_envelope(json_text)
+    return RT.decode_envelope(bridge.json.decode, bridge.console.print, json_text, "mission runtime")
   end
 
   router:add_method("repl_eval", function(params)
-    return rt_envelope(RT.eval_json((params and params.code) or ""))
+    return decode_envelope(RT.eval_json((params and params.code) or ""))
   end, {
     description = "Console eval in the mission state: { ok, result?, err? }.",
     params = { { name = "code", type = "string", required = true } },
   })
 
   router:add_method("repl_inspect", function(params)
-    return rt_envelope(RT.inspect_json((params and params.expr) or ""))
+    return decode_envelope(RT.inspect_json((params and params.expr) or ""))
   end, {
-    description = "Evaluate an expression and register the result for lazy drill-down: { ok, type, value, ref }.",
+    description = SHARED_META.repl_inspect.description,
     params = { { name = "expr", type = "string", required = true } },
   })
 
   router:add_method("repl_expand", function(params)
-    return rt_envelope(RT.expand_json((params and params.ref) or 0))
+    return decode_envelope(RT.expand_json((params and params.ref) or 0))
   end, {
-    description = "Expand a ref handed out by repl_inspect/repl_expand: { ok, variables }.",
+    description = SHARED_META.repl_expand.description,
     params = { { name = "ref", type = "number", required = true } },
   })
 
   router:add_method("repl_signature", function(params)
-    return rt_envelope(RT.signature_json((params and params.ref) or 0))
+    return decode_envelope(RT.signature_json((params and params.ref) or 0))
   end, {
-    description = "Resolve a function ref's real parameter names (never runs the function): { ok, params?, native?, err? }.",
+    description = SHARED_META.repl_signature.description,
     params = { { name = "ref", type = "number", required = true } },
   })
 
   router:add_method("repl_clear", function()
-    return rt_envelope(RT.clear_json())
+    return decode_envelope(RT.clear_json())
   end, {
     description = "Drop every explorer ref held by this state.",
   })
@@ -140,13 +107,7 @@ return function(router, deps)
     else
       res = RT.export_json((params and params.expr) or "", nil)
     end
-    if string.sub(res, 1, 4) == "ERR:" then
-      error(string.sub(res, 5), 0)
-    end
-    if string.sub(res, 1, 3) ~= "OK:" then
-      error("export failed: " .. string.sub(res, 1, 400), 0)
-    end
-    local json = string.sub(res, 4)
+    local json = RT.decode_export(res)
     export_n = export_n + 1
     local stamp = math.floor(((type(timer) == "table" and timer.getAbsTime and timer.getAbsTime()) or 0) * 1000)
     local rel = "Temp/dcs-studio-export-" .. stamp .. "-" .. export_n .. ".json"
@@ -157,7 +118,7 @@ return function(router, deps)
     local writedir = (type(lfs) == "table" and lfs.writedir and lfs.writedir()) or __DCS_STUDIO_WRITEDIR or ""
     return { path = writedir .. string.gsub(rel, "/", "\\"), bytes = #json }
   end, {
-    description = "Write the full JSON of a value (by ref or expression) to a file under <writedir>Temp\\ and return { path, bytes }.",
+    description = SHARED_META.repl_export.description,
     params = {
       { name = "expr", type = "string", required = false },
       { name = "ref", type = "number", required = false },
@@ -167,10 +128,10 @@ return function(router, deps)
   -- Debugger: drives __DCS_STUDIO_DBG in THIS state. Breakpoints live in this
   -- DLL's statics — the IDE must send them to this bridge for mission code.
   local function need_debugger()
-    if not D then
+    if not DBG then
       error("the debug library is not available in the mission state - breakpoints cannot work here", 0)
     end
-    return D
+    return DBG
   end
 
   router:add_method("debug_run", function(params)
@@ -190,63 +151,34 @@ return function(router, deps)
 
   router:add_method("debug_state", function()
     return need_debugger().state()
-  end, {
-    description = "Poll the session: { paused, running, snapshot?, error? }. Also the liveness signal that keeps a held pause alive.",
-  })
+  end, SHARED_META.debug_state)
 
   router:add_method("debug_continue", function(params)
     bridge.debug.request_resume((params and params.mode) or "continue")
     return { ok = true, mode = (params and params.mode) or "continue" }
-  end, {
-    description = "Resume a paused session: mode continue | step_over | step_into | step_out.",
-    params = { { name = "mode", type = "string", required = false } },
-  })
+  end, SHARED_META.debug_continue)
 
   router:add_method("debug_pause", function()
     bridge.debug.request_pause()
     return { ok = true }
-  end, {
-    description = "Break at the next line of debugged code (manual pause).",
-  })
+  end, SHARED_META.debug_pause)
 
   router:add_method("debug_stop", function()
     bridge.debug.request_stop()
     bridge.debug.request_resume("continue")
     return { ok = true }
-  end, {
-    description = "Terminate the running chunk (unwinds a runaway/looping run).",
-  })
+  end, SHARED_META.debug_stop)
 
   router:add_method("debug_expand", function(params)
     return need_debugger().expand((params and params.ref) or 0)
-  end, {
-    description = "Lazily expand a variables/scope ref from the pause snapshot or the inspector.",
-    params = { { name = "ref", type = "number", required = true } },
-  })
+  end, SHARED_META.debug_expand)
 
   router:add_method("debug_eval", function(params)
     return need_debugger().eval((params and params.frame) or 0, (params and params.expr) or "")
-  end, {
-    description = "Evaluate an expression in a paused frame (locals → upvalues → globals). A top-level `name = value` assigns for real.",
-    params = {
-      { name = "frame", type = "number", required = false },
-      { name = "expr", type = "string", required = true },
-    },
-  })
+  end, SHARED_META.debug_eval)
 
-  router:add_method("debug_inspect", function(params)
-    return need_debugger().inspect((params and params.expr) or "")
-  end, {
-    description = "Evaluate an expression against the live mission globals and register the result for lazy exploration (no pause needed).",
-    params = { { name = "expr", type = "string", required = true } },
-  })
-
-  router:add_method("debug_inspect_clear", function()
-    return need_debugger().inspect_clear()
-  end, {
-    description = "Drop every inspection ref, releasing the held values.",
-  })
-
+  -- NB: mission debug_set_breakpoints has its OWN description (no "for GUI
+  -- sessions" qualifier), so it is NOT part of SHARED_META.
   router:add_method("debug_set_breakpoints", function(params)
     return need_debugger().set_breakpoints(params)
   end, {
@@ -259,7 +191,5 @@ return function(router, deps)
 
   router:add_method("debug_clear_breakpoints", function()
     return need_debugger().clear_breakpoints()
-  end, {
-    description = "Drop every breakpoint and condition held by this bridge.",
-  })
+  end, SHARED_META.debug_clear_breakpoints)
 end

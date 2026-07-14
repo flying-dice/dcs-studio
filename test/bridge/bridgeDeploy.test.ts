@@ -1,22 +1,22 @@
-import { describe, it, expect } from "vitest";
 import * as path from "node:path";
+import { describe, expect, it } from "vitest";
 import {
   BIN_RELATIVE_DIR,
   BRIDGE_DLLS,
-  DCS_LAUNCH_ARGS,
-  HOOK_RELATIVE_PATH,
-  INJECT_LOCKED_MESSAGE,
-  LAUNCH_LOCKED_MESSAGE,
-  LEGACY_RELATIVE_PATHS,
   builtDllPath,
+  DCS_LAUNCH_ARGS,
   dcsBinDir,
   dcsExePath,
   dllInstallPath,
   ejectedMessage,
+  HOOK_RELATIVE_PATH,
   hookInstallPath,
   hookSourcePath,
+  INJECT_LOCKED_MESSAGE,
   injectedMessage,
   isDllLockedError,
+  LAUNCH_LOCKED_MESSAGE,
+  LEGACY_RELATIVE_PATHS,
   legacyInstallPaths,
   selectDll,
   shippedDllPath,
@@ -59,7 +59,9 @@ describe("DLL selection (built vs shipped)", () => {
   });
 
   it("prefers the freshly built workspace artifact when it exists", () => {
-    expect(selectDll(ROOT, "dcs_studio_gui.dll", true)).toBe(builtDllPath(ROOT, "dcs_studio_gui.dll"));
+    expect(selectDll(ROOT, "dcs_studio_gui.dll", true)).toBe(
+      builtDllPath(ROOT, "dcs_studio_gui.dll"),
+    );
   });
 
   it("falls back to the shipped DLL when there is no build", () => {

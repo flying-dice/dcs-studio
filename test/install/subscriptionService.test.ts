@@ -1,25 +1,25 @@
-import { describe, it, expect } from "vitest";
 import * as path from "node:path";
-import { SubscriptionService, type Progress } from "../../src/core/app/subscriptionService";
-import type { SubscriptionLedgerStore } from "../../src/core/ports/ledger";
-import type { ArchivePort } from "../../src/core/ports/archive";
-import type { DownloadPort } from "../../src/core/ports/downloader";
-import type { LinkerPort } from "../../src/core/ports/linker";
-import type { ManifestPort } from "../../src/core/ports/manifest";
-import type { InstallRootsPort } from "../../src/core/ports/installRoots";
-import type { FileSystemPort } from "../../src/core/ports/filesystem";
-import type { ClockPort } from "../../src/core/ports/clock";
+import { describe, expect, it } from "vitest";
+import { type Progress, SubscriptionService } from "../../src/core/app/subscriptionService";
+import {
+  AFTER_SANITIZE_FILE,
+  BEFORE_SANITIZE_FILE,
+  toPosix,
+} from "../../src/core/domain/missionScriptAggregator";
 import type {
   InstallTarget,
   LinkResult,
   ManifestModel,
   Subscription,
 } from "../../src/core/domain/types";
-import {
-  BEFORE_SANITIZE_FILE,
-  AFTER_SANITIZE_FILE,
-  toPosix,
-} from "../../src/core/domain/missionScriptAggregator";
+import type { ArchivePort } from "../../src/core/ports/archive";
+import type { ClockPort } from "../../src/core/ports/clock";
+import type { DownloadPort } from "../../src/core/ports/downloader";
+import type { FileSystemPort } from "../../src/core/ports/filesystem";
+import type { InstallRootsPort } from "../../src/core/ports/installRoots";
+import type { SubscriptionLedgerStore } from "../../src/core/ports/ledger";
+import type { LinkerPort } from "../../src/core/ports/linker";
+import type { ManifestPort } from "../../src/core/ports/manifest";
 
 // Full subscription-lifecycle tests against in-memory fake ports — no vscode, no
 // fs, no network. The fakes record every interaction so the tests can assert the
@@ -98,7 +98,12 @@ class FakeDownloader implements DownloadPort {
 
   constructor(private readonly fs: FakeFs) {}
 
-  async download(url: string, dest: string, token?: string, onProgress?: (f: number) => void): Promise<void> {
+  async download(
+    url: string,
+    dest: string,
+    token?: string,
+    onProgress?: (f: number) => void,
+  ): Promise<void> {
     this.calls.push({ url, dest, token });
     if (onProgress) for (const f of this.fractions) onProgress(f);
     this.fs.files.set(dest, this.content.get(url) ?? url);
@@ -132,7 +137,12 @@ class FakeLinker implements LinkerPort {
 
   async enable(defs: { id: string; src: string; dest: string }[]): Promise<LinkResult> {
     this.enables.push(defs);
-    return this.result ?? { ok: true, created: defs.map((d) => ({ id: d.id, src: d.src, dest: d.dest })) };
+    return (
+      this.result ?? {
+        ok: true,
+        created: defs.map((d) => ({ id: d.id, src: d.src, dest: d.dest })),
+      }
+    );
   }
   disable(installed: { id: string; installedPath: string }[]): { removed: string[]; failed: [] } {
     this.disables.push(installed);
@@ -148,7 +158,8 @@ class FakeManifest implements ManifestPort {
     return JSON.stringify(model);
   }
   resolveDest(dest: string, roots: { savedGames: string; gameInstall: string }): string | null {
-    if (dest.startsWith("{SavedGames}")) return roots.savedGames + dest.slice("{SavedGames}".length);
+    if (dest.startsWith("{SavedGames}"))
+      return roots.savedGames + dest.slice("{SavedGames}".length);
     if (dest.startsWith("{GameInstall}")) {
       return roots.gameInstall ? roots.gameInstall + dest.slice("{GameInstall}".length) : null;
     }
@@ -185,10 +196,31 @@ function makeWorld() {
   const manifest = new FakeManifest();
   const roots = new FakeRoots();
   const clock = new FakeClock();
-  const service = new SubscriptionService({ ledger, archive, downloader, linker, manifest, roots, fs, clock });
+  const service = new SubscriptionService({
+    ledger,
+    archive,
+    downloader,
+    linker,
+    manifest,
+    roots,
+    fs,
+    clock,
+  });
   const progress: Progress[] = [];
   const onProgress = (p: Progress) => progress.push(p);
-  return { fs, ledger, downloader, archive, linker, manifest, roots, clock, service, progress, onProgress };
+  return {
+    fs,
+    ledger,
+    downloader,
+    archive,
+    linker,
+    manifest,
+    roots,
+    clock,
+    service,
+    progress,
+    onProgress,
+  };
 }
 
 const MODEL: ManifestModel = {
@@ -286,7 +318,9 @@ describe("fetchPlan", () => {
       "tok",
     );
 
-    expect(w.downloader.calls).toEqual([{ url: "https://dl/dcs-studio.toml", dest: tmp, token: "tok" }]);
+    expect(w.downloader.calls).toEqual([
+      { url: "https://dl/dcs-studio.toml", dest: tmp, token: "tok" },
+    ]);
     expect(plan).toEqual({
       bundles: [{ path: "Scripts/X" }],
       symlinks: [
@@ -304,13 +338,18 @@ describe("fetchPlan", () => {
   it("resolves {GameInstall} dests to null when the game install is unconfigured", async () => {
     const w = makeWorld();
     w.roots.game = undefined;
-    const model: ManifestModel = { ...MODEL, symlink: [{ source: "Mods/X", dest: "{GameInstall}/Mods/X" }] };
+    const model: ManifestModel = {
+      ...MODEL,
+      symlink: [{ source: "Mods/X", dest: "{GameInstall}/Mods/X" }],
+    };
     w.downloader.content.set("https://dl/dcs-studio.toml", JSON.stringify(model));
     const plan = await w.service.fetchPlan(
       [{ name: "dcs-studio.toml", size: 1, url: "https://dl/dcs-studio.toml" }],
       undefined,
     );
-    expect(plan?.symlinks).toEqual([{ source: "Mods/X", dest: "{GameInstall}/Mods/X", resolved: null }]);
+    expect(plan?.symlinks).toEqual([
+      { source: "Mods/X", dest: "{GameInstall}/Mods/X", resolved: null },
+    ]);
   });
 });
 
@@ -329,7 +368,11 @@ describe("subscribe", () => {
   it("fails with the exact no-payload message when the release has no .7z volumes", async () => {
     const w = makeWorld();
     await expect(
-      w.service.subscribe(target({ assets: [{ name: "readme.md", size: 1, url: "u" }] }), undefined, w.onProgress),
+      w.service.subscribe(
+        target({ assets: [{ name: "readme.md", size: 1, url: "u" }] }),
+        undefined,
+        w.onProgress,
+      ),
     ).rejects.toThrow("This release has no .7z payload to install.");
   });
 
@@ -350,7 +393,9 @@ describe("subscribe", () => {
       { url: "https://dl/big.7z.002", dest: path.join(DL_DIR, "big.7z.002"), token: "tok" },
     ]);
     // Extraction points at the first volume; the archiver finds its siblings.
-    expect(w.archive.extracts).toEqual([{ archive: path.join(DL_DIR, "big.7z.001"), outDir: MOD_DIR }]);
+    expect(w.archive.extracts).toEqual([
+      { archive: path.join(DL_DIR, "big.7z.001"), outDir: MOD_DIR },
+    ]);
     // The .download dir is cleaned up afterwards.
     expect(w.fs.removed).toContain(DL_DIR);
 
@@ -405,7 +450,9 @@ describe("subscribe", () => {
     const w = makeWorld();
     const withEps: ManifestModel = {
       ...MODEL,
-      entrypoint: [{ id: "srs", name: "SRS", exe: "Server/SR.exe", args: ["--min"], cwd: "Server" }],
+      entrypoint: [
+        { id: "srs", name: "SRS", exe: "Server/SR.exe", args: ["--min"], cwd: "Server" },
+      ],
     };
     w.archive.unpacked.set("dcs-studio.toml", JSON.stringify(withEps));
 
@@ -438,13 +485,21 @@ describe("subscribe", () => {
 
     const sub = await w.service.subscribe(target(), undefined, w.onProgress);
 
-    expect(sub.missionScripts).toEqual([{ name: "Loader", path: "Scripts/l.lua", run_on: "before-sanitize" }]);
+    expect(sub.missionScripts).toEqual([
+      { name: "Loader", path: "Scripts/l.lua", run_on: "before-sanitize" },
+    ]);
     expect(w.ledger.store["owner/repo"].missionScripts).toEqual(sub.missionScripts);
   });
 
   it("tolerates a manifest lacking the entrypoint/mission_script fields (older schema)", async () => {
     const w = makeWorld();
-    const old = { project: MODEL.project, bundle: [], symlink: [], requires_module: [], extras: [] };
+    const old = {
+      project: MODEL.project,
+      bundle: [],
+      symlink: [],
+      requires_module: [],
+      extras: [],
+    };
     w.archive.unpacked.set("dcs-studio.toml", JSON.stringify(old));
 
     const sub = await w.service.subscribe(target(), undefined, w.onProgress);
@@ -524,7 +579,9 @@ describe("enable", () => {
     seedInstalled(w);
     w.linker.result = { ok: false, message: "Destination path already exists: X" };
 
-    await expect(w.service.enable("Owner/Repo")).rejects.toThrow("Destination path already exists: X");
+    await expect(w.service.enable("Owner/Repo")).rejects.toThrow(
+      "Destination path already exists: X",
+    );
     expect(w.ledger.saves).toEqual([]);
     expect(w.ledger.store["owner/repo"].enabled).toBe(false);
   });
@@ -714,7 +771,9 @@ describe("unsubscribe", () => {
 
     await w.service.unsubscribe("OWNER/REPO"); // case-insensitive
 
-    expect(w.linker.disables).toEqual([[{ id: "Owner/Repo:0", installedPath: "C:\\SG\\DCS\\Scripts\\X" }]]);
+    expect(w.linker.disables).toEqual([
+      [{ id: "Owner/Repo:0", installedPath: "C:\\SG\\DCS\\Scripts\\X" }],
+    ]);
     expect(w.fs.removed).toContain(MOD_DIR);
     expect(w.ledger.store).toEqual({});
   });

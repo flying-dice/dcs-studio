@@ -1,4 +1,4 @@
-//! The GUI bridge DLL: `require("dcs_studio_gui")` from the GameGUI hook. A
+//! The GUI bridge DLL: `require("dcs_studio_gui")` from the `GameGUI` hook. A
 //! thin entry point — everything lives in `dcs-bridge-core`, parametrized by
 //! [`BridgeKind::Gui`].
 
@@ -6,12 +6,18 @@ use dcs_bridge_core::BridgeKind;
 use mlua::prelude::{LuaResult, LuaTable};
 use mlua::Lua;
 
+/// The `luaopen_dcs_studio_gui` entry point DCS's `require` calls.
+///
+/// # Errors
+///
+/// Returns any `mlua` error from [`dcs_bridge_core::bootstrap`].
 #[mlua::lua_module]
 pub fn dcs_studio_gui(lua: &Lua) -> LuaResult<LuaTable> {
     dcs_bridge_core::bootstrap(lua, BridgeKind::Gui, env!("CARGO_PKG_VERSION"))
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod tests {
     use dcs_bridge_core::{emit_openrpc_json, emit_surface_dlua, BridgeKind};
 
@@ -21,9 +27,11 @@ mod tests {
     /// core's build.rs links PUC liblua5.1 so Linux CI runs them ordinarily.
     const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/types/dcs_studio_gui.d.lua");
 
-    /// The checked-in OpenRPC document `rpc.discover` returns for this bridge.
-    const OPENRPC_GOLDEN: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/openrpc/dcs_studio_gui.openrpc.json");
+    /// The checked-in `OpenRPC` document `rpc.discover` returns for this bridge.
+    const OPENRPC_GOLDEN: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/openrpc/dcs_studio_gui.openrpc.json"
+    );
 
     fn live() -> String {
         emit_surface_dlua(BridgeKind::Gui, env!("CARGO_PKG_VERSION")).expect("surface")
@@ -68,7 +76,7 @@ mod tests {
         std::fs::rename(&tmp, OPENRPC_GOLDEN).expect("swap openrpc golden into place");
     }
 
-    /// The checked-in OpenRPC document matches what `rpc.discover` generates
+    /// The checked-in `OpenRPC` document matches what `rpc.discover` generates
     /// from the live method registration. On an intentional method-set change,
     /// regenerate with [`regenerate_openrpc_golden`].
     #[test]

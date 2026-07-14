@@ -1,16 +1,11 @@
-import type { FileSystemPort } from "../ports/filesystem";
-import {
-  applyDesired,
-  backupPath,
-  scanItems,
-  type MissionStatus,
-} from "../domain/missionSanitize";
+import { applyDesired, backupPath, type MissionStatus, scanItems } from "../domain/missionSanitize";
 import {
   installTriggers,
   removeTriggers,
-  triggerStatus,
   type TriggerStatuses,
+  triggerStatus,
 } from "../domain/missionScriptTrigger";
+import type { FileSystemPort } from "../ports/filesystem";
 
 // Use-case service for managing MissionScripting.lua's sanitization block. Pure
 // parsing/edit computation lives in core/domain/missionSanitize; this layer owns
@@ -26,7 +21,12 @@ export class MissionSanitizeService {
     try {
       content = await this.fs.readText(p);
     } catch {
-      return { path: p, exists: false, backupExists: await this.fs.exists(backupPath(p)), items: [] };
+      return {
+        path: p,
+        exists: false,
+        backupExists: await this.fs.exists(backupPath(p)),
+        items: [],
+      };
     }
     return {
       path: p,

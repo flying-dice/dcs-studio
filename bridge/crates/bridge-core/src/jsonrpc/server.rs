@@ -18,7 +18,6 @@ use mlua::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::ops::Deref;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -46,21 +45,21 @@ static GLOBAL_APP_DATA: Mutex<Option<Data<Mutex<AppData>>>> = Mutex::new(None);
 /// running server instead of failing to re-bind the port.
 static SERVER: Mutex<Option<JsonRpcServer>> = Mutex::new(None);
 
-pub struct AppRequest {
-    pub request: JsonRpcRequest,
-    pub response_sender: Option<oneshot::Sender<JsonRpcResponse>>,
+pub(crate) struct AppRequest {
+    pub(crate) request: JsonRpcRequest,
+    pub(crate) response_sender: Option<oneshot::Sender<JsonRpcResponse>>,
 }
 
 #[derive(Default)]
-pub struct AppData {
-    pub rpc_queue: VecDeque<AppRequest>,
-    pub timeout: Duration,
-    pub service: ServiceInfo,
+pub(crate) struct AppData {
+    pub(crate) rpc_queue: VecDeque<AppRequest>,
+    pub(crate) timeout: Duration,
+    pub(crate) service: ServiceInfo,
 }
 
 /// Identity reported by `/health` and `rpc.discover`, so an agent probing
 /// 25569/25570 can tell the two bridges apart. `host`/`port` populate the
-/// OpenRPC `servers` block `rpc.discover` returns.
+/// `OpenRPC` `servers` block `rpc.discover` returns.
 #[derive(Debug, Clone)]
 pub struct ServiceInfo {
     pub name: String,
@@ -114,7 +113,7 @@ impl FromLua for ServerConfig {
     }
 }
 
-pub struct JsonRpcServer {
+pub(crate) struct JsonRpcServer {
     config: ServerConfig,
     handle: ServerHandle,
     app_data: Data<Mutex<AppData>>,
@@ -160,8 +159,8 @@ impl JsonRpcServer {
             info!("Starting server in new thread");
             actix_web::rt::System::new().block_on(async {
                 match server.await {
-                    Ok(_) => info!("Server stopped!"),
-                    Err(e) => error!("Error running server: {:?}", e),
+                    Ok(()) => info!("Server stopped!"),
+                    Err(e) => error!("Error running server: {e:?}"),
                 }
             });
         });
@@ -267,7 +266,7 @@ impl Drop for JsonRpcServer {
         // aborts the process — inside DCS that takes the sim down.
         match stop_on_thread(self.handle.clone(), false) {
             Ok(()) => info!("Server fully dropped"),
-            Err(e) => error!("Failed to stop server on drop: {}", e),
+            Err(e) => error!("Failed to stop server on drop: {e}"),
         }
     }
 }
@@ -285,7 +284,7 @@ impl UserData for JsonRpcServer {
         methods.add_method(
             "process_rpc",
             |lua: &Lua, this: &JsonRpcServer, router: UserDataRef<JsonRpcRouter>| {
-                drain_queue(lua, &this.app_data, router.deref())?;
+                drain_queue(lua, &this.app_data, &router)?;
                 true.into_lua_multi(lua)
             },
         );
@@ -309,8 +308,8 @@ fn drain_queue(
 ) -> Result<(), LuaError> {
     let (queue, service) = {
         let mut data_guard = app_data.lock().map_err(|e| {
-            error!("Error acquiring data lock: {:?}", e);
-            RuntimeError(format!("Error acquiring data lock: {:?}", e))
+            error!("Error acquiring data lock: {e:?}");
+            RuntimeError(format!("Error acquiring data lock: {e:?}"))
         })?;
         (
             std::mem::take(&mut data_guard.rpc_queue),
@@ -328,7 +327,7 @@ fn drain_queue(
 /// Drain the RUNNING server's queue through `router`, from whatever Lua state
 /// the caller lives in. This is `process_rpc` minus the server handle: the
 /// mission-state debugger pumps the editor's requests with its own router
-/// while its pause (or its running chunk) holds the sim thread and the GameGUI
+/// while its pause (or its running chunk) holds the sim thread and the `GameGUI`
 /// hook cannot run. Returns false when no server is up (nothing to drain).
 pub(crate) fn process_global_queue(lua: &Lua, router: &JsonRpcRouter) -> Result<bool, LuaError> {
     let app_data = {
@@ -358,7 +357,7 @@ async fn post_rpc(
     let (maybe_receiver, request_timeout) = {
         let mut data_guard = data
             .lock()
-            .map_err(|e| ErrorInternalServerError(format!("Failed to acquire data lock: {}", e)))?;
+            .map_err(|e| ErrorInternalServerError(format!("Failed to acquire data lock: {e}")))?;
         let maybe_receiver = push_rpc_request(&mut data_guard, request);
         (maybe_receiver, data_guard.timeout)
     };
@@ -368,7 +367,7 @@ async fn post_rpc(
     };
 
     let result = timeout(request_timeout, receiver).await.map_err(|_| {
-        ErrorInternalServerError(format!("Timed out max: {:?} seconds", request_timeout))
+        ErrorInternalServerError(format!("Timed out max: {request_timeout:?} seconds"))
     })?;
 
     let response = result.map_err(ErrorInternalServerError)?;
@@ -404,14 +403,12 @@ async fn get_ws(
                     // unread in the socket until `debug_run`'s server-side
                     // timeout fired. See notify_session; matching by id keeps
                     // out-of-order responses correct.
-                    if let Some((receiver, request_timeout)) =
-                        enqueue_text_frame(text.to_string(), &data)
-                    {
+                    if let Some((receiver, request_timeout)) = enqueue_text_frame(&text, &data) {
                         let session = session.clone();
                         spawn_local(async move {
                             notify_session(session, receiver, request_timeout)
                                 .await
-                                .unwrap_or_else(|e| error!("{}", e));
+                                .unwrap_or_else(|e| error!("{e}"));
                         });
                     }
                 }
@@ -440,11 +437,11 @@ async fn get_ws(
 /// logged and skipped, never fatal: the session must survive one bad client
 /// frame.
 fn enqueue_text_frame(
-    message: String,
+    message: &str,
     data: &Data<Mutex<AppData>>,
 ) -> Option<(Receiver<JsonRpcResponse>, Duration)> {
-    let Ok(request) = serde_json::from_str::<JsonRpcRequest>(&message) else {
-        error!("Failed to parse request, skipping frame: {}", message);
+    let Ok(request) = serde_json::from_str::<JsonRpcRequest>(message) else {
+        error!("Failed to parse request, skipping frame: {message}");
         return None;
     };
 
@@ -461,7 +458,7 @@ async fn get_health(data: Data<Mutex<AppData>>) -> Result<Json<Health>, actix_we
     let service = {
         let data_guard = data
             .lock()
-            .map_err(|e| ErrorInternalServerError(format!("Failed to acquire data lock: {}", e)))?;
+            .map_err(|e| ErrorInternalServerError(format!("Failed to acquire data lock: {e}")))?;
         data_guard.service.clone()
     };
 
@@ -479,27 +476,49 @@ async fn get_health(data: Data<Mutex<AppData>>) -> Result<Json<Health>, actix_we
 fn respond(lua: &Lua, router: &JsonRpcRouter, app_request: AppRequest, service: &ServiceInfo) {
     match process_request(lua, router, app_request.request, service) {
         Ok(Some(response)) => {
-            info!("Sending response: {:?}", response);
+            info!("Sending response: {response:?}");
             match app_request.response_sender {
                 Some(sender) => {
                     if sender.send(response).is_err() {
                         error!("Failed to send response");
                     }
                 }
-                None => info!("Processed notification: {:?}", response),
+                None => info!("Processed notification: {response:?}"),
             }
         }
         Ok(None) => info!("Processed notification"),
-        Err(e) => error!("Failed to process request: {:?}", e),
+        Err(e) => error!("Failed to process request: {e:?}"),
     }
 }
 
-fn ok_response(id: String, result: &LuaValue) -> JsonRpcResponse {
+/// A JSON-RPC success envelope carrying an already-built result value.
+fn success_response(id: String, result: serde_json::Value) -> JsonRpcResponse {
     JsonRpcResponse {
         jsonrpc: JSON_RPC_VERSION.to_string(),
         id,
-        result: serialize_lua_to_json(result),
+        result: Some(result),
         error: None,
+    }
+}
+
+/// Build the success envelope for a handler's `result`. A result the serializer
+/// can't represent — a cyclic table past the depth cap, a function, … — becomes
+/// a JSON-RPC error carrying the real cause, not a resultless response the
+/// editor can't interpret, and never a panic that would take the sim down.
+fn ok_response(id: String, result: &LuaValue) -> JsonRpcResponse {
+    match serialize_lua_to_json(result) {
+        Ok(value) => success_response(id, value),
+        Err(cause) => JsonRpcResponse {
+            jsonrpc: JSON_RPC_VERSION.to_string(),
+            id,
+            result: None,
+            error: serde_json::to_value(JsonRpcError {
+                code: JSON_RPC_INTERNAL_ERROR,
+                message: "result not serializable".to_string(),
+                data: serde_json::to_value(cause).ok(),
+            })
+            .ok(),
+        },
     }
 }
 
@@ -528,7 +547,7 @@ fn process_request(
     request: JsonRpcRequest,
     service: &ServiceInfo,
 ) -> Result<Option<JsonRpcResponse>, LuaError> {
-    debug!("Processing RPC request: {:?}", request);
+    debug!("Processing RPC request: {request:?}");
 
     // `rpc.discover` is answered by the server itself, before the router
     // lookup — every bridge (and every transport: POST /rpc and WS alike)
@@ -547,23 +566,18 @@ fn process_request(
             service.port,
             &router.methods_sorted(),
         );
-        return Ok(Some(JsonRpcResponse {
-            jsonrpc: JSON_RPC_VERSION.to_string(),
-            id,
-            result: Some(result),
-            error: None,
-        }));
+        return Ok(Some(success_response(id, result)));
     }
 
     let method_name = request.method.clone();
 
-    debug!("Getting method: {:?}", method_name);
+    debug!("Getting method: {method_name:?}");
     let Some(method) = router.get_method(&request.method) else {
         warn!("Method not found!");
         let Some(id) = request.id else {
             return Ok(None);
         };
-        let message = format!("Method not found: {}", method_name);
+        let message = format!("Method not found: {method_name}");
         return error_response(id, JSON_RPC_METHOD_NOT_FOUND, message, None).map(Some);
     };
 
@@ -573,22 +587,23 @@ fn process_request(
         None => LuaNil,
     };
 
-    debug!("Calling Lua method with params: {:?}, {:?}", method, params);
+    debug!("Calling Lua method with params: {method:?}, {params:?}");
 
-    match method.call::<LuaValue>(params) {
-        Ok(result) => {
-            debug!("Method call successful, result: {:?}", result);
-            let Some(id) = request.id else {
-                return Ok(None);
-            };
-            Ok(Some(ok_response(id, &result)))
-        }
+    // Run the handler now — its side effects must apply even to a notification —
+    // and log the outcome, then let the single id guard below drop the response
+    // for a notification (no id) rather than repeating the guard per arm.
+    let outcome = method.call::<LuaValue>(params);
+    match &outcome {
+        Ok(result) => debug!("Method call successful, result: {result:?}"),
+        Err(e) => error!("Method call failed: {e}"),
+    }
+    let Some(id) = request.id else {
+        return Ok(None);
+    };
+
+    match outcome {
+        Ok(result) => Ok(Some(ok_response(id, &result))),
         Err(e) => {
-            error!("Method call failed: {}", e);
-            let Some(id) = request.id else {
-                return Ok(None);
-            };
-
             // Strip the Lua stack traceback: the editor only needs the message.
             let msg = e.to_string();
             let msg = msg.split("\nstack traceback:").next().unwrap_or(&msg);
@@ -613,28 +628,25 @@ fn push_rpc_request(
 
     info!(
         "<< [{}]: '{:?}'",
-        request_id.clone().unwrap_or("notification".to_string()),
+        request_id.as_deref().unwrap_or("notification"),
         request
     );
 
-    match request_id {
-        Some(id) => {
-            debug!("Adding request to queue with id: {}", id);
-            let (sender, receiver) = oneshot::channel::<JsonRpcResponse>();
-            data.rpc_queue.push_back(AppRequest {
-                request,
-                response_sender: Some(sender),
-            });
-            Some(receiver)
-        }
-        None => {
-            debug!("Adding notification to queue");
-            data.rpc_queue.push_back(AppRequest {
-                request,
-                response_sender: None,
-            });
-            None
-        }
+    if let Some(id) = request_id {
+        debug!("Adding request to queue with id: {id}");
+        let (sender, receiver) = oneshot::channel::<JsonRpcResponse>();
+        data.rpc_queue.push_back(AppRequest {
+            request,
+            response_sender: Some(sender),
+        });
+        Some(receiver)
+    } else {
+        debug!("Adding notification to queue");
+        data.rpc_queue.push_back(AppRequest {
+            request,
+            response_sender: None,
+        });
+        None
     }
 }
 
@@ -645,16 +657,16 @@ async fn notify_session(
 ) -> Result<(), String> {
     let response = timeout(timeout_duration, receiver)
         .await
-        .map_err(|e| format!("ERR: TIMEOUT: {:?}", e))?
-        .map_err(|e| format!("ERR: FAILED RES: {:?}", e))?;
+        .map_err(|e| format!("ERR: TIMEOUT: {e:?}"))?
+        .map_err(|e| format!("ERR: FAILED RES: {e:?}"))?;
 
     let response_body =
-        serde_json::to_string(&response).map_err(|e| format!("ERR: RESP SERDE FAILED: {:?}", e))?;
+        serde_json::to_string(&response).map_err(|e| format!("ERR: RESP SERDE FAILED: {e:?}"))?;
 
     session
         .text(response_body)
         .await
-        .map_err(|e| format!("ERR: RESP SERDE FAILED: {:?}", e))?;
+        .map_err(|e| format!("ERR: RESP SERDE FAILED: {e:?}"))?;
 
     Ok(())
 }

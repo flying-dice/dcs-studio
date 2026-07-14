@@ -1,18 +1,18 @@
-import { describe, it, expect } from "vitest";
 import * as path from "node:path";
-import {
-  BAD_NAME,
-  validateName,
-  assertValidFolderName,
-  assertLocationChosen,
-  targetRoot,
-  assertSafeRelative,
-  assertRenderedSafe,
-  assertNewFolderTarget,
-  planInPlace,
-  NewFolderProbe,
-} from "../../src/core/domain/scaffoldPlan";
+import { describe, expect, it } from "vitest";
 import type { TemplateFile } from "../../src/core/domain/projectTemplates";
+import {
+  assertLocationChosen,
+  assertNewFolderTarget,
+  assertRenderedSafe,
+  assertSafeRelative,
+  assertValidFolderName,
+  BAD_NAME,
+  type NewFolderProbe,
+  planInPlace,
+  targetRoot,
+  validateName,
+} from "../../src/core/domain/scaffoldPlan";
 
 describe("validateName", () => {
   it("returns the trimmed name", () => {
@@ -33,14 +33,21 @@ describe("assertValidFolderName", () => {
     expect(() => assertValidFolderName("a.b-c_d 1")).not.toThrow();
   });
 
-  it.each(["<", ">", ":", '"', "/", "\\", "|", "?", "*"])(
-    "rejects the Windows-invalid character %s",
-    (ch) => {
-      expect(() => assertValidFolderName(`bad${ch}name`)).toThrow(
-        `"bad${ch}name" isn't a valid folder name.`,
-      );
-    },
-  );
+  it.each([
+    "<",
+    ">",
+    ":",
+    '"',
+    "/",
+    "\\",
+    "|",
+    "?",
+    "*",
+  ])("rejects the Windows-invalid character %s", (ch) => {
+    expect(() => assertValidFolderName(`bad${ch}name`)).toThrow(
+      `"bad${ch}name" isn't a valid folder name.`,
+    );
+  });
 
   it("rejects control characters", () => {
     expect(() => assertValidFolderName("bad\x00name")).toThrow("isn't a valid folder name");

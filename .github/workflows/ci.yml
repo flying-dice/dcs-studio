@@ -25,6 +25,9 @@ jobs:
       - name: TypeScript compile
         run: npm run compile
 
+      - name: Biome lint + format check (JS/TS)
+        run: npm run lint
+
       - name: Unit tests + coverage gate (100% per-file on src/core)
         run: npx vitest run --coverage
 
@@ -39,6 +42,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: bridge
+
+      - name: Rust format check
+        run: cargo fmt --check
+        working-directory: bridge
+
+      # -D warnings promotes the workspace lint policy (clippy pedantic +
+      # panic-path restriction lints, see bridge/Cargo.toml) into a hard gate.
+      - name: Rust clippy (pedantic workspace policy)
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: bridge
 
       # Build gate only: the lua-runtime-gated unit tests need DCS's own
       # lua.dll on PATH at process load (not redistributable to CI). Run them

@@ -3,7 +3,7 @@
 // a live path preview. With a folder open it bootstraps that folder in place
 // by default; otherwise it asks where to create the project. The host
 // scaffolds and opens the result.
-(function () {
+(() => {
   const vscode = acquireVsCodeApi();
   const app = document.getElementById("app");
 
@@ -21,17 +21,13 @@
 
   // Icons keyed by template id (same stroke style as nav.js).
   const ICONS = {
-    "blank": `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>`,
+    blank: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>`,
     "lua-mission": `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1"/></svg>`,
     "lua-hook": `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"/><path d="M12 22V8"/><path d="M5 12H2a10 10 0 0 0 20 0h-3"/></svg>`,
-    "rust-dll": `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`,
+    "rust-dll": `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${dcsUi.iconPaths.gear}</svg>`,
   };
 
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]),
-    );
-  }
+  const { esc } = dcsUi;
 
   function previewPath() {
     if (state.inPlace) return state.folder || "";
@@ -49,7 +45,7 @@
     const sel = t.id === state.templateId ? " selected" : "";
     return `
       <button class="tile${sel}" data-template="${esc(t.id)}">
-        <span class="tichip">${ICONS[t.id] || ICONS["blank"]}</span>
+        <span class="tichip">${ICONS[t.id] || ICONS.blank}</span>
         <span class="ttxt">
           <span class="tlabel">${esc(t.label)}</span>
           <span class="tdesc">${esc(t.description)}</span>
@@ -123,7 +119,7 @@
           <h2>Destination</h2>
           <p class="sub">${state.inPlace ? "The template is bootstrapped into the open folder; files you already have are kept." : "The project is created as a new folder and opened in this window."}</p>
           ${destinationHtml()}
-          <div class="preview mono ${preview ? "" : "empty"}">${preview ? "&rarr; " + esc(preview) : "&nbsp;"}</div>
+          <div class="preview mono ${preview ? "" : "empty"}">${preview ? `&rarr; ${esc(preview)}` : "&nbsp;"}</div>
           ${state.error ? `<div class="error">${esc(state.error)}</div>` : ""}
           <div class="actions">
             <button id="create" class="btn" ${canCreate() ? "" : "disabled"}>
@@ -159,7 +155,7 @@
       const p = previewPath();
       const pv = app.querySelector(".preview");
       pv.classList.toggle("empty", !p);
-      pv.innerHTML = p ? "&rarr; " + esc(p) : "&nbsp;";
+      pv.innerHTML = p ? `&rarr; ${esc(p)}` : "&nbsp;";
       document.getElementById("create").disabled = !canCreate();
       const err = app.querySelector(".error");
       if (err) err.remove();

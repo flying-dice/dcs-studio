@@ -9,6 +9,7 @@ import * as path from "node:path";
 import type { TemplateFile } from "./projectTemplates";
 
 /** Windows-invalid folder name characters (also fine to reject everywhere). */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control chars is the point
 export const BAD_NAME = /[<>:"/\\|?*\x00-\x1f]/;
 
 /** Trim the requested project name; reject an empty one. */

@@ -1,23 +1,23 @@
-import * as vscode from "vscode";
-import * as path from "path";
 import * as fs from "fs";
 import * as fsp from "fs/promises";
+import * as path from "path";
+import * as vscode from "vscode";
 import {
   BRIDGE_DLLS,
-  BridgeDllName,
-  INJECT_LOCKED_MESSAGE,
+  type BridgeDllName,
   builtDllPath,
   dllInstallPath,
   ejectedMessage,
   hookInstallPath,
   hookSourcePath,
+  INJECT_LOCKED_MESSAGE,
   injectedMessage,
   isDllLockedError,
   legacyInstallPaths,
   selectDll,
 } from "../core/domain/bridgeDeploy";
-import { savedGamesDir } from "./paths";
 import { showError } from "../errors";
+import { savedGamesDir } from "./paths";
 
 // Inject / eject the bridge — the same install layout dcs-studio uses:
 //   <writeDir>\Mods\tech\DcsStudio\bin\dcs_studio_gui.dll

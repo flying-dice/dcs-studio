@@ -10,6 +10,9 @@ license.workspace = true
 [lib]
 name = "dcs_bridge_core"
 
+[lints]
+workspace = true
+
 [features]
 # Gates src/luadef.rs's round-trip tests, which need dcs-studio's
 # dcs-lua-syntax parser crate (not ported into this repo).

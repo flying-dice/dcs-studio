@@ -1,24 +1,7 @@
+/* Base tokens, reset, .mono, .kicker/.spacer live in media/base.css (linked
+   first). Only manifest-form overrides + components are here. */
 :root {
-  --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
-  --card: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-  --muted: var(--vscode-descriptionForeground);
   --radius: 10px;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  font-family: var(--vscode-font-family);
-  font-size: 13px;
-  color: var(--vscode-foreground);
-  background: var(--vscode-editor-background);
-}
-
-.mono {
-  font-family: var(--vscode-editor-font-family, monospace);
 }
 
 .ico {
@@ -55,19 +38,10 @@ header {
   flex-direction: column;
   line-height: 1.2;
 }
-.kicker {
-  font-family: var(--vscode-editor-font-family, monospace);
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.28em;
-  color: var(--muted);
-}
+/* .kicker + .spacer come from base.css; the manifest title is a touch smaller. */
 .title {
   font-weight: 600;
   font-size: 14px;
-}
-.spacer {
-  margin-left: auto;
 }
 .save-hint {
   font-size: 11px;

@@ -1,17 +1,5 @@
-:root {
-  --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
-  --muted: var(--vscode-descriptionForeground);
-  --mono: var(--vscode-editor-font-family, monospace);
-}
-* { box-sizing: border-box; }
+/* Base tokens + reset live in media/base.css (linked first). */
 html, body { height: 100%; }
-body {
-  margin: 0;
-  font-family: var(--vscode-font-family);
-  font-size: 13px;
-  color: var(--vscode-foreground);
-  background: var(--vscode-editor-background);
-}
 #app { display: flex; flex-direction: column; height: 100vh; }
 .hidden { display: none !important; }
 

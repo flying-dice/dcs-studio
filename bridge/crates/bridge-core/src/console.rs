@@ -14,6 +14,7 @@
 use crate::facade::{p, p_opt, r_named, Sub};
 use mlua::{Function, IntoLuaMulti, Lua, MultiValue, Result};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 /// Ring capacity: plenty of scrollback for the panel, bounded for the sim.
@@ -22,25 +23,17 @@ const MAX_LINES: usize = 2000;
 /// The line ring: `(seq, text)`, oldest first. `seq` starts at 1 and never
 /// repeats within a DLL load.
 static LINES: Mutex<VecDeque<(u64, String)>> = Mutex::new(VecDeque::new());
-static NEXT_SEQ: Mutex<u64> = Mutex::new(1);
+static NEXT_SEQ: AtomicU64 = AtomicU64::new(1);
 
 fn with_lines<T>(f: impl FnOnce(&mut VecDeque<(u64, String)>) -> T) -> T {
-    let mut guard = LINES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    f(&mut guard)
+    crate::locks::with_lock(&LINES, f)
 }
 
 /// Append one line, evicting the oldest past the cap. Returns its sequence.
 pub(crate) fn push(text: String) -> u64 {
-    let seq = {
-        let mut next = NEXT_SEQ
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let seq = *next;
-        *next += 1;
-        seq
-    };
+    // Read-and-increment in one atomic step (fetch_add returns the pre-increment
+    // value), so the monotonic sequence stays gap-free without a lock.
+    let seq = NEXT_SEQ.fetch_add(1, Ordering::Relaxed);
     with_lines(|lines| {
         lines.push_back((seq, text));
         while lines.len() > MAX_LINES {
@@ -129,6 +122,7 @@ pub fn register(sub: &mut Sub) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod tests {
     use super::*;
 

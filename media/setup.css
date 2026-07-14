@@ -1,38 +1,13 @@
+/* Base tokens, reset, .mono, header/.kicker/.title/.spacer, .card, .spin live in
+   media/base.css (linked first). */
 :root {
-  --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
-  --card: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-  --muted: var(--vscode-descriptionForeground);
-  --mono: var(--vscode-editor-font-family, monospace);
   --ok: var(--vscode-testing-iconPassed, #3fb950);
   --warn: var(--vscode-editorWarning-foreground, #cca700);
 }
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  font-family: var(--vscode-font-family);
-  font-size: 13px;
-  color: var(--vscode-foreground);
-  background: var(--vscode-editor-background);
-}
-.mono { font-family: var(--mono); }
-
-header {
-  position: sticky; top: 0; z-index: 5;
-  display: flex; align-items: center; gap: 12px;
-  padding: 12px 18px; border-bottom: 1px solid var(--border);
-  background: var(--vscode-editor-background);
-}
-.kicker {
-  font-family: var(--mono); font-size: 9px; text-transform: uppercase;
-  letter-spacing: 0.28em; color: var(--muted);
-}
-.title { font-weight: 600; font-size: 15px; }
-.spacer { margin-left: auto; }
 
 .wrap { max-width: 760px; margin: 0 auto; padding: 20px 18px 40px; display: flex; flex-direction: column; gap: 18px; }
 .intro { color: var(--muted); font-size: 13px; line-height: 1.55; }
 
-.card { border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: 16px; }
 .card h2 { margin: 0 0 2px; font-size: 14px; }
 .card .sub { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
 

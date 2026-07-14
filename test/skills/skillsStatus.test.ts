@@ -1,11 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  INSTALL_DIR,
-  SkillStatus,
-  parseFrontmatter,
   compareVersions,
-  skillInfoFor,
+  INSTALL_DIR,
+  parseFrontmatter,
   requiresOverwriteConfirm,
+  type SkillStatus,
+  skillInfoFor,
 } from "../../src/core/domain/skillsStatus";
 
 describe("INSTALL_DIR", () => {
@@ -52,7 +52,7 @@ describe("parseFrontmatter", () => {
   });
 
   it("strips one layer of single or double quotes", () => {
-    const fm = parseFrontmatter('---\nname: "Quoted"\ndescription: \'Single\'\n---\n');
+    const fm = parseFrontmatter("---\nname: \"Quoted\"\ndescription: 'Single'\n---\n");
     expect(fm).toEqual({ name: "Quoted", description: "Single" });
   });
 
@@ -171,7 +171,7 @@ describe("skillInfoFor (status state machine)", () => {
   });
 
   it("same version, edited content: modified", () => {
-    const edited = bundled + "\nLocal tweak.\n";
+    const edited = `${bundled}\nLocal tweak.\n`;
     expect(skillInfoFor("pre-commit", bundled, true, edited).status).toBe("modified");
   });
 

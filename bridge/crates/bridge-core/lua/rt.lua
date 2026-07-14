@@ -54,7 +54,9 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
   end
 
   -- Stable key order: numeric keys ascending, then the rest case-insensitively
-  -- by tostring (raw tostring as the tiebreak).
+  -- by tostring (raw tostring as the tiebreak). Mirrored INLINE by
+  -- debug_engine.lua's D.expand comparator (see the dbg_preview lockstep note
+  -- there); kept in sync by hand so the engine stays self-contained.
   local function key_order(a, b)
     local na, nb = type(a) == "number", type(b) == "number"
     if na ~= nb then return na end
@@ -138,8 +140,11 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
     return table.concat(parts)
   end
 
-  -- Single-line preview + lazy ref registration for the drill-down explorer
-  -- (mirrors the debugger's dbg_preview/dbg_var).
+  -- Single-line preview for the drill-down explorer. Deliberately MIRRORS (does
+  -- not share) debug_engine.lua's dbg_preview: the two diverge on functions — the
+  -- REPL explorer shows arity here, the debugger renders a bare "function" — and
+  -- the engine stays self-contained (see the lockstep note there), so this copy
+  -- is kept in sync by hand.
   local function preview(v)
     local t = type(v)
     if t == "string" then
@@ -214,21 +219,66 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
     return f, err
   end
 
-  -- Run `fn` collecting print() output (restored on every path); each line
-  -- also forwards to the environment's own print when it has one.
-  local function capture_prints(fn)
-    local prints = {}
-    local prev = print
-    print = function(...)
+  -- A `print` replacement shared by every co-installed state: stringify the
+  -- varargs (tab-joined), feed the line to `sink`, then forward to `prev` (the
+  -- real print). The gui/mission method chunks and the debug engine each install
+  -- one with bridge.console.print as the sink so editor-driven runs stream their
+  -- print-debugging into the IDE Console; capture_prints below uses it too, with
+  -- a list-appending sink — ONE definition of the varargs→line shim for all four.
+  function RT.print_shim(sink, prev)
+    return function(...)
       local parts = {}
       for i = 1, select("#", ...) do
         parts[#parts + 1] = tostring(select(i, ...))
       end
-      prints[#prints + 1] = table.concat(parts, "\t")
+      sink(table.concat(parts, "\t"))
       if prev then
         pcall(prev, ...)
       end
     end
+  end
+
+  -- Run `fn(...)` with `_G.print` swapped for a print_shim streaming each line to
+  -- `sink` as well as the real print, restoring print on every path and
+  -- re-raising a captured error at level 0. The gui/mission `eval` handlers share
+  -- this; NOT used by debug_run — the engine swaps print around its own xpcall so
+  -- on_error can snapshot the live crash frames before the stack unwinds.
+  function RT.with_print_capture(sink, fn, ...)
+    local prev = _G.print
+    _G.print = RT.print_shim(sink, prev)
+    local results = { pcall(fn, ...) }
+    _G.print = prev
+    if not results[1] then
+      error(results[2], 0)
+    end
+    return unpack(results, 2)
+  end
+
+  -- Decode a JSON envelope produced by the RT.*_json entry points (via the DLL's
+  -- json.decode, handed in — this pure-Lua runtime has no decoder), forward any
+  -- `prints` it carries to `sink` (the console ring) and strip them, then return
+  -- the table. A non-table means the state handed back a raw error string instead
+  -- of an envelope; `label` names the source in that error message.
+  function RT.decode_envelope(decode, sink, res, label)
+    local tbl = decode(res)
+    if type(tbl) ~= "table" then
+      error(tostring(label) .. " returned: " .. string.sub(tostring(res), 1, 400), 0)
+    end
+    if type(tbl.prints) == "table" then
+      for _, line in ipairs(tbl.prints) do
+        sink(line)
+      end
+      tbl.prints = nil
+    end
+    return tbl
+  end
+
+  -- Run `fn` collecting print() output (restored on every path); each line also
+  -- forwards to the environment's own print when it has one.
+  local function capture_prints(fn)
+    local prints = {}
+    local prev = print
+    print = RT.print_shim(function(line) prints[#prints + 1] = line end, prev)
     local ok, res = pcall(fn)
     print = prev
     return prints, ok, res
@@ -312,6 +362,20 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
       v = res
     end
     return "OK:" .. RT.encode(v, true)
+  end
+
+  -- Decode the prefix protocol export_json produces: "ERR:<msg>" raises at level
+  -- 0, "OK:<json>" returns the json body, anything else is a malformed reply. The
+  -- inverse of RT.export_json — kept beside its producer so the two stay in
+  -- lockstep. The caller owns writing the body to a file.
+  function RT.decode_export(res)
+    if string.sub(res, 1, 4) == "ERR:" then
+      error(string.sub(res, 5), 0)
+    end
+    if string.sub(res, 1, 3) ~= "OK:" then
+      error("export failed: " .. string.sub(res, 1, 400), 0)
+    end
+    return string.sub(res, 4)
   end
 
   -- Resolve a function's real parameter names WITHOUT running its body — the

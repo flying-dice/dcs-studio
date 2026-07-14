@@ -16,12 +16,12 @@
 
 use std::fmt::Write as _;
 
-/// One parameter of a function or method. `optional` renders the EmmyLua
+/// One parameter of a function or method. `optional` renders the `EmmyLua`
 /// `name?` form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Param {
     pub name: String,
-    /// An EmmyLua type expression (`string`, `number`, `table`, `any`,
+    /// An `EmmyLua` type expression (`string`, `number`, `table`, `any`,
     /// `dcs_studio.Logger`, `string[]`, `string|nil`, …).
     pub ty: String,
     pub optional: bool,
@@ -37,7 +37,7 @@ impl Param {
     }
 }
 
-/// One return value. `name` is the optional EmmyLua return-name (`---@return
+/// One return value. `name` is the optional `EmmyLua` return-name (`---@return
 /// string json`), useful for multi-return functions like the `(value, err)`
 /// idiom.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,7 +90,6 @@ pub struct FieldDoc {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassDoc {
     pub name: String,
-    pub parent: Option<String>,
     pub doc: String,
     pub fields: Vec<FieldDoc>,
     pub functions: Vec<FnDoc>,
@@ -100,7 +99,6 @@ impl ClassDoc {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            parent: None,
             doc: String::new(),
             fields: Vec::new(),
             functions: Vec::new(),
@@ -118,7 +116,7 @@ pub struct ModuleDoc {
     pub classes: Vec<ClassDoc>,
 }
 
-/// The EmmyLua local-variable name backing a class: dots and other
+/// The `EmmyLua` local-variable name backing a class: dots and other
 /// non-identifier characters collapse to underscores (`dcs_studio.json` →
 /// `dcs_studio_json`). Stable and identifier-safe for any class name we emit.
 fn local_var(class_name: &str) -> String {
@@ -199,7 +197,7 @@ fn emit_fn(out: &mut String, var: &str, f: &FnDoc) {
 /// `require("<root>")` loads, which has no on-disk path), every class as an
 /// `---@class` + `@field`s + backing `local` + its functions, and a trailing
 /// `return <root>`. The output parses under `dcs-lua-syntax` and is accepted
-/// verbatim by LuaLS.
+/// verbatim by `LuaLS`.
 #[must_use]
 pub fn emit_dlua(doc: &ModuleDoc) -> String {
     let mut out = String::new();
@@ -209,14 +207,7 @@ pub fn emit_dlua(doc: &ModuleDoc) -> String {
 
     for class in &doc.classes {
         push_doc(&mut out, &class.doc);
-        match &class.parent {
-            Some(p) => {
-                let _ = writeln!(out, "---@class {} : {p}", class.name);
-            }
-            None => {
-                let _ = writeln!(out, "---@class {}", class.name);
-            }
-        }
+        let _ = writeln!(out, "---@class {}", class.name);
         for field in &class.fields {
             if field.doc.is_empty() {
                 let _ = writeln!(out, "---@field {} {}", field.name, field.ty);

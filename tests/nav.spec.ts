@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { openPreview, expectSent, hostSend } from "./helpers";
+import { expect, test } from "@playwright/test";
+import { expectSent, hostSend, openPreview } from "./helpers";
 
 test.describe("nav preview", () => {
   test("renders all 10 rows, publish hidden by default", async ({ page }) => {
@@ -44,7 +44,9 @@ test.describe("nav preview", () => {
     await expect(skillsRow.locator(".desc")).toHaveText("Skill update available");
   });
 
-  test("status transitions offline -> menu -> mission update the footer dot/label/time", async ({ page }) => {
+  test("status transitions offline -> menu -> mission update the footer dot/label/time", async ({
+    page,
+  }) => {
     await openPreview(page, "nav");
     const dot = page.getByTestId("status-dot");
     const label = page.getByTestId("status-label");

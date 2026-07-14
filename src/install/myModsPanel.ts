@@ -1,20 +1,21 @@
 import * as vscode from "vscode";
-import { currentSession } from "../adapters/vscode/auth";
-import { dataDir } from "./dataDir";
-import type { SubscriptionService } from "../core/app/subscriptionService";
-import type { MarketplacePort } from "../core/ports/marketplace";
-import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { JsonLedgerStore } from "../adapters/node/jsonLedgerStore";
 import type { ProcessLauncher } from "../adapters/node/processLauncher";
-import { toModDto, isUpToDate } from "../core/domain/subscriptions";
-import { deriveInstallManifestView } from "../core/domain/installManifestView";
+import type { SubscriptionService } from "../core/app/subscriptionService";
 import {
   entrypointConsentKey,
   entrypointRunKey,
   resolveEntrypointLaunch,
 } from "../core/domain/entrypointLaunch";
+import { deriveInstallManifestView } from "../core/domain/installManifestView";
+import { isUpToDate, toModDto } from "../core/domain/subscriptions";
 import type { InstallRoots } from "../core/domain/types";
+import type { AuthPort } from "../core/ports/auth";
+import type { InstallRootsPort } from "../core/ports/installRoots";
+import type { MarketplacePort } from "../core/ports/marketplace";
 import { showError } from "../errors";
+import { renderWebviewHtml } from "../webview/html";
+import { dataDir } from "./dataDir";
 
 // The "My Mods" experience: manage subscribed mods — enable/disable the symlinks,
 // update to a newer release, or uninstall (unsubscribe). Reads the subscription
@@ -35,6 +36,7 @@ export class MyModsPanel {
     market: MarketplacePort,
     launcher: ProcessLauncher,
     roots: InstallRootsPort,
+    auth: AuthPort,
   ): void {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
     if (MyModsPanel.current) {
@@ -47,7 +49,16 @@ export class MyModsPanel {
       retainContextWhenHidden: true,
       localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
     });
-    MyModsPanel.current = new MyModsPanel(panel, context, subs, ledger, market, launcher, roots);
+    MyModsPanel.current = new MyModsPanel(
+      panel,
+      context,
+      subs,
+      ledger,
+      market,
+      launcher,
+      roots,
+      auth,
+    );
   }
 
   private constructor(
@@ -58,6 +69,7 @@ export class MyModsPanel {
     private readonly market: MarketplacePort,
     private readonly launcher: ProcessLauncher,
     private readonly roots: InstallRootsPort,
+    private readonly auth: AuthPort,
   ) {
     this.panel = panel;
     this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
@@ -84,7 +96,11 @@ export class MyModsPanel {
       ...toModDto(s),
       manifest: deriveInstallManifestView({
         bundles: s.bundles ?? [],
-        symlinks: (s.symlinks ?? []).map((x) => ({ source: x.source, dest: x.dest, resolved: null })),
+        symlinks: (s.symlinks ?? []).map((x) => ({
+          source: x.source,
+          dest: x.dest,
+          resolved: null,
+        })),
         entrypoints: s.entrypoints ?? [],
         missionScripts: s.missionScripts ?? [],
       }),
@@ -106,7 +122,13 @@ export class MyModsPanel {
     });
   }
 
-  private async onMessage(msg: { type: string; repo?: string; url?: string; id?: string; page?: string }): Promise<void> {
+  private async onMessage(msg: {
+    type: string;
+    repo?: string;
+    url?: string;
+    id?: string;
+    page?: string;
+  }): Promise<void> {
     const repo = msg.repo;
     switch (msg.type) {
       case "refresh":
@@ -152,7 +174,10 @@ export class MyModsPanel {
         void vscode.commands.executeCommand("dcs.mymods.createShortcut");
         break;
       case "revealBat":
-        void vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(this.ledger.ensureUninstallBat()));
+        void vscode.commands.executeCommand(
+          "revealFileInOS",
+          vscode.Uri.file(this.ledger.ensureUninstallBat()),
+        );
         break;
       case "cleanUninstall": {
         const choice = await vscode.window.showWarningMessage(
@@ -185,7 +210,7 @@ export class MyModsPanel {
   private async runUpdate(repo: string): Promise<void> {
     this.post({ type: "busy", repo, busy: true });
     try {
-      const session = await currentSession(); // token feeds the payload download
+      const session = await this.auth.currentSession(); // token feeds the payload download
       const product = await this.market.loadProduct(repo);
       const sub = (await this.subs.list()).find((s) => s.repo === repo);
       if (!product.release_tag) throw new Error("No release found on GitHub.");
@@ -194,8 +219,13 @@ export class MyModsPanel {
         return;
       }
       await this.subs.update(
-        { repo: product.repo, name: product.name, tag: product.release_tag, assets: product.assets },
-        session?.accessToken,
+        {
+          repo: product.repo,
+          name: product.name,
+          tag: product.release_tag,
+          assets: product.assets,
+        },
+        session?.token,
         (p) => this.post({ type: "progress", repo, label: p.label, pct: p.pct }),
       );
       void vscode.window.showInformationMessage(`Updated ${repo} to ${product.release_tag}.`);
@@ -227,7 +257,8 @@ export class MyModsPanel {
         "Always allow for this mod",
       );
       if (!choice) return; // declined — do not launch
-      if (choice === "Always allow for this mod") await this.context.globalState.update(consentKey, true);
+      if (choice === "Always allow for this mod")
+        await this.context.globalState.update(consentKey, true);
     }
 
     try {
@@ -263,32 +294,12 @@ export class MyModsPanel {
   }
 
   private html(): string {
-    const webview = this.panel.webview;
-    const media = (f: string) =>
-      webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", f));
-    const nonce = getNonce();
-    const csp = [
-      `default-src 'none'`,
-      `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src 'nonce-${nonce}'`,
-    ].join("; ");
-    return `<!DOCTYPE html>
-<html lang="en"><head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="${csp}" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link href="${media("mymods.css")}" rel="stylesheet" />
-  <title>My Mods</title>
-</head><body>
-  <div id="app"></div>
-  <script nonce="${nonce}" src="${media("mymods.js")}"></script>
-</body></html>`;
+    return renderWebviewHtml({
+      webview: this.panel.webview,
+      extensionUri: this.context.extensionUri,
+      title: "My Mods",
+      styles: ["mymods.css"],
+      scripts: ["mymods.js"],
+    });
   }
-}
-
-function getNonce(): string {
-  let text = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) text += chars.charAt(Math.floor(Math.random() * chars.length));
-  return text;
 }

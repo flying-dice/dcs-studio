@@ -1,9 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  expandArgTokens,
-  resolveEntrypointLaunch,
   entrypointConsentKey,
   entrypointRunKey,
+  expandArgTokens,
+  resolveEntrypointLaunch,
 } from "../../src/core/domain/entrypointLaunch";
 import type { InstallRoots, ManifestEntrypoint } from "../../src/core/domain/types";
 
@@ -32,7 +32,9 @@ describe("expandArgTokens", () => {
   });
 
   it("substitutes an empty string when {GameInstall} is unconfigured", () => {
-    expect(expandArgTokens("{GameInstall}/x", { savedGames: "C:\\SG", gameInstall: "" })).toBe("/x");
+    expect(expandArgTokens("{GameInstall}/x", { savedGames: "C:\\SG", gameInstall: "" })).toBe(
+      "/x",
+    );
   });
 });
 
@@ -76,6 +78,8 @@ describe("entrypointConsentKey", () => {
 describe("entrypointRunKey", () => {
   it("lowercases the repo and pairs it with the entrypoint id", () => {
     expect(entrypointRunKey("Owner/Repo", "srs-server")).toBe("owner/repo::srs-server");
-    expect(entrypointRunKey("owner/repo", "srs-server")).toBe(entrypointRunKey("Owner/Repo", "srs-server"));
+    expect(entrypointRunKey("owner/repo", "srs-server")).toBe(
+      entrypointRunKey("Owner/Repo", "srs-server"),
+    );
   });
 });

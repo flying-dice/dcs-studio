@@ -2,15 +2,13 @@
 // Documentation panel renderer. Content (sections/pages) is defined in
 // docs-content.js as window.__DOCS__; this file renders the TOC + active page
 // and handles internal page links, external links, and command buttons.
-(function () {
+(() => {
   const vscode = acquireVsCodeApi();
   const app = document.getElementById("app");
   const DOCS = window.__DOCS__ || { sections: [] };
   const pages = DOCS.sections.flatMap((s) => s.pages);
 
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  }
+  const { esc } = dcsUi;
 
   const state = vscode.getState() || {};
   let current =
@@ -18,7 +16,7 @@
       ? window.__INITIAL_PAGE__
       : pages.some((p) => p.id === state.page)
         ? state.page
-        : pages[0] && pages[0].id;
+        : pages[0]?.id;
 
   app.innerHTML = `
     <div class="toc" data-testid="toc">
@@ -68,7 +66,9 @@
     `;
     // The page body's "try it" buttons are content (docs-content.js), not
     // markup owned by this file — tag them here rather than in every page.
-    pageEl.querySelectorAll(".cmd-btn").forEach((btn) => btn.setAttribute("data-testid", "command-btn"));
+    pageEl.querySelectorAll(".cmd-btn").forEach((btn) => {
+      btn.setAttribute("data-testid", "command-btn");
+    });
     contentEl.scrollTop = 0;
   }
 

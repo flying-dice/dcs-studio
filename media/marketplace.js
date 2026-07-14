@@ -3,7 +3,7 @@
 // sort); the extension host owns GitHub (auth, topic discovery, product loads)
 // and answers messages. Sign-in gated with a browse-without-signing-in fallback,
 // mirroring dcs-studio's /marketplace.
-(function () {
+(() => {
   const vscode = acquireVsCodeApi();
   const app = document.getElementById("app");
 
@@ -39,22 +39,24 @@
   const post = (m) => vscode.postMessage(m);
   const save = () => vscode.setState({ view: state.view, repo: state.repo });
 
+  const { esc, formatBytes, formatRecency, initialsAvatar, renderMarkdown, iconPaths } = dcsUi;
+
   // ── Icons ──
   const I = {
     search: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`,
     star: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15 9 22 9.3 16.5 14 18.5 21 12 17 5.5 21 7.5 14 2 9.3 9 9"/></svg>`,
     tag: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.6 2.6 21 11a2 2 0 0 1 0 2.8l-6.2 6.2a2 2 0 0 1-2.8 0L3.6 11.6A2 2 0 0 1 3 10.2V4a1 1 0 0 1 1-1h6.2a2 2 0 0 1 1.4.6Z"/><circle cx="7.5" cy="7.5" r="1"/></svg>`,
     back: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>`,
-    refresh: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>`,
+    refresh: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${iconPaths.refresh}</svg>`,
     ext: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`,
-    download: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>`,
+    download: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${iconPaths.download}</svg>`,
     check: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`,
     hd: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 18h.01M10 18h.01"/><path d="m6 14 3-9h6l3 9"/></svg>`,
     book: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>`,
     box: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5V8Z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg>`,
     warn: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>`,
     lock: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
-    github: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.4 9.4 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.35 4.8-4.58 5.05.36.32.68.94.68 1.9 0 1.37-.01 2.480-.01 2.81 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>`,
+    github: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="currentColor">${iconPaths.github}</svg>`,
     trash: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`,
     folder: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2Z"/><path d="m12 10 3 3-3 3"/></svg>`,
     arrow: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`,
@@ -64,93 +66,21 @@
     clock: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`,
   };
 
-  // Risk-flag display labels (the compact header badges). Order comes from the
-  // view-model's `risks` array (links-files → runs-executable → pre-sanitize).
-  const RISK_LABEL = {
-    "links-files": "links files",
-    "runs-executable": "runs executable",
-    "pre-sanitize-script": "pre-sanitize script",
-  };
-  // Which risk flags get the orange (warning) treatment vs. the neutral badge.
-  const RISK_WARN = { "runs-executable": true, "pre-sanitize-script": true };
-
-  // ── Helpers ──
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]),
-    );
-  }
-  function fmtBytes(n) {
-    if (!n || n <= 0) return "—";
-    const u = ["B", "KB", "MB", "GB", "TB"];
-    let v = n, i = 0;
-    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
-    return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
-  }
-  function initialsAvatar(name) {
-    const initials = name.split(/[\s/-]+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="48" height="48" rx="8" fill="#3a3d41"/><text x="50%" y="54%" font-size="18" fill="#c8c8c8" font-family="sans-serif" text-anchor="middle" dominant-baseline="middle">${initials}</text></svg>`;
-    return "data:image/svg+xml;base64," + btoa(svg);
-  }
-  function md(src) {
-    if (!src) return "";
-    const lines = src.replace(/\r\n/g, "\n").split("\n");
-    let html = "", inCode = false, inList = false;
-    const inline = (t) =>
-      esc(t)
-        .replace(/`([^`]+)`/g, "<code>$1</code>")
-        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-        .replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>")
-        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-    for (const line of lines) {
-      if (line.trim().startsWith("```")) {
-        if (inCode) { html += "</code></pre>"; inCode = false; }
-        else { if (inList) { html += "</ul>"; inList = false; } html += "<pre><code>"; inCode = true; }
-        continue;
-      }
-      if (inCode) { html += esc(line) + "\n"; continue; }
-      const h = line.match(/^(#{1,3})\s+(.*)/);
-      if (h) { if (inList) { html += "</ul>"; inList = false; } html += `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`; continue; }
-      if (/^\s*[-*]\s+/.test(line)) { if (!inList) { html += "<ul>"; inList = true; } html += `<li>${inline(line.replace(/^\s*[-*]\s+/, ""))}</li>`; continue; }
-      if (inList) { html += "</ul>"; inList = false; }
-      if (/^\s*>\s?/.test(line)) { html += `<blockquote>${inline(line.replace(/^\s*>\s?/, ""))}</blockquote>`; continue; }
-      if (line.trim() === "") continue;
-      html += `<p>${inline(line)}</p>`;
-    }
-    if (inList) html += "</ul>";
-    if (inCode) html += "</code></pre>";
-    return html;
-  }
-
-  // Relative "released N ago" recency from an ISO date (a trust signal). Falls
-  // back to the raw date for anything older than a year, and "" when absent.
-  function fmtRecency(iso) {
-    if (!iso) return "";
-    const then = Date.parse(iso);
-    if (isNaN(then)) return "";
-    const days = Math.floor((Date.now() - then) / 86400000);
-    if (days <= 0) return "released today";
-    if (days === 1) return "released yesterday";
-    if (days < 30) return `released ${days} days ago`;
-    if (days < 60) return "released last month";
-    if (days < 365) return `released ${Math.floor(days / 30)} months ago`;
-    return `released ${new Date(then).toISOString().slice(0, 10)}`;
-  }
-
-  // ── Install-manifest transparency (issue #12) ──
+  // ── Install-manifest transparency (issue #12) — the badge strip + the script-
+  // execution notice are the shared dcsUi renderers (parameterised by the
+  // per-surface class names / test-ids / icons and the notice body copy). The
+  // section builders below stay local: their DOM differs from My Mods'. ──
 
   // The compact risk badges shown before the Install action.
   function riskBadgesHtml(manifest) {
-    if (!manifest || !manifest.known || !manifest.risks.length) return "";
-    const badges = manifest.risks
-      .map(
-        (r) =>
-          `<span class="risk-badge${RISK_WARN[r] ? " warn" : ""}" data-testid="risk-badge" data-risk="${esc(r)}">${
-            RISK_WARN[r] ? I.warn : I.check
-          }${esc(RISK_LABEL[r] || r)}</span>`,
-      )
-      .join("");
-    return `<div class="risk-summary" data-testid="risk-summary">${badges}</div>`;
+    return dcsUi.riskBadges(manifest, {
+      wrapClass: "risk-summary",
+      wrapTestid: "risk-summary",
+      badgeClass: "risk-badge",
+      badgeTestid: "risk-badge",
+      warnIcon: I.warn,
+      okIcon: I.check,
+    });
   }
 
   // The leading "Script Execution Notice" alert — shown whenever a mod ships any
@@ -158,17 +88,23 @@
   // routes the host to the sandbox explainer in the Docs panel.
   function sanitizeNoticeHtml(count) {
     const n = count === 1 ? "1 script that runs" : `${count} scripts that run`;
-    return `<div class="alert warn" data-testid="sanitize-notice">
-      <div class="alert-head">${I.warn} Script Execution Notice</div>
-      <p>This mod includes ${n} <strong>before</strong> DCS World's scripting sandbox is applied. These scripts may have broader access than standard sandboxed scripts — full <span class="mono">os</span>/<span class="mono">io</span>/<span class="mono">lfs</span>/<span class="mono">require</span> (file and OS) access. Please ensure you trust the source before installing.</p>
-      <button class="link" data-testid="sanitize-learn-more" data-docs="sandbox">Learn more about script sanitization</button>
-    </div>`;
+    return dcsUi.sanitizeNotice({
+      wrapClass: "alert warn",
+      wrapTestid: "sanitize-notice",
+      headClass: "alert-head",
+      icon: I.warn,
+      body: `<p>This mod includes ${n} <strong>before</strong> DCS World's scripting sandbox is applied. These scripts may have broader access than standard sandboxed scripts — full <span class="mono">os</span>/<span class="mono">io</span>/<span class="mono">lfs</span>/<span class="mono">require</span> (file and OS) access. Please ensure you trust the source before installing.</p>`,
+      linkClass: "link",
+      learnTestid: "sanitize-learn-more",
+    });
   }
 
   function bundleSectionHtml(manifest) {
     const items = manifest.bundles.length
       ? manifest.bundles
-          .map((b) => `<div class="plan-item" data-testid="bundle-item">${I.box} ${esc(b.path)}</div>`)
+          .map(
+            (b) => `<div class="plan-item" data-testid="bundle-item">${I.box} ${esc(b.path)}</div>`,
+          )
           .join("")
       : `<p class="note">This mod bundles no content (manifest-only).</p>`;
     return `<div class="manifest-section" data-testid="section-bundles">
@@ -200,7 +136,7 @@
           `<div class="plan-item warn-item" data-testid="executable-item"><div>${I.terminal} <strong>${esc(
             e.name,
           )}</strong></div><div class="plan-dest mono">${esc(e.exe)}${
-            e.args && e.args.length ? " " + esc(e.args.join(" ")) : ""
+            e.args?.length ? ` ${esc(e.args.join(" "))}` : ""
           }</div></div>`,
       )
       .join("");
@@ -219,7 +155,9 @@
         const b = s.beforeSanitize;
         return `<div class="plan-item${b ? " warn-item" : ""}" data-testid="mission-script-item" data-run="${esc(s.run_on)}">
           <div>${I.script} <strong>${esc(s.name)}</strong>${
-            b ? ` <span class="badge warn" data-testid="before-sanitize-tag">before-sanitize</span>` : ""
+            b
+              ? ` <span class="badge warn" data-testid="before-sanitize-tag">before-sanitize</span>`
+              : ""
           }</div>
           ${s.purpose ? `<div class="plan-dest">${esc(s.purpose)}</div>` : ""}
           <div class="plan-dest mono">${esc(s.path)}</div>
@@ -243,7 +181,7 @@
   // full enumeration (bundled content, symlinks, executables, mission scripts).
   function installManifestHtml(manifest, installable) {
     if (!installable) return ""; // not-installable note already shown by the action card
-    if (!manifest || !manifest.known) {
+    if (!manifest?.known) {
       return `<div class="alert warn" data-testid="manifest-unknown">
         <div class="alert-head">${I.warn} Install actions unknown</div>
         <p>This release's manifest could not be read, so DCS Studio can't show what installing this mod would do. Proceed only if you trust the source.</p>
@@ -266,7 +204,9 @@
   // ── List / wall ──
   function renderList() {
     if (!state.authKnown) {
-      app.innerHTML = shell(`<div class="empty"><span class="spin">${I.refresh}</span> Connecting…</div>`);
+      app.innerHTML = shell(
+        `<div class="empty"><span class="spin">${I.refresh}</span> Connecting…</div>`,
+      );
       return;
     }
     if (!state.signedIn && !state.browsing) return renderWall();
@@ -303,9 +243,17 @@
       document.getElementById("gridwrap").innerHTML = gridHtml();
       bindCards();
     });
-    document.getElementById("tag").addEventListener("change", (e) => { state.activeTag = e.target.value; renderList(); });
-    document.getElementById("sort").addEventListener("change", (e) => { state.sort = e.target.value; renderList(); });
-    document.getElementById("refresh").addEventListener("click", () => post({ type: "discover", force: true }));
+    document.getElementById("tag").addEventListener("change", (e) => {
+      state.activeTag = e.target.value;
+      renderList();
+    });
+    document.getElementById("sort").addEventListener("change", (e) => {
+      state.sort = e.target.value;
+      renderList();
+    });
+    document
+      .getElementById("refresh")
+      .addEventListener("click", () => post({ type: "discover", force: true }));
     bindCards();
   }
 
@@ -369,7 +317,14 @@
           <span class="stars">${I.star}${m.stars}</span>
         </button>
         ${m.description ? `<div class="blurb">${esc(m.description)}</div>` : ""}
-        ${m.labels.length ? `<div class="tags">${m.labels.slice(0, 6).map((l) => `<button class="tag" data-tag="${esc(l)}">${I.tag}${esc(l)}</button>`).join("")}</div>` : ""}
+        ${
+          m.labels.length
+            ? `<div class="tags">${m.labels
+                .slice(0, 6)
+                .map((l) => `<button class="tag" data-tag="${esc(l)}">${I.tag}${esc(l)}</button>`)
+                .join("")}</div>`
+            : ""
+        }
         <div class="card-foot">
           <button class="link" data-open="${esc(m.repo)}">Details</button>
           <button class="link muted" data-github="${esc(m.repo_url)}">GitHub ${I.ext}</button>
@@ -378,18 +333,28 @@
   }
 
   function bindCards() {
-    document.querySelectorAll("img[data-fallback]").forEach((img) =>
-      img.addEventListener("error", () => (img.src = initialsAvatar(img.getAttribute("data-fallback")))),
-    );
-    document.querySelectorAll("[data-open]").forEach((el) =>
-      el.addEventListener("click", () => openProduct(el.getAttribute("data-open"))),
-    );
-    document.querySelectorAll("[data-tag]").forEach((el) =>
-      el.addEventListener("click", (e) => { e.stopPropagation(); state.activeTag = el.getAttribute("data-tag"); renderList(); }),
-    );
-    document.querySelectorAll("[data-github]").forEach((el) =>
-      el.addEventListener("click", (e) => { e.stopPropagation(); post({ type: "openExternal", url: el.getAttribute("data-github") }); }),
-    );
+    document.querySelectorAll("img[data-fallback]").forEach((img) => {
+      img.addEventListener(
+        "error",
+        () => (img.src = initialsAvatar(img.getAttribute("data-fallback"))),
+      );
+    });
+    document.querySelectorAll("[data-open]").forEach((el) => {
+      el.addEventListener("click", () => openProduct(el.getAttribute("data-open")));
+    });
+    document.querySelectorAll("[data-tag]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        state.activeTag = el.getAttribute("data-tag");
+        renderList();
+      });
+    });
+    document.querySelectorAll("[data-github]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        post({ type: "openExternal", url: el.getAttribute("data-github") });
+      });
+    });
   }
 
   // ── Product ──
@@ -408,19 +373,26 @@
 
   function renderProduct() {
     if (state.productBusy) {
-      app.innerHTML = productShell(`<div class="empty"><span class="spin">${I.refresh}</span> Loading ${esc(state.repo || "")}…</div>`);
+      app.innerHTML = productShell(
+        `<div class="empty"><span class="spin">${I.refresh}</span> Loading ${esc(state.repo || "")}…</div>`,
+      );
       wireBack();
       return;
     }
     if (state.productError) {
-      app.innerHTML = productShell(`<div class="empty"><p class="market-error" style="border:none;background:none">${I.warn} ${esc(state.productError)}</p><button class="btn secondary" id="retry">Try again</button></div>`);
+      app.innerHTML = productShell(
+        `<div class="empty"><p class="market-error" style="border:none;background:none">${I.warn} ${esc(state.productError)}</p><button class="btn secondary" id="retry">Try again</button></div>`,
+      );
       wireBack();
       const r = document.getElementById("retry");
       if (r) r.addEventListener("click", () => openProduct(state.repo));
       return;
     }
     const p = state.product;
-    if (!p) { state.view = "list"; return renderList(); }
+    if (!p) {
+      state.view = "list";
+      return renderList();
+    }
 
     let action = "";
     if (!p.installable) {
@@ -437,13 +409,13 @@
       action = `<button class="btn block" id="install" data-testid="install-btn">${I.download} Install</button>
         <p class="note">Downloads &amp; unpacks to your data dir, then links the files into your DCS folders.</p>`;
     }
-    if (state.installError) action += `<p class="note warn" data-testid="install-error" style="margin-top:8px">${I.warn} ${esc(state.installError)}</p>`;
+    if (state.installError)
+      action += `<p class="note warn" data-testid="install-error" style="margin-top:8px">${I.warn} ${esc(state.installError)}</p>`;
 
-    const reqCard =
-      state.requires && state.requires.length
-        ? `<div class="aside-card" data-testid="requires-card"><div class="section-label">${I.warn} Requires DCS modules</div>${state.requires.map((r) => `<div class="kv"><span class="name">${esc(r.id)}</span></div>`).join("")}</div>`
-        : "";
-    const recency = fmtRecency(p.release_date);
+    const reqCard = state.requires?.length
+      ? `<div class="aside-card" data-testid="requires-card"><div class="section-label">${I.warn} Requires DCS modules</div>${state.requires.map((r) => `<div class="kv"><span class="name">${esc(r.id)}</span></div>`).join("")}</div>`
+      : "";
+    const recency = formatRecency(p.release_date);
 
     app.innerHTML = `
       <header>
@@ -469,34 +441,49 @@
           ${p.description ? `<p class="product-desc">${esc(p.description)}</p>` : ""}
           ${installManifestHtml(state.manifest, p.installable)}
           <div class="section-label">${I.book} Readme</div>
-          <div class="prose" data-testid="readme">${p.readme ? md(p.readme) : "<p class='note'>This repo has no README.</p>"}</div>
+          <div class="prose" data-testid="readme">${p.readme ? renderMarkdown(p.readme) : "<p class='note'>This repo has no README.</p>"}</div>
         </main>
         <aside>
           <div class="aside-card">${action}</div>
           ${reqCard}
           <div class="aside-card">
             <div class="section-label">${I.hd} Download</div>
-            <div>${fmtBytes(p.download_size)}</div>
-            ${p.assets.length
-              ? `<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">${p.assets.map((a) => `<div class="kv"><span class="name">${I.box} ${esc(a.name)}</span><span class="mono" style="color:var(--muted)">${fmtBytes(a.size)}</span></div>`).join("")}</div>`
-              : `<p class="note">No release assets.</p>`}
+            <div>${formatBytes(p.download_size)}</div>
+            ${
+              p.assets.length
+                ? `<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">${p.assets.map((a) => `<div class="kv"><span class="name">${I.box} ${esc(a.name)}</span><span class="mono" style="color:var(--muted)">${formatBytes(a.size)}</span></div>`).join("")}</div>`
+                : `<p class="note">No release assets.</p>`
+            }
           </div>
           <button class="btn secondary block" id="viewgh" style="margin-top:14px">View on GitHub ${I.ext}</button>
         </aside>
       </div>`;
 
-    document.querySelectorAll("img[data-fallback]").forEach((img) =>
-      img.addEventListener("error", () => (img.src = initialsAvatar(img.getAttribute("data-fallback")))),
-    );
+    document.querySelectorAll("img[data-fallback]").forEach((img) => {
+      img.addEventListener(
+        "error",
+        () => (img.src = initialsAvatar(img.getAttribute("data-fallback"))),
+      );
+    });
     wireBack();
-    document.getElementById("viewgh").addEventListener("click", () => post({ type: "openExternal", url: p.repo_url }));
+    document
+      .getElementById("viewgh")
+      .addEventListener("click", () => post({ type: "openExternal", url: p.repo_url }));
     const inst = document.getElementById("install");
-    if (inst) inst.addEventListener("click", () => { state.installError = null; state.installing = { phase: "download", label: "Starting…", pct: 0 }; renderProduct(); post({ type: "install", repo: p.repo }); });
+    if (inst)
+      inst.addEventListener("click", () => {
+        state.installError = null;
+        state.installing = { phase: "download", label: "Starting…", pct: 0 };
+        renderProduct();
+        post({ type: "install", repo: p.repo });
+      });
     const unins = document.getElementById("uninstall");
     if (unins) unins.addEventListener("click", () => post({ type: "uninstall", repo: p.repo }));
-    document.querySelectorAll("[data-docs]").forEach((el) =>
-      el.addEventListener("click", () => post({ type: "openDocs", page: el.getAttribute("data-docs") })),
-    );
+    document.querySelectorAll("[data-docs]").forEach((el) => {
+      el.addEventListener("click", () =>
+        post({ type: "openDocs", page: el.getAttribute("data-docs") }),
+      );
+    });
   }
 
   function productShell(inner) {
@@ -504,7 +491,13 @@
   }
   function wireBack() {
     const b = document.getElementById("back");
-    if (b) b.addEventListener("click", () => { state.view = "list"; state.repo = null; save(); renderList(); });
+    if (b)
+      b.addEventListener("click", () => {
+        state.view = "list";
+        state.repo = null;
+        save();
+        renderList();
+      });
   }
 
   // ── Host messages ──
@@ -536,7 +529,11 @@
         if (state.view === "list") renderList();
         break;
       case "product:busy":
-        if (state.repo === m.repo) { state.productBusy = true; state.productError = null; if (state.view === "product") renderProduct(); }
+        if (state.repo === m.repo) {
+          state.productBusy = true;
+          state.productError = null;
+          if (state.view === "product") renderProduct();
+        }
         break;
       case "product":
         state.productBusy = false;
@@ -550,19 +547,38 @@
         if (state.view === "product") renderProduct();
         break;
       case "product:error":
-        if (state.repo === m.repo) { state.productBusy = false; state.productError = m.message; if (state.view === "product") renderProduct(); }
+        if (state.repo === m.repo) {
+          state.productBusy = false;
+          state.productError = m.message;
+          if (state.view === "product") renderProduct();
+        }
         break;
       case "installProgress":
-        if (state.product && state.product.repo === m.repo) { state.installing = { phase: m.phase, label: m.label, pct: m.pct }; if (state.view === "product") renderProduct(); }
+        if (state.product && state.product.repo === m.repo) {
+          state.installing = { phase: m.phase, label: m.label, pct: m.pct };
+          if (state.view === "product") renderProduct();
+        }
         break;
       case "installed":
-        if (state.product && state.product.repo === m.repo) { state.installing = null; state.installed = true; state.installError = null; if (state.view === "product") renderProduct(); }
+        if (state.product && state.product.repo === m.repo) {
+          state.installing = null;
+          state.installed = true;
+          state.installError = null;
+          if (state.view === "product") renderProduct();
+        }
         break;
       case "uninstalled":
-        if (state.product && state.product.repo === m.repo) { state.installed = false; if (state.view === "product") renderProduct(); }
+        if (state.product && state.product.repo === m.repo) {
+          state.installed = false;
+          if (state.view === "product") renderProduct();
+        }
         break;
       case "installError":
-        if (state.product && state.product.repo === m.repo) { state.installing = null; state.installError = m.message; if (state.view === "product") renderProduct(); }
+        if (state.product && state.product.repo === m.repo) {
+          state.installing = null;
+          state.installError = m.message;
+          if (state.view === "product") renderProduct();
+        }
         break;
     }
   });

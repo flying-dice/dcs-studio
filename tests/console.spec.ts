@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { openPreview, sentMessages, hostSend } from "./helpers";
+import { expect, test } from "@playwright/test";
+import { hostSend, openPreview, sentMessages } from "./helpers";
 
 // Build node selectors from the raw path — our paths only contain _, /,
 // letters and digits, all selector-safe.
@@ -96,7 +96,9 @@ test.describe("Lua Console — Explorer tab", () => {
     await expect(page.locator(sel("_G/many"))).toBeAttached();
     await page.getByTestId("explorer-filter").fill("_G/many/*");
     await page.getByTestId("explorer-filter").press("Enter");
-    await expect(page.getByTestId("sweep-notice")).toContainText("200-fetch limit", { timeout: 15000 });
+    await expect(page.getByTestId("sweep-notice")).toContainText("200-fetch limit", {
+      timeout: 15000,
+    });
   });
 
   test("copy shows the check state and writes children JSON", async ({ page, context }) => {
@@ -110,7 +112,9 @@ test.describe("Lua Console — Explorer tab", () => {
     await expect(copy).not.toHaveAttribute("data-state", "copied", { timeout: 4000 });
   });
 
-  test("a function shows its arity, then resolves real parameter names on click", async ({ page }) => {
+  test("a function shows its arity, then resolves real parameter names on click", async ({
+    page,
+  }) => {
     await openExplorer(page);
     const preview = page.locator(`${sel("_G/outText")} [data-testid="node-preview"]`);
     await expect(preview).toHaveText("function (3 args)");
@@ -118,12 +122,17 @@ test.describe("Lua Console — Explorer tab", () => {
     await expect(preview).toHaveText("outText(text, displayTime, clearView)");
   });
 
-  test("going offline still surfaces the Launch DCS button (does not regress #7)", async ({ page }) => {
+  test("going offline still surfaces the Launch DCS button (does not regress #7)", async ({
+    page,
+  }) => {
     await openExplorer(page);
     await expect(page.locator("#launchBtn")).toBeHidden();
     await hostSend(page, {
       type: "status",
-      status: { gui: { connected: false, dcsTime: null }, mission: { connected: false, dcsTime: null } },
+      status: {
+        gui: { connected: false, dcsTime: null },
+        mission: { connected: false, dcsTime: null },
+      },
     });
     await expect(page.locator("#launchBtn")).toBeVisible();
     await expect(page.getByTestId("explorer-filter")).toBeDisabled();

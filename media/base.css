@@ -1,0 +1,71 @@
+/* Shared webview design system — linked before each panel's own stylesheet by
+   src/webview/html.ts (and previews/*.html). Every rule here can be overridden
+   by a panel: its stylesheet cascades after this one. Holds the design tokens,
+   the reset, and the button / card / header / spinner primitives that were
+   previously re-declared near-verbatim across ~11 media/*.css files. */
+:root {
+  --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
+  --card: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  --muted: var(--vscode-descriptionForeground);
+  --mono: var(--vscode-editor-font-family, monospace);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+}
+.mono { font-family: var(--mono); }
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+.btn:hover { background: var(--vscode-button-hoverBackground); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.secondary {
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  border-color: var(--border);
+}
+.btn.secondary:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground)); }
+
+/* Card surface */
+.card { border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: 16px; }
+
+/* Page header — kicker + title + right-aligned spacer */
+header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--vscode-editor-background);
+}
+.kicker {
+  font-family: var(--mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.28em;
+  color: var(--muted);
+}
+.title { font-weight: 600; font-size: 15px; }
+.spacer { margin-left: auto; }
+
+/* Spinner */
+.spin { display: inline-block; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }

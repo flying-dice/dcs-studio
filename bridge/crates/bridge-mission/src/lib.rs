@@ -15,6 +15,12 @@ use mlua::Lua;
 
 const MISSION_INIT_SOURCE: &str = include_str!("../lua/mission_init.lua");
 
+/// The `luaopen_dcs_studio_mission` entry point DCS's `require` calls.
+///
+/// # Errors
+///
+/// Returns any `mlua` error from [`dcs_bridge_core::bootstrap`] or the
+/// embedded mission init chunk.
 #[mlua::lua_module]
 pub fn dcs_studio_mission(lua: &Lua) -> LuaResult<LuaTable> {
     let exports = dcs_bridge_core::bootstrap(lua, BridgeKind::Mission, env!("CARGO_PKG_VERSION"))?;
@@ -25,6 +31,7 @@ pub fn dcs_studio_mission(lua: &Lua) -> LuaResult<LuaTable> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod tests {
     use dcs_bridge_core::{emit_openrpc_json, emit_surface_dlua, BridgeKind};
 
@@ -37,7 +44,7 @@ mod tests {
         "/types/dcs_studio_mission.d.lua"
     );
 
-    /// The checked-in OpenRPC document `rpc.discover` returns for this bridge.
+    /// The checked-in `OpenRPC` document `rpc.discover` returns for this bridge.
     const OPENRPC_GOLDEN: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/openrpc/dcs_studio_mission.openrpc.json"
@@ -86,7 +93,7 @@ mod tests {
         std::fs::rename(&tmp, OPENRPC_GOLDEN).expect("swap openrpc golden into place");
     }
 
-    /// The checked-in OpenRPC document matches what `rpc.discover` generates
+    /// The checked-in `OpenRPC` document matches what `rpc.discover` generates
     /// from the live method registration. On an intentional method-set change,
     /// regenerate with [`regenerate_openrpc_golden`].
     #[test]

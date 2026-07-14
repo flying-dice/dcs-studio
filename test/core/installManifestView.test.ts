@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   deriveInstallManifestView,
   type InstallManifestInput,
@@ -42,7 +42,13 @@ describe("deriveInstallManifestView — known but empty", () => {
   it("is known with zero counts and no risks", () => {
     const v = deriveInstallManifestView(empty);
     expect(v.known).toBe(true);
-    expect(v.counts).toEqual({ bundles: 0, symlinks: 0, entrypoints: 0, missionScripts: 0, beforeSanitize: 0 });
+    expect(v.counts).toEqual({
+      bundles: 0,
+      symlinks: 0,
+      entrypoints: 0,
+      missionScripts: 0,
+      beforeSanitize: 0,
+    });
     expect(v.risks).toEqual([]);
   });
 });
@@ -52,7 +58,11 @@ describe("deriveInstallManifestView — sections", () => {
     const v = deriveInstallManifestView({
       bundles: [{ path: "Scripts/mod" }, { path: "Server" }],
       symlinks: [
-        { source: "Scripts/mod/a.lua", dest: "{SavedGames}/Scripts/a.lua", resolved: "C:\\SG\\Scripts\\a.lua" },
+        {
+          source: "Scripts/mod/a.lua",
+          dest: "{SavedGames}/Scripts/a.lua",
+          resolved: "C:\\SG\\Scripts\\a.lua",
+        },
         { source: "Scripts/mod/b.lua", dest: "{GameInstall}/Scripts/b.lua" }, // no resolved → null
       ],
       entrypoints: [
@@ -60,14 +70,23 @@ describe("deriveInstallManifestView — sections", () => {
         { id: "bare", name: "Bare", exe: "tool.exe" }, // no args/cwd → [] / null
       ],
       missionScripts: [
-        { name: "After", purpose: "loads framework", path: "Scripts/after.lua", run_on: "after-sanitize" },
+        {
+          name: "After",
+          purpose: "loads framework",
+          path: "Scripts/after.lua",
+          run_on: "after-sanitize",
+        },
         { name: "Before", path: "Scripts/before.lua", run_on: "before-sanitize" }, // no purpose → null
       ],
     });
 
     expect(v.bundles).toEqual([{ path: "Scripts/mod" }, { path: "Server" }]);
     expect(v.symlinks).toEqual([
-      { source: "Scripts/mod/a.lua", dest: "{SavedGames}/Scripts/a.lua", resolved: "C:\\SG\\Scripts\\a.lua" },
+      {
+        source: "Scripts/mod/a.lua",
+        dest: "{SavedGames}/Scripts/a.lua",
+        resolved: "C:\\SG\\Scripts\\a.lua",
+      },
       { source: "Scripts/mod/b.lua", dest: "{GameInstall}/Scripts/b.lua", resolved: null },
     ]);
     expect(v.entrypoints).toEqual([
@@ -75,10 +94,28 @@ describe("deriveInstallManifestView — sections", () => {
       { id: "bare", name: "Bare", exe: "tool.exe", args: [], cwd: null },
     ]);
     expect(v.missionScripts).toEqual([
-      { name: "After", purpose: "loads framework", path: "Scripts/after.lua", run_on: "after-sanitize", beforeSanitize: false },
-      { name: "Before", purpose: null, path: "Scripts/before.lua", run_on: "before-sanitize", beforeSanitize: true },
+      {
+        name: "After",
+        purpose: "loads framework",
+        path: "Scripts/after.lua",
+        run_on: "after-sanitize",
+        beforeSanitize: false,
+      },
+      {
+        name: "Before",
+        purpose: null,
+        path: "Scripts/before.lua",
+        run_on: "before-sanitize",
+        beforeSanitize: true,
+      },
     ]);
-    expect(v.counts).toEqual({ bundles: 2, symlinks: 2, entrypoints: 2, missionScripts: 2, beforeSanitize: 1 });
+    expect(v.counts).toEqual({
+      bundles: 2,
+      symlinks: 2,
+      entrypoints: 2,
+      missionScripts: 2,
+      beforeSanitize: 1,
+    });
   });
 
   it("treats an explicit null resolved the same as absent", () => {
@@ -97,7 +134,10 @@ describe("deriveInstallManifestView — risk flags", () => {
   });
 
   it("flags runs-executable only when there are entrypoints", () => {
-    const v = deriveInstallManifestView({ ...empty, entrypoints: [{ id: "x", name: "X", exe: "x.exe" }] });
+    const v = deriveInstallManifestView({
+      ...empty,
+      entrypoints: [{ id: "x", name: "X", exe: "x.exe" }],
+    });
     expect(v.risks).toEqual(["runs-executable"]);
   });
 

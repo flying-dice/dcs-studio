@@ -1,14 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  BEFORE_TRIGGER,
+  AFTER_SANITIZE_FILE,
   AFTER_TRIGGER,
   BEFORE_SANITIZE_FILE,
-  AFTER_SANITIZE_FILE,
-  isBeforeTrigger,
-  isAfterTrigger,
-  triggerStatus,
+  BEFORE_TRIGGER,
   installTriggers,
+  isAfterTrigger,
+  isBeforeTrigger,
   removeTriggers,
+  triggerStatus,
 } from "../../src/core/domain/missionScriptTrigger";
 
 // The DCS-shipped MissionScripting.lua shape (matches missionSanitize's fixture):
@@ -51,7 +51,7 @@ describe("trigger constants", () => {
 describe("isBeforeTrigger / isAfterTrigger", () => {
   it("matches the canonical trigger lines (with surrounding whitespace)", () => {
     expect(isBeforeTrigger(BEFORE_TRIGGER)).toBe(true);
-    expect(isBeforeTrigger("   " + BEFORE_TRIGGER + "  ")).toBe(true);
+    expect(isBeforeTrigger(`   ${BEFORE_TRIGGER}  `)).toBe(true);
     expect(isAfterTrigger(AFTER_TRIGGER)).toBe(true);
   });
   it("tolerates a differently-quoted dofile naming the same file", () => {
@@ -64,7 +64,9 @@ describe("isBeforeTrigger / isAfterTrigger", () => {
   it("rejects a non-dofile line and an unrelated dofile", () => {
     expect(isBeforeTrigger("print('hi')")).toBe(false);
     expect(isBeforeTrigger("dofile('Scripts/ScriptingSystem.lua')")).toBe(false);
-    expect(isAfterTrigger("-- a comment mentioning DcsStudioMissionScriptsAfterSanitize.lua")).toBe(false);
+    expect(isAfterTrigger("-- a comment mentioning DcsStudioMissionScriptsAfterSanitize.lua")).toBe(
+      false,
+    );
   });
 });
 
@@ -124,7 +126,7 @@ describe("installTriggers", () => {
   });
 
   it("self-fixes a wrong-position trigger by relocating it", () => {
-    const misplaced = PRISTINE_LF + "\n" + BEFORE_TRIGGER; // before-line after the block
+    const misplaced = `${PRISTINE_LF}\n${BEFORE_TRIGGER}`; // before-line after the block
     const { content } = installTriggers(misplaced);
     // Exactly one before line, now correctly above the block.
     const lines = content.split("\n");
@@ -144,13 +146,20 @@ describe("installTriggers", () => {
     const { content, changed } = installTriggers(PRISTINE_CRLF);
     expect(changed).toBe(true);
     expect(content).not.toMatch(/[^\r]\n/);
-    expect(content).toContain(BEFORE_TRIGGER + "\r\n");
+    expect(content).toContain(`${BEFORE_TRIGGER}\r\n`);
   });
 
   it("wraps bare lockdown statements (no do/end), crossing blanks but stopping at real code", () => {
     // Blank lines around the statements are crossed; the print(...) lines stop
     // the expansion — so the triggers hug the statement span, not the whole file.
-    const bare = ["print('setup')", "", "sanitizeModule('os')", "_G['require'] = nil", "", "print('done')"].join("\n");
+    const bare = [
+      "print('setup')",
+      "",
+      "sanitizeModule('os')",
+      "_G['require'] = nil",
+      "",
+      "print('done')",
+    ].join("\n");
     const { content, changed } = installTriggers(bare);
     expect(changed).toBe(true);
     expect(content.split("\n")).toEqual([

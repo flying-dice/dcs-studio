@@ -1,9 +1,9 @@
-import * as vscode from "vscode";
+import { spawn } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { spawn } from "child_process";
+import * as vscode from "vscode";
+import { buildIco, MYMODS_URI_PATH, myModsUri } from "../core/domain/shortcut";
 import { showError } from "../errors";
-import { MYMODS_URI_PATH, myModsUri, buildIco } from "../core/domain/shortcut";
 
 // Desktop / Start Menu shortcuts that launch straight into My Mods. The .lnk
 // targets the VS Code executable with `--new-window --open-url <deep link>`:
@@ -33,7 +33,8 @@ export async function createMyModsShortcut(context: vscode.ExtensionContext): Pr
     {
       canPickMany: true,
       title: "Add a My Mods shortcut",
-      placeHolder: "Where should the shortcut go? It opens My Mods in its own window — no project involved.",
+      placeHolder:
+        "Where should the shortcut go? It opens My Mods in its own window — no project involved.",
     },
   );
   if (!picked?.length) return;
@@ -75,13 +76,19 @@ function writeLnk(
     `$s.Save()`,
   ].join("; ");
   return new Promise((resolve) => {
-    const p = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
-      windowsHide: true,
-    });
+    const p = spawn(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+      {
+        windowsHide: true,
+      },
+    );
     let err = "";
     p.stderr.on("data", (d) => (err += d.toString()));
     p.on("error", (e) => resolve({ ok: false, message: e.message }));
-    p.on("exit", (c) => (c === 0 ? resolve({ ok: true }) : resolve({ ok: false, message: err.trim() || `exit ${c}` })));
+    p.on("exit", (c) =>
+      c === 0 ? resolve({ ok: true }) : resolve({ ok: false, message: err.trim() || `exit ${c}` }),
+    );
   });
 }
 

@@ -1,21 +1,31 @@
+import { spawn } from "node:child_process";
 import {
-  lstatSync,
-  mkdirSync,
-  rmSync,
   existsSync,
   linkSync,
-  symlinkSync,
-  statSync,
+  lstatSync,
+  mkdirSync,
   readdirSync,
   realpathSync,
+  rmSync,
   type Stats,
+  statSync,
+  symlinkSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
 import { platform } from "node:os";
-import { spawn } from "node:child_process";
+import { basename, dirname, join, resolve } from "node:path";
+import {
+  chooseLinkStrategy,
+  classifyExistingDest,
+  sameVolume,
+} from "../../core/domain/linkStrategy";
+import type {
+  DisableResult,
+  InstalledLink,
+  LinkDefinition,
+  LinkResult,
+  ResolvedLink,
+} from "../../core/domain/types";
 import type { LinkerPort } from "../../core/ports/linker";
-import type { LinkDefinition, InstalledLink, ResolvedLink, LinkResult, DisableResult } from "../../core/domain/types";
-import { chooseLinkStrategy, sameVolume, classifyExistingDest } from "../../core/domain/linkStrategy";
 
 // Node adapter for `LinkerPort`, ported from dcs-dropzone/packages/linker (the
 // proven impl): create/remove the links between unpacked assets in the data dir
@@ -34,7 +44,10 @@ function psSingleQuote(s: string): string {
 }
 
 /** Create a symlink elevated (UAC) — the cross-volume file fallback. */
-function createSymlinkElevated(link: string, target: string): Promise<{ ok: true } | { ok: false; message: string }> {
+function createSymlinkElevated(
+  link: string,
+  target: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
   const inner = `$ErrorActionPreference='Stop'; New-Item -ItemType SymbolicLink -Path ${psSingleQuote(
     link,
   )} -Target ${psSingleQuote(target)} -Force | Out-Null`;
@@ -42,13 +55,19 @@ function createSymlinkElevated(link: string, target: string): Promise<{ ok: true
     inner,
   )});`;
   return new Promise((resolve) => {
-    const p = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", launcher], {
-      windowsHide: true,
-    });
+    const p = spawn(
+      "powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", launcher],
+      {
+        windowsHide: true,
+      },
+    );
     let err = "";
     p.stderr.on("data", (d) => (err += d.toString()));
     p.on("error", (e) => resolve({ ok: false, message: e.message }));
-    p.on("exit", (c) => (c === 0 ? resolve({ ok: true }) : resolve({ ok: false, message: err.trim() || `exit ${c}` })));
+    p.on("exit", (c) =>
+      c === 0 ? resolve({ ok: true }) : resolve({ ok: false, message: err.trim() || `exit ${c}` }),
+    );
   });
 }
 
@@ -71,7 +90,10 @@ function destPointsAtSrc(dest: string, src: string, destStat: Stats): boolean {
 }
 
 /** Create one link, choosing junction / hard link / symlink by platform + shape. */
-export async function mklink(link: string, target: string): Promise<{ ok: true } | { ok: false; message: string }> {
+export async function mklink(
+  link: string,
+  target: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
   if (existsSync(link)) return { ok: false, message: `Link path already exists: ${link}` };
   const targetStat = statSync(target);
   const strategy = chooseLinkStrategy({
@@ -223,7 +245,8 @@ export class Linker implements LinkerPort {
   private rollback(created: ResolvedLink[]): void {
     for (const link of created) {
       try {
-        if (lstatSync(link.dest, { throwIfNoEntry: false })) rmSync(link.dest, { force: true, recursive: true });
+        if (lstatSync(link.dest, { throwIfNoEntry: false }))
+          rmSync(link.dest, { force: true, recursive: true });
       } catch {
         /* best-effort */
       }

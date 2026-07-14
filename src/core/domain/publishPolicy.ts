@@ -12,5 +12,5 @@ export function gitignoreNeedsEntry(text: string): boolean {
 
 /** The `.gitignore` text with the DCS Studio ignore entry appended (newline-safe). */
 export function gitignoreWithEntry(text: string): string {
-  return (text && !text.endsWith("\n") ? text + "\n" : text) + GITIGNORE_ENTRY + "\n";
+  return `${(text && !text.endsWith("\n") ? `${text}\n` : text) + GITIGNORE_ENTRY}\n`;
 }

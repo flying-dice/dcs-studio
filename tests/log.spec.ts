@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { openPreview, expectSent, hostSend } from "./helpers";
+import { expect, test } from "@playwright/test";
+import { expectSent, hostSend, openPreview } from "./helpers";
 
 function fillerEntries(startSeq: number, count: number) {
   return Array.from({ length: count }, (_, i) => ({
@@ -15,7 +15,9 @@ function fillerEntries(startSeq: number, count: number) {
 }
 
 test.describe("DCS Log preview", () => {
-  test("renders one row per entry with time/level/subsystem/message, mine rows highlighted", async ({ page }) => {
+  test("renders one row per entry with time/level/subsystem/message, mine rows highlighted", async ({
+    page,
+  }) => {
     const errors = await openPreview(page, "log");
     await expect(page.getByTestId("log-row")).toHaveCount(5);
 
@@ -50,7 +52,9 @@ test.describe("DCS Log preview", () => {
     await expect(page.locator('[data-testid="log-row"]:visible')).toHaveCount(5);
   });
 
-  test("continuation lines are hidden together with a filtered-out parent (inherit its visibility)", async ({ page }) => {
+  test("continuation lines are hidden together with a filtered-out parent (inherit its visibility)", async ({
+    page,
+  }) => {
     await openPreview(page, "log");
     await page.locator('[data-testid="level-chip"][data-level="ERROR"]').click();
     const boom = page.locator('[data-testid="log-row"][data-seq="3"]');
@@ -58,7 +62,9 @@ test.describe("DCS Log preview", () => {
     await expect(boom.locator(".cont-line")).toHaveCount(2); // still in the DOM, just hidden with the wrapper
   });
 
-  test("mine-toggle isolates rows matching the current mod, and is hidden with no mod identity", async ({ page }) => {
+  test("mine-toggle isolates rows matching the current mod, and is hidden with no mod identity", async ({
+    page,
+  }) => {
     await openPreview(page, "log");
     const mineToggle = page.getByTestId("mine-toggle");
     await expect(mineToggle).toBeVisible();
@@ -82,7 +88,9 @@ test.describe("DCS Log preview", () => {
     await expect(page.locator('[data-testid="log-row"]:visible')).toHaveCount(5);
   });
 
-  test("text filter matches a substring, /regex/ matches a pattern, and an invalid regex is flagged without hiding rows", async ({ page }) => {
+  test("text filter matches a substring, /regex/ matches a pattern, and an invalid regex is flagged without hiding rows", async ({
+    page,
+  }) => {
     await openPreview(page, "log");
     const filterInput = page.getByTestId("text-filter");
 
@@ -112,7 +120,9 @@ test.describe("DCS Log preview", () => {
     await expectSent(page, { type: "clear" });
   });
 
-  test("missing-file state shows the hint pane and Open Settings posts openSettings; resolves back to the grid", async ({ page }) => {
+  test("missing-file state shows the hint pane and Open Settings posts openSettings; resolves back to the grid", async ({
+    page,
+  }) => {
     await openPreview(page, "log");
     await expect(page.getByTestId("missing-pane")).toBeHidden();
     await expect(page.getByTestId("log-grid")).toBeVisible();
@@ -129,12 +139,18 @@ test.describe("DCS Log preview", () => {
     await page.getByTestId("open-settings-btn").click();
     await expectSent(page, { type: "openSettings" });
 
-    await hostSend(page, { type: "fileState", state: "ok", file: "C:\\Users\\test\\Saved Games\\DCS\\Logs\\dcs.log" });
+    await hostSend(page, {
+      type: "fileState",
+      state: "ok",
+      file: "C:\\Users\\test\\Saved Games\\DCS\\Logs\\dcs.log",
+    });
     await expect(page.getByTestId("missing-pane")).toBeHidden();
     await expect(page.getByTestId("log-grid")).toBeVisible();
   });
 
-  test("autoscroll pill appears once scrolled up and new lines arrive; clicking it jumps to the bottom", async ({ page }) => {
+  test("autoscroll pill appears once scrolled up and new lines arrive; clicking it jumps to the bottom", async ({
+    page,
+  }) => {
     await openPreview(page, "log");
     await hostSend(page, { type: "append", entries: fillerEntries(100, 80), cont: [], dropped: 0 });
     await expect(page.getByTestId("log-row")).toHaveCount(85);
@@ -148,7 +164,18 @@ test.describe("DCS Log preview", () => {
 
     await hostSend(page, {
       type: "append",
-      entries: [{ seq: 300, time: null, level: "INFO", subsystem: "filler", thread: null, message: "brand new line", mine: false, cont: [] }],
+      entries: [
+        {
+          seq: 300,
+          time: null,
+          level: "INFO",
+          subsystem: "filler",
+          thread: null,
+          message: "brand new line",
+          mine: false,
+          cont: [],
+        },
+      ],
       cont: [],
       dropped: 0,
     });
@@ -157,7 +184,9 @@ test.describe("DCS Log preview", () => {
 
     await page.getByTestId("autoscroll-pill").click();
     await expect(page.getByTestId("autoscroll-pill")).toBeHidden();
-    const atBottom = await grid.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 4);
+    const atBottom = await grid.evaluate(
+      (el) => el.scrollHeight - el.scrollTop - el.clientHeight < 4,
+    );
     expect(atBottom).toBe(true);
   });
 

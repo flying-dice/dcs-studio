@@ -92,12 +92,12 @@ export function toggledLine(line: string, desired: Record<string, boolean>): str
     if (rest.startsWith(" ")) rest = rest.slice(1);
     return indent + rest;
   }
-  return indent + "-- " + body;
+  return `${indent}-- ${body}`;
 }
 
 /** `<path>.dcsstudio.bak` — the pristine-snapshot backup path for a live file. */
 export function backupPath(p: string): string {
-  return p + ".dcsstudio.bak";
+  return `${p}.dcsstudio.bak`;
 }
 
 export interface MissionItemState {

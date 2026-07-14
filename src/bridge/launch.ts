@@ -1,17 +1,17 @@
-import * as vscode from "vscode";
+import { type ChildProcess, spawn } from "child_process";
 import * as fs from "fs";
-import { spawn, ChildProcess } from "child_process";
+import * as vscode from "vscode";
 import {
   DCS_LAUNCH_ARGS,
-  LAUNCH_LOCKED_MESSAGE,
   dcsBinDir,
   dcsExePath,
   isDllLockedError,
+  LAUNCH_LOCKED_MESSAGE,
   shouldEjectOnShutdown,
 } from "../core/domain/bridgeDeploy";
-import { inject, eject } from "./deploy";
-import { savedGamesDir, gameInstallDir } from "./paths";
 import { showError } from "../errors";
+import { eject, inject } from "./deploy";
+import { gameInstallDir, savedGamesDir } from "./paths";
 
 // Managed launch, mirroring dcs-studio's launcher: assert the bridge is injected,
 // spawn DCS.exe --no-launcher, and eject the bridge once DCS exits. Fails closed
@@ -19,10 +19,6 @@ import { showError } from "../errors";
 // (exe path, args, locked-DLL classification, eject-on-exit policy) are pure and
 // live in core/domain/bridgeDeploy.
 let child: ChildProcess | undefined;
-
-export function isLaunched(): boolean {
-  return !!child;
-}
 
 export async function launchDcs(ctx: vscode.ExtensionContext): Promise<void> {
   if (child) {

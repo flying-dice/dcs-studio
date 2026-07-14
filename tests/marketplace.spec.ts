@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { openPreview, expectSent, hostSend } from "./helpers";
+import { expect, test } from "@playwright/test";
+import { expectSent, hostSend, openPreview } from "./helpers";
 
 test.describe("marketplace preview", () => {
   test("boots by posting ready and shows the sign-in wall", async ({ page }) => {
@@ -14,7 +14,9 @@ test.describe("marketplace preview", () => {
     await expect(page.getByTestId("mod-card")).toHaveCount(12);
   });
 
-  test("search filters by name/description/label, empty results show list-empty", async ({ page }) => {
+  test("search filters by name/description/label, empty results show list-empty", async ({
+    page,
+  }) => {
     await openPreview(page, "marketplace");
     await page.getByTestId("browse-anon-btn").click();
     await expect(page.getByTestId("mod-card")).toHaveCount(12);
@@ -42,13 +44,19 @@ test.describe("marketplace preview", () => {
     await openPreview(page, "marketplace");
     await page.getByTestId("browse-anon-btn").click();
     // Default sort is "stars" — MOOSE Lite has the most (1203).
-    await expect(page.getByTestId("mod-card").first().getByTestId("card-title")).toHaveText("MOOSE Lite");
+    await expect(page.getByTestId("mod-card").first().getByTestId("card-title")).toHaveText(
+      "MOOSE Lite",
+    );
 
     await page.getByTestId("sort-select").selectOption("name");
-    await expect(page.getByTestId("mod-card").first().getByTestId("card-title")).toHaveText("BFM Trainer");
+    await expect(page.getByTestId("mod-card").first().getByTestId("card-title")).toHaveText(
+      "BFM Trainer",
+    );
   });
 
-  test("opening a product shows its install manifest, requirements and readme", async ({ page }) => {
+  test("opening a product shows its install manifest, requirements and readme", async ({
+    page,
+  }) => {
     await openPreview(page, "marketplace");
     await page.getByTestId("browse-anon-btn").click();
     await page
@@ -105,7 +113,9 @@ test.describe("marketplace preview", () => {
       repo: "viper-drivers/f16-weapons-expansion",
       message: "Download failed: network error.",
     });
-    await expect(page.getByTestId("install-error")).toContainText("Download failed: network error.");
+    await expect(page.getByTestId("install-error")).toContainText(
+      "Download failed: network error.",
+    );
   });
 });
 
@@ -113,7 +123,10 @@ test.describe("marketplace preview", () => {
 async function openProduct(page: import("@playwright/test").Page, repo: string): Promise<void> {
   await openPreview(page, "marketplace");
   await page.getByTestId("browse-anon-btn").click();
-  await page.locator(`[data-testid="mod-card"][data-repo="${repo}"]`).getByTestId("card-title").click();
+  await page
+    .locator(`[data-testid="mod-card"][data-repo="${repo}"]`)
+    .getByTestId("card-title")
+    .click();
   await expect(page.getByTestId("product-title")).toBeVisible();
 }
 
@@ -125,11 +138,17 @@ test.describe("marketplace — install manifest transparency (#12)", () => {
     await expect(page.getByTestId("risk-summary")).toBeVisible();
     await expect(page.getByTestId("risk-badge")).toHaveCount(3);
     await expect(page.locator('[data-testid="risk-badge"][data-risk="links-files"]')).toBeVisible();
-    await expect(page.locator('[data-testid="risk-badge"][data-risk="runs-executable"]')).toBeVisible();
-    await expect(page.locator('[data-testid="risk-badge"][data-risk="pre-sanitize-script"]')).toBeVisible();
+    await expect(
+      page.locator('[data-testid="risk-badge"][data-risk="runs-executable"]'),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-testid="risk-badge"][data-risk="pre-sanitize-script"]'),
+    ).toBeVisible();
   });
 
-  test("enumerates bundled content, symlinks, executables and mission scripts", async ({ page }) => {
+  test("enumerates bundled content, symlinks, executables and mission scripts", async ({
+    page,
+  }) => {
     await openProduct(page, PRIVILEGED);
     await expect(page.getByTestId("section-bundles")).toBeVisible();
     await expect(page.getByTestId("section-symlinks")).toBeVisible();
@@ -145,7 +164,9 @@ test.describe("marketplace — install manifest transparency (#12)", () => {
     await expect(page.getByTestId("sanitize-notice")).toBeVisible();
     await expect(page.getByTestId("before-sanitize-badge")).toContainText("1 before-sanitize");
     // The before-sanitize row is tagged; the after-sanitize one is not.
-    await expect(page.locator('[data-testid="mission-script-item"][data-run="before-sanitize"]')).toHaveCount(1);
+    await expect(
+      page.locator('[data-testid="mission-script-item"][data-run="before-sanitize"]'),
+    ).toHaveCount(1);
     await expect(page.getByTestId("before-sanitize-tag")).toHaveCount(1);
   });
 
@@ -160,7 +181,9 @@ test.describe("marketplace — install manifest transparency (#12)", () => {
     await expect(page.getByTestId("release-recency")).toContainText("released");
   });
 
-  test("a benign mod (links only) shows just the links-files risk and no notice", async ({ page }) => {
+  test("a benign mod (links only) shows just the links-files risk and no notice", async ({
+    page,
+  }) => {
     await openProduct(page, "syria-collective/syria-4k-textures");
     await expect(page.getByTestId("risk-badge")).toHaveCount(1);
     await expect(page.locator('[data-testid="risk-badge"][data-risk="links-files"]')).toBeVisible();
@@ -176,7 +199,9 @@ test.describe("marketplace — install manifest transparency (#12)", () => {
     await expect(page.getByTestId("before-sanitize-badge")).toHaveCount(0);
   });
 
-  test("an unreadable manifest renders the explicit unknown state, not missing sections", async ({ page }) => {
+  test("an unreadable manifest renders the explicit unknown state, not missing sections", async ({
+    page,
+  }) => {
     await openProduct(page, "sound-mods/immersive-cockpit-audio");
     await expect(page.getByTestId("manifest-unknown")).toBeVisible();
     await expect(page.getByTestId("install-manifest")).toHaveCount(0);

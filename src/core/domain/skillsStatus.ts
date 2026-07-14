@@ -1,7 +1,7 @@
 // Pure logic behind the Agent Skills status: the YAML-frontmatter mini-parser,
 // the dotted-numeric version compare, and the not-installed / up-to-date /
 // outdated / modified state machine — all decided from probed text, no I/O.
-// The SkillsManager adapter reads the bundled and installed SKILL.md files and
+// The SkillsLibrary adapter reads the bundled and installed SKILL.md files and
 // hands their contents here.
 
 /** Where skills install inside the user's repo, relative to the workspace root. */

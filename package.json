@@ -2,9 +2,8 @@
   "name": "dcs-studio",
   "displayName": "DCS Studio",
   "description": "DCS World mod tooling for VS Code — Marketplace, DCS link, injection & launch, guided publish.",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "publisher": "flying-dice",
-  
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -468,6 +467,8 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "lint": "biome check",
+    "lint:fix": "biome check --write",
     "dev": "node scripts/dev.mjs",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
@@ -477,6 +478,7 @@
     "test:ui": "playwright test --ui"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.3",
     "@playwright/test": "^1.61.1",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.125.0",

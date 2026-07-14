@@ -1,15 +1,10 @@
+/* Base tokens + reset live in media/base.css (linked first). */
 :root {
-  --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
-  --card: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-  --muted: var(--vscode-descriptionForeground);
-  --mono: var(--vscode-editor-font-family, monospace);
   --link: var(--vscode-textLink-foreground);
   --code-bg: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
   --accent: var(--vscode-focusBorder, #4a90d9);
 }
-* { box-sizing: border-box; }
 html, body { height: 100%; }
-body { margin: 0; font-family: var(--vscode-font-family); font-size: 13px; color: var(--vscode-foreground); background: var(--vscode-editor-background); }
 
 #app { display: flex; height: 100vh; }
 

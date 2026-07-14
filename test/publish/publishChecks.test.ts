@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   computeGhCheck,
   computePreflight,
@@ -61,7 +61,11 @@ describe("computePreflight — manifest checks", () => {
 
   it("passes the project name through as the ok detail", () => {
     const checks = computePreflight(facts());
-    expect(byLabel(checks, "Project name")).toEqual({ label: "Project name", level: "ok", detail: "My Mod" });
+    expect(byLabel(checks, "Project name")).toEqual({
+      label: "Project name",
+      level: "ok",
+      detail: "My Mod",
+    });
   });
 
   it("errors on a blank (whitespace-only) project name", () => {
@@ -83,7 +87,8 @@ describe("computePreflight — manifest checks", () => {
     expect(byLabel(checks, "Manifest")).toEqual({
       label: "Manifest",
       level: "error",
-      detail: "[[install]] is no longer supported — replace each rule with [[bundle]] path = <source> and [[symlink]] source/dest.",
+      detail:
+        "[[install]] is no longer supported — replace each rule with [[bundle]] path = <source> and [[symlink]] source/dest.",
     });
   });
 
@@ -364,7 +369,8 @@ describe("computePreflight — mission scripts", () => {
     expect(byLabel(computePreflight(facts({ manifest: m })), "Mission scripts")).toEqual({
       label: "Mission scripts",
       level: "error",
-      detail: '1 mission script(s) with an invalid run_on (must be "before-sanitize" or "after-sanitize").',
+      detail:
+        '1 mission script(s) with an invalid run_on (must be "before-sanitize" or "after-sanitize").',
       items: ["invalid run_on: Scripts/a.lua"],
     });
   });
@@ -378,7 +384,8 @@ describe("computePreflight — mission scripts", () => {
     expect(byLabel(computePreflight(facts({ manifest: m })), "Mission scripts")).toEqual({
       label: "Mission scripts",
       level: "error",
-      detail: '1 mission script(s) with an invalid run_on (must be "before-sanitize" or "after-sanitize").',
+      detail:
+        '1 mission script(s) with an invalid run_on (must be "before-sanitize" or "after-sanitize").',
       items: ["invalid run_on: (no path)"],
     });
   });
@@ -404,7 +411,15 @@ describe("computePreflight — mission scripts", () => {
     const labels = computePreflight(
       facts({ manifest: m, bundle: [{ source: "bin", missing: false, symlink: false }] }),
     ).map((c) => c.label);
-    expect(labels).toEqual(["Project name", "Bundle paths", "Executables", "Mission scripts", "7-Zip", "git", "GitHub CLI"]);
+    expect(labels).toEqual([
+      "Project name",
+      "Bundle paths",
+      "Executables",
+      "Mission scripts",
+      "7-Zip",
+      "git",
+      "GitHub CLI",
+    ]);
   });
 });
 
@@ -447,7 +462,11 @@ describe("computePreflight — tools", () => {
   });
 
   it("reports git availability", () => {
-    expect(byLabel(computePreflight(facts()), "git")).toEqual({ label: "git", level: "ok", detail: "available" });
+    expect(byLabel(computePreflight(facts()), "git")).toEqual({
+      label: "git",
+      level: "ok",
+      detail: "available",
+    });
     expect(byLabel(computePreflight(facts({ gitAvailable: false })), "git")).toEqual({
       label: "git",
       level: "error",
@@ -468,7 +487,14 @@ describe("computePreflight — tools", () => {
     const labels = computePreflight(
       facts({ manifest: m, bundle: [{ source: "out/a", missing: false, symlink: false }] }),
     ).map((c) => c.label);
-    expect(labels).toEqual(["Project name", "Bundle paths", "Symlink coverage", "7-Zip", "git", "GitHub CLI"]);
+    expect(labels).toEqual([
+      "Project name",
+      "Bundle paths",
+      "Symlink coverage",
+      "7-Zip",
+      "git",
+      "GitHub CLI",
+    ]);
   });
 });
 

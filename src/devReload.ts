@@ -1,6 +1,6 @@
-import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
+import * as vscode from "vscode";
 
 // Dev-only auto-reload: when running in an Extension Development Host, watch the
 // built output (out/) and webview assets (media/) and reload the window shortly

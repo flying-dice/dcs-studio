@@ -474,7 +474,7 @@ dependencies = [
 
 [[package]]
 name = "dcs-bridge-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "actix-web",
  "actix-ws",
@@ -491,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "dcs-bridge-gui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dcs-bridge-core",
  "mlua",
@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "dcs-bridge-mission"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dcs-bridge-core",
  "mlua",

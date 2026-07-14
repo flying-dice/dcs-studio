@@ -1,7 +1,7 @@
 // @ts-nocheck
 // Website-style sidebar navigation. Each row runs a command in the host; a
 // footer reflects the live bridge status.
-(function () {
+(() => {
   const vscode = acquireVsCodeApi();
   const app = document.getElementById("app");
 
@@ -12,7 +12,7 @@
     terminal: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>`,
     scroll: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M9 7h7M9 11h7"/></svg>`,
     shield: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3Z"/></svg>`,
-    gear: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`,
+    gear: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${dcsUi.iconPaths.gear}</svg>`,
     rocket: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>`,
     book: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/></svg>`,
     sparkle: `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z"/></svg>`,
@@ -22,21 +22,82 @@
   // In the requested order. Settings is separated to the bottom, website-style.
   // "hidden" rows stay display:none until a host message reveals them.
   const ITEMS = [
-    { id: "browse", label: "Browse Mods", desc: "Discover & install community mods", command: "dcs.marketplace.open", icon: "store" },
-    { id: "mymods", label: "My Mods", desc: "Enable, update & remove installed mods", command: "dcs.mymods.open", icon: "layers" },
-    { id: "create", label: "Create a Mod", desc: "Start a new project from a template", command: "dcs.manifest.author", icon: "edit" },
-    { id: "publish", label: "Publish Mod", desc: "Preflight, share to GitHub & create a release", command: "dcs.publish.open", icon: "rocket", hidden: true },
-    { id: "console", label: "DCS Console", desc: "Run Lua in the live sim", command: "dcs.bridge.console", icon: "terminal" },
-    { id: "log", label: "DCS Log", desc: "Tail dcs.log with filters", command: "dcs.log.open", icon: "scroll" },
-    { id: "mission", label: "MissionScripting", desc: "Sanitization toggle", command: "dcs.mission.open", icon: "shield" },
-    { id: "skills", label: "Agent Skills", desc: "AI skill files for your repo", command: "dcs.skills.open", icon: "sparkle" },
-    { id: "docs", label: "Documentation", desc: "Guides for every feature", command: "dcs.docs.open", icon: "book", footer: true },
-    { id: "settings", label: "Settings", desc: "DCS paths & options", command: "dcs.setup.open", icon: "gear", footer: true },
+    {
+      id: "browse",
+      label: "Browse Mods",
+      desc: "Discover & install community mods",
+      command: "dcs.marketplace.open",
+      icon: "store",
+    },
+    {
+      id: "mymods",
+      label: "My Mods",
+      desc: "Enable, update & remove installed mods",
+      command: "dcs.mymods.open",
+      icon: "layers",
+    },
+    {
+      id: "create",
+      label: "Create a Mod",
+      desc: "Start a new project from a template",
+      command: "dcs.manifest.author",
+      icon: "edit",
+    },
+    {
+      id: "publish",
+      label: "Publish Mod",
+      desc: "Preflight, share to GitHub & create a release",
+      command: "dcs.publish.open",
+      icon: "rocket",
+      hidden: true,
+    },
+    {
+      id: "console",
+      label: "DCS Console",
+      desc: "Run Lua in the live sim",
+      command: "dcs.bridge.console",
+      icon: "terminal",
+    },
+    {
+      id: "log",
+      label: "DCS Log",
+      desc: "Tail dcs.log with filters",
+      command: "dcs.log.open",
+      icon: "scroll",
+    },
+    {
+      id: "mission",
+      label: "MissionScripting",
+      desc: "Sanitization toggle",
+      command: "dcs.mission.open",
+      icon: "shield",
+    },
+    {
+      id: "skills",
+      label: "Agent Skills",
+      desc: "AI skill files for your repo",
+      command: "dcs.skills.open",
+      icon: "sparkle",
+    },
+    {
+      id: "docs",
+      label: "Documentation",
+      desc: "Guides for every feature",
+      command: "dcs.docs.open",
+      icon: "book",
+      footer: true,
+    },
+    {
+      id: "settings",
+      label: "Settings",
+      desc: "DCS paths & options",
+      command: "dcs.setup.open",
+      icon: "gear",
+      footer: true,
+    },
   ];
 
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  }
+  const { esc } = dcsUi;
 
   function itemHtml(it) {
     return `
@@ -120,16 +181,15 @@
     }
     if (m.type !== "status") return;
     const s = m.status;
+    const running = !!(s.dcsTime && s.dcsTime > 0);
+    dot.className = dcsUi.bridgeDotClass(s.connected, running);
     if (!s.connected) {
-      dot.className = "dot off";
       flabel.textContent = "Bridge offline";
       ftime.textContent = "";
-    } else if (s.dcsTime && s.dcsTime > 0) {
-      dot.className = "dot mission";
+    } else if (running) {
       flabel.textContent = "Mission running";
-      ftime.textContent = "t " + s.dcsTime.toFixed(0) + "s";
+      ftime.textContent = `t ${s.dcsTime.toFixed(0)}s`;
     } else {
-      dot.className = "dot menu";
       flabel.textContent = "At menu";
       ftime.textContent = "";
     }

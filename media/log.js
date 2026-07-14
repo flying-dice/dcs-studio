@@ -9,7 +9,7 @@
 //   append {entries, cont, dropped}, reset {}, fileState {state, file},
 //   mod {mod}.
 // Webview -> host: ready, clear, openSettings.
-(function () {
+(() => {
   const vscode = acquireVsCodeApi();
   const app = document.getElementById("app");
 
@@ -32,9 +32,7 @@
     pendingNew: 0,
   };
 
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  }
+  const { esc } = dcsUi;
 
   app.innerHTML = `
     <div class="toolbar">
@@ -148,7 +146,7 @@
     if (rec.level && !state.levels.has(rec.level)) return false;
     if (state.mineOnly && !rec.mine) return false;
     if (!state.filterRaw || state.filterInvalid) return true;
-    const hay = rec.message + (rec.cont.length ? " " + rec.cont.join(" ") : "");
+    const hay = rec.message + (rec.cont.length ? ` ${rec.cont.join(" ")}` : "");
     if (state.filterRegex) return state.filterRegex.test(hay);
     return hay.toLowerCase().includes(state.filterRaw.toLowerCase());
   }
@@ -176,7 +174,7 @@
     wrapEl.setAttribute("data-testid", "log-row");
 
     const row = document.createElement("div");
-    row.className = "row level-" + (e.level ? e.level.toLowerCase() : "other") + (e.mine ? " mine" : "");
+    row.className = `row level-${e.level ? e.level.toLowerCase() : "other"}${e.mine ? " mine" : ""}`;
     row.innerHTML = `
       <span class="time">${esc(fmtTime(e.time))}</span>
       <span class="level">${esc(e.level || "")}</span>
@@ -321,7 +319,7 @@
   function renderModToggle() {
     if (state.mod) {
       mineToggleEl.classList.remove("hidden");
-      mineToggleEl.textContent = "My mod: " + state.mod.name;
+      mineToggleEl.textContent = `My mod: ${state.mod.name}`;
     } else {
       mineToggleEl.classList.add("hidden");
       state.mineOnly = false;

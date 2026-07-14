@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { JsonLedgerStore } from "../../src/adapters/node/jsonLedgerStore";
 import { renderUninstallScript, type Subscription } from "../../src/core/domain/subscriptions";
 
@@ -75,7 +75,9 @@ describe("save", () => {
     // Occupy the bat path with a directory so writeFileSync fails.
     fs.mkdirSync(store.uninstallBatPath(), { recursive: true });
     await expect(store.save({ "owner/repo": sub })).resolves.toBeUndefined();
-    expect(JSON.parse(fs.readFileSync(store.subsFilePath(), "utf8"))).toEqual({ "owner/repo": sub });
+    expect(JSON.parse(fs.readFileSync(store.subsFilePath(), "utf8"))).toEqual({
+      "owner/repo": sub,
+    });
   });
 });
 

@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { MockMarketplace, LISTINGS, PRODUCTS } from "../../src/adapters/mock/marketplace";
+import { describe, expect, it } from "vitest";
+import { LISTINGS, MockMarketplace, PRODUCTS } from "../../src/adapters/mock/marketplace";
 import type { MarketplacePort } from "../../src/core/ports/marketplace";
 import { productInvariants } from "./contract";
 

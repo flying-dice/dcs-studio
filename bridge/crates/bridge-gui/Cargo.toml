@@ -11,6 +11,9 @@ license.workspace = true
 name = "dcs_studio_gui"
 crate-type = ["cdylib"]
 
+[lints]
+workspace = true
+
 [dependencies]
 dcs-bridge-core.workspace = true
 mlua.workspace = true

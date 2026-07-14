@@ -3,8 +3,8 @@ import type { GitPort } from "../../core/ports/git";
 
 // Node adapter for `GitPort`, driving the `git` CLI. Owns every git process
 // spawn used by the publish flow; the orchestration policy lives in
-// core/app/publishService.ts. The sync probes (hasGitSync/isGitRepoSync/
-// gitRemoteUrlSync) exist for the synchronous preflight/panel paths.
+// core/app/publishService.ts. The sync probes (hasGitSync/isGitRepoSync) back
+// the GitCli port methods used on the synchronous-feeling adapter paths.
 
 interface RunResult {
   code: number;
@@ -26,7 +26,8 @@ function run(cmd: string, args: string[], cwd: string): Promise<RunResult> {
 
 async function must(cmd: string, args: string[], cwd: string, label: string): Promise<string> {
   const r = await run(cmd, args, cwd);
-  if (r.code !== 0) throw new Error(`${label}: ${(r.stderr || r.stdout).trim() || `exit ${r.code}`}`);
+  if (r.code !== 0)
+    throw new Error(`${label}: ${(r.stderr || r.stdout).trim() || `exit ${r.code}`}`);
   return r.stdout.trim();
 }
 
@@ -50,20 +51,6 @@ export function isGitRepoSync(root: string): boolean {
     return !r.error && r.stdout.trim() === "true";
   } catch {
     return false;
-  }
-}
-
-/** The URL of `remote`, or null when unset (sync, for the publish panel). */
-export function gitRemoteUrlSync(root: string, remote = "origin"): string | null {
-  try {
-    const r = spawnSync("git", ["remote", "get-url", remote], {
-      cwd: root,
-      windowsHide: true,
-      encoding: "utf8",
-    });
-    return !r.error && r.status === 0 ? r.stdout.trim() : null;
-  } catch {
-    return null;
   }
 }
 
@@ -96,7 +83,15 @@ export class GitCli implements GitPort {
   async commit(root: string, message: string): Promise<void> {
     await run(
       "git",
-      ["-c", "user.email=noreply@dcs-studio", "-c", "user.name=DCS Studio", "commit", "-m", message],
+      [
+        "-c",
+        "user.email=noreply@dcs-studio",
+        "-c",
+        "user.name=DCS Studio",
+        "commit",
+        "-m",
+        message,
+      ],
       root,
     );
   }

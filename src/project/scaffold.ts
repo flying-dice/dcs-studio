@@ -1,15 +1,15 @@
 import * as vscode from "vscode";
-import { render, TemplateAssets, TemplateFile } from "../core/domain/projectTemplates";
+import { render, type TemplateAssets, type TemplateFile } from "../core/domain/projectTemplates";
 import {
-  validateName,
-  assertValidFolderName,
   assertLocationChosen,
-  assertRenderedSafe,
   assertNewFolderTarget,
-  targetRoot,
+  assertRenderedSafe,
+  assertValidFolderName,
+  type NewFolderProbe,
+  type ProbedFile,
   planInPlace,
-  NewFolderProbe,
-  ProbedFile,
+  targetRoot,
+  validateName,
 } from "../core/domain/scaffoldPlan";
 
 // Materialises a template into a project root — the port of the real app's
@@ -25,7 +25,10 @@ export async function loadTemplateAssets(extensionUri: vscode.Uri): Promise<Temp
     .readFile(vscode.Uri.joinPath(extensionUri, "bridge", "prebuilt", "lua.lib"))
     .then(
       (bytes) => bytes,
-      () => vscode.workspace.fs.readFile(vscode.Uri.joinPath(extensionUri, "bridge", "lua5.1", "lua.lib")),
+      () =>
+        vscode.workspace.fs.readFile(
+          vscode.Uri.joinPath(extensionUri, "bridge", "lua5.1", "lua.lib"),
+        ),
     );
   return { luaLib };
 }
@@ -114,6 +117,7 @@ async function renderChecked(
 async function write(rootUri: vscode.Uri, file: TemplateFile): Promise<void> {
   const target = vscode.Uri.joinPath(rootUri, ...file.path.split("/"));
   await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(target, ".."));
-  const bytes = typeof file.contents === "string" ? Buffer.from(file.contents, "utf8") : file.contents;
+  const bytes =
+    typeof file.contents === "string" ? Buffer.from(file.contents, "utf8") : file.contents;
   await vscode.workspace.fs.writeFile(target, bytes);
 }

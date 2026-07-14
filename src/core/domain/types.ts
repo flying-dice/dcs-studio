@@ -191,9 +191,7 @@ export interface InstalledLink {
 }
 
 /** Outcome of an `enable` — all-or-nothing with rollback on failure. */
-export type LinkResult =
-  | { ok: true; created: ResolvedLink[] }
-  | { ok: false; message: string };
+export type LinkResult = { ok: true; created: ResolvedLink[] } | { ok: false; message: string };
 
 /** Outcome of a `disable` — each entry attempted independently. */
 export interface DisableResult {

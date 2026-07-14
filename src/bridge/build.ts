@@ -1,7 +1,7 @@
-import * as vscode from "vscode";
-import * as path from "path";
-import * as fs from "fs";
 import { spawn } from "child_process";
+import * as fs from "fs";
+import * as path from "path";
+import * as vscode from "vscode";
 import { showError } from "../errors";
 
 // Build the bridge workspace (bridge/) into dcs_studio_gui.dll +

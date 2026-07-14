@@ -48,12 +48,7 @@ static PAUSE: Mutex<Option<String>> = Mutex::new(None);
 static RESUME: Mutex<Option<String>> = Mutex::new(None);
 
 fn with_registry<T>(f: impl FnOnce(&mut BTreeMap<String, BTreeSet<u32>>) -> T) -> T {
-    // A poisoned lock can't corrupt a map of line numbers — recover the guard
-    // rather than panic in a DLL that must never bring the sim down.
-    let mut guard = REGISTRY
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    f(&mut guard)
+    crate::locks::with_lock(&REGISTRY, f)
 }
 
 /// Canonical source key: chunkname prefixes stripped (`@` = loaded from file,
@@ -123,10 +118,7 @@ pub(crate) fn clear() {
 }
 
 fn conditions_slot<T>(f: impl FnOnce(&mut BTreeMap<(String, u32), String>) -> T) -> T {
-    let mut guard = CONDITIONS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    f(&mut guard)
+    crate::locks::with_lock(&CONDITIONS, f)
 }
 
 /// Set (or, for an empty `cond`, clear) the condition on `source:line`.
@@ -179,20 +171,14 @@ pub(crate) fn take_stop() -> bool {
 }
 
 fn pause_slot<T>(f: impl FnOnce(&mut Option<String>) -> T) -> T {
-    let mut guard = PAUSE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    f(&mut guard)
+    crate::locks::with_lock(&PAUSE, f)
 }
 
 fn resume_slot<T>(f: impl FnOnce(&mut Option<String>) -> T) -> T {
-    let mut guard = RESUME
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    f(&mut guard)
+    crate::locks::with_lock(&RESUME, f)
 }
 
-/// Reset all pause/resume/break-all state. Called at the start of a debug_run so
+/// Reset all pause/resume/break-all state. Called at the start of a `debug_run` so
 /// a stale manual-pause (`PAUSE_REQ`), resume request, or pause snapshot from a
 /// prior session can't bleed into the new one (a phantom break on line 1).
 pub(crate) fn reset_session() {
@@ -231,6 +217,9 @@ pub(crate) fn take_resume() -> Option<String> {
 }
 
 /// Register the `debug.*` breakpoint-registry surface on `sub`.
+// A linear registration manifest: one `sub.func` block per RPC method, where
+// splitting by count would scatter one cohesive surface listing.
+#[allow(clippy::too_many_lines)]
 pub fn register(sub: &mut Sub) -> Result<()> {
     sub.func(
         "set_breakpoints",
@@ -431,6 +420,7 @@ pub fn register(sub: &mut Sub) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod tests {
     use super::*;
 

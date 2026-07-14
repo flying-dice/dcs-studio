@@ -1,11 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  parseDcsLogLine,
   isLogLevel,
   LineDecoder,
-  modIdentity,
-  matchesMod,
   LogBuffer,
+  matchesMod,
+  modIdentity,
+  parseDcsLogLine,
 } from "../../src/core/domain/dcsLog";
 
 describe("parseDcsLogLine", () => {
@@ -61,7 +61,8 @@ describe("parseDcsLogLine", () => {
 
 describe("isLogLevel", () => {
   it("recognises the five dcs.log levels", () => {
-    for (const l of ["INFO", "WARNING", "ERROR", "DEBUG", "ALERT"]) expect(isLogLevel(l)).toBe(true);
+    for (const l of ["INFO", "WARNING", "ERROR", "DEBUG", "ALERT"])
+      expect(isLogLevel(l)).toBe(true);
   });
 
   it("rejects anything else", () => {

@@ -5,30 +5,37 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 /// Discover metadata a Lua registration may attach to a method:
-/// `{ summary?, description?, params?, result? }`, feeding the OpenRPC document
+/// `{ summary?, description?, params?, result? }`, feeding the `OpenRPC` document
 /// `rpc.discover` returns. Everything is optional — a bare
 /// `add_method(name, fn)` still catalogs the name.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct MethodMeta {
-    /// A short one-line summary (OpenRPC `method.summary`).
+    /// A short one-line summary (`OpenRPC` `method.summary`).
     pub summary: Option<String>,
-    /// A longer description (OpenRPC `method.description`).
+    /// A longer description (`OpenRPC` `method.description`).
     pub description: Option<String>,
     pub params: Option<Vec<ParamMeta>>,
-    /// The result content descriptor (OpenRPC `method.result`).
+    /// The result content descriptor (`OpenRPC` `method.result`).
     pub result: Option<ResultMeta>,
 }
 
+/// One parameter descriptor a Lua registration may attach — an entry of
+/// `MethodMeta::params`, rendered into the `OpenRPC` method's parameter list.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ParamMeta {
+    /// The parameter name (`OpenRPC` `contentDescriptor.name`).
     pub name: String,
+    /// The `EmmyLua`/JSON-schema type string (`OpenRPC` `schema`). Defaults to a
+    /// permissive schema when absent.
     #[serde(rename = "type")]
     pub ty: Option<String>,
+    /// Whether the parameter is required (`OpenRPC` `contentDescriptor.required`).
     pub required: Option<bool>,
+    /// A human-readable description (`OpenRPC` `contentDescriptor.description`).
     pub description: Option<String>,
 }
 
-/// The result descriptor a Lua registration may attach — becomes the OpenRPC
+/// The result descriptor a Lua registration may attach — becomes the `OpenRPC`
 /// `method.result` content descriptor. All fields optional; a missing result
 /// degrades to a permissive `{ name = "result", schema = {} }`.
 #[derive(Debug, Clone, Deserialize)]
@@ -45,6 +52,10 @@ struct MethodEntry {
     meta: MethodMeta,
 }
 
+/// A method-name → Lua-handler table for JSON-RPC dispatch, exposed to Lua as
+/// the `JsonRpcRouter` userdata. Each entry pairs the handler with its
+/// [`MethodMeta`], so the router doubles as the source the `OpenRPC` builder
+/// walks for `rpc.discover`.
 #[derive(Debug, Default)]
 pub struct JsonRpcRouter {
     methods: HashMap<String, MethodEntry>,
@@ -56,7 +67,7 @@ impl JsonRpcRouter {
     }
 
     fn add_method(&mut self, name: String, callback: LuaFunction, meta: MethodMeta) {
-        debug!("Adding method: {:?}", name);
+        debug!("Adding method: {name:?}");
         self.methods.insert(
             name,
             MethodEntry {
@@ -67,12 +78,12 @@ impl JsonRpcRouter {
     }
 
     pub fn get_method(&self, name: &str) -> Option<&LuaFunction> {
-        debug!("Getting method: {:?}", name);
+        debug!("Getting method: {name:?}");
         self.methods.get(name).map(|entry| &entry.handler)
     }
 
     /// Every registered method, sorted by name, paired with its metadata — the
-    /// single source the OpenRPC builder ([`crate::jsonrpc::openrpc`]) turns
+    /// single source the `OpenRPC` builder ([`crate::jsonrpc::openrpc`]) turns
     /// into the `rpc.discover` document.
     pub fn methods_sorted(&self) -> Vec<(&str, &MethodMeta)> {
         let mut entries: Vec<(&str, &MethodMeta)> = self
@@ -111,6 +122,7 @@ impl UserData for JsonRpcRouter {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod tests {
     use super::*;
 
@@ -147,7 +159,11 @@ mod tests {
 
         let methods = router.methods_sorted();
         let names: Vec<&str> = methods.iter().map(|(n, _)| *n).collect();
-        assert_eq!(names, vec!["eval", "ping"], "alphabetical, no synthetic entry");
+        assert_eq!(
+            names,
+            vec!["eval", "ping"],
+            "alphabetical, no synthetic entry"
+        );
 
         let (_, eval) = &methods[0];
         assert_eq!(eval.summary.as_deref(), Some("Run Lua"));

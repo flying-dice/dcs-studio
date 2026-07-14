@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { MissionSanitizeService } from "../../src/core/app/missionSanitizeService";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../src/adapters/node/fs";
+import { MissionSanitizeService } from "../../src/core/app/missionSanitizeService";
 import { allItems, backupPath, ITEMS } from "../../src/core/domain/missionSanitize";
 
 // Integration test: the real Node fs adapter wired into MissionSanitizeService
@@ -50,7 +50,7 @@ describe("MissionSanitizeService over the Node fs adapter (real fs)", () => {
   it("desanitize writes <path>.dcsstudio.bak once and preserves CRLF on disk", async () => {
     await setItems(lua, allItems(false));
     const bak = backupPath(lua);
-    expect(bak).toBe(lua + ".dcsstudio.bak");
+    expect(bak).toBe(`${lua}.dcsstudio.bak`);
     expect(fs.readFileSync(bak, "utf8")).toBe(PRISTINE);
     const edited = fs.readFileSync(lua, "utf8");
     expect(edited).toContain("\t-- sanitizeModule('os')\r\n");

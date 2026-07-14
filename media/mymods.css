@@ -1,18 +1,6 @@
-:root {
-  --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
-  --card: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-  --muted: var(--vscode-descriptionForeground);
-  --mono: var(--vscode-editor-font-family, monospace);
-  --ok: var(--vscode-testing-iconPassed, #3fb950);
-}
-* { box-sizing: border-box; }
-body { margin: 0; font-family: var(--vscode-font-family); font-size: 13px; color: var(--vscode-foreground); background: var(--vscode-editor-background); }
-.mono { font-family: var(--mono); }
-
-header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--vscode-editor-background); }
-.kicker { font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.28em; color: var(--muted); }
-.title { font-weight: 600; font-size: 15px; }
-.spacer { margin-left: auto; }
+/* Base tokens, reset, .mono, header/.kicker/.title/.spacer, .btn, .spin live in
+   media/base.css (linked first). Only My Mods overrides + components here. */
+:root { --ok: var(--vscode-testing-iconPassed, #3fb950); }
 
 .wrap { max-width: 820px; margin: 0 auto; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
 .datadir { font-size: 11px; color: var(--muted); font-family: var(--mono); word-break: break-all; }
@@ -26,12 +14,10 @@ header { position: sticky; top: 0; z-index: 5; display: flex; align-items: cente
 .pill.off { color: var(--muted); background: color-mix(in srgb, var(--muted) 14%, transparent); }
 
 .actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
-.btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid transparent; border-radius: 6px; font-size: 12px; cursor: pointer; background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
-.btn:hover { background: var(--vscode-button-hoverBackground); }
-.btn.secondary { background: var(--vscode-button-secondaryBackground, transparent); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); border-color: var(--border); }
-.btn.secondary:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground)); }
-.btn.danger:hover { background: var(--vscode-inputValidation-errorBackground, rgba(190,70,70,0.2)); }
-.btn:disabled { opacity: 0.5; cursor: default; }
+/* Base .btn/.secondary come from base.css; My Mods only tweaks the padding and
+   adds a danger hover. */
+.btn { padding: 7px 12px; }
+.btn.danger:hover { background: var(--vscode-inputValidation-errorBackground, rgba(190, 70, 70, 0.2)); }
 .icon-btn { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
 
 /* toggle switch */
@@ -76,6 +62,4 @@ header { position: sticky; top: 0; z-index: 5; display: flex; align-items: cente
 
 .empty { text-align: center; color: var(--muted); padding: 60px 20px; }
 .empty .big { font-size: 15px; font-weight: 600; color: var(--vscode-foreground); margin-bottom: 6px; }
-.spin { display: inline-block; animation: spin 0.9s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
 .progress { font-size: 11px; color: var(--muted); }

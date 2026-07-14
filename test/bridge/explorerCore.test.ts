@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+
 // The webview's pure explorer logic runs unmodified in Node via its UMD export
 // (the manifest-core precedent). Exercise every glob/filter/sweep branch here.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -191,7 +192,9 @@ describe("valueToJson / childrenToJson — copy serialization", () => {
   });
 
   it("keeps an unexpanded table as its preview, nests a loaded one", () => {
-    expect(core.valueToJson({ type: "table", value: "table (3)", loaded: false })).toBe("table (3)");
+    expect(core.valueToJson({ type: "table", value: "table (3)", loaded: false })).toBe(
+      "table (3)",
+    );
     const loaded = {
       type: "table",
       loaded: true,
@@ -204,8 +207,12 @@ describe("valueToJson / childrenToJson — copy serialization", () => {
   });
 
   it("uses the resolved signature for a function, else its preview", () => {
-    expect(core.valueToJson({ type: "function", value: "function (2 args)", signature: "f(a, b)" })).toBe("f(a, b)");
-    expect(core.valueToJson({ type: "function", value: "function (2 args)" })).toBe("function (2 args)");
+    expect(
+      core.valueToJson({ type: "function", value: "function (2 args)", signature: "f(a, b)" }),
+    ).toBe("f(a, b)");
+    expect(core.valueToJson({ type: "function", value: "function (2 args)" })).toBe(
+      "function (2 args)",
+    );
   });
 
   it("falls back to the raw value for unknown types (userdata/thread)", () => {

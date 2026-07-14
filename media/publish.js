@@ -1,14 +1,16 @@
 // @ts-nocheck
 // Publish panel: preflight checks, Share to GitHub (repo + push), Create a release
 // (7z-packaged, volume-split payload + standalone manifest).
-(function () {
+(() => {
   const vscode = acquireVsCodeApi();
   const app = document.getElementById("app");
-  const state = { checks: [], repo: null, defaults: { name: "", description: "", version: "0.1.0" } };
+  const state = {
+    checks: [],
+    repo: null,
+    defaults: { name: "", description: "", version: "0.1.0" },
+  };
 
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  }
+  const { esc } = dcsUi;
   const blocking = () => state.checks.some((c) => c.level === "error");
 
   function checksHtml() {
@@ -24,7 +26,7 @@
   }
 
   function render() {
-    const tag = "v" + (state.defaults.version || "0.1.0");
+    const tag = `v${state.defaults.version || "0.1.0"}`;
     const shared = !!state.repo;
     app.innerHTML = `
       <header>
@@ -45,9 +47,11 @@
         <section class="card">
           <h2>1 · Share to GitHub</h2>
           <p class="sub">Creates a public repo, pushes your project, and tags it <span class="mono">dcs-studio</span> so the Marketplace can discover it.</p>
-          ${shared
-            ? `<div class="result ok">Already on GitHub: <button class="btn link" data-open="${esc(state.repo.owner)}/${esc(state.repo.name)}">${esc(state.repo.owner)}/${esc(state.repo.name)}</button>. You can re-push by sharing again.</div>`
-            : ""}
+          ${
+            shared
+              ? `<div class="result ok">Already on GitHub: <button class="btn link" data-open="${esc(state.repo.owner)}/${esc(state.repo.name)}">${esc(state.repo.owner)}/${esc(state.repo.name)}</button>. You can re-push by sharing again.</div>`
+              : ""
+          }
           <div class="grid2" style="margin-top:12px">
             <div class="field"><span class="lbl">Repository name</span><input class="in" id="repoName" value="${esc(state.repo ? state.repo.name : state.defaults.name)}" placeholder="my-cool-mod" spellcheck="false" /></div>
             <div class="field"><span class="lbl">Description</span><input class="in" id="repoDesc" value="${esc(state.defaults.description)}" placeholder="One line about the mod" spellcheck="false" /></div>
@@ -60,7 +64,7 @@
           <h2>2 · Create a release</h2>
           <p class="sub">Packages the manifest + install sources into a 7z payload (split into GitHub-safe volumes when large) and uploads it with the standalone <span class="mono">dcs-studio.toml</span> alongside.</p>
           <div class="grid2">
-            <div class="field"><span class="lbl">Repo (owner/name)</span><input class="in" id="relRepo" value="${esc(state.repo ? state.repo.owner + "/" + state.repo.name : "")}" placeholder="owner/name" spellcheck="false" /></div>
+            <div class="field"><span class="lbl">Repo (owner/name)</span><input class="in" id="relRepo" value="${esc(state.repo ? `${state.repo.owner}/${state.repo.name}` : "")}" placeholder="owner/name" spellcheck="false" /></div>
             <div class="field"><span class="lbl">Tag</span><input class="in" id="relTag" value="${esc(tag)}" placeholder="v1.0.0" spellcheck="false" /></div>
             <div class="field full"><span class="lbl">Release notes</span><textarea class="in" id="relNotes" placeholder="What changed in this release…"></textarea></div>
           </div>
@@ -75,10 +79,17 @@
   }
 
   function bind() {
-    document.getElementById("refresh").addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
-    document.querySelectorAll("[data-open]").forEach((el) =>
-      el.addEventListener("click", () => vscode.postMessage({ type: "openExternal", url: "https://github.com/" + el.dataset.open })),
-    );
+    document
+      .getElementById("refresh")
+      .addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
+    document.querySelectorAll("[data-open]").forEach((el) => {
+      el.addEventListener("click", () =>
+        vscode.postMessage({
+          type: "openExternal",
+          url: `https://github.com/${el.dataset.open}`,
+        }),
+      );
+    });
     const shareBtn = document.getElementById("shareBtn");
     shareBtn.addEventListener("click", () => {
       showLog();
@@ -94,18 +105,33 @@
     releaseBtn.addEventListener("click", () => {
       const repo = document.getElementById("relRepo").value.trim();
       const [owner, name] = repo.split("/");
-      if (!owner || !name) { appendLog("✖ Enter the repo as owner/name (share first if you haven't)."); showLog(); return; }
+      if (!owner || !name) {
+        appendLog("✖ Enter the repo as owner/name (share first if you haven't).");
+        showLog();
+        return;
+      }
       showLog();
       vscode.postMessage({
         type: "release",
-        opts: { owner, name, tag: document.getElementById("relTag").value.trim(), notes: document.getElementById("relNotes").value },
+        opts: {
+          owner,
+          name,
+          tag: document.getElementById("relTag").value.trim(),
+          notes: document.getElementById("relNotes").value,
+        },
       });
     });
   }
 
   const logEl = () => document.getElementById("log");
-  function showLog() { logEl().classList.add("show"); }
-  function appendLog(line) { const el = logEl(); el.textContent += (el.textContent ? "\n" : "") + line; el.scrollTop = el.scrollHeight; }
+  function showLog() {
+    logEl().classList.add("show");
+  }
+  function appendLog(line) {
+    const el = logEl();
+    el.textContent += (el.textContent ? "\n" : "") + line;
+    el.scrollTop = el.scrollHeight;
+  }
 
   window.addEventListener("message", (e) => {
     const m = e.data;
@@ -115,7 +141,9 @@
         app.innerHTML = `<div class="wrap"><section class="card"><h2>Open a project folder</h2><p class="sub">Publish works on the open workspace folder that holds your dcs-studio.toml.</p></section></div>`;
         break;
       case "init":
-        state.checks = m.checks; state.repo = m.repo; state.defaults = m.defaults;
+        state.checks = m.checks;
+        state.repo = m.repo;
+        state.defaults = m.defaults;
         render();
         break;
       case "log":
@@ -123,25 +151,41 @@
         break;
       case "busy": {
         const btn = document.getElementById(m.scope === "share" ? "shareBtn" : "releaseBtn");
-        if (btn) { btn.disabled = m.busy; btn.textContent = m.busy ? (m.scope === "share" ? "Sharing…" : "Publishing…") : (m.scope === "share" ? "Share to GitHub" : "Package & publish release"); }
+        if (btn) {
+          btn.disabled = m.busy;
+          btn.textContent = m.busy
+            ? m.scope === "share"
+              ? "Sharing…"
+              : "Publishing…"
+            : m.scope === "share"
+              ? "Share to GitHub"
+              : "Package & publish release";
+        }
         break;
       }
       case "shareDone": {
         const r = document.getElementById("shareResult");
         r.style.display = "block";
         r.innerHTML = `Shared → <button class="btn link" data-open="${esc(m.result.owner)}/${esc(m.result.name)}">${esc(m.result.owner)}/${esc(m.result.name)}</button>. Create a release below.`;
-        r.querySelector("[data-open]").addEventListener("click", (ev) => vscode.postMessage({ type: "openExternal", url: "https://github.com/" + ev.target.dataset.open }));
+        r.querySelector("[data-open]").addEventListener("click", (ev) =>
+          vscode.postMessage({
+            type: "openExternal",
+            url: `https://github.com/${ev.target.dataset.open}`,
+          }),
+        );
         const relRepo = document.getElementById("relRepo");
-        if (relRepo && !relRepo.value) relRepo.value = m.result.owner + "/" + m.result.name;
-        appendLog("✓ Shared to " + m.result.owner + "/" + m.result.name);
+        if (relRepo && !relRepo.value) relRepo.value = `${m.result.owner}/${m.result.name}`;
+        appendLog(`✓ Shared to ${m.result.owner}/${m.result.name}`);
         break;
       }
       case "releaseDone": {
         const r = document.getElementById("releaseResult");
         r.style.display = "block";
         r.innerHTML = `Published release <span class="mono">${esc(m.result.url.split("/").pop())}</span> · <button class="btn link" data-url="${esc(m.result.url)}">view on GitHub</button><div class="assets">${m.result.assets.map(esc).join("<br>")}</div>`;
-        r.querySelector("[data-url]").addEventListener("click", (ev) => vscode.postMessage({ type: "openExternal", url: ev.target.dataset.url }));
-        appendLog("✓ Release published: " + m.result.url);
+        r.querySelector("[data-url]").addEventListener("click", (ev) =>
+          vscode.postMessage({ type: "openExternal", url: ev.target.dataset.url }),
+        );
+        appendLog(`✓ Release published: ${m.result.url}`);
         break;
       }
     }

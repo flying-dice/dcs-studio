@@ -2,9 +2,9 @@ import { spawn, spawnSync } from "child_process";
 import type { GhFacts } from "../../core/domain/publishChecks";
 import type {
   GhPort,
+  GhReleaseCreateOptions,
   GhRepoCreateOptions,
   GhRepoCreateResult,
-  GhReleaseCreateOptions,
 } from "../../core/ports/gh";
 
 // Node adapter for `GhPort`, driving the GitHub CLI. Owns every gh process
@@ -32,13 +32,17 @@ function run(cmd: string, args: string[]): Promise<RunResult> {
 
 async function must(cmd: string, args: string[], label: string): Promise<string> {
   const r = await run(cmd, args);
-  if (r.code !== 0) throw new Error(`${label}: ${(r.stderr || r.stdout).trim() || `exit ${r.code}`}`);
+  if (r.code !== 0)
+    throw new Error(`${label}: ${(r.stderr || r.stdout).trim() || `exit ${r.code}`}`);
   return r.stdout.trim();
 }
 
 /** The signed-in GitHub login, or null (sync, for the publish panel). */
 export function ghLoginSync(): string | null {
-  const r = spawnSync("gh", ["api", "user", "-q", ".login"], { windowsHide: true, encoding: "utf8" });
+  const r = spawnSync("gh", ["api", "user", "-q", ".login"], {
+    windowsHide: true,
+    encoding: "utf8",
+  });
   return !r.error && r.status === 0 ? r.stdout.trim() : null;
 }
 
@@ -72,7 +76,14 @@ export class GhCli implements GhPort {
   }
 
   async repoCreate(opts: GhRepoCreateOptions): Promise<GhRepoCreateResult> {
-    const args = ["repo", "create", opts.name, `--${opts.visibility ?? "public"}`, "--source", opts.source];
+    const args = [
+      "repo",
+      "create",
+      opts.name,
+      `--${opts.visibility ?? "public"}`,
+      "--source",
+      opts.source,
+    ];
     if (opts.remote) args.push("--remote", opts.remote);
     if (opts.push !== false) args.push("--push");
     args.push("-d", opts.description ?? "");
@@ -103,7 +114,18 @@ export class GhCli implements GhPort {
   async releaseCreate(opts: GhReleaseCreateOptions): Promise<void> {
     await must(
       "gh",
-      ["release", "create", opts.tag, ...opts.assets, "-R", opts.repo, "--title", opts.title, "--notes", opts.notes],
+      [
+        "release",
+        "create",
+        opts.tag,
+        ...opts.assets,
+        "-R",
+        opts.repo,
+        "--title",
+        opts.title,
+        "--notes",
+        opts.notes,
+      ],
       "gh release create",
     );
   }

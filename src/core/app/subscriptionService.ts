@@ -1,29 +1,29 @@
 import * as path from "node:path";
-import type { SubscriptionLedgerStore } from "../ports/ledger";
-import type { ArchivePort } from "../ports/archive";
-import type { DownloadPort } from "../ports/downloader";
-import type { LinkerPort } from "../ports/linker";
-import type { ManifestPort } from "../ports/manifest";
-import type { InstallRootsPort } from "../ports/installRoots";
-import type { FileSystemPort } from "../ports/filesystem";
-import type { ClockPort } from "../ports/clock";
+import { selectPayloadVolumes } from "../domain/archivePolicy";
+import {
+  AFTER_SANITIZE_FILE,
+  type AggregatorEntry,
+  BEFORE_SANITIZE_FILE,
+  generateAggregator,
+} from "../domain/missionScriptAggregator";
+import { dataDirName, ledgerKey, MANIFEST, sortedByName } from "../domain/subscriptions";
 import type {
-  InstallTarget,
   InstallRoots,
+  InstallTarget,
+  LinkDefinition,
   ManifestEntrypoint,
   ManifestMissionScript,
   ProductAsset,
   Subscription,
 } from "../domain/types";
-import type { LinkDefinition } from "../domain/types";
-import { MANIFEST, keyOf, ledgerKey, sortedByName } from "../domain/subscriptions";
-import { selectPayloadVolumes } from "../domain/archivePolicy";
-import {
-  generateAggregator,
-  BEFORE_SANITIZE_FILE,
-  AFTER_SANITIZE_FILE,
-  type AggregatorEntry,
-} from "../domain/missionScriptAggregator";
+import type { ArchivePort } from "../ports/archive";
+import type { ClockPort } from "../ports/clock";
+import type { DownloadPort } from "../ports/downloader";
+import type { FileSystemPort } from "../ports/filesystem";
+import type { InstallRootsPort } from "../ports/installRoots";
+import type { SubscriptionLedgerStore } from "../ports/ledger";
+import type { LinkerPort } from "../ports/linker";
+import type { ManifestPort } from "../ports/manifest";
 
 // The subscription lifecycle use-cases (Dropzone model): subscribe = download +
 // unpack into the data dir; enable = link the unpacked assets to their
@@ -72,7 +72,10 @@ export class SubscriptionService {
   constructor(private readonly ports: SubscriptionPorts) {}
 
   private roots(): InstallRoots {
-    return { savedGames: this.ports.roots.savedGames(), gameInstall: this.ports.roots.gameInstall() || "" };
+    return {
+      savedGames: this.ports.roots.savedGames(),
+      gameInstall: this.ports.roots.gameInstall() || "",
+    };
   }
 
   /** All subscriptions, sorted by display name. */
@@ -97,7 +100,11 @@ export class SubscriptionService {
   async fetchPlan(assets: ProductAsset[], token: string | undefined): Promise<InstallPlan | null> {
     const manifestAsset = assets.find((a) => a.name === MANIFEST);
     if (!manifestAsset) return null;
-    const tmp = path.join(this.ports.roots.dataDir(), ".tmp", `${this.ports.clock.now()}-${MANIFEST}`);
+    const tmp = path.join(
+      this.ports.roots.dataDir(),
+      ".tmp",
+      `${this.ports.clock.now()}-${MANIFEST}`,
+    );
     await this.ports.downloader.download(manifestAsset.url, tmp, token);
     const m = this.ports.manifest.parseToml(await this.ports.fs.readText(tmp));
     await this.ports.fs.remove(tmp);
@@ -127,7 +134,7 @@ export class SubscriptionService {
     const volumes = selectPayloadVolumes(target.assets);
     if (!volumes.length) throw new Error("This release has no .7z payload to install.");
 
-    const dir = path.join(this.ports.roots.dataDir(), keyOf(target.repo));
+    const dir = path.join(this.ports.roots.dataDir(), dataDirName(target.repo));
     const dl = path.join(dir, ".download");
     await this.ports.fs.remove(dl);
     await this.ports.fs.mkdirp(dl);
@@ -162,7 +169,9 @@ export class SubscriptionService {
     missionScripts: Subscription["missionScripts"];
   }> {
     try {
-      const model = this.ports.manifest.parseToml(await this.ports.fs.readText(path.join(dir, MANIFEST)));
+      const model = this.ports.manifest.parseToml(
+        await this.ports.fs.readText(path.join(dir, MANIFEST)),
+      );
       return {
         bundles: model.bundle.map((b) => ({ path: b.path })),
         symlinks: model.symlink.map((s) => ({ source: s.source, dest: s.dest })),
@@ -191,18 +200,31 @@ export class SubscriptionService {
     for (const sub of Object.values(subs)) {
       if (!sub.enabled) continue;
       for (const ms of sub.missionScripts ?? []) {
-        const entry: AggregatorEntry = { tag: `${sub.repo}@${sub.tag}`, absPath: path.join(sub.dir, ms.path) };
+        const entry: AggregatorEntry = {
+          tag: `${sub.repo}@${sub.tag}`,
+          absPath: path.join(sub.dir, ms.path),
+        };
         (ms.run_on === "before-sanitize" ? before : after).push(entry);
       }
     }
     const scriptsDir = path.join(this.ports.roots.savedGames(), "Scripts");
     await this.ports.fs.mkdirp(scriptsDir);
-    await this.ports.fs.writeText(path.join(scriptsDir, BEFORE_SANITIZE_FILE), generateAggregator(before));
-    await this.ports.fs.writeText(path.join(scriptsDir, AFTER_SANITIZE_FILE), generateAggregator(after));
+    await this.ports.fs.writeText(
+      path.join(scriptsDir, BEFORE_SANITIZE_FILE),
+      generateAggregator(before),
+    );
+    await this.ports.fs.writeText(
+      path.join(scriptsDir, AFTER_SANITIZE_FILE),
+      generateAggregator(after),
+    );
   }
 
   /** Subscribe: download + unpack (does not enable/link). */
-  async subscribe(target: InstallTarget, token: string | undefined, onProgress: OnProgress): Promise<Subscription> {
+  async subscribe(
+    target: InstallTarget,
+    token: string | undefined,
+    onProgress: OnProgress,
+  ): Promise<Subscription> {
     const dir = await this.downloadAndUnpack(target, token, onProgress);
     const subs = await this.ports.ledger.load();
     const existing = subs[ledgerKey(target.repo)];
@@ -233,12 +255,15 @@ export class SubscriptionService {
     const sub = subs[ledgerKey(repo)];
     if (!sub) throw new Error("Not subscribed.");
     if (sub.enabled) return;
-    const model = this.ports.manifest.parseToml(await this.ports.fs.readText(path.join(sub.dir, MANIFEST)));
+    const model = this.ports.manifest.parseToml(
+      await this.ports.fs.readText(path.join(sub.dir, MANIFEST)),
+    );
     const r = this.roots();
     const defs: LinkDefinition[] = [];
     model.symlink.forEach((rule, i) => {
       const resolved = this.ports.manifest.resolveDest(rule.dest, r);
-      if (!resolved) throw new Error(`Cannot resolve ${rule.dest} — configure {GameInstall} in Settings.`);
+      if (!resolved)
+        throw new Error(`Cannot resolve ${rule.dest} — configure {GameInstall} in Settings.`);
       defs.push({ id: `${repo}:${i}`, src: path.join(sub.dir, rule.source), dest: resolved });
     });
     const res = await this.ports.linker.enable(defs);
@@ -253,7 +278,7 @@ export class SubscriptionService {
   async disable(repo: string): Promise<void> {
     const subs = await this.ports.ledger.load();
     const sub = subs[ledgerKey(repo)];
-    if (!sub || !sub.enabled) return;
+    if (!sub?.enabled) return;
     this.ports.linker.disable(sub.links.map((l) => ({ id: l.id, installedPath: l.dest })));
     sub.enabled = false;
     sub.links = [];
@@ -262,7 +287,11 @@ export class SubscriptionService {
   }
 
   /** One-click install: subscribe + enable (the Marketplace action). */
-  async install(target: InstallTarget, token: string | undefined, onProgress: OnProgress): Promise<void> {
+  async install(
+    target: InstallTarget,
+    token: string | undefined,
+    onProgress: OnProgress,
+  ): Promise<void> {
     await this.subscribe(target, token, onProgress);
     onProgress({ phase: "link", label: "Linking into DCS…" });
     await this.enable(target.repo);
@@ -270,7 +299,11 @@ export class SubscriptionService {
   }
 
   /** Update to a newer release: re-download, preserving enabled state. */
-  async update(target: InstallTarget, token: string | undefined, onProgress: OnProgress): Promise<void> {
+  async update(
+    target: InstallTarget,
+    token: string | undefined,
+    onProgress: OnProgress,
+  ): Promise<void> {
     const wasEnabled = await this.isEnabled(target.repo);
     if (wasEnabled) await this.disable(target.repo);
     await this.subscribe(target, token, onProgress);
@@ -287,7 +320,8 @@ export class SubscriptionService {
     const subs = await this.ports.ledger.load();
     const sub = subs[ledgerKey(repo)];
     if (!sub) return;
-    if (sub.enabled) this.ports.linker.disable(sub.links.map((l) => ({ id: l.id, installedPath: l.dest })));
+    if (sub.enabled)
+      this.ports.linker.disable(sub.links.map((l) => ({ id: l.id, installedPath: l.dest })));
     await this.ports.fs.remove(sub.dir);
     delete subs[ledgerKey(repo)];
     await this.ports.ledger.save(subs);

@@ -69,14 +69,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         # The DLLs also ship inside the vsix; attaching them (and the hook)
         # separately lets a bridge-only deploy grab them without the extension.
-        run: >-
-          gh release create "${{ github.ref_name }}"
-          (Get-Item *.vsix).FullName
-          bridge/prebuilt/dcs_studio_gui.dll
-          bridge/prebuilt/dcs_studio_mission.dll
-          bridge/hook/DcsStudio.lua
-          --title "DCS Studio ${{ github.ref_name }}"
-          --generate-notes
+        # If a release for this tag already exists (e.g. a draft was pre-created
+        # for testing and then published, which is what created the tag), refresh
+        # its assets instead of failing on the duplicate.
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $assets = @(
+            (Get-Item *.vsix).FullName,
+            "bridge/prebuilt/dcs_studio_gui.dll",
+            "bridge/prebuilt/dcs_studio_mission.dll",
+            "bridge/hook/DcsStudio.lua"
+          )
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @assets --clobber
+          } else {
+            gh release create $tag @assets --title "DCS Studio $tag" --generate-notes
+          }
 
       # Marketplace publishing is deliberately manual: download the .vsix from
       # the GitHub Release and drag it into

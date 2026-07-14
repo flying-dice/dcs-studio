@@ -1,6 +1,6 @@
 import { execFile } from "child_process";
-import type { RegistryPort } from "../../core/ports/registry";
 import { parseRegistryQuery } from "../../core/domain/dcsDetect";
+import type { RegistryPort } from "../../core/ports/registry";
 
 // Node adapter for `RegistryPort` — shells out to `reg.exe` and hands the raw
 // stdout to the pure parser in core/domain/dcsDetect. Any error (non-Windows host,

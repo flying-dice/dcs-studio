@@ -1,9 +1,10 @@
-import * as vscode from "vscode";
 import * as os from "os";
 import * as path from "path";
+import * as vscode from "vscode";
+import { browseStart, initialForm } from "../core/domain/projectForm";
 import { TEMPLATES } from "../core/domain/projectTemplates";
+import { renderWebviewHtml } from "../webview/html";
 import { scaffoldInPlace, scaffoldNewFolder } from "./scaffold";
-import { initialForm, browseStart } from "../core/domain/projectForm";
 
 // The guided New Project experience — the VS Code port of the real app's
 // launcher card: template tiles, name, location with live path preview,
@@ -25,11 +26,16 @@ export class NewProjectPanel {
       NewProjectPanel.current.panel.reveal(column);
       return;
     }
-    const panel = vscode.window.createWebviewPanel(NewProjectPanel.viewType, "New Project", column, {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-    });
+    const panel = vscode.window.createWebviewPanel(
+      NewProjectPanel.viewType,
+      "New Project",
+      column,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
+      },
+    );
     NewProjectPanel.current = new NewProjectPanel(panel, context);
   }
 
@@ -89,7 +95,12 @@ export class NewProjectPanel {
     }
   }
 
-  private async create(template: string, name: string, location: string, inPlace: boolean): Promise<void> {
+  private async create(
+    template: string,
+    name: string,
+    location: string,
+    inPlace: boolean,
+  ): Promise<void> {
     try {
       const folder = this.workspaceFolder();
       if (inPlace && folder) {
@@ -131,36 +142,13 @@ export class NewProjectPanel {
   }
 
   private html(): string {
-    const webview = this.panel.webview;
-    const media = (f: string) =>
-      webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", f));
-    const nonce = getNonce();
-    const csp = [
-      `default-src 'none'`,
-      `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src 'nonce-${nonce}'`,
-      `font-src ${webview.cspSource}`,
-    ].join("; ");
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="${csp}" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link href="${media("newproject.css")}" rel="stylesheet" />
-  <title>New Project</title>
-</head>
-<body>
-  <div id="app"></div>
-  <script nonce="${nonce}" src="${media("newproject.js")}"></script>
-</body>
-</html>`;
+    return renderWebviewHtml({
+      webview: this.panel.webview,
+      extensionUri: this.context.extensionUri,
+      title: "New Project",
+      styles: ["newproject.css"],
+      scripts: ["newproject.js"],
+      csp: { font: true },
+    });
   }
-}
-
-function getNonce(): string {
-  let text = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) text += chars.charAt(Math.floor(Math.random() * chars.length));
-  return text;
 }

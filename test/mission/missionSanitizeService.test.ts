@@ -1,8 +1,8 @@
-import { describe, it, expect } from "vitest";
-import type { FileSystemPort } from "../../src/core/ports/filesystem";
+import { describe, expect, it } from "vitest";
 import { MissionSanitizeService } from "../../src/core/app/missionSanitizeService";
 import { allItems, backupPath } from "../../src/core/domain/missionSanitize";
-import { BEFORE_TRIGGER, AFTER_TRIGGER } from "../../src/core/domain/missionScriptTrigger";
+import { AFTER_TRIGGER, BEFORE_TRIGGER } from "../../src/core/domain/missionScriptTrigger";
+import type { FileSystemPort } from "../../src/core/ports/filesystem";
 
 const LUA = "C:\\DCS\\Scripts\\MissionScripting.lua";
 const BAK = backupPath(LUA);

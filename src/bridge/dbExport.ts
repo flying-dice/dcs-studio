@@ -2,9 +2,9 @@ import * as os from "os";
 import * as vscode from "vscode";
 import { dbExportFileBase, shouldOpenExport } from "../core/domain/bridgeConsole";
 import { fmtBytes } from "../core/domain/format";
-import { DbExportWhat } from "../core/domain/bridgeProtocol";
 import { showError } from "../errors";
-import { BridgeClients } from "./clients";
+import type { BridgeClients } from "./clients";
+import type { DbExportWhat } from "./dbTypes";
 
 // "DCS Studio: Export DCS Unit Database (JSON)…" — a quick-pick over the GUI
 // bridge's db_export method. Mirrors the console export flow: the sim writes the
@@ -20,10 +20,22 @@ interface ScopePick extends vscode.QuickPickItem {
 async function pickWhat(clients: BridgeClients): Promise<DbExportWhat | undefined> {
   const scope = await vscode.window.showQuickPick<ScopePick>(
     [
-      { label: "$(database) Everything", description: "The whole DCS database (tens of MB)", scope: "all" },
-      { label: "$(list-tree) A category…", description: "Planes, Helicopters, Ships, …", scope: "category" },
+      {
+        label: "$(database) Everything",
+        description: "The whole DCS database (tens of MB)",
+        scope: "all",
+      },
+      {
+        label: "$(list-tree) A category…",
+        description: "Planes, Helicopters, Ships, …",
+        scope: "category",
+      },
       { label: "$(rocket) A single unit…", description: "One unit record by type", scope: "unit" },
-      { label: "$(tools) Weapons / stores", description: "db.Weapons (CLSIDs + display names)", scope: "weapons" },
+      {
+        label: "$(tools) Weapons / stores",
+        description: "db.Weapons (CLSIDs + display names)",
+        scope: "weapons",
+      },
     ],
     { title: "Export DCS Database — what to export?", matchOnDescription: true },
   );
@@ -63,7 +75,10 @@ export async function dbExportCommand(clients: BridgeClients): Promise<void> {
     if (!what) return;
 
     const { path, bytes } = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: `Exporting DCS database (${what})…` },
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Exporting DCS database (${what})…`,
+      },
       () => clients.gui.dbExport(what),
     );
 
@@ -80,7 +95,9 @@ export async function dbExportCommand(clients: BridgeClients): Promise<void> {
         const doc = await vscode.workspace.openTextDocument(target);
         await vscode.window.showTextDocument(doc, { preview: true });
       } else {
-        void vscode.window.showInformationMessage(`Exported ${fmtBytes(bytes)} to ${target.fsPath}`);
+        void vscode.window.showInformationMessage(
+          `Exported ${fmtBytes(bytes)} to ${target.fsPath}`,
+        );
       }
     }
 

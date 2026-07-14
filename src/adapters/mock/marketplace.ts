@@ -1,5 +1,5 @@
-import type { MarketplacePort } from "../../core/ports/marketplace";
 import type { MarketListing, ProductDetail } from "../../core/domain/types";
+import type { MarketplacePort } from "../../core/ports/marketplace";
 
 // Mock adapter for `MarketplacePort` — sample Marketplace data for the
 // consumer-UX preview, previously src/marketplace/mockData.ts. The shapes are
@@ -203,7 +203,11 @@ Multiplayer: all clients need the mod installed for the loadouts to sync.
       {
         name: "f16-weapons-expansion-v2.3.1.zip",
         size: 4.2 * MB,
-        url: assetUrl("viper-drivers/f16-weapons-expansion", "v2.3.1", "f16-weapons-expansion-v2.3.1.zip"),
+        url: assetUrl(
+          "viper-drivers/f16-weapons-expansion",
+          "v2.3.1",
+          "f16-weapons-expansion-v2.3.1.zip",
+        ),
       },
       {
         name: "dcs-studio.toml",
@@ -291,7 +295,11 @@ Install, then find it under **Campaigns** in the DCS main menu.
       {
         name: "operation-eastern-storm-1.4.0.zip",
         size: 128 * MB,
-        url: assetUrl("mission-makers/operation-eastern-storm", "1.4.0", "operation-eastern-storm-1.4.0.zip"),
+        url: assetUrl(
+          "mission-makers/operation-eastern-storm",
+          "1.4.0",
+          "operation-eastern-storm-1.4.0.zip",
+        ),
       },
       {
         name: "dcs-studio.toml",

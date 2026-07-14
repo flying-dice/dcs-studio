@@ -1,31 +1,13 @@
+/* Base tokens, reset, .mono, the .btn family and .spin live in media/base.css
+   (linked first). Only the marketplace's extra tokens + components are here. */
 :root {
   --brand: color-mix(in srgb, var(--vscode-textLink-foreground) 90%, transparent);
-  --card: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-  --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
-  --muted: var(--vscode-descriptionForeground);
   --radius: 10px;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  padding: 0;
-  font-family: var(--vscode-font-family);
-  font-size: 13px;
-  color: var(--vscode-foreground);
-  background: var(--vscode-editor-background);
 }
 
 button {
   font-family: inherit;
   cursor: pointer;
-}
-
-.mono {
-  font-family: var(--vscode-editor-font-family, monospace);
 }
 
 /* ── Top bar ── */
@@ -123,32 +105,7 @@ select {
   outline: none;
 }
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 6px;
-  border: 1px solid transparent;
-  font-size: 12px;
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
-}
-.btn:hover {
-  background: var(--vscode-button-hoverBackground);
-}
-.btn.secondary {
-  background: var(--vscode-button-secondaryBackground, transparent);
-  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
-  border-color: var(--border);
-}
-.btn.secondary:hover {
-  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
-}
-.btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
+/* Base .btn / .secondary / :disabled come from base.css. */
 .btn.block {
   width: 100%;
   justify-content: center;
@@ -364,16 +321,6 @@ select {
   padding: 80px 24px;
   font-size: 13px;
 }
-.spin {
-  display: inline-block;
-  animation: spin 0.9s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* ── Product page ── */
 .product {
   max-width: 1000px;

@@ -1,10 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  generateAggregator,
-  toPosix,
-  BEFORE_SANITIZE_FILE,
   AFTER_SANITIZE_FILE,
   type AggregatorEntry,
+  BEFORE_SANITIZE_FILE,
+  generateAggregator,
+  toPosix,
 } from "../../src/core/domain/missionScriptAggregator";
 
 describe("aggregator file names", () => {
@@ -54,6 +54,8 @@ describe("generateAggregator", () => {
 
   it("declares the guard before any entries", () => {
     const out = generateAggregator([{ tag: "o/r@v1", absPath: "x/a.lua" }]);
-    expect(out.indexOf("local function dofileifexist")).toBeLessThan(out.indexOf("dofileifexist([["));
+    expect(out.indexOf("local function dofileifexist")).toBeLessThan(
+      out.indexOf("dofileifexist([["),
+    );
   });
 });

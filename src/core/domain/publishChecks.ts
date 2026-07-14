@@ -39,7 +39,7 @@ export function isCoveredByBundle(source: string, bundlePaths: string[]): boolea
   const s = normPath(source);
   return bundlePaths.some((p) => {
     const b = normPath(p);
-    return b === "" || b === "." || s === b || s.startsWith(b + "/");
+    return b === "" || b === "." || s === b || s.startsWith(`${b}/`);
   });
 }
 
@@ -67,8 +67,18 @@ export interface PreflightFacts {
 
 /** GitHub CLI presence + auth as a Check (used standalone and inside preflight). */
 export function computeGhCheck(gh: GhFacts): Check {
-  if (!gh.present) return { label: "GitHub CLI", level: "error", detail: "gh not found. Install from cli.github.com." };
-  if (!gh.authed) return { label: "GitHub CLI", level: "error", detail: "gh is not signed in. Run: gh auth login" };
+  if (!gh.present)
+    return {
+      label: "GitHub CLI",
+      level: "error",
+      detail: "gh not found. Install from cli.github.com.",
+    };
+  if (!gh.authed)
+    return {
+      label: "GitHub CLI",
+      level: "error",
+      detail: "gh is not signed in. Run: gh auth login",
+    };
   return { label: "GitHub CLI", level: "ok", detail: "signed in" };
 }
 
@@ -76,7 +86,11 @@ export function computeGhCheck(gh: GhFacts): Check {
 export function computePreflight(facts: PreflightFacts): Check[] {
   const checks: Check[] = [];
   if (!facts.manifestExists) {
-    checks.push({ label: "Manifest", level: "error", detail: "dcs-studio.toml not found in the workspace root." });
+    checks.push({
+      label: "Manifest",
+      level: "error",
+      detail: "dcs-studio.toml not found in the workspace root.",
+    });
   } else if (!facts.manifest) {
     checks.push({ label: "Manifest", level: "error", detail: "Could not parse dcs-studio.toml." });
   } else {
@@ -93,11 +107,16 @@ export function computePreflight(facts: PreflightFacts): Check[] {
       checks.push({
         label: "Manifest",
         level: "error",
-        detail: "[[install]] is no longer supported — replace each rule with [[bundle]] path = <source> and [[symlink]] source/dest.",
+        detail:
+          "[[install]] is no longer supported — replace each rule with [[bundle]] path = <source> and [[symlink]] source/dest.",
       });
     }
     if (!m.bundle.length) {
-      checks.push({ label: "Bundle paths", level: "warn", detail: "No [[bundle]] paths — the release will ship only the manifest." });
+      checks.push({
+        label: "Bundle paths",
+        level: "warn",
+        detail: "No [[bundle]] paths — the release will ship only the manifest.",
+      });
     } else {
       const missing = facts.bundle.filter((s) => s.missing).map((s) => s.source);
       const symlinks = facts.bundle.filter((s) => !s.missing && s.symlink).map((s) => s.source);
@@ -116,14 +135,20 @@ export function computePreflight(facts: PreflightFacts): Check[] {
           items: symlinks.map((s) => `symlink: ${s}`),
         });
       } else {
-        checks.push({ label: "Bundle paths", level: "ok", detail: `${m.bundle.length} bundle path(s) present.` });
+        checks.push({
+          label: "Bundle paths",
+          level: "ok",
+          detail: `${m.bundle.length} bundle path(s) present.`,
+        });
       }
     }
     // Every symlink source must live inside bundled content, or the link would
     // point at a file the payload never shipped. Pure check — no fs needed.
     if (m.symlink.length) {
       const bundlePaths = m.bundle.map((b) => b.path);
-      const uncovered = m.symlink.filter((s) => !isCoveredByBundle(s.source, bundlePaths)).map((s) => s.source);
+      const uncovered = m.symlink
+        .filter((s) => !isCoveredByBundle(s.source, bundlePaths))
+        .map((s) => s.source);
       if (uncovered.length) {
         checks.push({
           label: "Symlink coverage",
@@ -145,7 +170,9 @@ export function computePreflight(facts: PreflightFacts): Check[] {
     // symlinks) are perfectly valid — they still bundle the exe. Pure checks.
     if (m.entrypoint.length) {
       const bundlePaths = m.bundle.map((b) => b.path);
-      const uncovered = m.entrypoint.filter((e) => !isCoveredByBundle(e.exe, bundlePaths)).map((e) => e.exe);
+      const uncovered = m.entrypoint
+        .filter((e) => !isCoveredByBundle(e.exe, bundlePaths))
+        .map((e) => e.exe);
       const ids = m.entrypoint.map((e) => e.id);
       const dupes = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
       if (uncovered.length) {
@@ -177,7 +204,9 @@ export function computePreflight(facts: PreflightFacts): Check[] {
     // becomes the aggregator's tag and the subscriber-facing label). Pure check.
     if (m.mission_script.length) {
       const bundlePaths = m.bundle.map((b) => b.path);
-      const uncovered = m.mission_script.filter((s) => !isCoveredByBundle(s.path, bundlePaths)).map((s) => s.path);
+      const uncovered = m.mission_script
+        .filter((s) => !isCoveredByBundle(s.path, bundlePaths))
+        .map((s) => s.path);
       const badRunOn = m.mission_script
         .filter((s) => s.run_on !== "before-sanitize" && s.run_on !== "after-sanitize")
         .map((s) => s.path || "(no path)");
@@ -215,7 +244,11 @@ export function computePreflight(facts: PreflightFacts): Check[] {
   checks.push(
     facts.sevenZip
       ? { label: "7-Zip", level: "ok", detail: facts.sevenZip }
-      : { label: "7-Zip", level: "error", detail: "7z not found. Install 7-Zip (7-zip.org) and retry." },
+      : {
+          label: "7-Zip",
+          level: "error",
+          detail: "7z not found. Install 7-Zip (7-zip.org) and retry.",
+        },
   );
   checks.push(
     facts.gitAvailable

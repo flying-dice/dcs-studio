@@ -1,11 +1,12 @@
 import * as vscode from "vscode";
-import { currentSession, signIn } from "../adapters/vscode/auth";
-import { DISCOVERY_TOPIC } from "../core/domain/githubMarketplace";
-import type { MarketplacePort } from "../core/ports/marketplace";
-import type { ProductDetail } from "../core/domain/types";
 import type { SubscriptionService } from "../core/app/subscriptionService";
+import { DISCOVERY_TOPIC } from "../core/domain/githubMarketplace";
 import { deriveInstallManifestView } from "../core/domain/installManifestView";
+import type { ProductDetail } from "../core/domain/types";
+import type { AuthPort } from "../core/ports/auth";
+import type { MarketplacePort } from "../core/ports/marketplace";
 import { showError } from "../errors";
+import { renderWebviewHtml } from "../webview/html";
 
 // The full-screen storefront, hosted as a webview panel. The webview owns all
 // view state (grid, product page, search/tag/sort); the host owns the sign-in
@@ -31,18 +32,24 @@ export class MarketplacePanel {
     context: vscode.ExtensionContext,
     subs: SubscriptionService,
     market: MarketplacePort,
+    auth: AuthPort,
   ): void {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
     if (MarketplacePanel.current) {
       MarketplacePanel.current.panel.reveal(column);
       return;
     }
-    const panel = vscode.window.createWebviewPanel(MarketplacePanel.viewType, "DCS Marketplace", column, {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-    });
-    MarketplacePanel.current = new MarketplacePanel(panel, context, subs, market);
+    const panel = vscode.window.createWebviewPanel(
+      MarketplacePanel.viewType,
+      "DCS Marketplace",
+      column,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
+      },
+    );
+    MarketplacePanel.current = new MarketplacePanel(panel, context, subs, market, auth);
   }
 
   private constructor(
@@ -50,6 +57,7 @@ export class MarketplacePanel {
     context: vscode.ExtensionContext,
     private readonly subs: SubscriptionService,
     private readonly market: MarketplacePort,
+    private readonly auth: AuthPort,
   ) {
     this.panel = panel;
     this.context = context;
@@ -81,14 +89,21 @@ export class MarketplacePanel {
     void this.panel.webview.postMessage(msg);
   }
 
-  private async onMessage(msg: { type: string; repo?: string; name?: string; force?: boolean; url?: string; page?: string }): Promise<void> {
+  private async onMessage(msg: {
+    type: string;
+    repo?: string;
+    name?: string;
+    force?: boolean;
+    url?: string;
+    page?: string;
+  }): Promise<void> {
     switch (msg.type) {
       case "ready":
         await this.refreshAuth();
         break;
       case "signIn": {
-        const session = await signIn();
-        this.token = session?.accessToken;
+        const session = await this.auth.signIn();
+        this.token = session?.token;
         this.browsing = false;
         await this.refreshAuth();
         break;
@@ -122,7 +137,11 @@ export class MarketplacePanel {
             this.post({ type: "uninstalled", repo: msg.repo });
             void vscode.window.showInformationMessage(`Uninstalled ${msg.repo}.`);
           } catch (e) {
-            this.post({ type: "installError", repo: msg.repo, message: e instanceof Error ? e.message : String(e) });
+            this.post({
+              type: "installError",
+              repo: msg.repo,
+              message: e instanceof Error ? e.message : String(e),
+            });
           }
         }
         break;
@@ -139,24 +158,40 @@ export class MarketplacePanel {
     this.post({ type: "installProgress", repo, phase: "download", label: "Starting…", pct: 0 });
     try {
       await this.subs.install(
-        { repo: product.repo, name: product.name, tag: product.release_tag, assets: product.assets },
+        {
+          repo: product.repo,
+          name: product.name,
+          tag: product.release_tag,
+          assets: product.assets,
+        },
         this.token,
-        (p) => this.post({ type: "installProgress", repo, phase: p.phase, label: p.label, pct: p.pct }),
+        (p) =>
+          this.post({ type: "installProgress", repo, phase: p.phase, label: p.label, pct: p.pct }),
       );
       this.post({ type: "installed", repo });
       void vscode.window.showInformationMessage(`Installed ${product.name} into your DCS folders.`);
     } catch (e) {
-      this.post({ type: "installError", repo, message: e instanceof Error ? e.message : String(e) });
+      this.post({
+        type: "installError",
+        repo,
+        message: e instanceof Error ? e.message : String(e),
+      });
       void showError(`Install failed: ${e instanceof Error ? e.message : String(e)}`, e);
     }
   }
 
   /** Push current auth state to the webview; auto-discover when we have access. */
   private async refreshAuth(): Promise<void> {
-    const session = await currentSession();
-    this.token = session?.accessToken;
+    const session = await this.auth.currentSession();
+    this.token = session?.token;
     const signedIn = !!session;
-    this.post({ type: "auth", signedIn, browsing: this.browsing, login: session?.account.label, topic: this.topic() });
+    this.post({
+      type: "auth",
+      signedIn,
+      browsing: this.browsing,
+      login: session?.accountLabel,
+      topic: this.topic(),
+    });
     if (signedIn || this.browsing) await this.runDiscover(false);
   }
 
@@ -193,7 +228,11 @@ export class MarketplacePanel {
         installed: await this.subs.isSubscribed(product.repo),
       });
     } catch (e) {
-      this.post({ type: "product:error", repo, message: e instanceof Error ? e.message : String(e) });
+      this.post({
+        type: "product:error",
+        repo,
+        message: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 
@@ -204,38 +243,13 @@ export class MarketplacePanel {
   }
 
   private html(): string {
-    const webview = this.panel.webview;
-    const media = (f: string) =>
-      webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", f));
-    const nonce = getNonce();
-    const csp = [
-      `default-src 'none'`,
-      `img-src ${webview.cspSource} https: data:`,
-      `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src 'nonce-${nonce}'`,
-      `font-src ${webview.cspSource}`,
-    ].join("; ");
-
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="${csp}" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link href="${media("marketplace.css")}" rel="stylesheet" />
-  <title>DCS Marketplace</title>
-</head>
-<body>
-  <div id="app"></div>
-  <script nonce="${nonce}" src="${media("marketplace.js")}"></script>
-</body>
-</html>`;
+    return renderWebviewHtml({
+      webview: this.panel.webview,
+      extensionUri: this.context.extensionUri,
+      title: "DCS Marketplace",
+      styles: ["marketplace.css"],
+      scripts: ["marketplace.js"],
+      csp: { img: "https: data:", font: true },
+    });
   }
-}
-
-function getNonce(): string {
-  let text = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) text += chars.charAt(Math.floor(Math.random() * chars.length));
-  return text;
 }

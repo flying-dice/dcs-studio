@@ -5,19 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>DCS Studio preview — Lua Console</title>
 <!-- Load order is load-bearing: harness -> fixture -> CSS -> mounts ->
-     explorer-core.js -> real media/console.js. console.js posts {type:"ready"}
-     at the bottom of its IIFE (and reads window.DcsExplorerCore at the top),
-     so the fixture's onPost handler must already be listening and
-     explorer-core.js must already have run before console.js does. -->
+     explorer-core.js -> console-explorer.js -> real media/console.js.
+     console.js posts {type:"ready"} at the bottom of its IIFE and reads
+     window.DcsExplorerCore / window.DcsConsoleExplorer at the top, so the
+     fixture's onPost handler must already be listening and both explorer
+     scripts must already have run before console.js does. -->
 <script src="harness.js"></script>
 <script src="fixtures/console.js"></script>
 <link rel="stylesheet" href="theme.css" />
+<link rel="stylesheet" href="../media/base.css" />
 <link rel="stylesheet" href="../media/console.css" />
 </head>
 <body>
 <div id="app"></div>
 <div id="toast"></div>
+<script src="../media/shared.js"></script>
 <script src="../media/explorer-core.js"></script>
+<script src="../media/console-explorer.js"></script>
 <script src="../media/console.js"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { openPreview, expectSent, hostSend } from "./helpers";
+import { expect, test } from "@playwright/test";
+import { expectSent, hostSend, openPreview } from "./helpers";
 
 test.describe("skills preview", () => {
   test("renders one card per status with correct pill + version text", async ({ page }) => {
@@ -12,7 +12,9 @@ test.describe("skills preview", () => {
 
     const outdated = page.locator('[data-testid="skill-card"][data-id="dcs-studio-2"]');
     await expect(outdated.getByTestId("status-pill")).toHaveText("Update available");
-    await expect(outdated.getByTestId("version-line")).toHaveText("installed v1.0.0 → bundled v1.2.0");
+    await expect(outdated.getByTestId("version-line")).toHaveText(
+      "installed v1.0.0 → bundled v1.2.0",
+    );
 
     const upToDate = page.locator('[data-testid="skill-card"][data-id="dcs-studio-3"]');
     await expect(upToDate.getByTestId("status-pill")).toHaveText("Installed · up to date");
@@ -60,7 +62,15 @@ test.describe("skills preview", () => {
       type: "skills",
       installDir: ".claude/skills",
       hasWorkspace: false,
-      skills: [{ id: "s1", name: "s1", description: "d", bundledVersion: "1.0.0", status: "not-installed" }],
+      skills: [
+        {
+          id: "s1",
+          name: "s1",
+          description: "d",
+          bundledVersion: "1.0.0",
+          status: "not-installed",
+        },
+      ],
     });
     await expect(page.getByTestId("no-workspace-note")).toBeVisible();
     await expect(page.getByTestId("empty-note")).toHaveCount(0);
@@ -68,7 +78,12 @@ test.describe("skills preview", () => {
 
   test("empty skills list shows empty-note", async ({ page }) => {
     await openPreview(page, "skills");
-    await hostSend(page, { type: "skills", installDir: ".claude/skills", hasWorkspace: true, skills: [] });
+    await hostSend(page, {
+      type: "skills",
+      installDir: ".claude/skills",
+      hasWorkspace: true,
+      skills: [],
+    });
     await expect(page.getByTestId("empty-note")).toBeVisible();
     await expect(page.getByTestId("skill-card")).toHaveCount(0);
   });

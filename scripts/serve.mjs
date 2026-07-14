@@ -3,10 +3,11 @@
 // same relative paths they'd use opened directly via file://.
 //
 // Usage: node scripts/serve.mjs [port]   (default 4173, matches playwright.config.ts)
-import http from "node:http";
+
 import { createReadStream, statSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import http from "node:http";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = Number(process.argv[2]) || 4173;

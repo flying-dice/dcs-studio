@@ -10,21 +10,11 @@
 //! submodule for bulk persistence.
 
 use crate::facade::{p, p_opt, r_named, Sub};
-use crate::get_lfs_writedir;
 use crate::lua_utils::{opt_bool, opt_str, serialize_lua_to_json, to_json_string};
-use crate::path_guard::stays_under;
+use crate::path_guard::resolve_under_writedir;
 use mlua::prelude::{LuaTable, LuaValue};
 use mlua::{IntoLuaMulti, Lua, Result};
-use std::path::{Path, PathBuf};
-
-/// Resolve `rel` under `lfs.writedir()`, refusing any path that escapes the root.
-fn resolve(lua: &Lua, rel: &str) -> std::result::Result<PathBuf, String> {
-    if !stays_under(rel) {
-        return Err(format!("path escapes the write root: {rel}"));
-    }
-    let writedir = get_lfs_writedir(lua).map_err(|e| format!("lfs.writedir() unavailable: {e}"))?;
-    Ok(PathBuf::from(writedir).join(rel))
-}
+use std::path::Path;
 
 /// Create parent dirs, then truncate-write or append `bytes`.
 fn write_bytes(path: &Path, bytes: &[u8], append: bool) -> std::io::Result<()> {
@@ -68,7 +58,7 @@ fn encode_csv(rows: &LuaTable) -> std::result::Result<String, String> {
         let row = row.map_err(|e| format!("row {} is not a table: {e}", i + 1))?;
         let cells: Vec<String> = row
             .sequence_values::<LuaValue>()
-            .filter_map(|c| c.ok())
+            .filter_map(std::result::Result::ok)
             .map(|c| csv_field(&cell_to_string(&c)))
             .collect();
         out.push_str(&cells.join(","));
@@ -79,19 +69,19 @@ fn encode_csv(rows: &LuaTable) -> std::result::Result<String, String> {
 
 /// Sim-safe JSON encode of a Lua value (NaN/Inf → null, non-UTF-8 lossy).
 fn encode_json(value: &LuaValue, pretty: bool) -> std::result::Result<String, String> {
-    let json = serialize_lua_to_json(value).ok_or("value is not JSON-serializable")?;
+    let json = serialize_lua_to_json(value)?;
     to_json_string(&json, pretty).map_err(|e| e.to_string())
 }
 
 /// Infer the dump format from a path's extension (.json / .csv / else text).
 fn infer_format(path: &str) -> &'static str {
-    let lower = path.to_lowercase();
-    if lower.ends_with(".json") {
-        "json"
-    } else if lower.ends_with(".csv") {
-        "csv"
-    } else {
-        "text"
+    match std::path::Path::new(path)
+        .extension()
+        .map(std::ffi::OsStr::to_ascii_lowercase)
+    {
+        Some(ext) if ext == "json" => "json",
+        Some(ext) if ext == "csv" => "csv",
+        _ => "text",
     }
 }
 
@@ -109,8 +99,8 @@ pub fn register(sub: &mut Sub) -> Result<()> {
          `opts.append = true` appends instead. Refuses a path that escapes the \
          write root.",
         |lua: &Lua, (path, content, opts): (String, String, Option<LuaTable>)| {
-            let append = opt_bool(&opts, "append");
-            match resolve(lua, &path).and_then(|p| {
+            let append = opt_bool(opts.as_ref(), "append");
+            match resolve_under_writedir(lua, &path).and_then(|p| {
                 write_bytes(&p, content.as_bytes(), append)
                     .map_err(|e| format!("file.write_text: {e}"))
             }) {
@@ -131,9 +121,9 @@ pub fn register(sub: &mut Sub) -> Result<()> {
         "Encode `value` to JSON (sim-safe) and write it to `path` under \
          lfs.writedir(). `opts.pretty = true` indents.",
         |lua: &Lua, (path, value, opts): (String, LuaValue, Option<LuaTable>)| {
-            let pretty = opt_bool(&opts, "pretty");
+            let pretty = opt_bool(opts.as_ref(), "pretty");
             match encode_json(&value, pretty)
-                .and_then(|text| resolve(lua, &path).map(|p| (p, text)))
+                .and_then(|text| resolve_under_writedir(lua, &path).map(|p| (p, text)))
                 .and_then(|(p, text)| {
                     write_bytes(&p, text.as_bytes(), false)
                         .map_err(|e| format!("file.write_json: {e}"))
@@ -151,7 +141,7 @@ pub fn register(sub: &mut Sub) -> Result<()> {
         "Write `rows` (an array of arrays of scalars) as RFC-4180 CSV to `path` \
          under lfs.writedir().",
         |lua: &Lua, (path, rows): (String, LuaTable)| match encode_csv(&rows)
-            .and_then(|text| resolve(lua, &path).map(|p| (p, text)))
+            .and_then(|text| resolve_under_writedir(lua, &path).map(|p| (p, text)))
             .and_then(|(p, text)| {
                 write_bytes(&p, text.as_bytes(), false).map_err(|e| format!("file.write_csv: {e}"))
             }) {
@@ -173,9 +163,9 @@ pub fn register(sub: &mut Sub) -> Result<()> {
          (\"json\" | \"csv\" | \"text\").",
         |lua: &Lua, (path, value, opts): (String, LuaValue, Option<LuaTable>)| {
             let format =
-                opt_str(&opts, "format").unwrap_or_else(|| infer_format(&path).to_string());
+                opt_str(opts.as_ref(), "format").unwrap_or_else(|| infer_format(&path).to_string());
             let encoded = match format.as_str() {
-                "json" => encode_json(&value, opt_bool(&opts, "pretty")),
+                "json" => encode_json(&value, opt_bool(opts.as_ref(), "pretty")),
                 "csv" => match value {
                     LuaValue::Table(ref rows) => encode_csv(rows),
                     _ => Err("dump: csv format needs an array-of-arrays table".to_string()),
@@ -183,7 +173,7 @@ pub fn register(sub: &mut Sub) -> Result<()> {
                 _ => Ok(cell_to_string(&value)),
             };
             match encoded
-                .and_then(|text| resolve(lua, &path).map(|p| (p, text)))
+                .and_then(|text| resolve_under_writedir(lua, &path).map(|p| (p, text)))
                 .and_then(|(p, text)| {
                     write_bytes(&p, text.as_bytes(), false).map_err(|e| format!("file.dump: {e}"))
                 }) {

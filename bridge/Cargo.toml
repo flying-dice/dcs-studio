@@ -20,9 +20,32 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
+
+# Workspace-wide lint policy (each crate opts in via [lints] workspace = true).
+# Philosophy: pedantic on wholesale, plus the restriction lints that keep panics
+# out of code that runs inside DCS — a panic in a bridge DLL crashes the sim.
+# Individual pedantic lints are allowed below only when they genuinely don't
+# make sense for this codebase; prefer fixing code over widening this list.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Restriction lints: no abort/panic paths in production code. Tests may opt
+# out per-file (unwrap there is idiomatic and documents assumptions).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+exit = "deny"
 
 [workspace.dependencies]
 dcs-bridge-core = { path = "crates/bridge-core" }

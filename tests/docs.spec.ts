@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { openPreview, expectSent, hostSend } from "./helpers";
+import { expect, test } from "@playwright/test";
+import { expectSent, hostSend, openPreview } from "./helpers";
 
 test.describe("docs preview", () => {
   test("renders the TOC from __DOCS__ and the first page by default", async ({ page }) => {
@@ -23,7 +23,9 @@ test.describe("docs preview", () => {
     await openPreview(page, "docs");
     await page.locator('[data-testid="toc-link"][data-page="finding-mods"]').click();
     await expect(page.getByTestId("page-title")).toHaveText("Finding Mods");
-    await expect(page.locator('[data-testid="toc-link"][data-page="finding-mods"]')).toHaveClass(/active/);
+    await expect(page.locator('[data-testid="toc-link"][data-page="finding-mods"]')).toHaveClass(
+      /active/,
+    );
   });
 
   test("pager prev/next navigate between adjacent pages", async ({ page }) => {

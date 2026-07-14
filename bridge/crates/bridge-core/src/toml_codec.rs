@@ -17,12 +17,11 @@ pub fn register(sub: &mut Sub) -> Result<()> {
          lossy). The TOML top level must be a table; a bare array/scalar or a \
          null value returns (nil, err).",
         |lua: &Lua, value: LuaValue| {
-            let Some(json) = serialize_lua_to_json(&value) else {
-                return (
-                    LuaValue::Nil,
-                    "toml.encode: unsupported Lua value".to_string(),
-                )
-                    .into_lua_multi(lua);
+            let json = match serialize_lua_to_json(&value) {
+                Ok(json) => json,
+                Err(e) => {
+                    return (LuaValue::Nil, format!("toml.encode: {e}")).into_lua_multi(lua);
+                }
             };
             match toml::to_string(&json) {
                 Ok(text) => text.into_lua_multi(lua),

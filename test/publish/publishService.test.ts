@@ -1,18 +1,18 @@
-import { describe, it, expect } from "vitest";
 import * as path from "path";
-import { PublishService, type PublishPorts } from "../../src/core/app/publishService";
-import type { GitPort } from "../../src/core/ports/git";
-import type {
-  GhPort,
-  GhRepoCreateOptions,
-  GhRepoCreateResult,
-  GhReleaseCreateOptions,
-} from "../../src/core/ports/gh";
+import { describe, expect, it } from "vitest";
+import { type PublishPorts, PublishService } from "../../src/core/app/publishService";
+import { DEFAULT_VOLUME_BYTES } from "../../src/core/domain/archivePolicy";
+import type { InstallRoots, ManifestModel, PackagedPayload } from "../../src/core/domain/types";
 import type { ArchivePort } from "../../src/core/ports/archive";
 import type { FileSystemPort } from "../../src/core/ports/filesystem";
+import type {
+  GhPort,
+  GhReleaseCreateOptions,
+  GhRepoCreateOptions,
+  GhRepoCreateResult,
+} from "../../src/core/ports/gh";
+import type { GitPort } from "../../src/core/ports/git";
 import type { ManifestPort } from "../../src/core/ports/manifest";
-import type { InstallRoots, ManifestModel, PackagedPayload } from "../../src/core/domain/types";
-import { DEFAULT_VOLUME_BYTES } from "../../src/core/domain/archivePolicy";
 
 // ── Recording fakes ──────────────────────────────────────────────────────────
 
@@ -41,9 +41,10 @@ class FakeGit implements GitPort {
   async commit(root: string, message: string): Promise<void> {
     this.calls.push(["commit", root, message]);
   }
+  remoteUrlValue: string | null = null;
   async getRemoteUrl(root: string, remote?: string): Promise<string | null> {
     this.calls.push(["getRemoteUrl", root, remote]);
-    return null;
+    return this.remoteUrlValue;
   }
   async setRemote(root: string, remote: string, url: string): Promise<void> {
     this.calls.push(["setRemote", root, remote, url]);
@@ -198,7 +199,16 @@ function rig(): Rig {
   const manifest = new FakeManifest();
   const ports: PublishPorts = { git, gh, archive, fs, manifest };
   const logs: string[] = [];
-  return { git, gh, archive, fs, manifest, service: new PublishService(ports), logs, log: (l) => logs.push(l) };
+  return {
+    git,
+    gh,
+    archive,
+    fs,
+    manifest,
+    service: new PublishService(ports),
+    logs,
+    log: (l) => logs.push(l),
+  };
 }
 
 const ROOT = path.join("C:", "work", "mod");
@@ -244,7 +254,11 @@ describe("PublishService.share", () => {
       ],
       ["repoTopicAdd", "octocat/my-mod", "dcs-studio"],
     ]);
-    expect(res).toEqual({ owner: "octocat", name: "my-mod", url: "https://github.com/octocat/my-mod" });
+    expect(res).toEqual({
+      owner: "octocat",
+      name: "my-mod",
+      url: "https://github.com/octocat/my-mod",
+    });
     expect(r.logs).toEqual([
       "git init",
       "git commit",
@@ -300,7 +314,6 @@ describe("PublishService.share", () => {
       "gh repo create: boom",
     );
   });
-
 });
 
 // ── cutRelease ───────────────────────────────────────────────────────────────
@@ -327,14 +340,18 @@ function releaseRig(bundle: { path: string }[] = []) {
 describe("PublishService.cutRelease", () => {
   it("rejects when the manifest cannot be read", async () => {
     const r = rig();
-    await expect(r.service.cutRelease(ROOT, releaseOpts, r.log)).rejects.toThrow("Cannot read dcs-studio.toml.");
+    await expect(r.service.cutRelease(ROOT, releaseOpts, r.log)).rejects.toThrow(
+      "Cannot read dcs-studio.toml.",
+    );
   });
 
   it("rejects when the manifest does not parse", async () => {
     const r = rig();
     r.fs.files.set(manifestPath, "not toml");
     r.manifest.model = null; // parseToml throws
-    await expect(r.service.cutRelease(ROOT, releaseOpts, r.log)).rejects.toThrow("Cannot read dcs-studio.toml.");
+    await expect(r.service.cutRelease(ROOT, releaseOpts, r.log)).rejects.toThrow(
+      "Cannot read dcs-studio.toml.",
+    );
   });
 
   it("rejects when no archiver is available", async () => {
@@ -367,7 +384,14 @@ describe("PublishService.cutRelease", () => {
 
     expect(r.archive.calls).toEqual([
       ["available"],
-      ["packagePayload", ROOT, ["dcs-studio.toml", "out/mod"], outDir, "dcs-studio-mod-v1.0.0", undefined],
+      [
+        "packagePayload",
+        ROOT,
+        ["dcs-studio.toml", "out/mod"],
+        outDir,
+        "dcs-studio-mod-v1.0.0",
+        undefined,
+      ],
     ]);
     // The standalone manifest is copied alongside the payload.
     expect(r.fs.calls).toContainEqual(["copy", manifestPath, manifestAsset]);
@@ -424,7 +448,7 @@ describe("PublishService.cutRelease", () => {
     const r = releaseRig();
     await r.service.cutRelease(ROOT, releaseOpts, r.log);
     const create = r.gh.calls.find((c) => c[0] === "releaseCreate");
-    expect((create?.[1] as { notes: string }).notes).toBe("Release v1.0.0");
+    expect((create?.[1] as { notes: string } | undefined)?.notes).toBe("Release v1.0.0");
   });
 
   it("re-release: deletes the previous release before creating the new one", async () => {
@@ -447,5 +471,46 @@ describe("PublishService.cutRelease", () => {
     const pack = r.archive.calls.find((c) => c[0] === "packagePayload");
     expect(pack?.[5]).toBeUndefined();
     expect(DEFAULT_VOLUME_BYTES).toBeGreaterThan(0); // policy default lives with the archiver
+  });
+});
+
+// ── toolFacts / remoteUrl (preflight facts routed through the service) ─────────
+
+describe("PublishService.toolFacts", () => {
+  it("gathers 7-Zip, git and gh presence/auth through the ports", async () => {
+    const r = rig();
+    r.archive.availableValue = "C:/7z/7z.exe";
+    const facts = await r.service.toolFacts();
+    expect(facts).toEqual({
+      sevenZip: "C:/7z/7z.exe",
+      gitAvailable: true,
+      gh: { present: true, authed: true },
+    });
+    expect(r.archive.calls).toContainEqual(["available"]);
+    expect(r.git.calls).toContainEqual(["isInstalled"]);
+    expect(r.gh.calls).toContainEqual(["isInstalled"]);
+    expect(r.gh.calls).toContainEqual(["isAuthed"]);
+  });
+
+  it("reports missing tools as null / false", async () => {
+    const r = rig();
+    r.archive.availableValue = null;
+    const facts = await r.service.toolFacts();
+    expect(facts.sevenZip).toBeNull();
+  });
+});
+
+describe("PublishService.remoteUrl", () => {
+  it("returns the git port's origin remote URL by default", async () => {
+    const r = rig();
+    r.git.remoteUrlValue = "https://github.com/octocat/mod.git";
+    expect(await r.service.remoteUrl(ROOT)).toBe("https://github.com/octocat/mod.git");
+    expect(r.git.calls).toContainEqual(["getRemoteUrl", ROOT, "origin"]);
+  });
+
+  it("passes an explicit remote name through and returns null when unset", async () => {
+    const r = rig();
+    expect(await r.service.remoteUrl(ROOT, "upstream")).toBeNull();
+    expect(r.git.calls).toContainEqual(["getRemoteUrl", ROOT, "upstream"]);
   });
 });

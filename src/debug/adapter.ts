@@ -1,20 +1,18 @@
-import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { BridgeClient, DebugEnv, DebugState } from "../bridge/client";
-import { BridgeClients } from "../bridge/clients";
-import { missionStartFailure } from "../core/domain/bridgeProtocol";
-import { scanItems } from "../core/domain/missionSanitize";
-import { missionScriptPath } from "../mission/missionPanel";
+import * as vscode from "vscode";
+import type { BridgeClient, DebugEnv, DebugState } from "../bridge/client";
+import type { BridgeClients } from "../bridge/clients";
+import { missionStartFailure } from "../core/domain/bridgeStatusView";
 import {
-  INITIAL_TRACKING,
-  SessionEvent,
-  SessionTracking,
-  StoredBreakpoint,
   actionForResume,
+  INITIAL_TRACKING,
   noDebugOutcome,
   pollTransition,
   runFastPathDecision,
+  type SessionEvent,
+  type SessionTracking,
+  type StoredBreakpoint,
   showUserForFailure,
   sourceId,
   threadName,
@@ -25,7 +23,9 @@ import {
   toStackTraceResponse,
   toVariablesResponse,
 } from "../core/domain/dapTranslation";
+import { scanItems } from "../core/domain/missionSanitize";
 import { showError } from "../errors";
+import { missionScriptPath } from "../mission/missionPanel";
 
 // Inline Debug Adapter Protocol implementation for DCS World Lua.
 //
@@ -55,6 +55,7 @@ interface DapRequest {
   seq: number;
   type: "request";
   command: string;
+  // biome-ignore lint/suspicious/noExplicitAny: DAP wire format — arguments' shape varies per command
   arguments?: any;
 }
 
@@ -115,7 +116,13 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
   }
 
   private respond(req: DapRequest, body?: unknown): void {
-    this.send({ type: "response", request_seq: req.seq, success: true, command: req.command, body });
+    this.send({
+      type: "response",
+      request_seq: req.seq,
+      success: true,
+      command: req.command,
+      body,
+    });
   }
 
   private fail(req: DapRequest, message: string): void {
@@ -136,7 +143,7 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
   }
 
   private output(text: string, category: "stdout" | "stderr" | "console" = "stdout"): void {
-    this.event("output", { category, output: text.endsWith("\n") ? text : text + "\n" });
+    this.event("output", { category, output: text.endsWith("\n") ? text : `${text}\n` });
   }
 
   private async dispatch(req: DapRequest): Promise<void> {

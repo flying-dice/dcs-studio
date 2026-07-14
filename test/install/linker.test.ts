@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Linker } from "../../src/adapters/node/linker";
 
 // Exercises the linker against a real temp filesystem: junction/symlink for
@@ -61,7 +61,9 @@ describe("Linker.enable", () => {
     expect(res.created.map((l) => l.id).sort()).toEqual(["m:0/mod-hook.lua", "m:0/nested"]);
 
     // Disable removes only our links, never the shared dir or its other files.
-    const removed = new Linker().disable(res.created.map((l) => ({ id: l.id, installedPath: l.dest })));
+    const removed = new Linker().disable(
+      res.created.map((l) => ({ id: l.id, installedPath: l.dest })),
+    );
     expect(removed.failed).toEqual([]);
     expect(fs.existsSync(path.join(dest, "mod-hook.lua"))).toBe(false);
     expect(fs.existsSync(path.join(dest, "nested"))).toBe(false);

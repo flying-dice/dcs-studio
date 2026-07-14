@@ -1,69 +1,68 @@
+import * as path from "path";
 import * as vscode from "vscode";
-import { MarketplacePanel } from "./marketplace/panel";
-import { ManifestFormPanel } from "./manifest/formPanel";
-import {
-  openMissionScripting,
-  desanitizeMission,
-  sanitizeMission,
-  restoreMission,
-  installMissionHooks,
-  removeMissionHooks,
-} from "./mission/missionPanel";
+import { GithubMarketplace } from "./adapters/github/marketplace";
+import { SystemClock } from "./adapters/node/clock";
+import { FetchDownloader } from "./adapters/node/downloader";
+import { NodeEnv } from "./adapters/node/env";
+import { NodeFileSystem } from "./adapters/node/fs";
+import { GhCli } from "./adapters/node/gh";
+import { GitCli } from "./adapters/node/git";
+import { JsonLedgerStore } from "./adapters/node/jsonLedgerStore";
+import { Linker } from "./adapters/node/linker";
+import { ProcessLauncher } from "./adapters/node/processLauncher";
+import { RegExeRegistry } from "./adapters/node/registry";
+import { SevenZipArchive } from "./adapters/node/sevenZip";
+import { WsBridgeTransport } from "./adapters/node/wsTransport";
+import { VsCodeGitHubAuth } from "./adapters/vscode/auth";
+import { VsCodeInstallRoots } from "./adapters/vscode/installRoots";
+import { VsCodeManifest } from "./adapters/vscode/manifest";
+import { buildBridge } from "./bridge/build";
 import { BridgeClient } from "./bridge/client";
 import { BridgeClients } from "./bridge/clients";
-import {
-  GUI_BRIDGE_PORT,
-  MISSION_BRIDGE_PORT,
-  OFFLINE_DISPATCH_OPTIONS,
-  statusBarClickAction,
-  statusBarView,
-} from "./core/domain/bridgeProtocol";
 import { ConsolePanel } from "./bridge/consolePanel";
-import { LogPanel } from "./log/logPanel";
-import { injectCommand, ejectCommand } from "./bridge/deploy";
-import { launchDcs, launchCleanup } from "./bridge/launch";
-import { buildBridge } from "./bridge/build";
 import { dbExportCommand } from "./bridge/dbExport";
-import { SetupPanel } from "./setup/panel";
-import {
-  DEBUG_TYPE,
-  DcsDebugAdapterFactory,
-  DcsDebugConfigProvider,
-  registerDebugCommands,
-} from "./debug/factory";
-import { NavViewProvider } from "./nav/navView";
-import { setupDevReload } from "./devReload";
-import { PublishPanel } from "./publish/publishPanel";
-import { MyModsPanel } from "./install/myModsPanel";
-import { createMyModsShortcut, MYMODS_URI_PATH } from "./install/shortcut";
-import { NewProjectPanel, PENDING_OPEN_KEY } from "./project/newProjectPanel";
-import { DocsPanel } from "./docs/docsPanel";
-import { SkillsManager } from "./skills/manager";
-import { SkillsPanel } from "./skills/skillsPanel";
-import * as path from "path";
-
+import { ejectCommand, injectCommand } from "./bridge/deploy";
+import { launchCleanup, launchDcs } from "./bridge/launch";
+import { DetectService } from "./core/app/detectService";
+import { MissionSanitizeService } from "./core/app/missionSanitizeService";
+import { PublishService } from "./core/app/publishService";
 // ── Core services + their port adapters (wired only here, in the composition
 //    root — see ARCHITECTURE.md) ──
 import { SubscriptionService } from "./core/app/subscriptionService";
-import { PublishService } from "./core/app/publishService";
-import { MissionSanitizeService } from "./core/app/missionSanitizeService";
-import { DetectService } from "./core/app/detectService";
-import { NodeFileSystem } from "./adapters/node/fs";
-import { SystemClock } from "./adapters/node/clock";
-import { SevenZipArchive } from "./adapters/node/sevenZip";
-import { FetchDownloader } from "./adapters/node/downloader";
-import { Linker } from "./adapters/node/linker";
-import { JsonLedgerStore } from "./adapters/node/jsonLedgerStore";
-import { ProcessLauncher } from "./adapters/node/processLauncher";
-import { GitCli } from "./adapters/node/git";
-import { GhCli } from "./adapters/node/gh";
-import { RegExeRegistry } from "./adapters/node/registry";
-import { NodeEnv } from "./adapters/node/env";
-import { VsCodeInstallRoots } from "./adapters/vscode/installRoots";
-import { VsCodeManifestPort } from "./adapters/vscode/manifestPort";
-import { VsCodeGitHubAuth } from "./adapters/vscode/auth";
-import { GithubMarketplace } from "./adapters/github/marketplace";
+import { GUI_BRIDGE_PORT, MISSION_BRIDGE_PORT } from "./core/domain/bridgeProtocol";
+import {
+  OFFLINE_DISPATCH_OPTIONS,
+  statusBarClickAction,
+  statusBarView,
+} from "./core/domain/bridgeStatusView";
+import {
+  DcsDebugAdapterFactory,
+  DcsDebugConfigProvider,
+  DEBUG_TYPE,
+  registerDebugCommands,
+} from "./debug/factory";
+import { setupDevReload } from "./devReload";
+import { DocsPanel } from "./docs/docsPanel";
 import { dataDir } from "./install/dataDir";
+import { MyModsPanel } from "./install/myModsPanel";
+import { createMyModsShortcut, MYMODS_URI_PATH } from "./install/shortcut";
+import { LogPanel } from "./log/logPanel";
+import { ManifestFormPanel } from "./manifest/formPanel";
+import { MarketplacePanel } from "./marketplace/panel";
+import {
+  desanitizeMission,
+  installMissionHooks,
+  openMissionScripting,
+  removeMissionHooks,
+  restoreMission,
+  sanitizeMission,
+} from "./mission/missionPanel";
+import { NavViewProvider } from "./nav/navView";
+import { NewProjectPanel, PENDING_OPEN_KEY } from "./project/newProjectPanel";
+import { PublishPanel } from "./publish/publishPanel";
+import { SetupPanel } from "./setup/panel";
+import { SkillsLibrary } from "./skills/library";
+import { SkillsPanel } from "./skills/skillsPanel";
 
 const MANIFEST_FILE = "dcs-studio.toml";
 
@@ -90,13 +89,13 @@ export function activate(context: vscode.ExtensionContext): void {
     new BridgeClient(
       "127.0.0.1",
       bridgeCfg.get<number>("bridgeGuiPort") ?? GUI_BRIDGE_PORT,
-      undefined,
+      new WsBridgeTransport(),
       "GUI bridge",
     ),
     new BridgeClient(
       "127.0.0.1",
       bridgeCfg.get<number>("bridgeMissionPort") ?? MISSION_BRIDGE_PORT,
-      undefined,
+      new WsBridgeTransport(),
       "Mission bridge",
     ),
   );
@@ -105,7 +104,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Agent skill files the extension ships, installable into the workspace repo
   // (created before the nav so its row can badge pending updates).
-  const skills = new SkillsManager(context.extensionUri);
+  const skills = new SkillsLibrary(context.extensionUri);
   context.subscriptions.push(skills);
 
   // The sidebar: website-style page navigation (a WebviewView).
@@ -139,8 +138,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // (media/manifest-core.js) is loaded lazily on first use, so this adds no
   // measurable activation cost. Shared stateless adapters are reused.
   const fsPort = new NodeFileSystem();
-  const archive = new SevenZipArchive();
-  const manifestPort = new VsCodeManifestPort(context);
+  const archive = new SevenZipArchive(() =>
+    vscode.workspace.getConfiguration("dcsStudio").get<string>("sevenZipPath"),
+  );
+  const manifestPort = new VsCodeManifest(context);
   const ledger = new JsonLedgerStore(dataDir);
   const installRoots = new VsCodeInstallRoots();
   // Tracks mod entrypoint processes launched from My Mods. A single shared
@@ -170,10 +171,14 @@ export function activate(context: vscode.ExtensionContext): void {
     fs: fsPort,
     env: new NodeEnv(),
   });
+  // GitHub auth (AuthPort): the sole place vscode's auth API is reached. The
+  // marketplace backend sources its own token through it; the panels receive it
+  // to read the session (token + account label) they surface.
+  const auth = new VsCodeGitHubAuth();
   // The marketplace backend (MarketplacePort). To demo against the static
   // sample catalog, swap this single line for:
   //   const marketplace = new MockMarketplace();   // from ./adapters/mock/marketplace
-  const marketplace = new GithubMarketplace(new VsCodeGitHubAuth());
+  const marketplace = new GithubMarketplace(auth);
   // ──────────────────────────────────────────────────────────────────────────
 
   context.subscriptions.push(
@@ -181,25 +186,45 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("dcs.project.new", () => NewProjectPanel.show(context)),
     vscode.commands.registerCommand("dcs.publish.open", () => PublishPanel.show(context, publish)),
     vscode.commands.registerCommand("dcs.marketplace.open", () => {
-      MarketplacePanel.show(context, subscriptions, marketplace);
+      MarketplacePanel.show(context, subscriptions, marketplace, auth);
     }),
     vscode.commands.registerCommand("dcs.mymods.open", () =>
-      MyModsPanel.show(context, subscriptions, ledger, marketplace, launcher, installRoots),
+      MyModsPanel.show(context, subscriptions, ledger, marketplace, launcher, installRoots, auth),
     ),
-    vscode.commands.registerCommand("dcs.docs.open", (page?: string) => DocsPanel.show(context, page)),
+    vscode.commands.registerCommand("dcs.docs.open", (page?: string) =>
+      DocsPanel.show(context, page),
+    ),
     vscode.commands.registerCommand("dcs.skills.open", () => SkillsPanel.show(context, skills)),
-    vscode.commands.registerCommand("dcs.mymods.createShortcut", () => void createMyModsShortcut(context)),
+    vscode.commands.registerCommand(
+      "dcs.mymods.createShortcut",
+      () => void createMyModsShortcut(context),
+    ),
     vscode.commands.registerCommand("dcs.marketplace.refresh", () => {
       MarketplacePanel.current?.refresh();
     }),
     vscode.commands.registerCommand("dcs.mission.open", () => {
       void openMissionScripting(missionSanitize);
     }),
-    vscode.commands.registerCommand("dcs.mission.desanitize", () => void desanitizeMission(missionSanitize)),
-    vscode.commands.registerCommand("dcs.mission.sanitize", () => void sanitizeMission(missionSanitize)),
-    vscode.commands.registerCommand("dcs.mission.restore", () => void restoreMission(missionSanitize)),
-    vscode.commands.registerCommand("dcs.mission.hooks.install", () => void installMissionHooks(missionSanitize)),
-    vscode.commands.registerCommand("dcs.mission.hooks.remove", () => void removeMissionHooks(missionSanitize)),
+    vscode.commands.registerCommand(
+      "dcs.mission.desanitize",
+      () => void desanitizeMission(missionSanitize),
+    ),
+    vscode.commands.registerCommand(
+      "dcs.mission.sanitize",
+      () => void sanitizeMission(missionSanitize),
+    ),
+    vscode.commands.registerCommand(
+      "dcs.mission.restore",
+      () => void restoreMission(missionSanitize),
+    ),
+    vscode.commands.registerCommand(
+      "dcs.mission.hooks.install",
+      () => void installMissionHooks(missionSanitize),
+    ),
+    vscode.commands.registerCommand(
+      "dcs.mission.hooks.remove",
+      () => void removeMissionHooks(missionSanitize),
+    ),
   );
 
   // A storefront entry point that's always visible, mirroring the real app's
@@ -232,7 +257,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("dcs.setup.open", () => SetupPanel.show(context, detect)),
-    vscode.commands.registerCommand("dcs.bridge.console", () => ConsolePanel.show(context, clients)),
+    vscode.commands.registerCommand("dcs.bridge.console", () =>
+      ConsolePanel.show(context, clients),
+    ),
     vscode.commands.registerCommand("dcs.log.open", () => LogPanel.show(context, manifestPort)),
     // The status bar item's click handler: not palette-contributed, it's only
     // reachable by clicking "DCS: offline"/"at menu"/"mission" in the footer.
@@ -242,8 +269,15 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       const picked = await vscode.window.showQuickPick(
-        OFFLINE_DISPATCH_OPTIONS.map((o) => ({ label: o.label, description: o.description, command: o.command })),
-        { title: "DCS Bridge Offline", placeHolder: "Neither bridge is reachable — choose an action" },
+        OFFLINE_DISPATCH_OPTIONS.map((o) => ({
+          label: o.label,
+          description: o.description,
+          command: o.command,
+        })),
+        {
+          title: "DCS Bridge Offline",
+          placeHolder: "Neither bridge is reachable — choose an action",
+        },
       );
       if (picked) void vscode.commands.executeCommand(picked.command);
     }),
@@ -259,7 +293,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // ── Debugger: run/debug Lua inside DCS (mission + hooks envs) over the bridges ──
   context.subscriptions.push(
-    vscode.debug.registerDebugAdapterDescriptorFactory(DEBUG_TYPE, new DcsDebugAdapterFactory(clients)),
+    vscode.debug.registerDebugAdapterDescriptorFactory(
+      DEBUG_TYPE,
+      new DcsDebugAdapterFactory(clients),
+    ),
     vscode.debug.registerDebugConfigurationProvider(DEBUG_TYPE, new DcsDebugConfigProvider()),
   );
   registerDebugCommands(context);
@@ -272,7 +309,15 @@ export function activate(context: vscode.ExtensionContext): void {
       handleUri: (uri) => {
         if (uri.path !== MYMODS_URI_PATH) return;
         if (!vscode.workspace.workspaceFolders?.length) {
-          MyModsPanel.show(context, subscriptions, ledger, marketplace, launcher, installRoots);
+          MyModsPanel.show(
+            context,
+            subscriptions,
+            ledger,
+            marketplace,
+            launcher,
+            installRoots,
+            auth,
+          );
           return;
         }
         void context.globalState.update(PENDING_MYMODS_KEY, Date.now()).then(() => {
@@ -289,7 +334,7 @@ export function activate(context: vscode.ExtensionContext): void {
   if (pendingMods) {
     void context.globalState.update(PENDING_MYMODS_KEY, undefined);
     if (Date.now() - pendingMods < 30_000 && !vscode.workspace.workspaceFolders?.length) {
-      MyModsPanel.show(context, subscriptions, ledger, marketplace, launcher, installRoots);
+      MyModsPanel.show(context, subscriptions, ledger, marketplace, launcher, installRoots, auth);
     }
   }
 
@@ -322,7 +367,9 @@ export function activate(context: vscode.ExtensionContext): void {
         .then((choice) => {
           if (choice === "Update") {
             void skills.install(s.id).then(() => {
-              void vscode.window.showInformationMessage(`"${s.name}" skill updated to v${s.bundledVersion} — commit the change.`);
+              void vscode.window.showInformationMessage(
+                `"${s.name}" skill updated to v${s.bundledVersion} — commit the change.`,
+              );
             });
           } else if (choice === "Manage Skills") {
             SkillsPanel.show(context, skills);
@@ -333,11 +380,15 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // First run: if no DCS paths are configured, nudge to the selector once.
   const cfg = vscode.workspace.getConfiguration("dcsStudio");
-  const configured = cfg.get<string>("savedGamesPath")?.trim() || cfg.get<string>("gameInstallPath")?.trim();
+  const configured =
+    cfg.get<string>("savedGamesPath")?.trim() || cfg.get<string>("gameInstallPath")?.trim();
   if (!configured && !context.globalState.get("dcs.setupPrompted")) {
     void context.globalState.update("dcs.setupPrompted", true);
     void vscode.window
-      .showInformationMessage("Set your DCS folders to enable inject, launch and the Lua console.", "Set DCS Paths")
+      .showInformationMessage(
+        "Set your DCS folders to enable inject, launch and the Lua console.",
+        "Set DCS Paths",
+      )
       .then((choice) => {
         if (choice) SetupPanel.show(context, detect);
       });

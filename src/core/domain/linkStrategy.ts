@@ -13,7 +13,12 @@ import { parse } from "node:path";
  * - `hardlink` — Windows same-volume file link.
  * - `symlink-cross` — Windows cross-volume file: symlink, elevating on EPERM.
  */
-export type LinkStrategy = "symlink-dir" | "symlink-file" | "junction" | "hardlink" | "symlink-cross";
+export type LinkStrategy =
+  | "symlink-dir"
+  | "symlink-file"
+  | "junction"
+  | "hardlink"
+  | "symlink-cross";
 
 /** Facts probed from the filesystem that drive the strategy choice. */
 export interface LinkFacts {

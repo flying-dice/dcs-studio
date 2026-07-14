@@ -1,8 +1,9 @@
-import * as vscode from "vscode";
 import * as fs from "fs";
-import type { DetectService } from "../core/app/detectService";
-import { roleProbePath, type DcsCandidate } from "../core/domain/dcsDetect";
+import * as vscode from "vscode";
 import { find7z } from "../adapters/node/sevenZip";
+import type { DetectService } from "../core/app/detectService";
+import { type DcsCandidate, roleProbePath } from "../core/domain/dcsDetect";
+import { renderWebviewHtml } from "../webview/html";
 
 // The DCS install selector: pick (or browse to) the userdata (Saved Games) and
 // installation folders, with auto-detected candidates. Saves to the
@@ -56,7 +57,7 @@ export class SetupPanel {
       dataDir: this.cfg().get<string>("dataDir")?.trim() ?? "",
       dataDirDefault: require("path").join(home, "DCSStudio", "mods"),
       sevenZip: this.cfg().get<string>("sevenZipPath")?.trim() ?? "",
-      sevenZipDetected: find7z() ?? "",
+      sevenZipDetected: find7z(this.cfg().get<string>("sevenZipPath")?.trim() || undefined) ?? "",
       savedCandidates: saved,
       installCandidates: installs,
     });
@@ -100,10 +101,22 @@ export class SetupPanel {
         break;
       }
       case "save":
-        await this.cfg().update("savedGamesPath", msg.savedGames ?? "", vscode.ConfigurationTarget.Global);
-        await this.cfg().update("gameInstallPath", msg.gameInstall ?? "", vscode.ConfigurationTarget.Global);
+        await this.cfg().update(
+          "savedGamesPath",
+          msg.savedGames ?? "",
+          vscode.ConfigurationTarget.Global,
+        );
+        await this.cfg().update(
+          "gameInstallPath",
+          msg.gameInstall ?? "",
+          vscode.ConfigurationTarget.Global,
+        );
         await this.cfg().update("dataDir", msg.dataDir ?? "", vscode.ConfigurationTarget.Global);
-        await this.cfg().update("sevenZipPath", msg.sevenZip ?? "", vscode.ConfigurationTarget.Global);
+        await this.cfg().update(
+          "sevenZipPath",
+          msg.sevenZip ?? "",
+          vscode.ConfigurationTarget.Global,
+        );
         this.post({ type: "saved" });
         void vscode.window.showInformationMessage("DCS paths saved.");
         break;
@@ -112,7 +125,10 @@ export class SetupPanel {
 
   /** Whether a hand-picked path looks right for its role. The per-role path rule
    *  is pure (core/domain/dcsDetect); the panel only performs the existence probe. */
-  private validate(which: "saved" | "install" | "data" | "sevenzip" | undefined, target: string): boolean {
+  private validate(
+    which: "saved" | "install" | "data" | "sevenzip" | undefined,
+    target: string,
+  ): boolean {
     try {
       const probe = roleProbePath(which, target);
       return probe === null ? true : fs.existsSync(probe);
@@ -132,39 +148,16 @@ export class SetupPanel {
   }
 
   private html(): string {
-    const webview = this.panel.webview;
-    const media = (f: string) =>
-      webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", f));
-    const nonce = getNonce();
-    const csp = [
-      `default-src 'none'`,
-      `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src 'nonce-${nonce}'`,
-      `font-src ${webview.cspSource}`,
-    ].join("; ");
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="${csp}" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link href="${media("setup.css")}" rel="stylesheet" />
-  <title>DCS Setup</title>
-</head>
-<body>
-  <div id="app"></div>
-  <script nonce="${nonce}" src="${media("setup.js")}"></script>
-</body>
-</html>`;
+    return renderWebviewHtml({
+      webview: this.panel.webview,
+      extensionUri: this.context.extensionUri,
+      title: "DCS Setup",
+      styles: ["setup.css"],
+      scripts: ["setup.js"],
+      csp: { font: true },
+    });
   }
 }
 
 // Convenience for a type used by the webview payload.
 export type { DcsCandidate };
-
-function getNonce(): string {
-  let text = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) text += chars.charAt(Math.floor(Math.random() * chars.length));
-  return text;
-}

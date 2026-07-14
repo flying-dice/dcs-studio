@@ -4,12 +4,13 @@
 // the host applies as a WorkspaceEdit (so Ctrl/Cmd+S, dirty state and undo are
 // VS Code's). External changes arrive as {external} and re-seed the form. Pure
 // parse/emit/resolve come from the shared, unit-tested core (manifest-core.js).
-(function () {
+(() => {
   const vscode = acquireVsCodeApi();
   const boot = window.__BOOTSTRAP__;
   const app = document.getElementById("app");
 
-  const { ROOT_TOKENS, MISSION_SCRIPT_RUN_ON, parseToml, emitToml, splitDest } = self.DcsManifestCore;
+  const { ROOT_TOKENS, MISSION_SCRIPT_RUN_ON, parseToml, emitToml, splitDest } =
+    self.DcsManifestCore;
   let roots = boot.roots;
   const resolveDest = (dest) => self.DcsManifestCore.resolveDest(dest, roots);
 
@@ -25,7 +26,7 @@
     }, 200);
   }
   /** Model changed via the form: refresh preview + push the edit to the document. */
-  function changed() {
+  function onFormChanged() {
     renderPreview();
     pushEdit();
   }
@@ -37,7 +38,7 @@
     const s = norm(source);
     return bundlePaths.some((p) => {
       const b = norm(p);
-      return b === "" || b === "." || s === b || s.startsWith(b + "/");
+      return b === "" || b === "." || s === b || s.startsWith(`${b}/`);
     });
   }
 
@@ -53,7 +54,9 @@
       else if (!coveredByBundle(r.source, bundlePaths))
         out.push(`Symlink ${i + 1}: source is not inside any bundled path.`);
       if (splitDest(r.dest).root === "{GameInstall}" && !roots.gameInstall)
-        out.push(`Symlink ${i + 1}: {GameInstall} is not configured (set dcsStudio.gameInstallPath).`);
+        out.push(
+          `Symlink ${i + 1}: {GameInstall} is not configured (set dcsStudio.gameInstallPath).`,
+        );
     });
     m.requires_module.forEach((r, i) => {
       if (!r.id.trim()) out.push(`Required module ${i + 1}: id is empty.`);
@@ -83,16 +86,12 @@
     warn: `<svg class="ico sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>`,
   };
 
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]),
-    );
-  }
+  const { esc } = dcsUi;
 
   // ── Render ──
   function render() {
     const m = state.model;
-    const extras = m.extras && m.extras.length;
+    const extras = m.extras?.length;
     app.innerHTML = `
       <header>
         <div class="titles">
@@ -330,7 +329,10 @@
           updateResolved(i);
         } else if (key === "__args") {
           // One arg per line; blank lines dropped. Keeps args that contain spaces.
-          state.model.entrypoint[i].args = el.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+          state.model.entrypoint[i].args = el.value
+            .split(/\r?\n/)
+            .map((s) => s.trim())
+            .filter(Boolean);
         } else if (sec === "mission_script" && key === "run_on") {
           // Full render so the before-sanitize warning marker toggles live.
           state.model.mission_script[i].run_on = el.value;
@@ -338,36 +340,42 @@
           pushEdit();
           return;
         } else state.model[sec][i][key] = el.value;
-        changed();
+        onFormChanged();
       });
     });
     app.querySelectorAll('input[type="checkbox"]').forEach((el) => {
       el.addEventListener("change", () => {
         const { sec, idx, key } = el.dataset;
         state.model[sec][parseInt(idx, 10)][key] = el.checked;
-        changed();
+        onFormChanged();
       });
     });
-    app.querySelectorAll("[data-add]").forEach((el) =>
+    app.querySelectorAll("[data-add]").forEach((el) => {
       el.addEventListener("click", () => {
         const sec = el.dataset.add;
         if (sec === "bundle") state.model.bundle.push({ path: "" });
-        else if (sec === "symlink") state.model.symlink.push({ source: "", dest: "{SavedGames}/Scripts/" });
+        else if (sec === "symlink")
+          state.model.symlink.push({ source: "", dest: "{SavedGames}/Scripts/" });
         else if (sec === "requires_module") state.model.requires_module.push({ id: "", name: "" });
         else if (sec === "entrypoint") state.model.entrypoint.push({ id: "", name: "", exe: "" });
         else if (sec === "mission_script")
-          state.model.mission_script.push({ name: "", purpose: "", path: "", run_on: "after-sanitize" });
+          state.model.mission_script.push({
+            name: "",
+            purpose: "",
+            path: "",
+            run_on: "after-sanitize",
+          });
         render();
         pushEdit();
-      }),
-    );
-    app.querySelectorAll("[data-rm]").forEach((el) =>
+      });
+    });
+    app.querySelectorAll("[data-rm]").forEach((el) => {
       el.addEventListener("click", () => {
         state.model[el.dataset.rm].splice(parseInt(el.dataset.idx, 10), 1);
         render();
         pushEdit();
-      }),
-    );
+      });
+    });
   }
 
   function updateResolved(i) {

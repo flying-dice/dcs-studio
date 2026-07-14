@@ -1,10 +1,17 @@
-import { describe, it, expect } from "vitest";
-import { MYMODS_URI_PATH, myModsUri, buildIcoHeader, buildIco } from "../../src/core/domain/shortcut";
+import { describe, expect, it } from "vitest";
+import {
+  buildIco,
+  buildIcoHeader,
+  MYMODS_URI_PATH,
+  myModsUri,
+} from "../../src/core/domain/shortcut";
 
 describe("myModsUri", () => {
   it("builds the deep link from scheme + extension id + fixed path", () => {
     expect(MYMODS_URI_PATH).toBe("/mymods");
-    expect(myModsUri("vscode", "dcs-studio.dcs-studio")).toBe("vscode://dcs-studio.dcs-studio/mymods");
+    expect(myModsUri("vscode", "dcs-studio.dcs-studio")).toBe(
+      "vscode://dcs-studio.dcs-studio/mymods",
+    );
     expect(myModsUri("vscode-insiders", "pub.ext")).toBe("vscode-insiders://pub.ext/mymods");
   });
 });

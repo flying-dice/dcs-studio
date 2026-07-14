@@ -7,9 +7,9 @@ use crate::jsonrpc::router::JsonRpcRouter;
 use crate::jsonrpc::server::JsonRpcServer;
 use mlua::prelude::LuaResult;
 use mlua::{ExternalError, IntoLuaMulti, UserDataRef};
-use std::ops::Deref;
 
-// Envelope types are shared with the editor side via dcs-bridge-client — single source of truth.
+// The JSON-RPC envelope types (defined in `crate::protocol`) — this crate is the
+// single source of truth for the wire shapes the editor side speaks to.
 pub use crate::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, JSON_RPC_VERSION};
 
 pub const JSON_RPC_METHOD_NOT_FOUND: i32 = -32601;
@@ -73,7 +73,7 @@ pub fn register(sub: &mut Sub) -> LuaResult<()> {
          while a paused chunk holds the sim thread. Returns false when no \
          server is running.",
         |lua, router: UserDataRef<JsonRpcRouter>| {
-            server::process_global_queue(lua, router.deref())?.into_lua_multi(lua)
+            server::process_global_queue(lua, &router)?.into_lua_multi(lua)
         },
     )?;
 

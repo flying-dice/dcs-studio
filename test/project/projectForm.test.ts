@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
 import * as path from "node:path";
-import { defaultLocation, initialForm, browseStart } from "../../src/core/domain/projectForm";
+import { describe, expect, it } from "vitest";
+import { browseStart, defaultLocation, initialForm } from "../../src/core/domain/projectForm";
 
 const HOME = path.join("C:", "Users", "jo");
 const DEFAULT = path.join(HOME, "DCSStudio");

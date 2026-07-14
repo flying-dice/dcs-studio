@@ -13,7 +13,7 @@
 //   - empty/error/progress states get their own testid (list-empty,
 //     list-error, install-error, install-progress, ...) so assertions never
 //     depend on copy text.
-import { type Page, expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 /**
  * Navigate to a previews/<name>.html harness and start collecting console
@@ -44,10 +44,13 @@ export async function sentMessages(page: Page): Promise<any[]> {
  */
 export async function expectSent(page: Page, partial: Record<string, unknown>): Promise<void> {
   await expect
-    .poll(async () => {
-      const msgs = await sentMessages(page);
-      return msgs.some((m) => m && Object.entries(partial).every(([k, v]) => m[k] === v));
-    }, { message: `expected a sent message matching ${JSON.stringify(partial)}` })
+    .poll(
+      async () => {
+        const msgs = await sentMessages(page);
+        return msgs.some((m) => m && Object.entries(partial).every(([k, v]) => m[k] === v));
+      },
+      { message: `expected a sent message matching ${JSON.stringify(partial)}` },
+    )
     .toBe(true);
 }
 

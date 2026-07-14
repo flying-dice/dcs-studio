@@ -1,7 +1,7 @@
-import * as vscode from "vscode";
 import * as path from "path";
+import type * as vscode from "vscode";
+import type { InstallRoots, ManifestModel } from "../../core/domain/types";
 import type { ManifestPort } from "../../core/ports/manifest";
-import type { ManifestModel, InstallRoots } from "../../core/domain/types";
 
 // VS Code adapter for `ManifestPort`, wrapping the shipped media/manifest-core.js
 // UMD. The module is resolved lazily on first use so activation never pays the
@@ -17,14 +17,15 @@ export function manifestCore(ctx: vscode.ExtensionContext): {
   return require(path.join(ctx.extensionUri.fsPath, "media", "manifest-core.js"));
 }
 
-export class VsCodeManifestPort implements ManifestPort {
+export class VsCodeManifest implements ManifestPort {
   private core: ReturnType<typeof manifestCore> | undefined;
 
   constructor(private readonly ctx: vscode.ExtensionContext) {}
 
   /** Resolve (and memoise) the UMD core the first time a method needs it. */
   private resolved(): ReturnType<typeof manifestCore> {
-    return (this.core ??= manifestCore(this.ctx));
+    this.core ??= manifestCore(this.ctx);
+    return this.core;
   }
 
   parseToml(text: string): ManifestModel {

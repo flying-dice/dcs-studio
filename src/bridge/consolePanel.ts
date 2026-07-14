@@ -1,10 +1,11 @@
 import * as os from "os";
 import * as vscode from "vscode";
 import { exportFileBase, shouldOpenExport } from "../core/domain/bridgeConsole";
+import type { DualBridgeStatus } from "../core/domain/bridgeProtocol";
 import { fmtBytes } from "../core/domain/format";
-import { DualBridgeStatus } from "../core/domain/bridgeProtocol";
-import { BridgeClient, LuaEnv } from "./client";
-import { BridgeClients } from "./clients";
+import { renderWebviewHtml } from "../webview/html";
+import type { BridgeClient, LuaEnv } from "./client";
+import type { BridgeClients } from "./clients";
 
 // The Lua console: a REPL against the live sim over the bridges, with a target
 // environment picker (GUI/hooks, mission scripting env, or another net state).
@@ -16,8 +17,8 @@ import { BridgeClients } from "./clients";
 // (repl_inspect/repl_expand) with function signatures resolved on demand
 // (repl_signature — the runtime reads parameter names off a call hook, never
 // running the function), a path-glob sweep bounded by the
-// `dcsStudio.explorerWildcardDepth` setting (pushed to the webview as a
-// `config` message), and a full-table JSON export: the sim writes the file, we
+// `dcsStudio.explorerWildcardDepth` setting (pushed to the webview as an
+// `explorerConfig` message), and a full-table JSON export: the sim writes the file, we
 // copy it wherever the user picks.
 export class ConsolePanel {
   public static current: ConsolePanel | undefined;
@@ -36,11 +37,16 @@ export class ConsolePanel {
       ConsolePanel.current.panel.reveal(column);
       return;
     }
-    const panel = vscode.window.createWebviewPanel(ConsolePanel.viewType, "DCS Lua Console", column, {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-    });
+    const panel = vscode.window.createWebviewPanel(
+      ConsolePanel.viewType,
+      "DCS Lua Console",
+      column,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
+      },
+    );
     ConsolePanel.current = new ConsolePanel(panel, context, clients);
   }
 
@@ -123,7 +129,14 @@ export class ConsolePanel {
             ref: r.ref,
           });
         } catch (e) {
-          this.post({ type: "inspectResult", id: msg.id, env, expr: msg.expr, ok: false, err: errText(e) });
+          this.post({
+            type: "inspectResult",
+            id: msg.id,
+            env,
+            expr: msg.expr,
+            ok: false,
+            err: errText(e),
+          });
         }
         break;
       }
@@ -131,7 +144,12 @@ export class ConsolePanel {
         if (typeof msg.ref !== "number") return;
         try {
           const r = await client.replExpand(env, msg.ref);
-          this.post({ type: "expandResult", nodeId: msg.nodeId, ok: true, variables: r.variables ?? [] });
+          this.post({
+            type: "expandResult",
+            nodeId: msg.nodeId,
+            ok: true,
+            variables: r.variables ?? [],
+          });
         } catch (e) {
           this.post({ type: "expandResult", nodeId: msg.nodeId, ok: false, err: errText(e) });
         }
@@ -141,7 +159,14 @@ export class ConsolePanel {
         if (typeof msg.ref !== "number") return;
         try {
           const r = await client.replSignature(env, msg.ref);
-          this.post({ type: "signatureResult", reqId: msg.reqId, ok: r.ok, params: r.params, native: r.native, err: r.err });
+          this.post({
+            type: "signatureResult",
+            reqId: msg.reqId,
+            ok: r.ok,
+            params: r.params,
+            native: r.native,
+            err: r.err,
+          });
         } catch (e) {
           this.post({ type: "signatureResult", reqId: msg.reqId, ok: false, err: errText(e) });
         }
@@ -164,9 +189,6 @@ export class ConsolePanel {
         await this.export(env, msg);
         break;
       }
-      case "clear":
-        // Client-side clear only; the sim buffer keeps its own tail.
-        break;
       case "launch":
         // The offline status line's inline CTA — funnel into the same
         // dcs.bridge.launch command as the Command Palette and the status
@@ -200,7 +222,9 @@ export class ConsolePanel {
           const doc = await vscode.workspace.openTextDocument(target);
           await vscode.window.showTextDocument(doc, { preview: true });
         } else {
-          void vscode.window.showInformationMessage(`Exported ${fmtBytes(bytes)} to ${target.fsPath}`);
+          void vscode.window.showInformationMessage(
+            `Exported ${fmtBytes(bytes)} to ${target.fsPath}`,
+          );
         }
       }
       try {
@@ -254,7 +278,7 @@ export class ConsolePanel {
     const wildcardDepth = vscode.workspace
       .getConfiguration("dcsStudio")
       .get<number>("explorerWildcardDepth", 1);
-    this.post({ type: "config", wildcardDepth });
+    this.post({ type: "explorerConfig", wildcardDepth });
   }
 
   private post(msg: unknown): void {
@@ -269,41 +293,17 @@ export class ConsolePanel {
   }
 
   private html(context: vscode.ExtensionContext): string {
-    const webview = this.panel.webview;
-    const media = (f: string) =>
-      webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", f));
-    const nonce = getNonce();
-    const csp = [
-      `default-src 'none'`,
-      `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src 'nonce-${nonce}'`,
-      `font-src ${webview.cspSource}`,
-    ].join("; ");
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="${csp}" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link href="${media("console.css")}" rel="stylesheet" />
-  <title>DCS Lua Console</title>
-</head>
-<body>
-  <div id="app"></div>
-  <script nonce="${nonce}" src="${media("explorer-core.js")}"></script>
-  <script nonce="${nonce}" src="${media("console.js")}"></script>
-</body>
-</html>`;
+    return renderWebviewHtml({
+      webview: this.panel.webview,
+      extensionUri: context.extensionUri,
+      title: "DCS Lua Console",
+      styles: ["console.css"],
+      scripts: ["explorer-core.js", "console-explorer.js", "console.js"],
+      csp: { font: true },
+    });
   }
 }
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
-}
-
-function getNonce(): string {
-  let text = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) text += chars.charAt(Math.floor(Math.random() * chars.length));
-  return text;
 }

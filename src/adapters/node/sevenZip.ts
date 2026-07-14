@@ -1,29 +1,29 @@
+import { spawn, spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { spawn, spawnSync } from "child_process";
-import type { ArchivePort } from "../../core/ports/archive";
-import type { PackagedPayload } from "../../core/domain/types";
 import {
   DEFAULT_VOLUME_BYTES,
-  MAX_VOLUME_BYTES,
   isVolumeFamilyMember,
+  MAX_VOLUME_BYTES,
   payloadBase,
   selectSplitVolumes,
   shouldSplit,
   volumeLimit,
 } from "../../core/domain/archivePolicy";
+import type { PackagedPayload } from "../../core/domain/types";
+import type { ArchivePort } from "../../core/ports/archive";
 
 // Node adapter for the 7-Zip CLI, implementing `ArchivePort`. It owns every 7z
 // process spawn (find/extract/pack) and the on-disk volume housekeeping; the pure
 // sizing/naming decisions live in core/domain/archivePolicy.ts. The publish and
-// install services reach the CLI through this adapter (find7z is also used by the
-// setup/preflight panels), so the 7z surface stays in one place.
+// install services reach the CLI through this adapter (find7z also backs the
+// setup panel's detected-7z display), so the 7z surface stays in one place.
 
 /** The archive volume file(s): one `<base>.7z`, or ordered `<base>.7z.NNN`. */
 export type Packaged = PackagedPayload;
 
 // Re-export the frozen sizing constants for shim consumers.
-export { MAX_VOLUME_BYTES, DEFAULT_VOLUME_BYTES, payloadBase };
+export { DEFAULT_VOLUME_BYTES, MAX_VOLUME_BYTES, payloadBase };
 
 const CANDIDATES = [
   "7z",
@@ -31,18 +31,6 @@ const CANDIDATES = [
   "C:\\Program Files\\7-Zip\\7z.exe",
   "C:\\Program Files (x86)\\7-Zip\\7z.exe",
 ];
-
-/** The user-configured 7z path (dcsStudio.sevenZipPath), if set. Lazy-requires
- *  vscode so this module stays usable in plain-node tests. */
-function configuredPath(): string | undefined {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const vscode = require("vscode");
-    return vscode.workspace.getConfiguration("dcsStudio").get("sevenZipPath")?.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /** Whether a 7z candidate is usable: an absolute/path form must exist on disk; a
  *  bare command must run. */
@@ -55,9 +43,10 @@ function usable(c: string): boolean {
   }
 }
 
-/** Resolve a usable 7-Zip command, or null. The configured path wins. */
-export function find7z(): string | null {
-  const configured = configuredPath();
+/** Resolve a usable 7-Zip command, or null. `configured` (the user's
+ *  dcsStudio.sevenZipPath) wins when supplied — node-tier adapters never read
+ *  vscode themselves, so the composition root / a vscode-tier caller passes it. */
+export function find7z(configured?: string): string | null {
   const candidates = configured ? [configured, ...CANDIDATES] : CANDIDATES;
   for (const c of candidates) {
     if (usable(c)) return c;
@@ -73,7 +62,9 @@ function run7z(cmd: string, cwd: string, args: string[]): Promise<void> {
     proc.stdout.on("data", () => undefined);
     proc.on("error", (e) => reject(new Error(`7z failed to start: ${e.message}`)));
     proc.on("exit", (code) =>
-      code === 0 ? resolve() : reject(new Error(`7z exited ${code}: ${err.trim() || "(no output)"}`)),
+      code === 0
+        ? resolve()
+        : reject(new Error(`7z exited ${code}: ${err.trim() || "(no output)"}`)),
     );
   });
 }
@@ -85,7 +76,9 @@ function extract7z(cmd: string, archive: string, outDir: string): Promise<void> 
     let err = "";
     p.stderr.on("data", (d) => (err += d.toString()));
     p.on("error", (e) => reject(new Error(`7z: ${e.message}`)));
-    p.on("exit", (c) => (c === 0 ? resolve() : reject(new Error(`7z extract exited ${c}: ${err.trim()}`))));
+    p.on("exit", (c) =>
+      c === 0 ? resolve() : reject(new Error(`7z extract exited ${c}: ${err.trim()}`)),
+    );
   });
 }
 
@@ -119,7 +112,8 @@ export async function packagePayload(
   // First pass: a single archive (no -v, so small payloads stay one clean .7z).
   await run7z(cmd, root, ["a", "-t7z", "-mx=5", "-y", archive, ...files]);
   const size = fs.statSync(archive).size;
-  if (!shouldSplit(size, volumeBytes)) return { volumes: [archive], totalBytes: size, split: false };
+  if (!shouldSplit(size, volumeBytes))
+    return { volumes: [archive], totalBytes: size, split: false };
 
   // Too big for one asset: repack into numbered volumes.
   fs.rmSync(archive, { force: true });
@@ -129,14 +123,22 @@ export async function packagePayload(
   return { volumes, totalBytes, split: true };
 }
 
-/** `ArchivePort` over the 7-Zip CLI. */
+/** `ArchivePort` over the 7-Zip CLI. `configuredPath` supplies the user's
+ *  dcsStudio.sevenZipPath — read by the composition root (which has vscode) and
+ *  injected here, keeping this node-tier adapter free of any vscode dependency. */
 export class SevenZipArchive implements ArchivePort {
+  constructor(private readonly configuredPath?: () => string | undefined) {}
+
+  private configured(): string | undefined {
+    return this.configuredPath?.()?.trim() || undefined;
+  }
+
   async available(): Promise<string | null> {
-    return find7z();
+    return find7z(this.configured());
   }
 
   async extract(archive: string, outDir: string): Promise<void> {
-    const cmd = find7z();
+    const cmd = find7z(this.configured());
     if (!cmd) throw new Error("7-Zip not found — install 7-Zip (7-zip.org) to install mods.");
     await extract7z(cmd, archive, outDir);
   }
@@ -148,7 +150,7 @@ export class SevenZipArchive implements ArchivePort {
     base: string,
     volumeBytes: number = DEFAULT_VOLUME_BYTES,
   ): Promise<PackagedPayload> {
-    const cmd = find7z();
+    const cmd = find7z(this.configured());
     if (!cmd) throw new Error("7z not found.");
     return packagePayload(cmd, root, files, outDir, base, volumeBytes);
   }

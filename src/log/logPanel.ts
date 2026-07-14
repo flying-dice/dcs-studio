@@ -1,9 +1,10 @@
-import * as vscode from "vscode";
 import * as path from "path";
-import { LogTailer, FileState } from "./tailer";
-import { LogBuffer, LogEntry, ModIdentity, modIdentity } from "../core/domain/dcsLog";
-import type { ManifestPort } from "../core/ports/manifest";
+import * as vscode from "vscode";
 import { savedGamesDir } from "../bridge/paths";
+import { LogBuffer, type LogEntry, type ModIdentity, modIdentity } from "../core/domain/dcsLog";
+import type { ManifestPort } from "../core/ports/manifest";
+import { renderWebviewHtml } from "../webview/html";
+import { type FileState, LogTailer } from "./tailer";
 
 // The DCS Log viewer: a singleton WebviewPanel (shape copied from
 // bridge/consolePanel.ts) live-tailing Saved Games/DCS/Logs/dcs.log via
@@ -152,36 +153,13 @@ export class LogPanel {
   }
 
   private html(context: vscode.ExtensionContext): string {
-    const webview = this.panel.webview;
-    const media = (f: string) =>
-      webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", f));
-    const nonce = getNonce();
-    const csp = [
-      `default-src 'none'`,
-      `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src 'nonce-${nonce}'`,
-      `font-src ${webview.cspSource}`,
-    ].join("; ");
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="${csp}" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link href="${media("log.css")}" rel="stylesheet" />
-  <title>DCS Log</title>
-</head>
-<body>
-  <div id="app"></div>
-  <script nonce="${nonce}" src="${media("log.js")}"></script>
-</body>
-</html>`;
+    return renderWebviewHtml({
+      webview: this.panel.webview,
+      extensionUri: context.extensionUri,
+      title: "DCS Log",
+      styles: ["log.css"],
+      scripts: ["log.js"],
+      csp: { font: true },
+    });
   }
-}
-
-function getNonce(): string {
-  let text = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) text += chars.charAt(Math.floor(Math.random() * chars.length));
-  return text;
 }

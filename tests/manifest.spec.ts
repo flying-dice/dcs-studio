@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { openPreview, expectSent, hostSend, sentMessages } from "./helpers";
+import { expect, test } from "@playwright/test";
+import { expectSent, hostSend, openPreview, sentMessages } from "./helpers";
 
 test.describe("manifest preview", () => {
   test("seeds the Bundled content / Symlinks cards only from explicit [[bundle]]/[[symlink]] blocks", async ({
@@ -28,7 +28,9 @@ test.describe("manifest preview", () => {
     await expect(preview).toContainText("[[dependencies]]");
   });
 
-  test("seeds the Executables card from an [[entrypoint]] block, round-tripping args/cwd", async ({ page }) => {
+  test("seeds the Executables card from an [[entrypoint]] block, round-tripping args/cwd", async ({
+    page,
+  }) => {
     await openPreview(page, "manifest");
     await expect(page.getByTestId("entrypoint-row")).toHaveCount(1);
 
@@ -59,7 +61,9 @@ test.describe("manifest preview", () => {
     await openPreview(page, "manifest");
     const exe = page.getByTestId("entrypoint-row").first().locator('[data-key="exe"]');
     await exe.fill("nowhere/tool.exe");
-    await expect(page.getByTestId("validation-issues")).toContainText("exe is not inside any bundled path");
+    await expect(page.getByTestId("validation-issues")).toContainText(
+      "exe is not inside any bundled path",
+    );
   });
 
   test("add / remove entrypoint rows", async ({ page }) => {
@@ -73,13 +77,17 @@ test.describe("manifest preview", () => {
     await expect(page.getByTestId("entrypoint-row")).toHaveCount(1);
   });
 
-  test("seeds the Mission scripts card from a [[mission_script]] block, round-tripping fields", async ({ page }) => {
+  test("seeds the Mission scripts card from a [[mission_script]] block, round-tripping fields", async ({
+    page,
+  }) => {
     await openPreview(page, "manifest");
     await expect(page.getByTestId("mission-script-row")).toHaveCount(1);
 
     const row = page.getByTestId("mission-script-row").first();
     await expect(row.locator('[data-key="name"]')).toHaveValue("F16 Weapons init");
-    await expect(row.locator('[data-key="purpose"]')).toHaveValue("Registers the extra stores at mission start");
+    await expect(row.locator('[data-key="purpose"]')).toHaveValue(
+      "Registers the extra stores at mission start",
+    );
     await expect(row.locator('[data-key="path"]')).toHaveValue("Mods/tech/F16Weapons/init.lua");
     await expect(row.locator('select[data-key="run_on"]')).toHaveValue("after-sanitize");
     // after-sanitize is the safe timing — no warning marker.
@@ -92,7 +100,9 @@ test.describe("manifest preview", () => {
     await expect(preview).toContainText('run_on = "after-sanitize"');
   });
 
-  test("switching run_on to before-sanitize shows the security warning and re-emits", async ({ page }) => {
+  test("switching run_on to before-sanitize shows the security warning and re-emits", async ({
+    page,
+  }) => {
     await openPreview(page, "manifest");
     const row = page.getByTestId("mission-script-row").first();
     await row.locator('select[data-key="run_on"]').selectOption("before-sanitize");
@@ -101,17 +111,23 @@ test.describe("manifest preview", () => {
     await expect(page.getByTestId("toml-preview")).toContainText('run_on = "before-sanitize"');
   });
 
-  test("a mission script path outside all bundled paths flags a coverage issue", async ({ page }) => {
+  test("a mission script path outside all bundled paths flags a coverage issue", async ({
+    page,
+  }) => {
     await openPreview(page, "manifest");
     const path = page.getByTestId("mission-script-row").first().locator('[data-key="path"]');
     await path.fill("nowhere/init.lua");
-    await expect(page.getByTestId("validation-issues")).toContainText("path is not inside any bundled path");
+    await expect(page.getByTestId("validation-issues")).toContainText(
+      "path is not inside any bundled path",
+    );
   });
 
   test("clearing a mission script name flags a validation issue", async ({ page }) => {
     await openPreview(page, "manifest");
     await page.getByTestId("mission-script-row").first().locator('[data-key="name"]').fill("");
-    await expect(page.getByTestId("validation-issues")).toContainText("Mission script 1: name is empty.");
+    await expect(page.getByTestId("validation-issues")).toContainText(
+      "Mission script 1: name is empty.",
+    );
   });
 
   test("add / remove mission script rows", async ({ page }) => {
@@ -159,7 +175,9 @@ test.describe("manifest preview", () => {
     // Point the first symlink's source at something no [[bundle]] path covers.
     const firstSymlink = page.getByTestId("symlink-row").first();
     await firstSymlink.locator('[data-key="source"]').fill("nowhere/orphan.lua");
-    await expect(page.getByTestId("validation-issues")).toContainText("is not inside any bundled path");
+    await expect(page.getByTestId("validation-issues")).toContainText(
+      "is not inside any bundled path",
+    );
   });
 
   test("add / remove bundle rows", async ({ page }) => {
@@ -184,12 +202,16 @@ test.describe("manifest preview", () => {
     await expect(page.getByTestId("symlink-row")).toHaveCount(1);
   });
 
-  test("a {GameInstall} root with no configured path shows the unresolved-root warning", async ({ page }) => {
+  test("a {GameInstall} root with no configured path shows the unresolved-root warning", async ({
+    page,
+  }) => {
     await openPreview(page, "manifest");
     const firstRow = page.getByTestId("symlink-row").first();
     await firstRow.locator('select[data-key="__root"]').selectOption("{GameInstall}");
     await expect(firstRow.getByTestId("unresolved-warning")).toBeVisible();
-    await expect(page.getByTestId("validation-issues")).toContainText("{GameInstall} is not configured");
+    await expect(page.getByTestId("validation-issues")).toContainText(
+      "{GameInstall} is not configured",
+    );
   });
 
   test("hostSend {type: external} re-seeds the form from a new document", async ({ page }) => {

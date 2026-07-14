@@ -5,15 +5,13 @@
 // The host routes each call to the env's bridge.
 //  Console  — send Lua via `eval`; results render here, `print` output from any
 //             env streams in from the host's console_read poll.
-//  Explorer — a single lazy `_G` tree per env (dcsfiddle-style): type icons,
-//             function arity previews with click-to-resolve real parameter
-//             names (repl_signature — never calls the function), a three-mode
-//             live filter that keeps ancestors of deep matches visible, an
-//             Enter-triggered budget-capped sweep over `/`-path patterns,
-//             per-node copy-children-as-JSON, and full-table JSON export. Pure
-//             logic (glob/filter/sweep/copy) lives in explorer-core.js
-//             (DcsExplorerCore), loaded before this script.
-(function () {
+//  Explorer — a lazy `_G` tree per env; its DOM + interaction live in
+//             console-explorer.js (DcsConsoleExplorer), loaded before this
+//             script, with the pure glob/filter/sweep/copy logic in
+//             explorer-core.js (DcsExplorerCore). This file owns the Console
+//             REPL tab, the shared status line and the message router; the
+//             router delegates the tree round-trip replies to the explorer.
+(() => {
   const vscode = acquireVsCodeApi();
   const core = window.DcsExplorerCore;
   const persisted = vscode.getState() || {};
@@ -25,7 +23,7 @@
   };
   let env = persisted.env || "gui";
   let activeTab = persisted.tab || "console";
-  let wildcardDepth = 1; // `**` cost for the sweep; pushed by the host `config` msg
+  let wildcardDepth = 1; // `**` cost for the sweep; pushed by the host `explorerConfig` msg
 
   const ENVS = [
     { id: "gui", label: "GUI (hooks)" },
@@ -38,35 +36,7 @@
   let launching = false;
   let launchTimer = null;
 
-  // ── Inline Lucide-style icons (paths only; wrapped by svg()) ──
-  const ICON = {
-    chevronRight: '<path d="m9 18 6-6-6-6"/>',
-    chevronDown: '<path d="m6 9 6 6 6-6"/>',
-    loader:
-      '<line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.9" y1="4.9" x2="7.8" y2="7.8"/><line x1="16.2" y1="16.2" x2="19.1" y2="19.1"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.9" y1="19.1" x2="7.8" y2="16.2"/><line x1="16.2" y1="7.8" x2="19.1" y2="4.9"/>',
-    hash: '<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>',
-    func: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 17c2 0 2.8-1 2.8-2.8V10c0-2 1-3.3 3.2-3"/><path d="M9 11.2h5.7"/>',
-    toggle: '<rect width="20" height="12" x="2" y="6" rx="6"/><circle cx="8" cy="12" r="2"/>',
-    type: '<path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/>',
-    box: '<path d="M21 8 12 3 3 8v8l9 5 9-5V8Z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
-    copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
-    check: '<path d="M20 6 9 17l-5-5"/>',
-    search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
-    listTree:
-      '<path d="M21 12h-8"/><path d="M21 6H8"/><path d="M21 18h-8"/><path d="M3 6v4c0 1.1.9 2 2 2h3"/><path d="M3 10v6c0 1.1.9 2 2 2h3"/>',
-    refresh:
-      '<path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/>',
-    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>',
-  };
-  function svg(name, cls) {
-    return (
-      '<svg class="ic' +
-      (cls ? " " + cls : "") +
-      '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-      ICON[name] +
-      "</svg>"
-    );
-  }
+  const svg = window.DcsConsoleExplorer.svg;
 
   const app = document.getElementById("app");
   app.innerHTML = `
@@ -121,6 +91,19 @@
   const sweepNotice = document.getElementById("sweepNotice");
   const treeHost = document.getElementById("treeHost");
 
+  // The Explorer tab controller reads live env/status/config through these
+  // getters (this shell owns and mutates them) and owns all tree DOM/interaction.
+  const explorer = window.DcsConsoleExplorer.create({
+    vscode,
+    core,
+    els: { treeHost, filterInput, sweepBtn, refreshBtn, sweepNotice },
+    ENVS,
+    getEnv: () => env,
+    getStatus: () => status,
+    getWildcardDepth: () => wildcardDepth,
+    getActiveTab: () => activeTab,
+  });
+
   for (const e of ENVS) {
     const opt = document.createElement("option");
     opt.value = e.id;
@@ -132,8 +115,8 @@
     env = envSel.value;
     persist();
     renderStatus();
-    showEnvTree();
-    ensureInspected();
+    explorer.showEnvTree();
+    explorer.ensureInspected();
   });
 
   // Offline CTA: funnels into the same dcs.bridge.launch command as the
@@ -166,8 +149,8 @@
     if (name === "console") codeEl.focus();
     else {
       filterInput.focus();
-      showEnvTree();
-      ensureInspected();
+      explorer.showEnvTree();
+      explorer.ensureInspected();
     }
     persist();
   }
@@ -176,7 +159,7 @@
   // --- Console tab ---
   function append(cls, text) {
     const div = document.createElement("div");
-    div.className = "entry " + cls;
+    div.className = `entry ${cls}`;
     div.textContent = text;
     logEl.appendChild(div);
     logEl.scrollTop = logEl.scrollHeight;
@@ -213,354 +196,15 @@
       e.preventDefault();
       histIdx = Math.max(0, histIdx - 1);
       codeEl.value = history[histIdx] || "";
-    } else if (e.key === "ArrowDown" && codeEl.selectionStart === codeEl.value.length && history.length) {
+    } else if (
+      e.key === "ArrowDown" &&
+      codeEl.selectionStart === codeEl.value.length &&
+      history.length
+    ) {
       e.preventDefault();
       histIdx = Math.min(history.length, histIdx + 1);
       codeEl.value = history[histIdx] || "";
     }
-  });
-
-  // --- Explorer tab ---
-  // Per-env state: the cached root node and its DOM container (display-toggled
-  // so switching env keeps each tree — and its live sim-side refs — intact).
-  let seq = 0; // shared id counter for inspect/expand/signature/export round trips
-  const trees = {}; // env -> root node (or absent = not inspected)
-  const inspected = {}; // env -> true once an inspect has been dispatched
-  const envContainers = {}; // env -> tree container div
-  const pendingInspect = new Map(); // id -> env
-  const pendingExpand = new Map(); // nodeId -> { node, then? }
-  const pendingSignature = new Map(); // reqId -> node
-  const pendingExport = new Map(); // reqId -> button
-  let sweepGen = 0; // bumped to cancel an in-flight sweep (filter edit / new sweep)
-  let filterTimer = null;
-
-  function explorerDisabled() {
-    const gui = status.gui || {};
-    const mission = status.mission || {};
-    if (!gui.connected && !mission.connected) return true;
-    return env === "mission" ? !mission.connected : !gui.connected;
-  }
-
-  function ensureContainer(envName) {
-    let c = envContainers[envName];
-    if (!c) {
-      c = document.createElement("div");
-      c.className = "tree-env";
-      c.dataset.env = envName;
-      c.style.display = "none";
-      treeHost.appendChild(c);
-      envContainers[envName] = c;
-    }
-    return c;
-  }
-
-  function showEnvTree() {
-    for (const e of ENVS) {
-      const c = envContainers[e.id];
-      if (c) c.style.display = e.id === env ? "" : "none";
-    }
-    ensureContainer(env).style.display = "";
-    applyFilter();
-  }
-
-  // Post the one-and-only inspect for an env's `_G` root (first show, or after
-  // Refresh). Guarded by connectivity and the per-env `inspected` flag.
-  function ensureInspected() {
-    if (activeTab !== "explorer" || explorerDisabled() || inspected[env]) return;
-    inspected[env] = true;
-    const id = ++seq;
-    pendingInspect.set(id, env);
-    vscode.postMessage({ type: "inspect", env, expr: "_G", id });
-  }
-
-  function iconName(node) {
-    if (node.loading) return "loader";
-    switch (node.type) {
-      case "table":
-        return node.open ? "chevronDown" : "chevronRight";
-      case "function":
-        return "func";
-      case "number":
-        return "hash";
-      case "boolean":
-        return "toggle";
-      case "string":
-        return "type";
-      default:
-        return "box";
-    }
-  }
-
-  function updateToggleIcon(node) {
-    node.el.toggle.innerHTML = svg(iconName(node), node.loading ? "spin" : "");
-    node.el.toggle.disabled = !((node.type === "table" || node.type === "function") && node.ref > 0);
-  }
-
-  function makeNode(v, envName) {
-    const node = {
-      key: v.key,
-      path: v.path,
-      depth: v.depth,
-      type: v.type,
-      value: v.value,
-      ref: v.ref,
-      env: envName,
-      open: false,
-      loaded: false,
-      loading: false,
-      children: null,
-      matched: true,
-      signature: null,
-      el: {},
-    };
-    const nodeEl = document.createElement("div");
-    nodeEl.className = "node";
-    nodeEl.dataset.path = v.path;
-    nodeEl.setAttribute("data-testid", "tree-node");
-    const row = document.createElement("div");
-    row.className = "row";
-    const toggle = document.createElement("button");
-    toggle.className = "toggle";
-    toggle.setAttribute("data-testid", "node-toggle");
-    row.appendChild(toggle);
-    const key = document.createElement("span");
-    key.className = "key";
-    key.textContent = v.key;
-    row.appendChild(key);
-    const preview = document.createElement("span");
-    preview.className = "preview t-" + v.type;
-    preview.setAttribute("data-testid", "node-preview");
-    preview.textContent = v.value;
-    row.appendChild(preview);
-    node.el.preview = preview;
-    if (v.type === "table") {
-      const copyBtn = document.createElement("button");
-      copyBtn.className = "icon-btn copy";
-      copyBtn.setAttribute("data-testid", "node-copy");
-      copyBtn.title = "Copy children as JSON";
-      copyBtn.innerHTML = svg("copy");
-      copyBtn.disabled = true;
-      copyBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        copyNode(node);
-      });
-      row.appendChild(copyBtn);
-      node.el.copy = copyBtn;
-      const exportBtn = document.createElement("button");
-      exportBtn.className = "icon-btn export";
-      exportBtn.setAttribute("data-testid", "node-export");
-      exportBtn.title = "Export this table as a JSON file";
-      exportBtn.innerHTML = svg("download");
-      exportBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        exportNode(node, exportBtn);
-      });
-      row.appendChild(exportBtn);
-      node.el.export = exportBtn;
-    }
-    const children = document.createElement("div");
-    children.className = "children";
-    children.style.display = "none";
-    nodeEl.appendChild(row);
-    nodeEl.appendChild(children);
-    node.el.node = nodeEl;
-    node.el.row = row;
-    node.el.toggle = toggle;
-    node.el.children = children;
-    row.addEventListener("click", () => onToggle(node));
-    updateToggleIcon(node);
-    return node;
-  }
-
-  function onToggle(node) {
-    if (node.type === "table" && node.ref > 0) {
-      if (node.open) closeTable(node);
-      else openTable(node);
-    } else if (node.type === "function" && node.ref > 0) {
-      resolveSignature(node);
-    }
-  }
-
-  // Open + fetch a table's children. `then` (optional) is the sweep drain
-  // continuation, invoked with the freshly attached children.
-  function openTable(node, then) {
-    node.open = true;
-    node.loading = true;
-    node.el.children.style.display = "";
-    updateToggleIcon(node);
-    const nodeId = ++seq;
-    pendingExpand.set(nodeId, { node, then });
-    vscode.postMessage({ type: "expand", env: node.env, ref: node.ref, nodeId });
-  }
-
-  // Collapse discards children (fiddle parity): the next open refetches, so a
-  // stale sim-side ref self-heals.
-  function closeTable(node) {
-    node.open = false;
-    node.loaded = false;
-    node.children = null;
-    node.el.children.innerHTML = "";
-    node.el.children.style.display = "none";
-    if (node.el.copy) node.el.copy.disabled = true;
-    updateToggleIcon(node);
-  }
-
-  function resolveSignature(node) {
-    if (node.signature || node.loading) return;
-    node.loading = true;
-    updateToggleIcon(node);
-    const reqId = ++seq;
-    pendingSignature.set(reqId, node);
-    vscode.postMessage({ type: "signature", env: node.env, ref: node.ref, reqId });
-  }
-
-  function copyNode(node) {
-    const text = JSON.stringify(core.childrenToJson(node), null, 2);
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text);
-    } catch {
-      /* clipboard may be unavailable; the check icon still confirms the attempt */
-    }
-    const btn = node.el.copy;
-    btn.innerHTML = svg("check");
-    btn.classList.add("copied");
-    btn.setAttribute("data-state", "copied");
-    clearTimeout(btn._t);
-    btn._t = setTimeout(() => {
-      btn.innerHTML = svg("copy");
-      btn.classList.remove("copied");
-      btn.removeAttribute("data-state");
-    }, 2000);
-  }
-
-  function exportNode(node, btn) {
-    const reqId = ++seq;
-    pendingExport.set(reqId, btn);
-    btn.disabled = true;
-    vscode.postMessage({
-      type: "export",
-      env: node.env,
-      ref: node.ref > 0 ? node.ref : undefined,
-      expr: node.ref > 0 ? undefined : node.path,
-      label: node.path,
-      reqId,
-    });
-  }
-
-  function walk(node, fn) {
-    fn(node);
-    if (node.children) for (const c of node.children) walk(c, fn);
-  }
-
-  // Debounced live filter: annotate the whole tree then toggle `.hidden` per
-  // node (kept mounted). Ancestors of a deep match stay visible via the core's
-  // upward match propagation. An empty filter unhides everything.
-  function applyFilter() {
-    const root = trees[env];
-    updateSweepEnabled();
-    if (!root) return;
-    const filter = filterInput.value.trim();
-    core.annotateMatches(root, filter);
-    walk(root, (n) => n.el.node.classList.toggle("hidden", !n.matched));
-  }
-
-  function updateSweepEnabled() {
-    sweepBtn.disabled = explorerDisabled() || !core.canSweep(filterInput.value.trim());
-  }
-
-  function showNotice(text) {
-    sweepNotice.textContent = text;
-    sweepNotice.style.display = "";
-  }
-  function clearNotice() {
-    sweepNotice.textContent = "";
-    sweepNotice.style.display = "none";
-  }
-
-  // Enter-triggered sweep: auto-expand closed table nodes lying on the path
-  // toward a match, bounded by a 200-fetch budget and the wildcard depth.
-  // Concurrency 1 (the sim thread is single-threaded; the mission mailbox is
-  // one slot); a filter edit or a new sweep bumps the generation to cancel.
-  function sweep() {
-    const filter = filterInput.value.trim();
-    if (!core.canSweep(filter)) {
-      showNotice("Use a path pattern with / to sweep — e.g. _G/db/Units/*.");
-      return;
-    }
-    const root = trees[env];
-    if (!root || explorerDisabled()) return;
-    const gen = ++sweepGen;
-    const maxDepth = core.sweepMaxDepth(filter, wildcardDepth);
-    let spent = 0;
-    const queue = [];
-    const seedFrom = (node) => {
-      if (
-        node.type === "table" &&
-        node.ref > 0 &&
-        !node.open &&
-        core.shouldSweepFetch(node.path, node.depth, filter, maxDepth)
-      ) {
-        queue.push(node);
-      }
-      if (node.children) for (const c of node.children) seedFrom(c);
-    };
-    seedFrom(root);
-    if (env === "mission") showNotice("Mission sweep can be slow — each fetch waits on the sim thread.");
-    else clearNotice();
-    const drain = () => {
-      if (gen !== sweepGen) return; // superseded
-      if (spent >= core.SWEEP_BUDGET) {
-        showNotice("Sweep hit the " + core.SWEEP_BUDGET + "-fetch limit — refine the pattern.");
-        applyFilter();
-        return;
-      }
-      if (!queue.length) {
-        applyFilter();
-        if (env !== "mission") clearNotice();
-        return;
-      }
-      const node = queue.shift();
-      spent++;
-      openTable(node, (children) => {
-        if (gen !== sweepGen) return;
-        for (const c of children) {
-          if (
-            c.type === "table" &&
-            c.ref > 0 &&
-            !c.open &&
-            core.shouldSweepFetch(c.path, c.depth, filter, maxDepth)
-          ) {
-            queue.push(c);
-          }
-        }
-        drain();
-      });
-    };
-    drain();
-  }
-
-  filterInput.addEventListener("input", () => {
-    // A filter edit cancels any in-flight sweep.
-    sweepGen++;
-    clearTimeout(filterTimer);
-    filterTimer = setTimeout(applyFilter, 100);
-  });
-  filterInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      sweep();
-    }
-  });
-  sweepBtn.addEventListener("click", sweep);
-  refreshBtn.addEventListener("click", () => {
-    if (explorerDisabled()) return;
-    vscode.postMessage({ type: "clearExplorer", envs: [env] });
-    trees[env] = null;
-    inspected[env] = false;
-    const c = envContainers[env];
-    if (c) c.innerHTML = "";
-    clearNotice();
-    ensureInspected();
   });
 
   // --- Status line (two bridges: gui always up with DCS, mission only during a mission) ---
@@ -568,22 +212,22 @@
     const gui = status.gui || { connected: false, dcsTime: null };
     const mission = status.mission || { connected: false, dcsTime: null };
     const simTime = mission.connected && mission.dcsTime != null ? mission.dcsTime : gui.dcsTime;
+    const anyConnected = gui.connected || mission.connected;
+    // A live mission (mission bridge up) is the "mission" dot; any other
+    // connected state is "menu". Labels/time stay bespoke to this surface.
+    dot.className = dcsUi.bridgeDotClass(anyConnected, mission.connected);
     let offline = false;
-    if (!gui.connected && !mission.connected) {
-      dot.className = "dot off";
+    if (!anyConnected) {
       statusLabel.textContent = "Bridge offline — click Launch DCS (with bridge) to connect";
       statusTime.textContent = "";
       offline = true;
     } else if (mission.connected) {
-      dot.className = "dot mission";
       statusLabel.textContent = "Mission running";
-      statusTime.textContent = simTime > 0 ? "sim t = " + simTime.toFixed(1) + "s" : "";
+      statusTime.textContent = simTime > 0 ? `sim t = ${simTime.toFixed(1)}s` : "";
     } else if (gui.dcsTime > 0) {
-      dot.className = "dot menu";
       statusLabel.textContent = "Mission running — mission bridge offline";
-      statusTime.textContent = "sim t = " + gui.dcsTime.toFixed(1) + "s";
+      statusTime.textContent = `sim t = ${gui.dcsTime.toFixed(1)}s`;
     } else {
-      dot.className = "dot menu";
       statusLabel.textContent = "Connected — at menu (no mission)";
       statusTime.textContent = "";
     }
@@ -612,11 +256,11 @@
       warn = "GUI bridge offline";
     }
     envWarn.textContent = warn;
-    const disabled = explorerDisabled();
+    const disabled = explorer.isDisabled();
     runBtn.disabled = offline || (env === "mission" ? !mission.connected : !gui.connected);
     filterInput.disabled = disabled;
     refreshBtn.disabled = disabled;
-    updateSweepEnabled();
+    explorer.updateSweepEnabled();
   }
 
   window.addEventListener("message", (e) => {
@@ -626,9 +270,9 @@
       case "status":
         status = m.status;
         renderStatus();
-        ensureInspected();
+        explorer.ensureInspected();
         break;
-      case "config":
+      case "explorerConfig":
         if (typeof m.wildcardDepth === "number") wildcardDepth = m.wildcardDepth;
         break;
       case "result":
@@ -640,90 +284,13 @@
       case "print":
         for (const line of m.lines) append("print", line.text);
         break;
-      case "inspectResult": {
-        const rEnv = pendingInspect.get(m.id) || m.env;
-        pendingInspect.delete(m.id);
-        const container = ensureContainer(rEnv);
-        container.innerHTML = "";
-        if (!m.ok) {
-          inspected[rEnv] = false; // allow a retry
-          const err = document.createElement("div");
-          err.className = "entry error";
-          err.textContent = (m.expr || "_G") + " — " + (m.err || "error");
-          container.appendChild(err);
-          break;
-        }
-        const root = makeNode(
-          { key: m.expr || "_G", path: "_G", depth: 0, type: m.luaType, value: m.value, ref: m.ref },
-          rEnv,
-        );
-        root.el.node.classList.add("root");
-        trees[rEnv] = root;
-        container.appendChild(root.el.node);
-        // Auto-expand the root so the top-level keys show immediately.
-        if (root.type === "table" && root.ref > 0) openTable(root);
-        if (rEnv === env) applyFilter();
+      // Explorer tree round-trips are owned by the Explorer controller.
+      case "inspectResult":
+      case "expandResult":
+      case "signatureResult":
+      case "exportDone":
+        explorer.handleMessage(m);
         break;
-      }
-      case "expandResult": {
-        const p = pendingExpand.get(m.nodeId);
-        if (!p) break;
-        pendingExpand.delete(m.nodeId);
-        const node = p.node;
-        node.loading = false;
-        if (!m.ok) {
-          updateToggleIcon(node);
-          const err = document.createElement("div");
-          err.className = "entry error";
-          err.textContent = m.err || "expand failed";
-          node.el.children.appendChild(err);
-          if (p.then) p.then([]);
-          break;
-        }
-        node.loaded = true;
-        node.children = (m.variables || []).map((v) =>
-          makeNode(
-            { key: v.name, path: core.childPath(node.path, v.name), depth: node.depth + 1, type: v.type, value: v.value, ref: v.ref },
-            node.env,
-          ),
-        );
-        node.el.children.innerHTML = "";
-        for (const c of node.children) node.el.children.appendChild(c.el.node);
-        if (!node.children.length) {
-          const empty = document.createElement("div");
-          empty.className = "entry hint";
-          empty.textContent = "(empty)";
-          node.el.children.appendChild(empty);
-        }
-        if (node.el.copy) node.el.copy.disabled = false;
-        updateToggleIcon(node);
-        if (node.env === env) applyFilter();
-        if (p.then) p.then(node.children);
-        break;
-      }
-      case "signatureResult": {
-        const node = pendingSignature.get(m.reqId);
-        if (!node) break;
-        pendingSignature.delete(m.reqId);
-        node.loading = false;
-        updateToggleIcon(node);
-        if (m.ok) {
-          node.signature = core.signatureDisplay(node.key, m.params || "");
-          node.el.preview.textContent = m.native ? node.signature + "  (native)" : node.signature;
-          node.el.preview.classList.remove("sig-error");
-        } else {
-          node.el.preview.textContent = m.err || "signature unavailable";
-          node.el.preview.classList.add("sig-error");
-        }
-        break;
-      }
-      case "exportDone": {
-        const btn = pendingExport.get(m.reqId);
-        pendingExport.delete(m.reqId);
-        if (btn) btn.disabled = false;
-        if (m.error) showNotice("export failed — " + m.error);
-        break;
-      }
     }
   });
 

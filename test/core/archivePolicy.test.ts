@@ -1,13 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  MAX_VOLUME_BYTES,
   DEFAULT_VOLUME_BYTES,
-  selectPayloadVolumes,
-  volumeLimit,
-  shouldSplit,
   isVolumeFamilyMember,
-  selectSplitVolumes,
+  MAX_VOLUME_BYTES,
   payloadBase,
+  selectPayloadVolumes,
+  selectSplitVolumes,
+  shouldSplit,
+  volumeLimit,
 } from "../../src/core/domain/archivePolicy";
 
 describe("archivePolicy constants", () => {

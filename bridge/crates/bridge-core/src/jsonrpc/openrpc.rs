@@ -1,21 +1,21 @@
 //! Build a conformant [OpenRPC](https://spec.open-rpc.org/) document from the
 //! router's registered methods. This is what `rpc.discover` returns (the
-//! OpenRPC standard defines `rpc.discover` → the service's OpenRPC document),
+//! `OpenRPC` standard defines `rpc.discover` → the service's `OpenRPC` document),
 //! and what the per-cdylib golden tests pin — generated from the exact method
 //! set the DLL registers, never handcrafted.
 //!
 //! The document is deterministic (methods sorted by name) so a checked-in
 //! golden can equal the live output byte-for-byte, and it validates against the
-//! vendored official OpenRPC meta-schema (see `tests/openrpc_meta_schema.rs`).
+//! vendored official `OpenRPC` meta-schema (see `tests/openrpc_meta_schema.rs`).
 
 use crate::jsonrpc::router::{MethodMeta, ParamMeta, ResultMeta};
 use serde_json::{json, Map, Value};
 
-/// The OpenRPC specification version this document conforms to.
+/// The `OpenRPC` specification version this document conforms to.
 pub const OPENRPC_VERSION: &str = "1.3.2";
 
 /// Map a bridge param/result `type` string to a JSON-Schema `type`. An unknown
-/// or absent type yields an empty schema (`{}`, "any"), which is valid OpenRPC.
+/// or absent type yields an empty schema (`{}`, "any"), which is valid `OpenRPC`.
 fn schema_for_type(ty: Option<&str>) -> Value {
     let json_type = match ty {
         Some("string") => "string",
@@ -23,13 +23,13 @@ fn schema_for_type(ty: Option<&str>) -> Value {
         Some("integer") => "integer",
         Some("boolean") => "boolean",
         Some("array") => "array",
-        Some("table") | Some("object") => "object",
+        Some("table" | "object") => "object",
         _ => return json!({}),
     };
     json!({ "type": json_type })
 }
 
-/// Build one OpenRPC content descriptor for a parameter.
+/// Build one `OpenRPC` content descriptor for a parameter.
 fn param_descriptor(p: &ParamMeta) -> Value {
     let mut obj = Map::new();
     obj.insert("name".into(), json!(p.name));
@@ -43,7 +43,7 @@ fn param_descriptor(p: &ParamMeta) -> Value {
     Value::Object(obj)
 }
 
-/// Build the OpenRPC `result` content descriptor for a method, defaulting to a
+/// Build the `OpenRPC` `result` content descriptor for a method, defaulting to a
 /// permissive `{ name: "result", schema: {} }` when the registration gave none.
 fn result_descriptor(result: Option<&ResultMeta>) -> Value {
     let mut obj = Map::new();
@@ -62,7 +62,7 @@ fn result_descriptor(result: Option<&ResultMeta>) -> Value {
     Value::Object(obj)
 }
 
-/// Build one OpenRPC method object from its metadata.
+/// Build one `OpenRPC` method object from its metadata.
 fn method_object(name: &str, meta: &MethodMeta) -> Value {
     let mut obj = Map::new();
     obj.insert("name".into(), json!(name));
@@ -84,7 +84,7 @@ fn method_object(name: &str, meta: &MethodMeta) -> Value {
     Value::Object(obj)
 }
 
-/// The spec-mandated `rpc.discover` method entry (its result is the OpenRPC
+/// The spec-mandated `rpc.discover` method entry (its result is the `OpenRPC`
 /// document itself). Appended so the document self-describes the discovery call.
 fn discover_method_object() -> Value {
     json!({
@@ -100,7 +100,7 @@ fn discover_method_object() -> Value {
     })
 }
 
-/// Assemble the whole OpenRPC document for a bridge.
+/// Assemble the whole `OpenRPC` document for a bridge.
 ///
 /// `methods` is the router's `methods_sorted()` output; the synthetic
 /// `rpc.discover` entry is appended and the final list re-sorted so the document
@@ -141,6 +141,7 @@ pub fn build_document(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod tests {
     use super::*;
 

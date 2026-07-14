@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { openPreview, expectSent, hostSend } from "./helpers";
+import { expect, test } from "@playwright/test";
+import { expectSent, hostSend, openPreview } from "./helpers";
 
 test.describe("My Mods — entrypoints", () => {
   test("shows entrypoint rows only for enabled mods that declare them", async ({ page }) => {
@@ -50,7 +50,9 @@ test.describe("My Mods — entrypoints", () => {
     await expect(broken.getByTestId("stop-btn")).toHaveCount(0);
   });
 
-  test("init running-state renders a Stop button without a prior launch click", async ({ page }) => {
+  test("init running-state renders a Stop button without a prior launch click", async ({
+    page,
+  }) => {
     await openPreview(page, "mymods");
     // Re-seed with srs-server already running (as a fresh panel would after a
     // launch that survived a reopen).
@@ -81,7 +83,9 @@ test.describe("My Mods — install manifest breakdown (#12)", () => {
   const srs = (page: import("@playwright/test").Page) =>
     page.locator('[data-testid="mod-manifest"][data-repo="Owner/DCS-SRS"]');
 
-  test("a privileged installed mod shows risk badges, symlinks, executables and mission scripts", async ({ page }) => {
+  test("a privileged installed mod shows risk badges, symlinks, executables and mission scripts", async ({
+    page,
+  }) => {
     const errors = await openPreview(page, "mymods");
     const m = srs(page);
     await expect(m).toBeVisible();
@@ -92,12 +96,16 @@ test.describe("My Mods — install manifest breakdown (#12)", () => {
     expect(errors).toEqual([]);
   });
 
-  test("a before-sanitize script surfaces the notice + badge, and the row is tagged", async ({ page }) => {
+  test("a before-sanitize script surfaces the notice + badge, and the row is tagged", async ({
+    page,
+  }) => {
     await openPreview(page, "mymods");
     const m = srs(page);
     await expect(m.getByTestId("mod-sanitize-notice")).toBeVisible();
     await expect(m.getByTestId("mod-before-sanitize-badge")).toContainText("1 before-sanitize");
-    await expect(m.locator('[data-testid="mod-mission-script"][data-run="before-sanitize"]')).toHaveCount(1);
+    await expect(
+      m.locator('[data-testid="mod-mission-script"][data-run="before-sanitize"]'),
+    ).toHaveCount(1);
   });
 
   test('the notice "Learn more" posts openDocs for the sandbox page', async ({ page }) => {
@@ -106,7 +114,9 @@ test.describe("My Mods — install manifest breakdown (#12)", () => {
     await expectSent(page, { type: "openDocs", page: "sandbox" });
   });
 
-  test("the breakdown renders for a DISABLED mod too (independent of Launch/Stop rows)", async ({ page }) => {
+  test("the breakdown renders for a DISABLED mod too (independent of Launch/Stop rows)", async ({
+    page,
+  }) => {
     await openPreview(page, "mymods");
     const disabled = page.locator('[data-testid="mod-manifest"][data-repo="Owner/Disabled-Mod"]');
     await expect(disabled).toBeVisible();
@@ -120,7 +130,9 @@ test.describe("My Mods — install manifest breakdown (#12)", () => {
     await openPreview(page, "mymods");
     const plain = page.locator('[data-testid="mod-manifest"][data-repo="Owner/Plain-Mod"]');
     await expect(plain.getByTestId("mod-risk-badge")).toHaveCount(1);
-    await expect(plain.locator('[data-testid="mod-risk-badge"][data-risk="links-files"]')).toBeVisible();
+    await expect(
+      plain.locator('[data-testid="mod-risk-badge"][data-risk="links-files"]'),
+    ).toBeVisible();
     await expect(plain.getByTestId("mod-sanitize-notice")).toHaveCount(0);
   });
 });

@@ -8,11 +8,11 @@
 // any future ones) are captured VERBATIM into `model.extras` and re-emitted, so
 // editing through the form never drops them. Comments inside modeled sections
 // are not preserved (a v1 limitation — the real app uses toml_edit for that).
-(function (root, factory) {
+((root, factory) => {
   const api = factory();
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.DcsManifestCore = api;
-})(typeof self !== "undefined" ? self : this, function () {
+})(typeof self !== "undefined" ? self : this, () => {
   const ROOT_TOKENS = ["{SavedGames}", "{GameInstall}"];
   // The array sections the model stores first-class and re-emits. New array
   // sections (a future one) drop in by adding a name here and a create-case
@@ -52,6 +52,7 @@
     const out = [];
     const re = /\s*("(?:[^"\\]|\\.)*"|'[^']*'|[^,]+?)\s*(?:,|$)/g;
     let m;
+    // biome-ignore lint/suspicious/noAssignInExpressions: canonical RegExp.exec loop
     while ((m = re.exec(inner)) !== null) {
       if (m.index === re.lastIndex) re.lastIndex++; // guard against empty matches
       const tok = m[1].trim();
@@ -77,7 +78,7 @@
     let sec = null;
     let extra = null;
     const flush = () => {
-      if (extra && extra.join("").trim()) m.extras.push(extra.join("\n").replace(/\s+$/, ""));
+      if (extra?.join("").trim()) m.extras.push(extra.join("\n").replace(/\s+$/, ""));
       extra = null;
     };
     for (const raw of text.split(/\r?\n/)) {
@@ -90,12 +91,22 @@
         flush();
         if (modeled) {
           if (aa) {
-            if (name === "bundle") (cur = { path: "" }), m.bundle.push(cur);
-            else if (name === "symlink") (cur = { source: "", dest: "" }), m.symlink.push(cur);
-            else if (name === "entrypoint") (cur = { id: "", name: "", exe: "" }), m.entrypoint.push(cur);
-            else if (name === "mission_script")
-              (cur = { name: "", purpose: "", path: "", run_on: "after-sanitize" }), m.mission_script.push(cur);
-            else (cur = { id: "", name: "" }), m.requires_module.push(cur);
+            if (name === "bundle") {
+              cur = { path: "" };
+              m.bundle.push(cur);
+            } else if (name === "symlink") {
+              cur = { source: "", dest: "" };
+              m.symlink.push(cur);
+            } else if (name === "entrypoint") {
+              cur = { id: "", name: "", exe: "" };
+              m.entrypoint.push(cur);
+            } else if (name === "mission_script") {
+              cur = { name: "", purpose: "", path: "", run_on: "after-sanitize" };
+              m.mission_script.push(cur);
+            } else {
+              cur = { id: "", name: "" };
+              m.requires_module.push(cur);
+            }
           } else cur = m.project;
           sec = "modeled";
         } else {
@@ -122,7 +133,13 @@
   }
 
   function q(s) {
-    return '"' + String(s == null ? "" : s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+    return (
+      '"' +
+      String(s == null ? "" : s)
+        .replace(/\\/g, "\\\\")
+        .replace(/"/g, '\\"') +
+      '"'
+    );
   }
 
   function emitToml(m) {
@@ -140,14 +157,15 @@
       L.push(typeof v === "string" ? `${k} = ${q(v)}` : `${k} = ${v}`);
     }
     for (const r of m.bundle) L.push("", "[[bundle]]", `path = ${q(r.path)}`);
-    for (const r of m.symlink) L.push("", "[[symlink]]", `source = ${q(r.source)}`, `dest = ${q(r.dest)}`);
+    for (const r of m.symlink)
+      L.push("", "[[symlink]]", `source = ${q(r.source)}`, `dest = ${q(r.dest)}`);
     for (const r of m.requires_module) {
       L.push("", "[[requires_module]]", `id = ${q(r.id)}`);
       if (r.name) L.push(`name = ${q(r.name)}`);
     }
     for (const r of m.entrypoint) {
       L.push("", "[[entrypoint]]", `id = ${q(r.id)}`, `name = ${q(r.name)}`, `exe = ${q(r.exe)}`);
-      if (r.args && r.args.length) L.push(`args = [${r.args.map(q).join(", ")}]`);
+      if (r.args?.length) L.push(`args = [${r.args.map(q).join(", ")}]`);
       if (r.cwd) L.push(`cwd = ${q(r.cwd)}`);
     }
     for (const r of m.mission_script) {
@@ -155,8 +173,8 @@
       if (r.purpose) L.push(`purpose = ${q(r.purpose)}`);
       L.push(`path = ${q(r.path)}`, `run_on = ${q(r.run_on || "after-sanitize")}`);
     }
-    let out = L.join("\n") + "\n";
-    if (m.extras && m.extras.length) out += "\n" + m.extras.join("\n\n") + "\n";
+    let out = `${L.join("\n")}\n`;
+    if (m.extras?.length) out += `\n${m.extras.join("\n\n")}\n`;
     return out;
   }
 
@@ -176,9 +194,21 @@
   function resolveDest(dest, roots) {
     const { root, rest } = splitDest(dest);
     if (root === "{SavedGames}") return winJoin(roots.savedGames, rest);
-    if (root === "{GameInstall}") return roots.gameInstall ? winJoin(roots.gameInstall, rest) : null;
+    if (root === "{GameInstall}")
+      return roots.gameInstall ? winJoin(roots.gameInstall, rest) : null;
     return dest;
   }
 
-  return { ROOT_TOKENS, MISSION_SCRIPT_RUN_ON, emptyModel, parseVal, parseToml, q, emitToml, splitDest, winJoin, resolveDest };
+  return {
+    ROOT_TOKENS,
+    MISSION_SCRIPT_RUN_ON,
+    emptyModel,
+    parseVal,
+    parseToml,
+    q,
+    emitToml,
+    splitDest,
+    winJoin,
+    resolveDest,
+  };
 });

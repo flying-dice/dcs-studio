@@ -1,13 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  MANIFEST,
-  ledgerKey,
-  keyOf,
-  toModDto,
+  dataDirName,
   isUpToDate,
-  sortedByName,
+  ledgerKey,
+  MANIFEST,
   renderUninstallScript,
   type Subscription,
+  sortedByName,
+  toModDto,
 } from "../../src/core/domain/subscriptions";
 
 const sub = (over: Partial<Subscription> = {}): Subscription => ({
@@ -35,14 +35,14 @@ describe("ledgerKey", () => {
   });
 });
 
-describe("keyOf", () => {
+describe("dataDirName", () => {
   it("replaces forward and back slashes with __", () => {
-    expect(keyOf("owner/repo")).toBe("owner__repo");
-    expect(keyOf("owner\\repo")).toBe("owner__repo");
+    expect(dataDirName("owner/repo")).toBe("owner__repo");
+    expect(dataDirName("owner\\repo")).toBe("owner__repo");
   });
 
   it("preserves case (distinct from the ledger key)", () => {
-    expect(keyOf("Owner/Repo")).toBe("Owner__Repo");
+    expect(dataDirName("Owner/Repo")).toBe("Owner__Repo");
   });
 });
 
@@ -115,8 +115,7 @@ describe("renderUninstallScript", () => {
   ];
 
   it("renders the empty-ledger script byte-exactly (CRLF + trailing newline)", () => {
-    const expected =
-      [...HEADER, "echo Removing unpacked mod data...", ...FOOTER(SUBS_FILE)].join("\r\n") + "\r\n";
+    const expected = `${[...HEADER, "echo Removing unpacked mod data...", ...FOOTER(SUBS_FILE)].join("\r\n")}\r\n`;
     expect(renderUninstallScript({}, DATA, SUBS_FILE)).toBe(expected);
   });
 
@@ -131,16 +130,15 @@ describe("renderUninstallScript", () => {
       }),
       "other/mod": sub({ repo: "Other/Mod", dir: "D:\\data\\Other__Mod", links: [] }),
     };
-    const expected =
-      [
-        ...HEADER,
-        `if exist "C:\\SG\\DCS\\Mods\\tech\\X\\" ( rmdir "C:\\SG\\DCS\\Mods\\tech\\X" ) else ( if exist "C:\\SG\\DCS\\Mods\\tech\\X" del /f /q "C:\\SG\\DCS\\Mods\\tech\\X" )`,
-        `if exist "C:\\SG\\DCS\\Scripts\\x.lua\\" ( rmdir "C:\\SG\\DCS\\Scripts\\x.lua" ) else ( if exist "C:\\SG\\DCS\\Scripts\\x.lua" del /f /q "C:\\SG\\DCS\\Scripts\\x.lua" )`,
-        "echo Removing unpacked mod data...",
-        `if exist "D:\\data\\Owner__Repo" rmdir /s /q "D:\\data\\Owner__Repo"`,
-        `if exist "D:\\data\\Other__Mod" rmdir /s /q "D:\\data\\Other__Mod"`,
-        ...FOOTER(SUBS_FILE),
-      ].join("\r\n") + "\r\n";
+    const expected = `${[
+      ...HEADER,
+      `if exist "C:\\SG\\DCS\\Mods\\tech\\X\\" ( rmdir "C:\\SG\\DCS\\Mods\\tech\\X" ) else ( if exist "C:\\SG\\DCS\\Mods\\tech\\X" del /f /q "C:\\SG\\DCS\\Mods\\tech\\X" )`,
+      `if exist "C:\\SG\\DCS\\Scripts\\x.lua\\" ( rmdir "C:\\SG\\DCS\\Scripts\\x.lua" ) else ( if exist "C:\\SG\\DCS\\Scripts\\x.lua" del /f /q "C:\\SG\\DCS\\Scripts\\x.lua" )`,
+      "echo Removing unpacked mod data...",
+      `if exist "D:\\data\\Owner__Repo" rmdir /s /q "D:\\data\\Owner__Repo"`,
+      `if exist "D:\\data\\Other__Mod" rmdir /s /q "D:\\data\\Other__Mod"`,
+      ...FOOTER(SUBS_FILE),
+    ].join("\r\n")}\r\n`;
     expect(renderUninstallScript(subs, DATA, SUBS_FILE)).toBe(expected);
   });
 

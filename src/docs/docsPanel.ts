@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { renderWebviewHtml } from "../webview/html";
 
 // The Documentation experience: a webview panel with a table-of-contents
 // sidebar and per-feature guide pages (Mod Manager, manifest reference,
@@ -60,35 +61,14 @@ export class DocsPanel {
   }
 
   private html(initialPage?: string): string {
-    const webview = this.panel.webview;
-    const media = (f: string) =>
-      webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", f));
-    const nonce = getNonce();
-    const csp = [
-      `default-src 'none'`,
-      `img-src ${webview.cspSource} data:`,
-      `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src 'nonce-${nonce}'`,
-    ].join("; ");
-    return `<!DOCTYPE html>
-<html lang="en"><head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="${csp}" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link href="${media("docs.css")}" rel="stylesheet" />
-  <title>Documentation</title>
-</head><body>
-  <div id="app"></div>
-  <script nonce="${nonce}">window.__INITIAL_PAGE__ = ${JSON.stringify(initialPage ?? "")};</script>
-  <script nonce="${nonce}" src="${media("docs-content.js")}"></script>
-  <script nonce="${nonce}" src="${media("docs.js")}"></script>
-</body></html>`;
+    return renderWebviewHtml({
+      webview: this.panel.webview,
+      extensionUri: this.context.extensionUri,
+      title: "Documentation",
+      styles: ["docs.css"],
+      inlineScripts: [`window.__INITIAL_PAGE__ = ${JSON.stringify(initialPage ?? "")};`],
+      scripts: ["docs-content.js", "docs.js"],
+      csp: { img: "data:" },
+    });
   }
-}
-
-function getNonce(): string {
-  let text = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) text += chars.charAt(Math.floor(Math.random() * chars.length));
-  return text;
 }

@@ -14,6 +14,7 @@ mod file;
 mod globals;
 mod json;
 mod jsonrpc;
+mod locks;
 mod logger;
 mod logging;
 mod lua_utils;
@@ -43,8 +44,8 @@ pub(crate) const RT_SOURCE: &str = include_str!("../lua/rt.lua");
 const DEBUG_ENGINE_SOURCE: &str = include_str!("../lua/debug_engine.lua");
 
 /// The GUI bridge's JSON-RPC method registration chunk — a
-/// `function(router, deps)` exposed as `bridge.register_methods`. The GameGUI
-/// hook and the OpenRPC golden test load the SAME source, so the checked-in
+/// `function(router, deps)` exposed as `bridge.register_methods`. The `GameGUI`
+/// hook and the `OpenRPC` golden test load the SAME source, so the checked-in
 /// document can't drift from what the DLL registers.
 const GUI_METHODS_SOURCE: &str = include_str!("../lua/gui_methods.lua");
 
@@ -53,11 +54,20 @@ const GUI_METHODS_SOURCE: &str = include_str!("../lua/gui_methods.lua");
 /// test alike.
 const MISSION_METHODS_SOURCE: &str = include_str!("../lua/mission_methods.lua");
 
+/// Shared JSON-RPC method metadata (`SHARED_META`) prepended to BOTH bridges'
+/// registration chunks so the debug_*/repl_* description/params strings live in
+/// one place; the trailing `return function(router, deps)` closes over it.
+const METHODS_SHARED_SOURCE: &str = include_str!("../lua/methods_shared.lua");
+
+/// The GUI unit-database curation library (`GUI_DB`), prepended to the GUI
+/// registration chunk only, so `gui_methods.lua` stays pure registration wiring.
+const GUI_DB_SOURCE: &str = include_str!("../lua/gui_db.lua");
+
 /// Which Lua state this DLL serves — parametrizes names, logging, and the
 /// curated `dump_globals` roots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BridgeKind {
-    /// The GameGUI hooks state (`DCS.*`, `net.*`) — `dcs_studio_gui.dll`.
+    /// The `GameGUI` hooks state (`DCS.*`, `net.*`) — `dcs_studio_gui.dll`.
     Gui,
     /// The mission scripting state (`trigger`, `world`, `coalition`, …) —
     /// `dcs_studio_mission.dll`.
@@ -67,6 +77,7 @@ pub enum BridgeKind {
 impl BridgeKind {
     /// The Lua module name (`require("<module_name>")` — also the DLL basename
     /// and the root class of the generated `.d.lua`).
+    #[must_use]
     pub fn module_name(self) -> &'static str {
         match self {
             BridgeKind::Gui => "dcs_studio_gui",
@@ -75,6 +86,7 @@ impl BridgeKind {
     }
 
     /// The service name reported by `/health` and `rpc.discover`.
+    #[must_use]
     pub fn service_name(self) -> &'static str {
         match self {
             BridgeKind::Gui => "dcs-studio-gui",
@@ -83,6 +95,7 @@ impl BridgeKind {
     }
 
     /// The environment name this bridge serves natively.
+    #[must_use]
     pub fn env_name(self) -> &'static str {
         match self {
             BridgeKind::Gui => "gui",
@@ -91,7 +104,8 @@ impl BridgeKind {
     }
 
     /// The loopback port this bridge's JSON-RPC server binds by convention —
-    /// used to populate the OpenRPC `servers` block in the golden document.
+    /// used to populate the `OpenRPC` `servers` block in the golden document.
+    #[must_use]
     pub fn default_port(self) -> u16 {
         match self {
             BridgeKind::Gui => 25569,
@@ -151,6 +165,11 @@ impl BridgeKind {
 /// DLL's `luaopen` re-runs on every mission load), register every binding,
 /// wire `emit_dlua`/`dump_globals`, and install the console runtime and debug
 /// engine into this state.
+///
+/// # Errors
+///
+/// Returns any `mlua` error raised while building the binding surface or
+/// loading the embedded runtime/debug-engine chunks into this state.
 pub fn bootstrap(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<LuaTable> {
     let module_config: ModuleConfig = lua
         .globals()
@@ -159,10 +178,10 @@ pub fn bootstrap(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<LuaTab
 
     let logger_level: LevelFilter = module_config.logger_level.unwrap_or(Warn);
 
-    match logging::init(get_logger_file_path(lua, kind)?, logger_level) {
+    match logging::init(get_logger_file_path(lua, kind), logger_level) {
         Ok(()) => info!("Logger initialized ({})", kind.service_name()),
-        Err(e) => error!("Failed to initialize logger: {}", e),
-    };
+        Err(e) => error!("Failed to initialize logger: {e}"),
+    }
 
     let exports = lua.create_table()?;
 
@@ -207,29 +226,45 @@ pub fn bootstrap(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<LuaTab
         .set_name("=dcs_studio_debug_engine")
         .call(&exports)?;
     if let Some(e) = engine_err {
-        warn!("debug engine not installed: {}", e);
+        warn!("debug engine not installed: {e}");
     }
 
     Ok(exports)
 }
 
-fn get_logger_file_path(lua: &Lua, kind: BridgeKind) -> LuaResult<PathBuf> {
+fn get_logger_file_path(lua: &Lua, kind: BridgeKind) -> PathBuf {
     if let Ok(writedir) = get_lfs_writedir(lua) {
-        return Ok(PathBuf::from(writedir)
+        return PathBuf::from(writedir)
             .join("Logs")
-            .join(kind.log_file_name()));
+            .join(kind.log_file_name());
     }
 
     if let Ok(current_dir) = env::current_dir() {
-        return Ok(current_dir.join(kind.log_file_name()));
+        return current_dir.join(kind.log_file_name());
     }
 
-    Ok(format!("./{}", kind.log_file_name()).into())
+    format!("./{}", kind.log_file_name()).into()
+}
+
+/// Compose the `register_methods(router, deps)` source for `kind`: the shared
+/// metadata chunk (and, for the GUI bridge, the unit-db curation library)
+/// PREPENDED to the bridge's own registration chunk, so the trailing
+/// `return function(router, deps)` closes over `SHARED_META` (and `GUI_DB`) as
+/// locals. Concatenation keeps it a single chunk — exactly what `eval` on the
+/// bare registration source already relied on to hand back the function.
+fn composed_methods_source(kind: BridgeKind) -> String {
+    match kind {
+        BridgeKind::Gui => format!(
+            "{METHODS_SHARED_SOURCE}\n{GUI_DB_SOURCE}\n{}",
+            kind.methods_source()
+        ),
+        BridgeKind::Mission => format!("{METHODS_SHARED_SOURCE}\n{}", kind.methods_source()),
+    }
 }
 
 /// Load this bridge's `register_methods(router, deps)` chunk into `lua`.
 fn load_register_methods(lua: &Lua, kind: BridgeKind) -> LuaResult<LuaFunction> {
-    lua.load(kind.methods_source())
+    lua.load(composed_methods_source(kind))
         .set_name(match kind {
             BridgeKind::Gui => "=dcs_studio_gui_methods",
             BridgeKind::Mission => "=dcs_studio_mission_methods",
@@ -239,6 +274,10 @@ fn load_register_methods(lua: &Lua, kind: BridgeKind) -> LuaResult<LuaFunction> 
 
 /// Render the `.d.lua` for `kind`'s surface on a fresh Lua state — the
 /// per-cdylib golden tests pin their checked-in `types/<module>.d.lua` to this.
+///
+/// # Errors
+///
+/// Returns any `mlua` error raised while building the surface on the fresh state.
 pub fn emit_surface_dlua(kind: BridgeKind, version: &str) -> LuaResult<String> {
     let lua = Lua::new();
     let exports = lua.create_table()?;
@@ -246,12 +285,17 @@ pub fn emit_surface_dlua(kind: BridgeKind, version: &str) -> LuaResult<String> {
     Ok(luadef::emit_dlua(&doc))
 }
 
-/// Render the OpenRPC document for `kind`'s bridge as pretty JSON on a fresh
+/// Render the `OpenRPC` document for `kind`'s bridge as pretty JSON on a fresh
 /// Lua state — the per-cdylib golden tests pin their checked-in
 /// `openrpc/<module>.openrpc.json` to this, and the meta-schema test validates
 /// it. Runs the SAME `register_methods` chunk the live DLL registers, against a
 /// stub router with an empty `deps` (handlers are created, never called, so no
 /// DCS API is needed to enumerate the method set).
+///
+/// # Errors
+///
+/// Returns any `mlua` error raised while running the `register_methods` chunk
+/// against the stub router or serializing the document.
 pub fn emit_openrpc_json(kind: BridgeKind, version: &str) -> LuaResult<String> {
     let lua = Lua::new();
     let register = load_register_methods(&lua, kind)?;
@@ -289,8 +333,9 @@ pub(crate) fn get_lfs_writedir(lua: &Lua) -> LuaResult<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod db_method_tests {
-    use super::GUI_METHODS_SOURCE;
+    use super::{composed_methods_source, BridgeKind};
     use mlua::prelude::{LuaFunction, LuaResult};
     use mlua::Lua;
 
@@ -300,12 +345,14 @@ mod db_method_tests {
     // Skills list, both of which shape-detection must exclude; db.Weapons.ByCLSID).
     // register_methods runs against a fake router that captures the handlers into
     // the global `H`, so we can invoke them directly and assert on the returned
-    // plain-data tables. Gated like the rest of the mlua suite.
+    // plain-data tables. Loads the COMPOSED GUI source (shared metadata + the
+    // gui_db curation library prepended) exactly as the DLL does. Gated like the
+    // rest of the mlua suite.
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn db_methods_over_synthetic_db() -> LuaResult<()> {
         let lua = Lua::new();
-        let register: LuaFunction = lua.load(GUI_METHODS_SOURCE).eval()?;
+        let register: LuaFunction = lua.load(composed_methods_source(BridgeKind::Gui)).eval()?;
         lua.globals().set("register_methods", register)?;
         lua.load(SUITE).exec()?;
         Ok(())

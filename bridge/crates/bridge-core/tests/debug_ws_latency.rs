@@ -1,3 +1,13 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+// idiomatic in tests
+// The hand-rolled WS frame codec truncates lengths on purpose: test payloads are tiny.
+#![allow(clippy::cast_possible_truncation)]
+
 //! Regression harness for the F5-to-first-stop latency bug (issue: pressing F5
 //! took ~25-30s to reach the first debug stop, sim frozen the whole time).
 //!
@@ -207,7 +217,14 @@ impl Ws {
             if self.rx.len() < total {
                 return None;
             }
-            let mask = masked.then(|| [self.rx[off], self.rx[off + 1], self.rx[off + 2], self.rx[off + 3]]);
+            let mask = masked.then(|| {
+                [
+                    self.rx[off],
+                    self.rx[off + 1],
+                    self.rx[off + 2],
+                    self.rx[off + 3],
+                ]
+            });
             if masked {
                 off += 4;
             }
@@ -221,7 +238,7 @@ impl Ws {
             match opcode {
                 0x1 => return Some(String::from_utf8_lossy(&payload).into_owned()),
                 0x8 => return None, // close
-                _ => continue,      // ping/pong/binary: skip and try the next
+                _ => {}             // ping/pong/binary: skip and try the next
             }
         }
     }
@@ -252,7 +269,7 @@ fn first_stop_is_prompt_while_run_blocks_the_sim() {
             match Ws::connect(PORT) {
                 Ok(ws) => break ws,
                 Err(_) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(50))
+                    std::thread::sleep(Duration::from_millis(50));
                 }
                 Err(e) => panic!("could not connect to bridge: {e}"),
             }
@@ -260,9 +277,11 @@ fn first_stop_is_prompt_while_run_blocks_the_sim() {
     };
 
     // The adapter awaits the breakpoint set before firing the run — mirror that.
-    ws.send(&rpc("bp", "debug_set_breakpoints", &format!(
-        r#"{{"source":"{SOURCE}","breakpoints":[{{"line":1}}]}}"#
-    )))
+    ws.send(&rpc(
+        "bp",
+        "debug_set_breakpoints",
+        &format!(r#"{{"source":"{SOURCE}","breakpoints":[{{"line":1}}]}}"#),
+    ))
     .unwrap();
     wait_for_id(&mut ws, "bp", Duration::from_secs(5));
 
@@ -272,7 +291,10 @@ fn first_stop_is_prompt_while_run_blocks_the_sim() {
     ws.send(&rpc(
         "run",
         "debug_run",
-        &format!(r#"{{"source":"{SOURCE}","code":"{}","pause_on_error":false}}"#, SCRIPT.replace('\n', "\\n")),
+        &format!(
+            r#"{{"source":"{SOURCE}","code":"{}","pause_on_error":false}}"#,
+            SCRIPT.replace('\n', "\\n")
+        ),
     ))
     .unwrap();
 
@@ -281,7 +303,8 @@ fn first_stop_is_prompt_while_run_blocks_the_sim() {
     let deadline = Instant::now() + Duration::from_secs(6);
     while Instant::now() < deadline {
         n += 1;
-        ws.send(&rpc(&format!("st{n}"), "debug_state", "{}")).unwrap();
+        ws.send(&rpc(&format!("st{n}"), "debug_state", "{}"))
+            .unwrap();
         if let Some(msg) = ws.poll(Duration::from_millis(100)).unwrap() {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg) {
                 if v["result"]["paused"] == serde_json::Value::Bool(true) {

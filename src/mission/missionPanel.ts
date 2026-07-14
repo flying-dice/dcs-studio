@@ -1,6 +1,6 @@
-import * as vscode from "vscode";
-import * as path from "path";
 import * as fs from "fs";
+import * as path from "path";
+import * as vscode from "vscode";
 import { gameInstallDir } from "../bridge/paths";
 import type { MissionSanitizeService } from "../core/app/missionSanitizeService";
 import { allItems, backupPath } from "../core/domain/missionSanitize";
@@ -29,7 +29,9 @@ async function requireFile(): Promise<string | undefined> {
     return undefined;
   }
   if (!fs.existsSync(p)) {
-    void showError(`MissionScripting.lua not found at ${p}. Check your DCS install path in Settings.`);
+    void showError(
+      `MissionScripting.lua not found at ${p}. Check your DCS install path in Settings.`,
+    );
     return undefined;
   }
   return p;
@@ -106,7 +108,11 @@ export function desanitizeMission(svc: MissionSanitizeService): Promise<void> {
 
 /** Uncomment the lockdown → DCS's default sanitized state. */
 export function sanitizeMission(svc: MissionSanitizeService): Promise<void> {
-  return apply(svc, allItems(true), "Re-sanitized MissionScripting.lua — DCS's default lockdown restored.");
+  return apply(
+    svc,
+    allItems(true),
+    "Re-sanitized MissionScripting.lua — DCS's default lockdown restored.",
+  );
 }
 
 /** Copy the pristine backup back over the live file. */
@@ -136,7 +142,9 @@ function summarizeTriggers(s: { before: string; after: string }): string {
 export async function installMissionHooks(svc: MissionSanitizeService): Promise<void> {
   const p = await requireFile();
   if (!p) return;
-  const open = vscode.workspace.textDocuments.find((d) => d.uri.fsPath.toLowerCase() === p.toLowerCase());
+  const open = vscode.workspace.textDocuments.find(
+    (d) => d.uri.fsPath.toLowerCase() === p.toLowerCase(),
+  );
   if (open?.isDirty) {
     void vscode.window.showWarningMessage(
       "MissionScripting.lua has unsaved changes. Save or close it first, then try again.",
@@ -158,7 +166,9 @@ export async function installMissionHooks(svc: MissionSanitizeService): Promise<
 export async function removeMissionHooks(svc: MissionSanitizeService): Promise<void> {
   const p = await requireFile();
   if (!p) return;
-  const open = vscode.workspace.textDocuments.find((d) => d.uri.fsPath.toLowerCase() === p.toLowerCase());
+  const open = vscode.workspace.textDocuments.find(
+    (d) => d.uri.fsPath.toLowerCase() === p.toLowerCase(),
+  );
   if (open?.isDirty) {
     void vscode.window.showWarningMessage(
       "MissionScripting.lua has unsaved changes. Save or close it first, then try again.",
@@ -168,7 +178,9 @@ export async function removeMissionHooks(svc: MissionSanitizeService): Promise<v
   try {
     await svc.removeTriggers(p);
     await refreshOpen(p);
-    void vscode.window.showInformationMessage("Mission-script hooks removed from MissionScripting.lua.");
+    void vscode.window.showInformationMessage(
+      "Mission-script hooks removed from MissionScripting.lua.",
+    );
   } catch (e) {
     void showError(permissionHint(e), e);
   }

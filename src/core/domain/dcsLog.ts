@@ -197,7 +197,14 @@ export class LogBuffer {
     }
     return {
       kind: "added",
-      entry: this.add(parsed.time, parsed.level, parsed.subsystem, parsed.thread, parsed.message, mod),
+      entry: this.add(
+        parsed.time,
+        parsed.level,
+        parsed.subsystem,
+        parsed.thread,
+        parsed.message,
+        mod,
+      ),
     };
   }
 

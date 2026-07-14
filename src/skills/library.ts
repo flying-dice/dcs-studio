@@ -1,10 +1,10 @@
 import * as vscode from "vscode";
 import {
-  INSTALL_DIR,
-  SkillInfo,
-  skillInfoFor,
-  parseFrontmatter,
   compareVersions,
+  INSTALL_DIR,
+  parseFrontmatter,
+  type SkillInfo,
+  skillInfoFor,
 } from "../core/domain/skillsStatus";
 
 // Agent skill files the extension ships (skills/<id>/SKILL.md in the VSIX)
@@ -17,11 +17,11 @@ import {
 // owns the file watchers. The status state machine, frontmatter parsing and
 // version compare are pure and live in core/domain/skillsStatus.
 
+export type { SkillInfo, SkillStatus } from "../core/domain/skillsStatus";
 // Re-exported from core for stable import paths (nav, skillsPanel, extension).
-export { INSTALL_DIR, parseFrontmatter, compareVersions };
-export type { SkillStatus, SkillInfo } from "../core/domain/skillsStatus";
+export { compareVersions, INSTALL_DIR, parseFrontmatter };
 
-export class SkillsManager implements vscode.Disposable {
+export class SkillsLibrary implements vscode.Disposable {
   private readonly changeEmitter = new vscode.EventEmitter<void>();
   readonly onDidChange = this.changeEmitter.event;
   private readonly subs: vscode.Disposable[] = [];

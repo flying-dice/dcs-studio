@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // BridgeClient imports `vscode` only for Disposable; stub just that.
 vi.mock("vscode", () => ({
@@ -10,8 +10,8 @@ vi.mock("vscode", () => ({
   },
 }));
 
-import { BridgeClient, BridgeStatus } from "../../src/bridge/client";
-import {
+import { BridgeClient, type BridgeStatus } from "../../src/bridge/client";
+import type {
   BridgeConnection,
   BridgeEndpoint,
   BridgeHandlers,
@@ -91,7 +91,9 @@ describe("BridgeClient over a scripted transport", () => {
   it("derives dcsTime from the ping result", async () => {
     open();
     const ping = lastSent(transport);
-    transport.last.handlers.onMessage?.(JSON.stringify({ id: ping.id, result: { dcs_time: 42.5 } }));
+    transport.last.handlers.onMessage?.(
+      JSON.stringify({ id: ping.id, result: { dcs_time: 42.5 } }),
+    );
     await vi.advanceTimersByTimeAsync(0);
     expect(client.current).toEqual({ connected: true, dcsTime: 42.5 });
   });
@@ -241,7 +243,10 @@ describe("BridgeClient over a scripted transport", () => {
     open();
     const p = client.replEval("mission", "return 1");
     const req = lastSent(transport);
-    expect(req).toMatchObject({ method: "repl_eval", params: { env: "mission", code: "return 1" } });
+    expect(req).toMatchObject({
+      method: "repl_eval",
+      params: { env: "mission", code: "return 1" },
+    });
     transport.last.handlers.onMessage?.(
       JSON.stringify({ id: req.id, result: { ok: true, result: 1 } }),
     );

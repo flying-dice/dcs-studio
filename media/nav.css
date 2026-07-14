@@ -1,20 +1,16 @@
+/* Base tokens, reset, .btn / .card / header primitives live in media/base.css
+   (linked first). Only the sidebar-specific overrides and components are here. */
 :root {
+  /* Slightly tighter border alpha than the shared default, plus the sidebar's
+     own accent/hover/active/status tokens. */
   --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.22));
-  --muted: var(--vscode-descriptionForeground);
   --accent: var(--vscode-textLink-foreground);
   --hover: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
   --active: var(--vscode-list-activeSelectionBackground, rgba(128, 128, 128, 0.2));
   --ok: var(--vscode-testing-iconPassed, #3fb950);
   --warn: var(--vscode-charts-yellow, #cca700);
 }
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  font-family: var(--vscode-font-family);
-  font-size: 13px;
-  color: var(--vscode-foreground);
-  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
-}
+body { background: var(--vscode-sideBar-background, var(--vscode-editor-background)); }
 #app { display: flex; flex-direction: column; min-height: 100vh; }
 
 /* Brand header */

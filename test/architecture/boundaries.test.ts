@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { describe, expect, it } from "vitest";
 
 // Enforces the hexagonal dependency rule from ARCHITECTURE.md: `src/core/**` may
 // import only other core modules and `path`/`node:path`. Anything else — `vscode`,
@@ -50,6 +50,7 @@ function importSpecifiers(source: string): string[] {
   ];
   for (const re of patterns) {
     let m: RegExpExecArray | null;
+    // biome-ignore lint/suspicious/noAssignInExpressions: canonical RegExp.exec loop
     while ((m = re.exec(source)) !== null) specs.push(m[1]);
   }
   return specs;

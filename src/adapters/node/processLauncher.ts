@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from "child_process";
+import { type ChildProcess, spawn } from "child_process";
 import * as fs from "fs";
 import type { EntrypointLaunchPlan } from "../../core/domain/entrypointLaunch";
 

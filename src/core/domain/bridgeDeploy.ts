@@ -9,6 +9,11 @@ import * as path from "path";
 // Install layout inside the DCS write dir (same layout dcs-studio uses).
 // Two DLLs: the GUI bridge (loaded by the GameGUI hook) and the mission bridge
 // (loaded into the mission scripting state by the hook's boot dispatch).
+//
+// LOCKSTEP: bridge/deploy/deploy.ps1 hard-codes this exact layout independently
+// (DLL names, Mods\tech\DcsStudio\bin, Scripts\Hooks\DcsStudio.lua, the legacy
+// artifacts). It's a standalone PowerShell dev-deploy, so a shared constant
+// isn't feasible across the two runtimes — change one, change the other.
 export const BRIDGE_DLLS = ["dcs_studio_gui.dll", "dcs_studio_mission.dll"] as const;
 export type BridgeDllName = (typeof BRIDGE_DLLS)[number];
 
@@ -50,7 +55,11 @@ export function shippedDllPath(extensionRoot: string, name: BridgeDllName): stri
 }
 
 /** The DLL to install: the freshly built workspace artifact if present, else the shipped one. */
-export function selectDll(extensionRoot: string, name: BridgeDllName, builtExists: boolean): string {
+export function selectDll(
+  extensionRoot: string,
+  name: BridgeDllName,
+  builtExists: boolean,
+): string {
   return builtExists ? builtDllPath(extensionRoot, name) : shippedDllPath(extensionRoot, name);
 }
 

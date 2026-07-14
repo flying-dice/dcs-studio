@@ -3,7 +3,7 @@
 // state in the workspace repo. All state arrives from the host as a
 // { type: "skills", skills, installDir, hasWorkspace } message; buttons post
 // { type: install|open|viewBundled|remove, id } back.
-(function () {
+(() => {
   const vscode = acquireVsCodeApi();
   const app = document.getElementById("app");
 
@@ -15,9 +15,7 @@
     modified: { label: "Installed · locally modified", cls: "info" },
   };
 
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  }
+  const { esc } = dcsUi;
 
   function versionLine(s) {
     if (!s.installedVersion) return `v${esc(s.bundledVersion)}`;
@@ -37,16 +35,28 @@
   function buttons(s, hasWorkspace) {
     const b = [];
     if (s.status === "not-installed" && hasWorkspace)
-      b.push(`<button class="btn primary" data-act="install" data-testid="${ACT_TESTID.install}" data-id="${s.id}">Install into repo</button>`);
+      b.push(
+        `<button class="btn primary" data-act="install" data-testid="${ACT_TESTID.install}" data-id="${s.id}">Install into repo</button>`,
+      );
     if (s.status === "outdated")
-      b.push(`<button class="btn primary" data-act="install" data-testid="${ACT_TESTID.install}" data-id="${s.id}">Update to v${esc(s.bundledVersion)}</button>`);
+      b.push(
+        `<button class="btn primary" data-act="install" data-testid="${ACT_TESTID.install}" data-id="${s.id}">Update to v${esc(s.bundledVersion)}</button>`,
+      );
     if (s.status === "modified")
-      b.push(`<button class="btn" data-act="install" data-testid="${ACT_TESTID.install}" data-id="${s.id}">Reset to bundled</button>`);
+      b.push(
+        `<button class="btn" data-act="install" data-testid="${ACT_TESTID.install}" data-id="${s.id}">Reset to bundled</button>`,
+      );
     if (s.installedVersion) {
-      b.push(`<button class="btn" data-act="open" data-testid="${ACT_TESTID.open}" data-id="${s.id}">Open installed</button>`);
-      b.push(`<button class="btn subtle" data-act="remove" data-testid="${ACT_TESTID.remove}" data-id="${s.id}">Remove</button>`);
+      b.push(
+        `<button class="btn" data-act="open" data-testid="${ACT_TESTID.open}" data-id="${s.id}">Open installed</button>`,
+      );
+      b.push(
+        `<button class="btn subtle" data-act="remove" data-testid="${ACT_TESTID.remove}" data-id="${s.id}">Remove</button>`,
+      );
     }
-    b.push(`<button class="btn subtle" data-act="viewBundled" data-testid="${ACT_TESTID.viewBundled}" data-id="${s.id}">View bundled</button>`);
+    b.push(
+      `<button class="btn subtle" data-act="viewBundled" data-testid="${ACT_TESTID.viewBundled}" data-id="${s.id}">View bundled</button>`,
+    );
     return b.join("");
   }
 

@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  EXPORT_OPEN_LIMIT_BYTES,
   dbExportFileBase,
+  EXPORT_OPEN_LIMIT_BYTES,
   exportFileBase,
   shouldOpenExport,
 } from "../../src/core/domain/bridgeConsole";

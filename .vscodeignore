@@ -28,3 +28,4 @@ target/**
 .github/**
 vitest.config.ts
 goals/**
+biome.json

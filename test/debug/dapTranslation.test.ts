@@ -1,12 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { DebugFrame, DebugSnapshot, DebugState } from "../../src/core/domain/bridgeProtocol";
 import {
-  INITIAL_TRACKING,
-  SessionTracking,
   actionForResume,
+  INITIAL_TRACKING,
   noDebugOutcome,
   pathOfSource,
   pollTransition,
   runFastPathDecision,
+  type SessionTracking,
   showUserForFailure,
   sourceId,
   threadName,
@@ -17,7 +18,6 @@ import {
   toStackTraceResponse,
   toVariablesResponse,
 } from "../../src/core/domain/dapTranslation";
-import { DebugFrame, DebugSnapshot, DebugState } from "../../src/core/domain/bridgeProtocol";
 
 // ── chunkname ↔ path ──
 
@@ -38,7 +38,9 @@ describe("sourceId / pathOfSource", () => {
   });
 
   it("maps '@' dofile chunknames to their path", () => {
-    expect(pathOfSource("@C:\\Scripts\\Hooks\\DcsStudio.lua")).toBe("C:\\Scripts\\Hooks\\DcsStudio.lua");
+    expect(pathOfSource("@C:\\Scripts\\Hooks\\DcsStudio.lua")).toBe(
+      "C:\\Scripts\\Hooks\\DcsStudio.lua",
+    );
     expect(pathOfSource("@/opt/dcs/x.lua")).toBe("/opt/dcs/x.lua");
   });
 

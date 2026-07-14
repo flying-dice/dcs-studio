@@ -2,7 +2,7 @@
 //! `.d.lua` type at the *same* call site, so the live `dcs_studio` module and
 //! its generated type definitions cannot drift.
 //!
-//! The recorded model and the EmmyLua emitter are the lua-free
+//! The recorded model and the `EmmyLua` emitter are the lua-free
 //! [`crate::luadef`]; this is the mlua-side recorder that feeds it.
 //! A free function is *fused* — [`Sub::func`] both `create_function`s it and
 //! records its signature. A userdata handle keeps its `impl UserData`
@@ -15,7 +15,7 @@ use crate::luadef::{ClassDoc, FieldDoc, FnDoc, ModuleDoc, Param, Ret};
 use mlua::prelude::{LuaTable, LuaValue};
 use mlua::{FromLuaMulti, IntoLua, IntoLuaMulti, Lua, Result, UserData};
 
-/// Maps a Rust binding type to its EmmyLua type string. The surface type, not
+/// Maps a Rust binding type to its `EmmyLua` type string. The surface type, not
 /// the Rust type: every string-shaped binding collapses to `string`, every
 /// numeric one to `number`, and every dynamic value to `any`.
 pub trait LuaType {
@@ -67,7 +67,7 @@ impl<'l> Surface<'l> {
     }
 
     /// Set a constant on the exports table and record it as a `@field` on the
-    /// root class, with the EmmyLua type inferred from the value via
+    /// root class, with the `EmmyLua` type inferred from the value via
     /// [`LuaType`].
     pub fn constant<V: LuaType + IntoLua>(
         &mut self,
@@ -75,22 +75,10 @@ impl<'l> Surface<'l> {
         doc: &str,
         value: V,
     ) -> Result<&mut Self> {
-        self.constant_as(name, &V::lua_type(), doc, value)
-    }
-
-    /// Like [`Surface::constant`] but with an explicit EmmyLua type string, for
-    /// a value whose surface type differs from its Rust type.
-    pub fn constant_as(
-        &mut self,
-        name: &str,
-        ty: &str,
-        doc: &str,
-        value: impl IntoLua,
-    ) -> Result<&mut Self> {
         self.exports.set(name, value)?;
         self.root.fields.push(FieldDoc {
             name: name.to_string(),
-            ty: ty.to_string(),
+            ty: V::lua_type(),
             doc: doc.to_string(),
         });
         Ok(self)
@@ -189,7 +177,7 @@ impl Sub<'_> {
 
     /// Register an infallible free function and record its `.d.lua` signature.
     ///
-    /// `params` and `returns` are the recorded EmmyLua surface; `f` is the mlua
+    /// `params` and `returns` are the recorded `EmmyLua` surface; `f` is the mlua
     /// body. Most bridge functions use the `(value, err)` multi-return idiom,
     /// so `returns` is explicit rather than derived from a single Rust type.
     pub fn func<A, R>(

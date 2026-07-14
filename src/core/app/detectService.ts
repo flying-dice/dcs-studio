@@ -1,17 +1,17 @@
 import * as path from "node:path";
-import type { RegistryPort } from "../ports/registry";
-import type { FileSystemPort } from "../ports/filesystem";
-import type { EnvPort } from "../ports/env";
 import {
-  type DcsCandidate,
-  REGISTRY_INSTALL_KEYS,
   compareInstallNames,
   compareSavedNames,
+  type DcsCandidate,
   installDetail,
   isDcsSavedName,
   programFilesInstallRoots,
+  REGISTRY_INSTALL_KEYS,
   savedGameDetail,
 } from "../domain/dcsDetect";
+import type { EnvPort } from "../ports/env";
+import type { FileSystemPort } from "../ports/filesystem";
+import type { RegistryPort } from "../ports/registry";
 
 // Use-case service for DCS path detection. Composes the RegistryPort, FileSystemPort
 // and EnvPort probes around the pure rules in core/domain/dcsDetect; the ordering,

@@ -19,7 +19,9 @@ const PAYLOAD_VOLUME_RE = /\.7z(\.\d{3})?$/i;
  * the standalone manifest) are dropped.
  */
 export function selectPayloadVolumes<T extends { name: string }>(assets: readonly T[]): T[] {
-  return assets.filter((a) => PAYLOAD_VOLUME_RE.test(a.name)).sort((a, b) => a.name.localeCompare(b.name));
+  return assets
+    .filter((a) => PAYLOAD_VOLUME_RE.test(a.name))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** The effective per-volume byte limit — never above the GitHub-safe maximum. */
@@ -28,7 +30,10 @@ export function volumeLimit(volumeBytes: number = DEFAULT_VOLUME_BYTES): number 
 }
 
 /** Whether a single archive of `archiveBytes` must be repacked into volumes. */
-export function shouldSplit(archiveBytes: number, volumeBytes: number = DEFAULT_VOLUME_BYTES): boolean {
+export function shouldSplit(
+  archiveBytes: number,
+  volumeBytes: number = DEFAULT_VOLUME_BYTES,
+): boolean {
   return archiveBytes > volumeLimit(volumeBytes);
 }
 

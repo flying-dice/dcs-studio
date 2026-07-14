@@ -1,10 +1,10 @@
 import * as vscode from "vscode";
 import {
-  DualBridgeStatus,
-  INITIAL_DUAL_STATUS,
   bridgeForEnv,
+  type DualBridgeStatus,
+  INITIAL_DUAL_STATUS,
 } from "../core/domain/bridgeProtocol";
-import { BridgeClient } from "./client";
+import type { BridgeClient } from "./client";
 
 // The two bridge clients as one unit: the GUI bridge (port 25569, always up
 // while DCS runs) and the mission bridge (port 25570, up only during a

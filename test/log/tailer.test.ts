@@ -1,8 +1,8 @@
-import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { LogTailer, LogTailerOptions } from "../../src/log/tailer";
+import { afterEach, describe, expect, it } from "vitest";
+import { LogTailer, type LogTailerOptions } from "../../src/log/tailer";
 
 // Short poll interval + real timers: the tailer is a thin fs-polling loop,
 // so exercising it end-to-end against a real temp file is more honest than
@@ -40,7 +40,13 @@ describe("LogTailer", () => {
     const file = tmpFile();
     fs.writeFileSync(file, "line one\nline two\n");
     const lines: string[] = [];
-    const tailer = makeTailer({ filePath: file, pollMs: 20, onLines: (l: string[]) => lines.push(...l), onState: () => {}, onReset: () => {} });
+    const tailer = makeTailer({
+      filePath: file,
+      pollMs: 20,
+      onLines: (l: string[]) => lines.push(...l),
+      onState: () => {},
+      onReset: () => {},
+    });
     tailer.start();
     await waitFor(() => lines.length >= 2);
     expect(lines).toEqual(["line one", "line two"]);
@@ -50,7 +56,13 @@ describe("LogTailer", () => {
     const file = tmpFile();
     fs.writeFileSync(file, "first\n");
     const lines: string[] = [];
-    const tailer = makeTailer({ filePath: file, pollMs: 20, onLines: (l: string[]) => lines.push(...l), onState: () => {}, onReset: () => {} });
+    const tailer = makeTailer({
+      filePath: file,
+      pollMs: 20,
+      onLines: (l: string[]) => lines.push(...l),
+      onState: () => {},
+      onReset: () => {},
+    });
     tailer.start();
     await waitFor(() => lines.length >= 1);
     fs.appendFileSync(file, "second\nthird\n");
@@ -104,7 +116,13 @@ describe("LogTailer", () => {
     const file = tmpFile();
     fs.writeFileSync(file, "steady\n");
     const states: string[] = [];
-    const tailer = makeTailer({ filePath: file, pollMs: 15, onLines: () => {}, onState: (s: string) => states.push(s), onReset: () => {} });
+    const tailer = makeTailer({
+      filePath: file,
+      pollMs: 15,
+      onLines: () => {},
+      onState: (s: string) => states.push(s),
+      onReset: () => {},
+    });
     tailer.start();
     await new Promise((r) => setTimeout(r, 150)); // several ticks with no state change
     expect(states).toEqual(["ok"]);
@@ -124,7 +142,7 @@ describe("LogTailer", () => {
     });
     tailer.start();
     await waitFor(() => true); // let the initial (empty) backfill tick happen
-    const batch = Array.from({ length: 20 }, (_, i) => `line-${i}`).join("\n") + "\n"; // ~180 bytes
+    const batch = `${Array.from({ length: 20 }, (_, i) => `line-${i}`).join("\n")}\n`; // ~180 bytes
     fs.appendFileSync(file, batch);
     // Immediately after the first tick to observe growth, not everything can
     // be in yet — the read is capped at sliceBytes per tick.
@@ -139,7 +157,7 @@ describe("LogTailer", () => {
     const file = tmpFile();
     // 50 short fixed-width lines so we can compute exactly how many survive a small backfill window.
     const allLines = Array.from({ length: 50 }, (_, i) => `L${String(i).padStart(3, "0")}`); // 4 bytes each + \n = 5
-    fs.writeFileSync(file, allLines.join("\n") + "\n");
+    fs.writeFileSync(file, `${allLines.join("\n")}\n`);
     const lines: string[] = [];
     const tailer = makeTailer({
       filePath: file,
@@ -162,7 +180,13 @@ describe("LogTailer", () => {
     const file = tmpFile();
     fs.writeFileSync(file, "one\n");
     const lines: string[] = [];
-    const tailer = new LogTailer({ filePath: file, pollMs: 15, onLines: (l: string[]) => lines.push(...l), onState: () => {}, onReset: () => {} });
+    const tailer = new LogTailer({
+      filePath: file,
+      pollMs: 15,
+      onLines: (l: string[]) => lines.push(...l),
+      onState: () => {},
+      onReset: () => {},
+    });
     tailer.start();
     await waitFor(() => lines.length >= 1);
     tailer.stop();

@@ -31,5 +31,5 @@ export function exportFileBase(label?: string): string {
  * [`exportFileBase`]. E.g. `"category:Planes"` → `"dcs-db-category-Planes"`.
  */
 export function dbExportFileBase(what: string): string {
-  return exportFileBase("dcs-db-" + what.replace(/:/g, "-"));
+  return exportFileBase(`dcs-db-${what.replace(/:/g, "-")}`);
 }

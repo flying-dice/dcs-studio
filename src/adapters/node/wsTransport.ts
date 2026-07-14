@@ -1,12 +1,12 @@
-import * as net from "net";
 import * as crypto from "crypto";
-import {
+import * as net from "net";
+import { encodeFrame, parseCloseFrame, readFrame } from "../../core/domain/wsFraming";
+import type {
   BridgeConnection,
   BridgeEndpoint,
   BridgeHandlers,
   BridgeTransportPort,
 } from "../../core/ports/bridgeTransport";
-import { encodeFrame, parseCloseFrame, readFrame } from "../../core/domain/wsFraming";
 
 // Node adapter for `BridgeTransportPort`: a minimal client-side WebSocket
 // (RFC 6455) over a raw TCP socket — enough to speak text frames to the in-DCS

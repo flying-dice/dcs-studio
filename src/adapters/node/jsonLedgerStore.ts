@@ -1,8 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { SubscriptionLedgerStore } from "../../core/ports/ledger";
-import type { Subscription } from "../../core/domain/types";
 import { renderUninstallScript } from "../../core/domain/subscriptions";
+import type { Subscription } from "../../core/domain/types";
+import type { SubscriptionLedgerStore } from "../../core/ports/ledger";
 
 // Node adapter for `SubscriptionLedgerStore`: persists the ledger as
 // `<dataDir>/subscriptions.json` (pretty-printed, keyed by lowercased repo — the
@@ -53,7 +53,10 @@ export class JsonLedgerStore implements SubscriptionLedgerStore {
   private writeUninstallBat(subs: Record<string, Subscription>): void {
     try {
       fs.mkdirSync(this.dataDir(), { recursive: true });
-      fs.writeFileSync(this.uninstallBatPath(), renderUninstallScript(subs, this.dataDir(), this.subsFilePath()));
+      fs.writeFileSync(
+        this.uninstallBatPath(),
+        renderUninstallScript(subs, this.dataDir(), this.subsFilePath()),
+      );
     } catch {
       /* best-effort — a read-only data dir shouldn't break a subscription write */
     }

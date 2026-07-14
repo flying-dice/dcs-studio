@@ -7,9 +7,9 @@
 //
 // Usage: npm run dev
 import { spawn, spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sandbox = path.join(root, ".dev-sandbox");
@@ -38,5 +38,9 @@ spawn(
 );
 
 console.log("› Watching for changes (edits rebuild out/ and the dev host auto-reloads)…");
-const watch = spawn("npx", ["tsc", "-watch", "-p", "./"], { cwd: root, stdio: "inherit", shell: true });
+const watch = spawn("npx", ["tsc", "-watch", "-p", "./"], {
+  cwd: root,
+  stdio: "inherit",
+  shell: true,
+});
 watch.on("exit", (code) => process.exit(code ?? 0));

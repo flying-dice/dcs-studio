@@ -64,7 +64,11 @@ export function mapListing(it: SearchItem): MarketListing {
 
 /** Map a release's assets (or none) to product assets. */
 export function mapAssets(release: ReleaseJson | null): ProductAsset[] {
-  return (release?.assets ?? []).map((a) => ({ name: a.name, size: a.size, url: a.browser_download_url }));
+  return (release?.assets ?? []).map((a) => ({
+    name: a.name,
+    size: a.size,
+    url: a.browser_download_url,
+  }));
 }
 
 /**

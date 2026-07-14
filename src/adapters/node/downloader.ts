@@ -40,7 +40,12 @@ export async function downloadTo(
 
 /** `DownloadPort` over global fetch + a streamed file write. */
 export class FetchDownloader implements DownloadPort {
-  download(url: string, dest: string, token?: string, onProgress?: (fraction: number) => void): Promise<void> {
+  download(
+    url: string,
+    dest: string,
+    token?: string,
+    onProgress?: (fraction: number) => void,
+  ): Promise<void> {
     return downloadTo(url, dest, token, onProgress);
   }
 }

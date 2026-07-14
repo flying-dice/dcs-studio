@@ -1,30 +1,29 @@
 import * as vscode from "vscode";
-import { BridgeConnection, BridgeTransportPort } from "../core/ports/bridgeTransport";
+import { WsBridgeTransport } from "../adapters/node/wsTransport";
 import {
   BRIDGE_INITIAL_BACKOFF_MS,
-  BridgeStatus,
-  DbCategory,
-  DbExportResult,
-  DbExportWhat,
-  DbUnitType,
-  DbWeapon,
-  DebugEnv,
-  DebugState,
-  DebugValue,
-  INITIAL_BRIDGE_STATUS,
-  LuaEnv,
-  PING_INTERVAL_MS,
-  PING_TIMEOUT_MS,
-  ReplInspectResult,
-  ReplSignatureResult,
-  ReplVariable,
+  type BridgeStatus,
   buildRequest,
   dcsTimeFromPing,
   formatRequestId,
+  GUI_BRIDGE_PORT,
+  INITIAL_BRIDGE_STATUS,
   nextBackoff,
+  PING_INTERVAL_MS,
+  PING_TIMEOUT_MS,
   parseResponse,
 } from "../core/domain/bridgeProtocol";
-import { WsBridgeTransport } from "../adapters/node/wsTransport";
+import type {
+  DebugEnv,
+  DebugState,
+  DebugValue,
+  LuaEnv,
+  ReplInspectResult,
+  ReplSignatureResult,
+  ReplVariable,
+} from "../core/domain/debugProtocol";
+import type { BridgeConnection, BridgeTransportPort } from "../core/ports/bridgeTransport";
+import type { DbCategory, DbExportResult, DbExportWhat, DbUnitType, DbWeapon } from "./dbTypes";
 
 // Editor-side WebSocket JSON-RPC client for one in-DCS bridge. Two instances
 // exist (see clients.ts): the GUI bridge (dcs_studio_gui.dll on
@@ -34,18 +33,18 @@ import { WsBridgeTransport } from "../adapters/node/wsTransport";
 // string id (the bridge's serde rejects numeric ids). This class is the
 // stateful shell — sockets via `BridgeTransportPort`, timers, the pending map
 // — over the pure protocol rules in core/domain/bridgeProtocol.
-export {
-  BridgeStatus,
-  LuaEnv,
+export type { BridgeStatus } from "../core/domain/bridgeProtocol";
+export type {
   DebugEnv,
-  ReplVariable,
-  ReplInspectResult,
-  ReplSignatureResult,
   DebugFrame,
   DebugSnapshot,
   DebugState,
   DebugValue,
-} from "../core/domain/bridgeProtocol";
+  LuaEnv,
+  ReplInspectResult,
+  ReplSignatureResult,
+  ReplVariable,
+} from "../core/domain/debugProtocol";
 
 interface Pending {
   resolve: (v: unknown) => void;
@@ -67,7 +66,7 @@ export class BridgeClient {
 
   constructor(
     private readonly host = "127.0.0.1",
-    private readonly port = 25569,
+    private readonly port = GUI_BRIDGE_PORT,
     transport?: BridgeTransportPort,
     /** Names this bridge in user-facing error messages ("GUI bridge" / "Mission bridge"). */
     private readonly label = "bridge",
@@ -156,7 +155,10 @@ export class BridgeClient {
   /** Serialize a value (by explorer ref, else by evaluating `expr`) to a JSON
    * file in the DCS write dir; returns its path — big exports never ride the
    * WebSocket. Long timeout: the sim thread does the whole serialization. */
-  replExport(env: LuaEnv, spec: { ref?: number; expr?: string }): Promise<{ path: string; bytes: number }> {
+  replExport(
+    env: LuaEnv,
+    spec: { ref?: number; expr?: string },
+  ): Promise<{ path: string; bytes: number }> {
     const params = { env, ref: spec.ref, expr: spec.expr };
     return this.replCall("repl_export", params, 35000);
   }
@@ -170,19 +172,32 @@ export class BridgeClient {
 
   /** Light unit-type listing across one or all categories; `filter` is a
    * case-insensitive substring over type/display name (capped, `truncated`). */
-  dbUnitTypes(opts?: { category?: string; filter?: string }): Promise<{ units: DbUnitType[]; truncated: boolean }> {
-    return this.call("db_unit_types", opts ?? {}) as Promise<{ units: DbUnitType[]; truncated: boolean }>;
+  dbUnitTypes(opts?: {
+    category?: string;
+    filter?: string;
+  }): Promise<{ units: DbUnitType[]; truncated: boolean }> {
+    return this.call("db_unit_types", opts ?? {}) as Promise<{
+      units: DbUnitType[];
+      truncated: boolean;
+    }>;
   }
 
   /** One unit record: curated summary, or the raw record with `raw = true`. */
   dbUnit(type: string, raw = false): Promise<{ unit: unknown; category?: string; raw?: boolean }> {
-    return this.call("db_unit", { type, raw }) as Promise<{ unit: unknown; category?: string; raw?: boolean }>;
+    return this.call("db_unit", { type, raw }) as Promise<{
+      unit: unknown;
+      category?: string;
+      raw?: boolean;
+    }>;
   }
 
   /** Light listing of db.Weapons.ByCLSID; `filter` is a case-insensitive
    * substring over display name/name/CLSID (capped, `truncated`). */
   dbWeapons(filter?: string): Promise<{ weapons: DbWeapon[]; truncated: boolean }> {
-    return this.call("db_weapons", filter ? { filter } : {}) as Promise<{ weapons: DbWeapon[]; truncated: boolean }>;
+    return this.call("db_weapons", filter ? { filter } : {}) as Promise<{
+      weapons: DbWeapon[];
+      truncated: boolean;
+    }>;
   }
 
   /** Dump part (or all) of the DB to a JSON file in the DCS write dir; returns
@@ -253,7 +268,9 @@ export class BridgeClient {
     source: string,
     breakpoints: { line: number; condition?: string }[],
   ): Promise<{ count: number }> {
-    return this.call("debug_set_breakpoints", { source, breakpoints }) as Promise<{ count: number }>;
+    return this.call("debug_set_breakpoints", { source, breakpoints }) as Promise<{
+      count: number;
+    }>;
   }
 
   /** Drop every breakpoint and condition (session start/end hygiene). */

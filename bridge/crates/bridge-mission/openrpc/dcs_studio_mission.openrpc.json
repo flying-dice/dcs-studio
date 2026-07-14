@@ -2,7 +2,7 @@
   "info": {
     "description": "In-DCS DCS Studio JSON-RPC bridge for the mission environment.",
     "title": "dcs-studio-mission",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "x-dcs-env": "mission"
   },
   "methods": [
@@ -85,32 +85,6 @@
           }
         }
       ],
-      "result": {
-        "name": "result",
-        "schema": {}
-      }
-    },
-    {
-      "description": "Evaluate an expression against the live mission globals and register the result for lazy exploration (no pause needed).",
-      "name": "debug_inspect",
-      "params": [
-        {
-          "name": "expr",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {}
-      }
-    },
-    {
-      "description": "Drop every inspection ref, releasing the held values.",
-      "name": "debug_inspect_clear",
-      "params": [],
       "result": {
         "name": "result",
         "schema": {}

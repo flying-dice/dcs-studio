@@ -1,4 +1,4 @@
-import type { ManifestModel, InstallRoots } from "../domain/types";
+import type { InstallRoots, ManifestModel } from "../domain/types";
 
 // Port: parse/emit the `dcs-studio.toml` manifest and resolve an install
 // destination against the DCS roots. The adapter wraps the shipped

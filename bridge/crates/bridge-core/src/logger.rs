@@ -15,20 +15,20 @@ impl Logger {
         Logger { ns }
     }
 
-    pub fn debug(&self, msg: String) {
-        debug!(target: &self.ns, "{}", msg);
+    pub fn debug(&self, msg: &str) {
+        debug!(target: &self.ns, "{msg}");
     }
 
-    pub fn info(&self, msg: String) {
-        info!(target: &self.ns, "{}", msg);
+    pub fn info(&self, msg: &str) {
+        info!(target: &self.ns, "{msg}");
     }
 
-    pub fn warn(&self, msg: String) {
-        warn!(target: &self.ns, "{}", msg);
+    pub fn warn(&self, msg: &str) {
+        warn!(target: &self.ns, "{msg}");
     }
 
-    pub fn error(&self, msg: String) {
-        error!(target: &self.ns, "{}", msg);
+    pub fn error(&self, msg: &str) {
+        error!(target: &self.ns, "{msg}");
     }
 }
 
@@ -41,22 +41,22 @@ impl UserData for Logger {
         });
 
         methods.add_method("debug", |_lua, this, msg: String| {
-            this.debug(msg);
+            this.debug(&msg);
             Ok(())
         });
 
         methods.add_method("info", |_lua, this, msg: String| {
-            this.info(msg);
+            this.info(&msg);
             Ok(())
         });
 
         methods.add_method("warn", |_lua, this, msg: String| {
-            this.warn(msg);
+            this.warn(&msg);
             Ok(())
         });
 
         methods.add_method("error", |_lua, this, msg: String| {
-            this.error(msg);
+            this.error(&msg);
             Ok(())
         });
     }
@@ -129,7 +129,7 @@ pub fn register(sub: &mut Sub) -> Result<()> {
 /// for all four level free functions.
 fn log_at(level: log::Level, msg: &str, ns: Option<&str>) {
     match ns {
-        Some(namespace) => log::log!(target: namespace, level, "{}", msg),
-        None => log::log!(level, "{}", msg),
+        Some(namespace) => log::log!(target: namespace, level, "{msg}"),
+        None => log::log!(level, "{msg}"),
     }
 }

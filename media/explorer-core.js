@@ -13,11 +13,11 @@
 // minimatch, because DCS's own keys mix cases wildly and an exact-case filter
 // would be near useless in the field.
 /* v8 ignore start */
-(function (root, factory) {
+((root, factory) => {
   const api = factory();
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.DcsExplorerCore = api;
-})(typeof self !== "undefined" ? self : this, function () {
+})(typeof self !== "undefined" ? self : this, () => {
   /* v8 ignore stop */
   const SWEEP_BUDGET = 200; // max table fetches one Enter-triggered sweep may spend
 
@@ -35,7 +35,7 @@
       else if (ch === "?") out += "[^/]";
       else out += escapeLiteral(ch);
     }
-    return new RegExp(out + "$", "i");
+    return new RegExp(`${out}$`, "i");
   }
 
   function segMatch(seg, pat) {
@@ -129,11 +129,16 @@
 
   // The `/`-joined child path; the root is always "_G".
   function childPath(parent, name) {
-    return parent ? parent + "/" + name : name;
+    return parent ? `${parent}/${name}` : name;
   }
 
   function stripQuotes(s) {
-    if (typeof s === "string" && s.length >= 2 && s.charAt(0) === '"' && s.charAt(s.length - 1) === '"') {
+    if (
+      typeof s === "string" &&
+      s.length >= 2 &&
+      s.charAt(0) === '"' &&
+      s.charAt(s.length - 1) === '"'
+    ) {
       return s.slice(1, -1);
     }
     return s;
@@ -179,7 +184,7 @@
 
   // "name(a, b, c)" — the resolved (or arity-preview) function signature line.
   function signatureDisplay(name, params) {
-    return name + "(" + (params || "") + ")";
+    return `${name}(${params || ""})`;
   }
 
   return {

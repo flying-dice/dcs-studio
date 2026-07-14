@@ -1,6 +1,7 @@
-import * as vscode from "vscode";
 import * as os from "os";
 import * as path from "path";
+import * as vscode from "vscode";
+import { renderWebviewHtml } from "../webview/html";
 
 // The manifest authoring FORM as a companion webview opened beside the normal
 // text editor — a split view: raw dcs-studio.toml (real editor: TOML syntax +
@@ -73,19 +74,20 @@ export class ManifestFormPanel {
     return { savedGames, gameInstall };
   }
 
-  private async onMessage(msg: { type: string; text?: string; url?: string }): Promise<void> {
+  private async onMessage(msg: { type: string; text?: string }): Promise<void> {
     switch (msg.type) {
       case "edit": {
         if (typeof msg.text !== "string" || msg.text === this.document.getText()) return;
         this.lastWritten = msg.text;
         const edit = new vscode.WorkspaceEdit();
-        edit.replace(this.document.uri, new vscode.Range(0, 0, this.document.lineCount, 0), msg.text);
+        edit.replace(
+          this.document.uri,
+          new vscode.Range(0, 0, this.document.lineCount, 0),
+          msg.text,
+        );
         await vscode.workspace.applyEdit(edit);
         break;
       }
-      case "openExternal":
-        if (msg.url) void vscode.env.openExternal(vscode.Uri.parse(msg.url));
-        break;
     }
   }
 
@@ -96,44 +98,19 @@ export class ManifestFormPanel {
   }
 
   private html(): string {
-    const webview = this.panel.webview;
-    const media = (f: string) =>
-      webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", f));
-    const nonce = getNonce();
     const bootstrap = {
       rawText: this.document.getText(),
       targetPath: this.document.uri.fsPath,
       roots: this.roots(),
     };
-    const csp = [
-      `default-src 'none'`,
-      `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src 'nonce-${nonce}'`,
-      `font-src ${webview.cspSource}`,
-    ].join("; ");
-
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="${csp}" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link href="${media("manifest.css")}" rel="stylesheet" />
-  <title>dcs-studio.toml form</title>
-</head>
-<body>
-  <div id="app"></div>
-  <script nonce="${nonce}">window.__BOOTSTRAP__ = ${JSON.stringify(bootstrap)};</script>
-  <script nonce="${nonce}" src="${media("manifest-core.js")}"></script>
-  <script nonce="${nonce}" src="${media("manifest.js")}"></script>
-</body>
-</html>`;
+    return renderWebviewHtml({
+      webview: this.panel.webview,
+      extensionUri: this.context.extensionUri,
+      title: "dcs-studio.toml form",
+      styles: ["manifest.css"],
+      inlineScripts: [`window.__BOOTSTRAP__ = ${JSON.stringify(bootstrap)};`],
+      scripts: ["manifest-core.js", "manifest.js"],
+      csp: { font: true },
+    });
   }
-}
-
-function getNonce(): string {
-  let text = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) text += chars.charAt(Math.floor(Math.random() * chars.length));
-  return text;
 }

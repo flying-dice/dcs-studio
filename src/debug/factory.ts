@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
-import { DebugEnv } from "../bridge/client";
-import { BridgeClients } from "../bridge/clients";
-import { DcsDebugAdapter } from "./adapter";
+import type { DebugEnv } from "../bridge/client";
+import type { BridgeClients } from "../bridge/clients";
 import { showError } from "../errors";
+import { DcsDebugAdapter } from "./adapter";
 
 export const DEBUG_TYPE = "dcs-lua";
 
@@ -29,7 +29,7 @@ export class DcsDebugConfigProvider implements vscode.DebugConfigurationProvider
     // Empty config: user hit F5 with no launch.json — debug the active file.
     if (!config.type && !config.request && !config.name) {
       const doc = vscode.window.activeTextEditor?.document;
-      if (!doc || !doc.fileName.toLowerCase().endsWith(".lua")) {
+      if (!doc?.fileName.toLowerCase().endsWith(".lua")) {
         void showError("Open a .lua file to debug it in DCS.");
         return undefined;
       }
@@ -67,9 +67,13 @@ export class DcsDebugConfigProvider implements vscode.DebugConfigurationProvider
 }
 
 /** Editor run/debug buttons: start a session for the given (or active) file. */
-async function startSession(uri: vscode.Uri | undefined, env: DebugEnv, noDebug: boolean): Promise<void> {
+async function startSession(
+  uri: vscode.Uri | undefined,
+  env: DebugEnv,
+  noDebug: boolean,
+): Promise<void> {
   const target = uri ?? vscode.window.activeTextEditor?.document.uri;
-  if (!target || target.scheme !== "file" || !target.fsPath.toLowerCase().endsWith(".lua")) {
+  if (target?.scheme !== "file" || !target.fsPath.toLowerCase().endsWith(".lua")) {
     void showError("Open a .lua file to run it in DCS.");
     return;
   }

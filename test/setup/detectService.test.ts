@@ -1,9 +1,9 @@
-import { describe, it, expect } from "vitest";
 import * as path from "node:path";
+import { describe, expect, it } from "vitest";
+import { DetectService } from "../../src/core/app/detectService";
+import type { EnvPort } from "../../src/core/ports/env";
 import type { FileSystemPort } from "../../src/core/ports/filesystem";
 import type { RegistryPort } from "../../src/core/ports/registry";
-import type { EnvPort } from "../../src/core/ports/env";
-import { DetectService } from "../../src/core/app/detectService";
 
 const HOME = "C:\\Users\\pilot";
 const SAVED = path.join(HOME, "Saved Games");
@@ -28,7 +28,7 @@ class FakeFs implements FileSystemPort {
     if (!this.dirs.has(p)) throw new Error(`ENOENT: ${p}`);
     const children = new Set<string>();
     for (const d of [...this.dirs, ...this.plainFiles]) {
-      if (d !== p && d.startsWith(p + "\\")) children.add(d.slice(p.length + 1).split("\\")[0]);
+      if (d !== p && d.startsWith(`${p}\\`)) children.add(d.slice(p.length + 1).split("\\")[0]);
     }
     return [...children].sort();
   }
@@ -40,7 +40,11 @@ class FakeFs implements FileSystemPort {
 class FakeRegistry implements RegistryPort {
   calls: Array<[string, string, string]> = [];
   constructor(private readonly results: Record<string, Array<[string, string]>> = {}) {}
-  async queryValues(hive: string, subKey: string, valueName: string): Promise<Array<[string, string]>> {
+  async queryValues(
+    hive: string,
+    subKey: string,
+    valueName: string,
+  ): Promise<Array<[string, string]>> {
     this.calls.push([hive, subKey, valueName]);
     return this.results[`${hive}\\${subKey}`] ?? [];
   }
@@ -55,7 +59,11 @@ function fakeEnv(overrides?: Partial<EnvPort>): EnvPort {
   };
 }
 
-function svc(fs: FileSystemPort, registry: RegistryPort = new FakeRegistry(), env: EnvPort = fakeEnv()) {
+function svc(
+  fs: FileSystemPort,
+  registry: RegistryPort = new FakeRegistry(),
+  env: EnvPort = fakeEnv(),
+) {
   return new DetectService({ registry, fs, env });
 }
 

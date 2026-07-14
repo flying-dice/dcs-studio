@@ -1,15 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   DISCOVERY_TOPIC,
-  MANIFEST_FILE,
-  labelsFrom,
-  mapListing,
-  mapAssets,
-  mapProduct,
   ghErrorMessage,
-  type SearchItem,
-  type RepoJson,
+  labelsFrom,
+  MANIFEST_FILE,
+  mapAssets,
+  mapListing,
+  mapProduct,
   type ReleaseJson,
+  type RepoJson,
+  type SearchItem,
 } from "../../src/core/domain/githubMarketplace";
 import { productInvariants } from "../marketplace/contract";
 

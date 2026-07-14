@@ -1,19 +1,13 @@
+/* Base tokens, reset, .kicker live in media/base.css (linked first). */
 :root {
-  --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
-  --card: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-  --muted: var(--vscode-descriptionForeground);
-  --mono: var(--vscode-editor-font-family, monospace);
   --code-bg: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
   --accent: var(--vscode-focusBorder, #4a90d9);
   --ok: var(--vscode-testing-iconPassed, #3fb950);
   --warn: var(--vscode-charts-yellow, #cca700);
   --info: var(--vscode-charts-blue, #4a90d9);
 }
-* { box-sizing: border-box; }
-body { margin: 0; font-family: var(--vscode-font-family); font-size: 13px; color: var(--vscode-foreground); background: var(--vscode-editor-background); }
 
 .page { max-width: 720px; margin: 0 auto; padding: 26px 32px 80px; }
-.kicker { font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.28em; color: var(--muted); }
 h1 { font-size: 22px; font-weight: 650; margin: 6px 0 4px; }
 .lede { color: var(--muted); font-size: 13.5px; margin: 0 0 20px; line-height: 1.55; }
 .lede code { font-family: var(--mono); font-size: 12px; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }

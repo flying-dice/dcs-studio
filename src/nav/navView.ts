@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
-import { BridgeClients } from "../bridge/clients";
-import { DualBridgeStatus, displayTime } from "../core/domain/bridgeProtocol";
-import { SkillsManager } from "../skills/manager";
+import type { BridgeClients } from "../bridge/clients";
+import { type DualBridgeStatus, displayTime } from "../core/domain/bridgeProtocol";
+import type { SkillsLibrary } from "../skills/library";
+import { mediaUri, renderWebviewHtml } from "../webview/html";
 
 // The sidebar as website-style page navigation: a WebviewView rendering a logo
 // header, nav rows (Browse Mods / Create Mods / Publish Mod / DCS Console /
@@ -19,7 +20,7 @@ export class NavViewProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly clients: BridgeClients,
-    private readonly skills: SkillsManager,
+    private readonly skills: SkillsLibrary,
   ) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -106,35 +107,15 @@ export class NavViewProvider implements vscode.WebviewViewProvider {
   }
 
   private html(webview: vscode.Webview): string {
-    const media = (f: string) =>
-      webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", f));
-    const nonce = getNonce();
-    const csp = [
-      `default-src 'none'`,
-      `img-src ${webview.cspSource} data:`,
-      `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src 'nonce-${nonce}'`,
-    ].join("; ");
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="${csp}" />
-  <link href="${media("nav.css")}" rel="stylesheet" />
-  <title>DCS Studio</title>
-</head>
-<body>
-  <div id="app"></div>
-  <script nonce="${nonce}">window.__LOGO__ = "${media("icon.png")}";</script>
-  <script nonce="${nonce}" src="${media("nav.js")}"></script>
-</body>
-</html>`;
+    return renderWebviewHtml({
+      webview,
+      extensionUri: this.extensionUri,
+      title: "DCS Studio",
+      styles: ["nav.css"],
+      inlineScripts: [`window.__LOGO__ = "${mediaUri(webview, this.extensionUri, "icon.png")}";`],
+      scripts: ["nav.js"],
+      csp: { img: "data:" },
+      viewport: false,
+    });
   }
-}
-
-function getNonce(): string {
-  let text = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) text += chars.charAt(Math.floor(Math.random() * chars.length));
-  return text;
 }

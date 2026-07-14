@@ -1,5 +1,5 @@
-import * as vscode from "vscode";
 import * as os from "os";
+import * as vscode from "vscode";
 
 // Every error popup in the extension goes through showError so it carries a
 // "Report Issue" button that opens a pre-filled GitHub issue (message, stack,
