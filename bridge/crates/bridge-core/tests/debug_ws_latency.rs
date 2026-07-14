@@ -144,10 +144,10 @@ impl Ws {
         if len < 126 {
             frame.push(0x80 | len as u8);
         } else if len < 65536 {
-            frame.push(0x80 | 126);
+            frame.push(0x80 | 0x7e); // 126: 16-bit extended payload length
             frame.extend_from_slice(&(len as u16).to_be_bytes());
         } else {
-            frame.push(0x80 | 127);
+            frame.push(0x80 | 0x7f); // 127: 64-bit extended payload length
             frame.extend_from_slice(&(len as u64).to_be_bytes());
         }
         let mask = [0x12u8, 0x34, 0x56, 0x78];
