@@ -78,6 +78,18 @@ jobs:
           --title "DCS Studio ${{ github.ref_name }}"
           --generate-notes
 
+      - name: Publish to VS Code Marketplace
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        # Requires the VSCE_PAT repo secret (Azure DevOps PAT, Marketplace →
+        # Manage scope, all accessible orgs) and ownership of the "dcs-studio"
+        # publisher from package.json. Skips gracefully until the secret exists.
+        run: |
+          if (-not $env:VSCE_PAT) { Write-Host "VSCE_PAT secret not set - skipping marketplace publish"; exit 0 }
+          npx @vscode/vsce publish --packagePath (Get-Item *.vsix).FullName
+
       - name: Upload .vsix artifact (manual runs)
         if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
