@@ -74,6 +74,7 @@ describe("mapListing", () => {
 const releaseJson = (over: Partial<ReleaseJson> = {}): ReleaseJson => ({
   tag_name: "v1.2.3",
   html_url: "https://github.com/owner/mod/releases/tag/v1.2.3",
+  published_at: "2026-01-01T00:00:00Z",
   assets: [
     { name: "mod.7z", size: 100, browser_download_url: "https://dl/mod.7z" },
     { name: "dcs-studio.toml", size: 10, browser_download_url: "https://dl/manifest" },
@@ -119,6 +120,7 @@ describe("mapProduct", () => {
       readme: "# readme",
       release_tag: "v1.2.3",
       release_url: "https://github.com/owner/mod/releases/tag/v1.2.3",
+      release_date: "2026-01-01T00:00:00Z",
       assets: [
         { name: "mod.7z", size: 100, url: "https://dl/mod.7z" },
         { name: "dcs-studio.toml", size: 10, url: "https://dl/manifest" },
@@ -141,10 +143,16 @@ describe("mapProduct", () => {
     productInvariants(p);
   });
 
+  it("maps a release without published_at to a null release_date", () => {
+    const rel = releaseJson({ published_at: undefined });
+    expect(mapProduct(repoJson(), null, rel, "fallback").release_date).toBeNull();
+  });
+
   it("handles a repo without a release (null tag/url, empty assets)", () => {
     const p = mapProduct(repoJson(), null, null, "fallback");
     expect(p.release_tag).toBeNull();
     expect(p.release_url).toBeNull();
+    expect(p.release_date).toBeNull();
     expect(p.assets).toEqual([]);
     expect(p.download_size).toBe(0);
     expect(p.installable).toBe(false);

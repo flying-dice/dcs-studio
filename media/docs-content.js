@@ -481,6 +481,44 @@ run_on = "after-sanitize"</code></pre>
 `,
         },
         {
+          id: "sandbox",
+          title: "Scripting Sandbox & Trust",
+          lede: "DCS World sandboxes mission Lua to keep scripts away from your files and OS. Some mods run code before that sandbox is applied — this page explains what that means and how to judge whether to trust one.",
+          body: `
+<h2>What the sandbox is</h2>
+<p>DCS World applies a <strong>Lua scripting sandbox</strong> that restricts what mission and mod scripts may touch at runtime. It is meant to stop scripts from doing unsafe things — unrestricted file access, operating-system calls, loading native libraries, or network operations. Once the sandbox is active, <code>os</code>, <code>io</code> and <code>lfs</code> are cut down and <code>require</code>/<code>package</code>/<code>loadlib</code> are removed.</p>
+
+<h2>Scripts that run <em>before</em> the sandbox</h2>
+<p>A mod may declare a <a data-page="manifest-reference"><code>[[mission_script]]</code></a> with <code>run_on = "before-sanitize"</code>. DCS Studio runs that script through its managed <a data-page="mission-scripting"><code>MissionScripting.lua</code></a> entrypoint <strong>before</strong> the sandbox lockdown is applied — so it executes with the <strong>full, unsanitized</strong> Lua environment.</p>
+<div class="note warn">
+  <p>A <code>before-sanitize</code> script has broader access than a normal sandboxed script. Because it runs prior to sandbox enforcement it can reach Lua standard libraries and functions that are otherwise restricted, including:</p>
+  <ul>
+    <li>File-system access (read/write/delete anywhere your account can)</li>
+    <li>Operating-system functions (spawning processes, environment)</li>
+    <li>Lua module / native-library loading</li>
+    <li>Broad interaction with the DCS scripting environment</li>
+  </ul>
+  <p>This is not inherently malicious — exporters, telemetry bridges and hook frameworks legitimately need it — but it <strong>bypasses the protection the DCS sandbox normally provides</strong>.</p>
+</div>
+
+<h2>Why the marketplace warns you</h2>
+<p>Because the risk is invisible from a mod's name alone, the product page and My Mods surface it up front: a <strong>pre-sanitize script</strong> risk badge next to the title, an orange count on the Mission scripts section, and a leading <strong>Script Execution Notice</strong>. The goal is informed consent — you see exactly what a mod will do before you install it.</p>
+
+<h2>How to judge a mod</h2>
+<p>Only install a mod that runs unsandboxed scripts if you:</p>
+<ul>
+  <li>Trust the source (author, repository, community reputation — stars and recency help);</li>
+  <li>Understand the implications of unsandboxed execution;</li>
+  <li>Are comfortable reviewing the Lua yourself — the source is on the mod's public GitHub repo.</li>
+</ul>
+<p>Neither Eagle Dynamics nor the DCS sandbox can restrict a script that runs before sandbox initialization. Installing any mod that executes unsandboxed scripts carries inherent risk; use them at your own discretion.</p>
+<div class="cmd-row">
+  <button class="cmd-btn" data-command="dcs.marketplace.open">Open Marketplace</button>
+  <button class="cmd-btn" data-command="dcs.mymods.open">Open My Mods</button>
+</div>
+`,
+        },
+        {
           id: "debugger",
           title: "Lua Debugger",
           lede: "Run and debug Lua inside the live sim — breakpoints, stepping, scopes, watches and a debug console — in either DCS Lua environment.",

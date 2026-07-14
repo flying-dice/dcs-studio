@@ -18,7 +18,84 @@
     refresh: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>`,
     desktop: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`,
     dot: `<svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="6"/></svg>`,
+    warn: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>`,
+    box: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5V8Z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg>`,
+    link: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg>`,
+    term: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>`,
+    script: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>`,
   };
+
+  const RISK_LABEL = {
+    "links-files": "links files",
+    "runs-executable": "runs executable",
+    "pre-sanitize-script": "pre-sanitize script",
+  };
+  const RISK_WARN = { "runs-executable": true, "pre-sanitize-script": true };
+
+  // ── Install-manifest breakdown (issue #12) — the same transparency the product
+  // page shows, for already-installed mods, driven from the ledger snapshot. ──
+  function riskBadges(view) {
+    if (!view || !view.known || !view.risks.length) return "";
+    return `<div class="mm-risks" data-testid="mod-risks">${view.risks
+      .map(
+        (r) =>
+          `<span class="mm-risk${RISK_WARN[r] ? " warn" : ""}" data-testid="mod-risk-badge" data-risk="${esc(r)}">${
+            RISK_WARN[r] ? ICO.warn : ""
+          }${esc(RISK_LABEL[r] || r)}</span>`,
+      )
+      .join("")}</div>`;
+  }
+
+  function sanitizeNotice(count) {
+    const n = count === 1 ? "1 script that runs" : count + " scripts that run";
+    return `<div class="mm-alert" data-testid="mod-sanitize-notice">
+      <div class="mm-alert-head">${ICO.warn} Script Execution Notice</div>
+      <div>This mod includes ${esc(n)} <strong>before</strong> DCS World's scripting sandbox is applied, with full os/io/lfs/require access. Ensure you trust the source.</div>
+      <button class="mm-link" data-testid="mod-sanitize-learn-more" data-docs="sandbox">Learn more about script sanitization</button>
+    </div>`;
+  }
+
+  function manifestBlock(m) {
+    const v = m.manifest;
+    if (!v || !v.known) return "";
+    const c = v.counts;
+    if (!c.bundles && !c.symlinks && !c.entrypoints && !c.missionScripts) return "";
+    const rows = [];
+    rows.push(riskBadges(v));
+    if (c.beforeSanitize) rows.push(sanitizeNotice(c.beforeSanitize));
+    if (v.symlinks.length)
+      rows.push(
+        `<div class="mm-sec" data-testid="mod-symlinks"><div class="mm-sec-h">${ICO.link} Symlinks <span class="mm-count">${c.symlinks}</span></div>` +
+          v.symlinks
+            .map((s) => `<div class="mm-item" data-testid="mod-symlink"><span class="mono">${esc(s.source)}</span> &rarr; <span class="mono">${esc(s.resolved || s.dest)}</span></div>`)
+            .join("") +
+          `</div>`,
+      );
+    if (v.entrypoints.length)
+      rows.push(
+        `<div class="mm-sec warn" data-testid="mod-executables"><div class="mm-sec-h warn">${ICO.warn} Executables <span class="mm-count warn">${c.entrypoints}</span></div>` +
+          v.entrypoints
+            .map((e) => `<div class="mm-item" data-testid="mod-executable">${ICO.term} <strong>${esc(e.name)}</strong> <span class="mono">${esc(e.exe)}</span></div>`)
+            .join("") +
+          `</div>`,
+      );
+    if (v.missionScripts.length)
+      rows.push(
+        `<div class="mm-sec${c.beforeSanitize ? " warn" : ""}" data-testid="mod-mission-scripts"><div class="mm-sec-h${c.beforeSanitize ? " warn" : ""}">${ICO.script} Mission scripts <span class="mm-count">${c.missionScripts}</span>${
+          c.beforeSanitize ? ` <span class="mm-count warn" data-testid="mod-before-sanitize-badge">${c.beforeSanitize} before-sanitize</span>` : ""
+        }</div>` +
+          v.missionScripts
+            .map(
+              (s) =>
+                `<div class="mm-item${s.beforeSanitize ? " warn" : ""}" data-testid="mod-mission-script" data-run="${esc(s.run_on)}">${ICO.script} <strong>${esc(s.name)}</strong>${
+                  s.beforeSanitize ? ` <span class="mm-badge warn">before-sanitize</span>` : ""
+                } <span class="mono">${esc(s.path)}</span></div>`,
+            )
+            .join("") +
+          `</div>`,
+      );
+    return `<div class="mm-manifest" data-testid="mod-manifest" data-repo="${esc(m.repo)}">${rows.join("")}</div>`;
+  }
 
   // One entrypoint row (Launch/Stop + running state + inline error). Only shown
   // under enabled mods that declare [[entrypoint]] blocks.
@@ -74,6 +151,7 @@
           </div>
         </div>
         ${entrypointsBlock(m)}
+        ${manifestBlock(m)}
       </div>`;
   }
 
@@ -121,6 +199,9 @@
     );
     document.querySelectorAll("[data-stop]").forEach((el) =>
       el.addEventListener("click", () => post({ type: "stop", repo: el.dataset.stop, id: el.dataset.id })),
+    );
+    document.querySelectorAll("[data-docs]").forEach((el) =>
+      el.addEventListener("click", () => post({ type: "openDocs", page: el.dataset.docs })),
     );
   }
 

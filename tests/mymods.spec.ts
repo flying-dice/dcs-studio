@@ -76,3 +76,51 @@ test.describe("My Mods — entrypoints", () => {
     await expect(srs.getByTestId("entrypoint-running")).toBeVisible();
   });
 });
+
+test.describe("My Mods — install manifest breakdown (#12)", () => {
+  const srs = (page: import("@playwright/test").Page) =>
+    page.locator('[data-testid="mod-manifest"][data-repo="Owner/DCS-SRS"]');
+
+  test("a privileged installed mod shows risk badges, symlinks, executables and mission scripts", async ({ page }) => {
+    const errors = await openPreview(page, "mymods");
+    const m = srs(page);
+    await expect(m).toBeVisible();
+    await expect(m.getByTestId("mod-risk-badge")).toHaveCount(3);
+    await expect(m.getByTestId("mod-symlinks")).toBeVisible();
+    await expect(m.getByTestId("mod-executables")).toBeVisible();
+    await expect(m.getByTestId("mod-mission-scripts")).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test("a before-sanitize script surfaces the notice + badge, and the row is tagged", async ({ page }) => {
+    await openPreview(page, "mymods");
+    const m = srs(page);
+    await expect(m.getByTestId("mod-sanitize-notice")).toBeVisible();
+    await expect(m.getByTestId("mod-before-sanitize-badge")).toContainText("1 before-sanitize");
+    await expect(m.locator('[data-testid="mod-mission-script"][data-run="before-sanitize"]')).toHaveCount(1);
+  });
+
+  test('the notice "Learn more" posts openDocs for the sandbox page', async ({ page }) => {
+    await openPreview(page, "mymods");
+    await srs(page).getByTestId("mod-sanitize-learn-more").click();
+    await expectSent(page, { type: "openDocs", page: "sandbox" });
+  });
+
+  test("the breakdown renders for a DISABLED mod too (independent of Launch/Stop rows)", async ({ page }) => {
+    await openPreview(page, "mymods");
+    const disabled = page.locator('[data-testid="mod-manifest"][data-repo="Owner/Disabled-Mod"]');
+    await expect(disabled).toBeVisible();
+    await expect(disabled.getByTestId("mod-executables")).toBeVisible();
+    // Disabled mod shows no Launch/Stop entrypoint rows, but still its breakdown:
+    // only the enabled DCS-SRS mod renders an entrypoints (Launch/Stop) block.
+    await expect(page.getByTestId("entrypoints")).toHaveCount(1);
+  });
+
+  test("a benign mod shows only the links-files risk and no notice", async ({ page }) => {
+    await openPreview(page, "mymods");
+    const plain = page.locator('[data-testid="mod-manifest"][data-repo="Owner/Plain-Mod"]');
+    await expect(plain.getByTestId("mod-risk-badge")).toHaveCount(1);
+    await expect(plain.locator('[data-testid="mod-risk-badge"][data-risk="links-files"]')).toBeVisible();
+    await expect(plain.getByTestId("mod-sanitize-notice")).toHaveCount(0);
+  });
+});

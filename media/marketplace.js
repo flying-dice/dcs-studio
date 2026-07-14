@@ -25,7 +25,8 @@
     product: null,
     productBusy: false,
     productError: null,
-    plan: null,
+    manifest: null, // derived install-manifest view-model (host-supplied)
+    requires: [], // required DCS modules (separate card)
     installed: false,
     installing: null,
     installError: null,
@@ -57,7 +58,21 @@
     trash: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`,
     folder: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2Z"/><path d="m12 10 3 3-3 3"/></svg>`,
     arrow: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`,
+    link: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg>`,
+    terminal: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>`,
+    script: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h4"/></svg>`,
+    clock: `<svg class="codicon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`,
   };
+
+  // Risk-flag display labels (the compact header badges). Order comes from the
+  // view-model's `risks` array (links-files → runs-executable → pre-sanitize).
+  const RISK_LABEL = {
+    "links-files": "links files",
+    "runs-executable": "runs executable",
+    "pre-sanitize-script": "pre-sanitize script",
+  };
+  // Which risk flags get the orange (warning) treatment vs. the neutral badge.
+  const RISK_WARN = { "runs-executable": true, "pre-sanitize-script": true };
 
   // ── Helpers ──
   function esc(s) {
@@ -105,6 +120,141 @@
     if (inList) html += "</ul>";
     if (inCode) html += "</code></pre>";
     return html;
+  }
+
+  // Relative "released N ago" recency from an ISO date (a trust signal). Falls
+  // back to the raw date for anything older than a year, and "" when absent.
+  function fmtRecency(iso) {
+    if (!iso) return "";
+    const then = Date.parse(iso);
+    if (isNaN(then)) return "";
+    const days = Math.floor((Date.now() - then) / 86400000);
+    if (days <= 0) return "released today";
+    if (days === 1) return "released yesterday";
+    if (days < 30) return `released ${days} days ago`;
+    if (days < 60) return "released last month";
+    if (days < 365) return `released ${Math.floor(days / 30)} months ago`;
+    return `released ${new Date(then).toISOString().slice(0, 10)}`;
+  }
+
+  // ── Install-manifest transparency (issue #12) ──
+
+  // The compact risk badges shown before the Install action.
+  function riskBadgesHtml(manifest) {
+    if (!manifest || !manifest.known || !manifest.risks.length) return "";
+    const badges = manifest.risks
+      .map(
+        (r) =>
+          `<span class="risk-badge${RISK_WARN[r] ? " warn" : ""}" data-testid="risk-badge" data-risk="${esc(r)}">${
+            RISK_WARN[r] ? I.warn : I.check
+          }${esc(RISK_LABEL[r] || r)}</span>`,
+      )
+      .join("");
+    return `<div class="risk-summary" data-testid="risk-summary">${badges}</div>`;
+  }
+
+  // The leading "Script Execution Notice" alert — shown whenever a mod ships any
+  // before-sanitize mission script. Copy adapted from DCS Dropzone; "Learn more"
+  // routes the host to the sandbox explainer in the Docs panel.
+  function sanitizeNoticeHtml(count) {
+    const n = count === 1 ? "1 script that runs" : `${count} scripts that run`;
+    return `<div class="alert warn" data-testid="sanitize-notice">
+      <div class="alert-head">${I.warn} Script Execution Notice</div>
+      <p>This mod includes ${n} <strong>before</strong> DCS World's scripting sandbox is applied. These scripts may have broader access than standard sandboxed scripts — full <span class="mono">os</span>/<span class="mono">io</span>/<span class="mono">lfs</span>/<span class="mono">require</span> (file and OS) access. Please ensure you trust the source before installing.</p>
+      <button class="link" data-testid="sanitize-learn-more" data-docs="sandbox">Learn more about script sanitization</button>
+    </div>`;
+  }
+
+  function bundleSectionHtml(manifest) {
+    const items = manifest.bundles.length
+      ? manifest.bundles
+          .map((b) => `<div class="plan-item" data-testid="bundle-item">${I.box} ${esc(b.path)}</div>`)
+          .join("")
+      : `<p class="note">This mod bundles no content (manifest-only).</p>`;
+    return `<div class="manifest-section" data-testid="section-bundles">
+      <div class="section-label">${I.box} Bundled content <span class="count-badge">${manifest.counts.bundles}</span></div>
+      ${items}</div>`;
+  }
+
+  function symlinkSectionHtml(manifest) {
+    const items = manifest.symlinks.length
+      ? manifest.symlinks
+          .map(
+            (s) =>
+              `<div class="plan-item" data-testid="symlink-item"><div>${esc(s.source)}</div><div class="plan-dest">${I.arrow}${esc(
+                s.resolved || s.dest,
+              )}</div></div>`,
+          )
+          .join("")
+      : `<p class="note">This mod links no files into your DCS folders.</p>`;
+    return `<div class="manifest-section" data-testid="section-symlinks">
+      <div class="section-label">${I.link} Symlinks <span class="count-badge">${manifest.counts.symlinks}</span></div>
+      ${items}</div>`;
+  }
+
+  function executableSectionHtml(manifest) {
+    if (!manifest.entrypoints.length) return "";
+    const items = manifest.entrypoints
+      .map(
+        (e) =>
+          `<div class="plan-item warn-item" data-testid="executable-item"><div>${I.terminal} <strong>${esc(
+            e.name,
+          )}</strong></div><div class="plan-dest mono">${esc(e.exe)}${
+            e.args && e.args.length ? " " + esc(e.args.join(" ")) : ""
+          }</div></div>`,
+      )
+      .join("");
+    return `<div class="manifest-section warn-section" data-testid="section-executables">
+      <div class="section-label warn">${I.warn} Executables <span class="count-badge warn">${manifest.counts.entrypoints}</span></div>
+      <p class="note warn">This mod can launch executable programs on your machine. Only launch executables from sources you trust.</p>
+      ${items}</div>`;
+  }
+
+  function missionScriptSectionHtml(manifest) {
+    if (!manifest.missionScripts.length) return "";
+    const before = manifest.counts.beforeSanitize;
+    const notice = before > 0 ? sanitizeNoticeHtml(before) : "";
+    const items = manifest.missionScripts
+      .map((s) => {
+        const b = s.beforeSanitize;
+        return `<div class="plan-item${b ? " warn-item" : ""}" data-testid="mission-script-item" data-run="${esc(s.run_on)}">
+          <div>${I.script} <strong>${esc(s.name)}</strong>${
+            b ? ` <span class="badge warn" data-testid="before-sanitize-tag">before-sanitize</span>` : ""
+          }</div>
+          ${s.purpose ? `<div class="plan-dest">${esc(s.purpose)}</div>` : ""}
+          <div class="plan-dest mono">${esc(s.path)}</div>
+        </div>`;
+      })
+      .join("");
+    const badge =
+      before > 0
+        ? ` <span class="count-badge warn" data-testid="before-sanitize-badge">${before} before-sanitize</span>`
+        : "";
+    return `<div class="manifest-section${before > 0 ? " warn-section" : ""}" data-testid="section-mission-scripts">
+      <div class="section-label${before > 0 ? " warn" : ""}">${I.script} Mission scripts <span class="count-badge">${
+        manifest.counts.missionScripts
+      }</span>${badge}</div>
+      ${notice}
+      ${items}</div>`;
+  }
+
+  // The whole install-manifest block for the product main column. Never a silent
+  // gap: an unreadable manifest renders the explicit unknown state; otherwise the
+  // full enumeration (bundled content, symlinks, executables, mission scripts).
+  function installManifestHtml(manifest, installable) {
+    if (!installable) return ""; // not-installable note already shown by the action card
+    if (!manifest || !manifest.known) {
+      return `<div class="alert warn" data-testid="manifest-unknown">
+        <div class="alert-head">${I.warn} Install actions unknown</div>
+        <p>This release's manifest could not be read, so DCS Studio can't show what installing this mod would do. Proceed only if you trust the source.</p>
+      </div>`;
+    }
+    return `<div class="install-manifest" data-testid="install-manifest">
+      ${bundleSectionHtml(manifest)}
+      ${symlinkSectionHtml(manifest)}
+      ${executableSectionHtml(manifest)}
+      ${missionScriptSectionHtml(manifest)}
+    </div>`;
   }
 
   // ── Render dispatch ──
@@ -247,6 +397,8 @@
     state.view = "product";
     state.repo = repo;
     state.product = null;
+    state.manifest = null;
+    state.requires = [];
     state.productBusy = true;
     state.productError = null;
     save();
@@ -287,17 +439,11 @@
     }
     if (state.installError) action += `<p class="note warn" data-testid="install-error" style="margin-top:8px">${I.warn} ${esc(state.installError)}</p>`;
 
-    const plan = state.plan;
-    const planCard =
-      plan && plan.installs && plan.installs.length
-        ? `<div class="aside-card" data-testid="install-plan"><div class="section-label">${I.folder} Install plan</div>${plan.installs
-            .map((r) => `<div class="plan-item"><div>${esc(r.source)}</div><div class="plan-dest">${I.arrow}${esc(r.resolved || r.dest)}</div></div>`)
-            .join("")}</div>`
-        : "";
     const reqCard =
-      plan && plan.requires && plan.requires.length
-        ? `<div class="aside-card" data-testid="requires-card"><div class="section-label">${I.warn} Requires DCS modules</div>${plan.requires.map((r) => `<div class="kv"><span class="name">${esc(r.id)}</span></div>`).join("")}</div>`
+      state.requires && state.requires.length
+        ? `<div class="aside-card" data-testid="requires-card"><div class="section-label">${I.warn} Requires DCS modules</div>${state.requires.map((r) => `<div class="kv"><span class="name">${esc(r.id)}</span></div>`).join("")}</div>`
         : "";
+    const recency = fmtRecency(p.release_date);
 
     app.innerHTML = `
       <header>
@@ -315,16 +461,18 @@
                 <span>by ${esc(p.author)}</span>
                 <span>${I.star}${p.stars}</span>
                 ${p.release_tag ? `<span>${esc(p.release_tag)}</span>` : ""}
+                ${recency ? `<span data-testid="release-recency">${I.clock}${esc(recency)}</span>` : ""}
               </div>
             </div>
           </div>
+          ${riskBadgesHtml(state.manifest)}
           ${p.description ? `<p class="product-desc">${esc(p.description)}</p>` : ""}
+          ${installManifestHtml(state.manifest, p.installable)}
           <div class="section-label">${I.book} Readme</div>
           <div class="prose" data-testid="readme">${p.readme ? md(p.readme) : "<p class='note'>This repo has no README.</p>"}</div>
         </main>
         <aside>
           <div class="aside-card">${action}</div>
-          ${planCard}
           ${reqCard}
           <div class="aside-card">
             <div class="section-label">${I.hd} Download</div>
@@ -346,6 +494,9 @@
     if (inst) inst.addEventListener("click", () => { state.installError = null; state.installing = { phase: "download", label: "Starting…", pct: 0 }; renderProduct(); post({ type: "install", repo: p.repo }); });
     const unins = document.getElementById("uninstall");
     if (unins) unins.addEventListener("click", () => post({ type: "uninstall", repo: p.repo }));
+    document.querySelectorAll("[data-docs]").forEach((el) =>
+      el.addEventListener("click", () => post({ type: "openDocs", page: el.getAttribute("data-docs") })),
+    );
   }
 
   function productShell(inner) {
@@ -391,7 +542,8 @@
         state.productBusy = false;
         state.product = m.product;
         state.repo = m.product.repo;
-        state.plan = m.plan || null;
+        state.manifest = m.manifest || null;
+        state.requires = m.requires || [];
         state.installed = !!m.installed;
         state.installing = null;
         state.installError = null;

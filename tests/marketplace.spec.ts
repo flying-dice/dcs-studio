@@ -48,7 +48,7 @@ test.describe("marketplace preview", () => {
     await expect(page.getByTestId("mod-card").first().getByTestId("card-title")).toHaveText("BFM Trainer");
   });
 
-  test("opening a product shows its install plan, requirements and readme", async ({ page }) => {
+  test("opening a product shows its install manifest, requirements and readme", async ({ page }) => {
     await openPreview(page, "marketplace");
     await page.getByTestId("browse-anon-btn").click();
     await page
@@ -57,7 +57,8 @@ test.describe("marketplace preview", () => {
       .click();
 
     await expect(page.getByTestId("product-title")).toHaveText("Operation Eastern Storm");
-    await expect(page.getByTestId("install-plan")).toBeVisible();
+    await expect(page.getByTestId("install-manifest")).toBeVisible();
+    await expect(page.getByTestId("section-symlinks")).toBeVisible();
     await expect(page.getByTestId("requires-card")).toBeVisible();
     await expect(page.getByTestId("readme")).toContainText("Operation Eastern Storm");
   });
@@ -105,5 +106,82 @@ test.describe("marketplace preview", () => {
       message: "Download failed: network error.",
     });
     await expect(page.getByTestId("install-error")).toContainText("Download failed: network error.");
+  });
+});
+
+// Open a product by repo id after browsing anon (shared setup for the #12 tests).
+async function openProduct(page: import("@playwright/test").Page, repo: string): Promise<void> {
+  await openPreview(page, "marketplace");
+  await page.getByTestId("browse-anon-btn").click();
+  await page.locator(`[data-testid="mod-card"][data-repo="${repo}"]`).getByTestId("card-title").click();
+  await expect(page.getByTestId("product-title")).toBeVisible();
+}
+
+test.describe("marketplace — install manifest transparency (#12)", () => {
+  const PRIVILEGED = "viper-drivers/f16-weapons-expansion";
+
+  test("privileged mod shows all three risk badges before the install action", async ({ page }) => {
+    await openProduct(page, PRIVILEGED);
+    await expect(page.getByTestId("risk-summary")).toBeVisible();
+    await expect(page.getByTestId("risk-badge")).toHaveCount(3);
+    await expect(page.locator('[data-testid="risk-badge"][data-risk="links-files"]')).toBeVisible();
+    await expect(page.locator('[data-testid="risk-badge"][data-risk="runs-executable"]')).toBeVisible();
+    await expect(page.locator('[data-testid="risk-badge"][data-risk="pre-sanitize-script"]')).toBeVisible();
+  });
+
+  test("enumerates bundled content, symlinks, executables and mission scripts", async ({ page }) => {
+    await openProduct(page, PRIVILEGED);
+    await expect(page.getByTestId("section-bundles")).toBeVisible();
+    await expect(page.getByTestId("section-symlinks")).toBeVisible();
+    await expect(page.getByTestId("symlink-item")).toHaveCount(2);
+    await expect(page.getByTestId("section-executables")).toBeVisible();
+    await expect(page.getByTestId("executable-item")).toHaveCount(1);
+    await expect(page.getByTestId("section-mission-scripts")).toBeVisible();
+    await expect(page.getByTestId("mission-script-item")).toHaveCount(2);
+  });
+
+  test("a privileged mod never renders without its warnings (notice + badge)", async ({ page }) => {
+    await openProduct(page, PRIVILEGED);
+    await expect(page.getByTestId("sanitize-notice")).toBeVisible();
+    await expect(page.getByTestId("before-sanitize-badge")).toContainText("1 before-sanitize");
+    // The before-sanitize row is tagged; the after-sanitize one is not.
+    await expect(page.locator('[data-testid="mission-script-item"][data-run="before-sanitize"]')).toHaveCount(1);
+    await expect(page.getByTestId("before-sanitize-tag")).toHaveCount(1);
+  });
+
+  test('the notice "Learn more" posts openDocs for the sandbox page', async ({ page }) => {
+    await openProduct(page, PRIVILEGED);
+    await page.getByTestId("sanitize-learn-more").click();
+    await expectSent(page, { type: "openDocs", page: "sandbox" });
+  });
+
+  test("last-release recency is shown as a trust signal", async ({ page }) => {
+    await openProduct(page, PRIVILEGED);
+    await expect(page.getByTestId("release-recency")).toContainText("released");
+  });
+
+  test("a benign mod (links only) shows just the links-files risk and no notice", async ({ page }) => {
+    await openProduct(page, "syria-collective/syria-4k-textures");
+    await expect(page.getByTestId("risk-badge")).toHaveCount(1);
+    await expect(page.locator('[data-testid="risk-badge"][data-risk="links-files"]')).toBeVisible();
+    await expect(page.getByTestId("sanitize-notice")).toHaveCount(0);
+    await expect(page.getByTestId("section-executables")).toHaveCount(0);
+  });
+
+  test("an after-sanitize-only mod lists the mission script without a notice", async ({ page }) => {
+    await openProduct(page, "dcs-scripting/moose-lite");
+    await expect(page.getByTestId("section-mission-scripts")).toBeVisible();
+    await expect(page.getByTestId("mission-script-item")).toHaveCount(1);
+    await expect(page.getByTestId("sanitize-notice")).toHaveCount(0);
+    await expect(page.getByTestId("before-sanitize-badge")).toHaveCount(0);
+  });
+
+  test("an unreadable manifest renders the explicit unknown state, not missing sections", async ({ page }) => {
+    await openProduct(page, "sound-mods/immersive-cockpit-audio");
+    await expect(page.getByTestId("manifest-unknown")).toBeVisible();
+    await expect(page.getByTestId("install-manifest")).toHaveCount(0);
+    await expect(page.getByTestId("risk-summary")).toHaveCount(0);
+    // Still installable — the action is present, but the actions are unknown.
+    await expect(page.getByTestId("install-btn")).toBeVisible();
   });
 });

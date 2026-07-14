@@ -34,10 +34,17 @@
       description: "Adds JSOW-C1, GBU-53/B StormBreaker and an expanded HARM tables loadout to the Viper.",
       repo_url: "https://github.com/viper-drivers/f16-weapons-expansion", avatar_url: ICON, stars: 342,
       release_tag: "v2.3.1", release_url: "https://github.com/viper-drivers/f16-weapons-expansion/releases/tag/v2.3.1",
+      release_date: new Date(Date.now() - 5 * 86400000).toISOString(),
       readme: "# F-16C Weapons Expansion\n\nExtra air-to-ground stores for the DCS **F-16C Viper**, wired into the rearm\nmenu so you can load them from the ground crew.\n\n## What you get\n\n- **AGM-154C JSOW-C1** — moving-target capable glide bomb\n- **GBU-53/B StormBreaker** — 40nm standoff, tri-mode seeker\n- Expanded **HARM** threat tables (updated emitter list)\n- A rearm-menu integration script (no mission editing required)\n",
       assets: [{ name: "f16-weapons-expansion-v2.3.1.zip", size: 4404019.2 }, { name: "dcs-studio.toml", size: 1126.4 }],
       download_size: 4404019.2, installable: true,
       installs: [{ source: "Scripts/WeaponsExpansion", dest: "Saved Games/DCS/Scripts/WeaponsExpansion" }, { source: "Mods/tech/F16Weapons", dest: "Saved Games/DCS/Mods/tech/F16Weapons" }],
+      // A privileged mod: launches an exe AND injects a pre-sanitization script.
+      entrypoints: [{ id: "rearm-daemon", name: "Rearm Daemon", exe: "Server/rearm.exe", args: ["--port", "9100"], cwd: "Server" }],
+      missionScripts: [
+        { name: "Rearm menu hook", purpose: "Adds stores to the ground-crew rearm menu", path: "Scripts/WeaponsExpansion/rearm.lua", run_on: "after-sanitize" },
+        { name: "HARM table injector", purpose: "Patches emitter tables at load", path: "Scripts/WeaponsExpansion/harm.lua", run_on: "before-sanitize" },
+      ],
       requires: [{ id: "ed/f16c", name: "F-16C Viper", installed: true }],
     },
     "dcs-scripting/moose-lite": {
@@ -45,10 +52,28 @@
       description: "A trimmed MOOSE toolkit for mission scripting.",
       repo_url: "https://github.com/dcs-scripting/moose-lite", avatar_url: ICON, stars: 1203,
       release_tag: "v0.9.0", release_url: "https://github.com/dcs-scripting/moose-lite/releases/tag/v0.9.0",
+      release_date: new Date(Date.now() - 120 * 86400000).toISOString(),
       readme: "# MOOSE Lite\n\nA trimmed MOOSE core for mission scripting — spawning, zones and scheduling\nwithout the full framework weight.\n",
       assets: [{ name: "moose-lite-v0.9.0.zip", size: 629145.6 }, { name: "dcs-studio.toml", size: 614.4 }],
       download_size: 629145.6, installable: true,
-      installs: [{ source: "Scripts/MooseLite", dest: "Saved Games/DCS/Scripts/MooseLite" }], requires: [],
+      installs: [{ source: "Scripts/MooseLite", dest: "Saved Games/DCS/Scripts/MooseLite" }],
+      // Only a sandboxed (after-sanitize) mission script — no pre-sanitize risk.
+      missionScripts: [{ name: "MOOSE loader", purpose: "Boots the framework at mission start", path: "Scripts/MooseLite/loader.lua", run_on: "after-sanitize" }],
+      requires: [],
+    },
+    "sound-mods/immersive-cockpit-audio": {
+      repo: "sound-mods/immersive-cockpit-audio", name: "Immersive Cockpit Audio", author: "sound-mods",
+      description: "Re-sampled switch, relay and hydraulic sounds for the Hornet and Viper pits.",
+      repo_url: "https://github.com/sound-mods/immersive-cockpit-audio", avatar_url: ICON, stars: 98,
+      release_tag: "v1.1.0", release_url: "https://github.com/sound-mods/immersive-cockpit-audio/releases/tag/v1.1.0",
+      release_date: new Date(Date.now() - 12 * 86400000).toISOString(),
+      readme: "# Immersive Cockpit Audio\n\nDrop-in sound folder, no scripting.\n",
+      assets: [{ name: "immersive-cockpit-audio-v1.1.0.zip", size: 88080384 }, { name: "dcs-studio.toml", size: 400 }],
+      download_size: 88080384, installable: true,
+      // Manifest asset present, but its contents can't be read — the marketplace
+      // must show the explicit "install actions unknown" state, not a clean page.
+      manifestUnknown: true,
+      installs: [], requires: [],
     },
     "mission-makers/operation-eastern-storm": {
       repo: "mission-makers/operation-eastern-storm", name: "Operation Eastern Storm", author: "mission-makers",
@@ -88,6 +113,7 @@
       repo_url: l.repo_url, avatar_url: l.avatar_url, stars: l.stars,
       readme: "# " + l.name + "\n\n" + l.description,
       release_tag: "v1.0.0", release_url: l.repo_url + "/releases",
+      release_date: new Date(Date.now() - 40 * 86400000).toISOString(),
       assets: [{ name: l.name.replace(/\s+/g, "-").toLowerCase() + ".zip", size: 6291456 }, { name: "dcs-studio.toml", size: 900 }],
       download_size: 6292356,
       installable: true,
@@ -95,11 +121,39 @@
     };
   }
 
-  function planFor(p) {
-    return {
-      installs: (p.installs || []).map((r) => ({ source: r.source, dest: r.dest, resolved: r.dest })),
-      requires: (p.requires || []).map((r) => ({ id: r.id })),
-    };
+  // JS mirror of src/core/domain/installManifestView.ts — the host derives this
+  // and posts it; the fixture reproduces the same shape so the webview renders
+  // exactly what production would. (The derivation logic itself is unit-tested in
+  // vitest; this stand-in only needs to match the output shape.)
+  function deriveManifest(surface) {
+    if (!surface) {
+      return { known: false, bundles: [], symlinks: [], entrypoints: [], missionScripts: [], counts: { bundles: 0, symlinks: 0, entrypoints: 0, missionScripts: 0, beforeSanitize: 0 }, risks: [] };
+    }
+    const bundles = (surface.bundles || []).map((b) => ({ path: b.path }));
+    const symlinks = (surface.symlinks || []).map((s) => ({ source: s.source, dest: s.dest, resolved: s.resolved == null ? null : s.resolved }));
+    const entrypoints = (surface.entrypoints || []).map((e) => ({ id: e.id, name: e.name, exe: e.exe, args: e.args || [], cwd: e.cwd == null ? null : e.cwd }));
+    const missionScripts = (surface.missionScripts || []).map((m) => ({ name: m.name, purpose: m.purpose == null ? null : m.purpose, path: m.path, run_on: m.run_on, beforeSanitize: m.run_on === "before-sanitize" }));
+    const beforeSanitize = missionScripts.filter((m) => m.beforeSanitize).length;
+    const counts = { bundles: bundles.length, symlinks: symlinks.length, entrypoints: entrypoints.length, missionScripts: missionScripts.length, beforeSanitize };
+    const risks = [];
+    if (symlinks.length) risks.push("links-files");
+    if (entrypoints.length) risks.push("runs-executable");
+    if (beforeSanitize) risks.push("pre-sanitize-script");
+    return { known: true, bundles, symlinks, entrypoints, missionScripts, counts, risks };
+  }
+
+  function manifestFor(p) {
+    if (p.manifestUnknown) return deriveManifest(null);
+    return deriveManifest({
+      bundles: (p.installs || []).map((r) => ({ path: r.source })),
+      symlinks: (p.installs || []).map((r) => ({ source: r.source, dest: r.dest, resolved: r.dest })),
+      entrypoints: p.entrypoints || [],
+      missionScripts: p.missionScripts || [],
+    });
+  }
+
+  function requiresFor(p) {
+    return (p.requires || []).map((r) => ({ id: r.id }));
   }
 
   // repos the fixture currently considers "installed" — drives the
@@ -130,7 +184,7 @@
         const repo = m.repo;
         reply({ type: "product:busy", repo });
         const product = productFor(repo);
-        reply({ type: "product", product, plan: planFor(product), installed: installed.has(repo) }, 450);
+        reply({ type: "product", product, manifest: manifestFor(product), requires: requiresFor(product), installed: installed.has(repo) }, 450);
         break;
       }
       case "openExternal":

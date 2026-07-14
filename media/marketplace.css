@@ -567,3 +567,95 @@ select {
   display: inline-block;
   vertical-align: -2px;
 }
+
+/* ── Install-manifest transparency (issue #12) ── */
+.risk-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 4px;
+}
+.risk-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted);
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.risk-badge.warn {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  border-color: var(--vscode-editorWarning-foreground, #cca700);
+}
+.risk-badge .codicon-inline {
+  width: 12px;
+  height: 12px;
+}
+
+.install-manifest {
+  margin: 14px 0 4px;
+}
+.manifest-section {
+  margin-bottom: 6px;
+}
+.manifest-section.warn-section {
+  border: 1px solid var(--vscode-editorWarning-foreground, #cca700);
+  border-radius: var(--radius);
+  padding: 4px 12px 10px;
+  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 7%, transparent);
+}
+.section-label.warn {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+.plan-item.warn-item strong {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.count-badge {
+  border-radius: 8px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.count-badge.warn {
+  background: var(--vscode-editorWarning-foreground, #cca700);
+  color: #1b1b00;
+}
+.badge.warn {
+  background: var(--vscode-editorWarning-foreground, #cca700);
+  color: #1b1b00;
+}
+
+.alert {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 12px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.alert.warn {
+  border-color: var(--vscode-editorWarning-foreground, #cca700);
+  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 9%, transparent);
+}
+.alert-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  margin-bottom: 4px;
+}
+.alert p {
+  margin: 4px 0;
+  color: var(--vscode-foreground);
+}

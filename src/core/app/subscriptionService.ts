@@ -7,7 +7,14 @@ import type { ManifestPort } from "../ports/manifest";
 import type { InstallRootsPort } from "../ports/installRoots";
 import type { FileSystemPort } from "../ports/filesystem";
 import type { ClockPort } from "../ports/clock";
-import type { InstallTarget, InstallRoots, ProductAsset, Subscription } from "../domain/types";
+import type {
+  InstallTarget,
+  InstallRoots,
+  ManifestEntrypoint,
+  ManifestMissionScript,
+  ProductAsset,
+  Subscription,
+} from "../domain/types";
 import type { LinkDefinition } from "../domain/types";
 import { MANIFEST, keyOf, ledgerKey, sortedByName } from "../domain/subscriptions";
 import { selectPayloadVolumes } from "../domain/archivePolicy";
@@ -34,9 +41,18 @@ export interface Progress {
 }
 export type OnProgress = (p: Progress) => void;
 
-/** The resolved install plan parsed from a release's manifest (for display). */
+/**
+ * The full parsed manifest surface for a release, resolved for display. Feeds
+ * `deriveInstallManifestView` (bundles/symlinks/entrypoints/missionScripts) and
+ * carries `requires` separately for the "Requires DCS modules" card. `symlinks`
+ * dests are resolved against the DCS roots so the product page can show the
+ * absolute destination.
+ */
 export interface InstallPlan {
-  installs: { source: string; dest: string; resolved: string | null }[];
+  bundles: { path: string }[];
+  symlinks: { source: string; dest: string; resolved: string | null }[];
+  entrypoints: ManifestEntrypoint[];
+  missionScripts: ManifestMissionScript[];
   requires: { id: string }[];
 }
 
@@ -87,11 +103,14 @@ export class SubscriptionService {
     await this.ports.fs.remove(tmp);
     const r = this.roots();
     return {
-      installs: m.symlink.map((s) => ({
+      bundles: m.bundle.map((b) => ({ path: b.path })),
+      symlinks: m.symlink.map((s) => ({
         source: s.source,
         dest: s.dest,
         resolved: this.ports.manifest.resolveDest(s.dest, r),
       })),
+      entrypoints: m.entrypoint,
+      missionScripts: m.mission_script,
       requires: m.requires_module.map((x) => ({ id: x.id })),
     };
   }
@@ -137,14 +156,21 @@ export class SubscriptionService {
    * disk (or one predating these blocks) yields empty arrays.
    */
   private async readSnapshot(dir: string): Promise<{
+    bundles: Subscription["bundles"];
+    symlinks: Subscription["symlinks"];
     entrypoints: Subscription["entrypoints"];
     missionScripts: Subscription["missionScripts"];
   }> {
     try {
       const model = this.ports.manifest.parseToml(await this.ports.fs.readText(path.join(dir, MANIFEST)));
-      return { entrypoints: model.entrypoint ?? [], missionScripts: model.mission_script ?? [] };
+      return {
+        bundles: model.bundle.map((b) => ({ path: b.path })),
+        symlinks: model.symlink.map((s) => ({ source: s.source, dest: s.dest })),
+        entrypoints: model.entrypoint ?? [],
+        missionScripts: model.mission_script ?? [],
+      };
     } catch {
-      return { entrypoints: [], missionScripts: [] };
+      return { bundles: [], symlinks: [], entrypoints: [], missionScripts: [] };
     }
   }
 
@@ -190,6 +216,8 @@ export class SubscriptionService {
       dir,
       enabled: existing?.enabled ?? false,
       links: existing?.links ?? [],
+      bundles: snapshot.bundles,
+      symlinks: snapshot.symlinks,
       entrypoints: snapshot.entrypoints,
       missionScripts: snapshot.missionScripts,
     };
