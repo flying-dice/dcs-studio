@@ -2,7 +2,7 @@
   "name": "dcs-studio",
   "displayName": "DCS Studio",
   "description": "DCS World mod tooling for VS Code — Marketplace, DCS link, injection & launch, guided publish.",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "publisher": "dcs-studio",
   "private": true,
   "license": "UNLICENSED",
