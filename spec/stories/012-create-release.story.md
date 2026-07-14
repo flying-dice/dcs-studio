@@ -1,4 +1,4 @@
-# 012 — Publish: Package & Cut a Release
+# 012 — Publish: Package & Create a Release
 
 ## Story
 
@@ -12,14 +12,14 @@
 - The standalone `dcs-studio.toml` uploaded next to the payload is what makes the release *installable* to the Marketplace (stories 005/006).
 
 ```gherkin
-Feature: Cut a release
+Feature: Create a release
 
   Background:
     Given the Publish panel is open with all preflight checks passing
     And the project has been shared to GitHub
 
   Scenario: Release form
-    Then the "2 · Cut a release" card offers:
+    Then the "2 · Create a release" card offers:
       a Repo field (owner/name, prefilled after sharing),
       a Tag field (prefilled "v<manifest version>"),
       and a Release notes textarea

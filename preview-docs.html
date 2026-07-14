@@ -184,7 +184,7 @@ window.__DOCS__ = {
   <li><strong>Browse Mods</strong> — the Marketplace. Discover and install community mods published on GitHub. <a data-page="finding-mods">Finding mods</a></li>
   <li><strong>My Mods</strong> — everything you have installed: enable, disable, update or uninstall. <a data-page="updating-uninstalling">Managing installed mods</a></li>
   <li><strong>Create a Mod</strong> — start a project from a template, or edit the current project's manifest. Reads as <em>Edit Project</em> once your workspace has a <code>dcs-studio.toml</code>. <a data-page="creating-a-project">Creating a project</a></li>
-  <li><strong>Publish Mod</strong> — preflight checks, share to GitHub, cut a release. Appears once the workspace has a manifest. <a data-page="publishing">Publishing</a></li>
+  <li><strong>Publish Mod</strong> — preflight checks, share to GitHub, create a release. Appears once the workspace has a manifest. <a data-page="publishing">Publishing</a></li>
   <li><strong>DCS Console</strong> — a live Lua REPL inside the running sim. <a data-page="dcs-console">DCS Console</a></li>
   <li><strong>MissionScripting</strong> — safely desanitize / re-sanitize DCS's Lua sandbox. <a data-page="mission-scripting">MissionScripting</a></li>
   <li><strong>Documentation</strong> — this panel.</li>
@@ -464,7 +464,7 @@ dest = "{SavedGames}/Mods/tech/f16-weapons"</code></pre>
         {
           id: "publishing",
           title: "Publishing Your Mod",
-          lede: "Publishing is three guided steps — preflight, share to GitHub, cut a release — and needs nothing but a GitHub account. What makes your mod appear in the marketplace is precisely two things: the topic on the repo, and a manifest asset on the release.",
+          lede: "Publishing is three guided steps — preflight, share to GitHub, create a release — and needs nothing but a GitHub account. What makes your mod appear in the marketplace is precisely two things: the topic on the repo, and a manifest asset on the release.",
           body: `
 <h2>Prerequisites (checked by preflight)</h2>
 <p>The Publish panel runs a preflight and shows a checklist. It verifies:</p>
@@ -484,12 +484,12 @@ dest = "{SavedGames}/Mods/tech/f16-weapons"</code></pre>
   <li>Applies the <code>dcs-studio</code> topic — <strong>this is what makes the marketplace find your repo</strong>. Library packages also get <code>dcs-studio-library</code>.</li>
 </ol>
 
-<h2>Step 2 — Cut a release</h2>
+<h2>Step 2 — Create a release</h2>
 <p>Enter a tag (your manifest <code>version</code> is suggested) and optional notes. DCS Studio then:</p>
 <ol>
   <li>packs <code>dcs-studio.toml</code> + every install source into <code>dcs-studio-&lt;name&gt;-&lt;tag&gt;.7z</code> under <code>.dcs-studio/release/</code>, splitting into numbered volumes if it exceeds ~1.5&nbsp;GiB;</li>
   <li>uploads the payload <em>and</em> a standalone <code>dcs-studio.toml</code> as release assets;</li>
-  <li>creates the git tag and GitHub release. Re-publishing the same tag first deletes the old release+tag, so cutting <code>1.0.0</code> twice is safe and idempotent.</li>
+  <li>creates the git tag and GitHub release. Re-publishing the same tag first deletes the old release+tag, so releasing <code>1.0.0</code> twice is safe and idempotent.</li>
 </ol>
 
 <h2>What makes a mod "detected"</h2>
@@ -498,10 +498,10 @@ dest = "{SavedGames}/Mods/tech/f16-weapons"</code></pre>
   <tr><td>Appear in the marketplace grid</td><td>Public GitHub repo with the <code>dcs-studio</code> topic.</td></tr>
   <tr><td>A live <strong>Install</strong> button</td><td>The <em>latest</em> release must include a <code>dcs-studio.toml</code> asset (and the repo must not be a library).</td></tr>
   <tr><td>Tags/labels on your card</td><td>Add more GitHub topics — every extra topic becomes a filterable label.</td></tr>
-  <tr><td>Users get updates</td><td>Cut a release with a new tag; <a data-page="updating-uninstalling">Update</a> follows your latest release.</td></tr>
+  <tr><td>Users get updates</td><td>Create a release with a new tag; <a data-page="updating-uninstalling">Update</a> follows your latest release.</td></tr>
 </table>
 <div class="note warn">
-  <p>The marketplace always reads the <strong>latest</strong> release. If you cut a release without the manifest asset (e.g. by hand on github.com), your mod will show as not installable until the next proper release.</p>
+  <p>The marketplace always reads the <strong>latest</strong> release. If you create a release without the manifest asset (e.g. by hand on github.com), your mod will show as not installable until the next proper release.</p>
 </div>
 <div class="cmd-row">
   <button class="cmd-btn" data-command="dcs.publish.open">Open Publish Panel</button>

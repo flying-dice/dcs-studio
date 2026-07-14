@@ -24,7 +24,7 @@
     { id: "browse", label: "Browse Mods", desc: "Discover & install community mods", command: "dcs.marketplace.open", icon: "store" },
     { id: "mymods", label: "My Mods", desc: "Enable, update & remove installed mods", command: "dcs.mymods.open", icon: "layers" },
     { id: "create", label: "Create a Mod", desc: "Start a new project from a template", command: "dcs.manifest.author", icon: "edit" },
-    { id: "publish", label: "Publish Mod", desc: "Preflight, share to GitHub & cut a release", command: "dcs.publish.open", icon: "rocket", hidden: true },
+    { id: "publish", label: "Publish Mod", desc: "Preflight, share to GitHub & create a release", command: "dcs.publish.open", icon: "rocket", hidden: true },
     { id: "console", label: "DCS Console", desc: "Run Lua in the live sim", command: "dcs.bridge.console", icon: "terminal" },
     { id: "mission", label: "MissionScripting", desc: "Sanitization toggle", command: "dcs.mission.open", icon: "shield" },
     { id: "skills", label: "Agent Skills", desc: "AI skill files for your repo", command: "dcs.skills.open", icon: "sparkle" },

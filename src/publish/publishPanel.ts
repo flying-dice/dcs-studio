@@ -5,7 +5,7 @@ import { preflight, readManifest, Check } from "./preflight";
 import type { PublishService, ShareOpts, ReleaseOpts } from "../core/app/publishService";
 
 // The Publish panel: preflight checks, "Share to GitHub" (create repo + push),
-// and "Cut a release" (7z-packaged, volume-split payload + standalone manifest).
+// and "Create a release" (7z-packaged, volume-split payload + standalone manifest).
 export class PublishPanel {
   public static current: PublishPanel | undefined;
   private static readonly viewType = "dcsStudio.publish";
