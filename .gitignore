@@ -11,3 +11,6 @@ coverage/
 .playwright-mcp/
 test-results/
 playwright-report/
+# Bridge logger output written to the crate dir when a test bootstraps a state
+# without lfs (e.g. tests/debug_ws_latency.rs).
+bridge/crates/*/dcs_studio_*.log

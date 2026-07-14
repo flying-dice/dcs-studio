@@ -387,7 +387,28 @@ async fn get_ws(
         while let Some(Ok(msg)) = msg_stream.recv().await {
             match msg {
                 Message::Text(text) => {
-                    handle_text_frame(text.to_string(), &session, &data).await;
+                    // Enqueue the request IN ORDER (synchronously) but await its
+                    // response in a DETACHED task, so a long-running request does
+                    // not head-of-line-block reads of later frames on this
+                    // connection. The debugger depends on this: `debug_run`
+                    // blocks bridge-side for the whole session (the sim thread's
+                    // pump serves the editor's polls from inside it), and if the
+                    // read loop awaited its response before reading the next
+                    // frame, the very `debug_state` polls that surface the first
+                    // breakpoint — and every step/continue after it — would sit
+                    // unread in the socket until `debug_run`'s server-side
+                    // timeout fired. See notify_session; matching by id keeps
+                    // out-of-order responses correct.
+                    if let Some((receiver, request_timeout)) =
+                        enqueue_text_frame(text.to_string(), &data)
+                    {
+                        let session = session.clone();
+                        spawn_local(async move {
+                            notify_session(session, receiver, request_timeout)
+                                .await
+                                .unwrap_or_else(|e| error!("{}", e));
+                        });
+                    }
                 }
                 Message::Ping(bytes) => {
                     if session.pong(&bytes).await.is_err() {
@@ -406,32 +427,28 @@ async fn get_ws(
     Ok(response)
 }
 
-/// Queue one WS text frame as a JSON-RPC request and, for a non-notification,
-/// relay its response back over the session. A malformed frame (bad JSON,
-/// numeric id, …) is logged and skipped, never fatal: the session must survive
-/// one bad client frame.
-async fn handle_text_frame(message: String, session: &Session, data: &Data<Mutex<AppData>>) {
+/// Parse one WS text frame and enqueue it as a JSON-RPC request, returning the
+/// response channel + timeout for a non-notification (the caller awaits it in a
+/// detached task) or `None` for a notification / a malformed frame. The enqueue
+/// is synchronous so frames keep their arrival order in the queue; only the
+/// wait-and-reply is deferred. A malformed frame (bad JSON, numeric id, …) is
+/// logged and skipped, never fatal: the session must survive one bad client
+/// frame.
+fn enqueue_text_frame(
+    message: String,
+    data: &Data<Mutex<AppData>>,
+) -> Option<(Receiver<JsonRpcResponse>, Duration)> {
     let Ok(request) = serde_json::from_str::<JsonRpcRequest>(&message) else {
         error!("Failed to parse request, skipping frame: {}", message);
-        return;
+        return None;
     };
 
-    // Enqueue under the std Mutex in a block that ends before the `.await`
-    // below — a guard must never span an await point inside the sim.
-    let (maybe_receiver, request_timeout) = {
-        let Ok(mut data_guard) = data.lock() else {
-            error!("Failed to acquire data lock, skipping frame");
-            return;
-        };
-        let maybe_receiver = push_rpc_request(&mut data_guard, request);
-        (maybe_receiver, data_guard.timeout)
+    let Ok(mut data_guard) = data.lock() else {
+        error!("Failed to acquire data lock, skipping frame");
+        return None;
     };
-
-    if let Some(receiver) = maybe_receiver {
-        notify_session(session.clone(), receiver, request_timeout)
-            .await
-            .unwrap_or_else(|e| error!("{}", e))
-    }
+    let receiver = push_rpc_request(&mut data_guard, request)?;
+    Some((receiver, data_guard.timeout))
 }
 
 #[get("/health")]
