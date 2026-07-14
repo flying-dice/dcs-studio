@@ -99,8 +99,9 @@ body {
 }
 .entry-wrap { padding: 0 12px; }
 .row { display: flex; gap: 10px; padding: 1px 0; white-space: pre-wrap; word-break: break-word; }
-.row .time { color: var(--muted); flex-shrink: 0; width: 84px; }
-.row .level { flex-shrink: 0; width: 60px; font-weight: 600; }
+/* Fixed columns must never wrap — hh:mm:ss.mmm is exactly 12ch. */
+.row .time { color: var(--muted); flex-shrink: 0; width: 12ch; white-space: nowrap; }
+.row .level { flex-shrink: 0; width: 60px; font-weight: 600; white-space: nowrap; }
 .row .subsystem { flex-shrink: 0; width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-symbolIcon-variableForeground, var(--vscode-charts-blue, #75beff)); }
 .row .message { flex: 1; }
 .row.level-info .level { color: var(--vscode-charts-blue, #4daafc); }
