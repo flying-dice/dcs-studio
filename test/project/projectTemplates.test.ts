@@ -23,8 +23,14 @@ function text(files: TemplateFile[], path: string): string {
 }
 
 describe("TEMPLATES metadata", () => {
-  it("lists the four template tiles, ids unique, all fields filled", () => {
-    expect(TEMPLATES.map((t) => t.id)).toEqual(["blank", "lua-mission", "lua-hook", "rust-dll"]);
+  it("lists the five template tiles, ids unique, all fields filled", () => {
+    expect(TEMPLATES.map((t) => t.id)).toEqual([
+      "blank",
+      "lua-mission",
+      "lua-hook",
+      "rust-dll",
+      "mission",
+    ]);
     for (const t of TEMPLATES) {
       expect(t.label).toBeTruthy();
       expect(t.description).toBeTruthy();
@@ -334,5 +340,59 @@ describe("rust-dll template", () => {
     expect(cargo).toContain('name = "mod_104th"');
     const toml = text(digits, "dcs-studio.toml");
     expect(toml).toContain('dest = "{SavedGames}/Mods/tech/104th/bin"');
+  });
+});
+
+describe("mission template", () => {
+  const files = render("mission", "Red Flag Finale", assets)!;
+
+  it("produces exactly the manifest and the README inside Missions/", () => {
+    expect(paths(files)).toEqual(["dcs-studio.toml", "Missions/README.md"]);
+  });
+
+  it("has no other file — no baked .miz is shipped", () => {
+    for (const f of files) {
+      expect(typeof f.contents).toBe("string");
+    }
+  });
+
+  it("bundles and symlinks the slugged .miz path into the DCS Missions folder", () => {
+    const toml = text(files, "dcs-studio.toml");
+    expect(toml).toContain('template = "mission"');
+    expect(toml).toContain("[[bundle]]");
+    expect(toml).toContain('path = "Missions/red-flag-finale.miz"');
+    expect(toml).toContain("[[symlink]]");
+    expect(toml).toContain('source = "Missions/red-flag-finale.miz"');
+    expect(toml).toContain('dest = "{SavedGames}/Missions/red-flag-finale.miz"');
+    expect(toml).not.toContain("[[install]]");
+  });
+
+  it("READMEs where to add the mission and how the rule matches its filename", () => {
+    const md = text(files, "Missions/README.md");
+    expect(md).toContain("# Red Flag Finale");
+    expect(md).toContain("Save or copy your");
+    expect(md).toContain("`.miz` file in here");
+    expect(md).toContain("`red-flag-finale.miz`");
+    expect(md).toContain("Scaffolding in place keeps the");
+    expect(md).toContain("existing file (it comes back reported as skipped)");
+  });
+
+  it("READMEs the .miz format and where it lands for subscribers", () => {
+    const md = text(files, "Missions/README.md");
+    expect(md).toContain("single mission archive");
+    expect(md).toContain("Saved Games/DCS/Missions");
+    expect(md).toContain("Mission Editor's mission list");
+  });
+
+  it("READMEs the publish/subscribe flow via a GitHub release", () => {
+    const md = text(files, "Missions/README.md");
+    expect(md).toContain("**Create a release**");
+    expect(md).toContain("subscriber installs your repo from the Marketplace");
+  });
+
+  it("uses a plain slug (no keyword-dodging ident needed, unlike the Lua templates)", () => {
+    const kwFiles = render("mission", "end", assets)!;
+    const toml = text(kwFiles, "dcs-studio.toml");
+    expect(toml).toContain('path = "Missions/end.miz"');
   });
 });
