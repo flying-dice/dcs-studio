@@ -553,7 +553,7 @@ run_on = "after-sanitize"</code></pre>
   <li><strong>Inject Bridge</strong> — copies the files into place. If a DLL is locked, DCS is running — close it first.</li>
   <li><strong>Launch DCS (with bridge)</strong> — injects, then starts <code>DCS.exe --no-launcher</code> from your configured install; when DCS exits the bridge is automatically ejected.</li>
   <li><strong>Eject Bridge</strong> — removes the files.</li>
-  <li><strong>Build Bridge</strong> — for contributors: rebuilds the native workspace with cargo; inject prefers freshly built DLLs over the shipped ones.</li>
+  <li><strong>Build Bridge</strong> — for contributors: rebuilds the bridge workspace with cargo; inject prefers freshly built DLLs over the shipped ones.</li>
 </ul>
 <div class="cmd-row">
   <button class="cmd-btn" data-command="dcs.bridge.inject">Inject Bridge</button>

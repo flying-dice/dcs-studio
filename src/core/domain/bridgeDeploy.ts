@@ -41,12 +41,12 @@ export function legacyInstallPaths(writeDir: string): string[] {
 
 /** The freshly built workspace DLL inside the extension (one shared target dir). */
 export function builtDllPath(extensionRoot: string, name: BridgeDllName): string {
-  return path.join(extensionRoot, "native", "target", "release", name);
+  return path.join(extensionRoot, "bridge", "target", "release", name);
 }
 
-/** The prebuilt DLL shipped with the extension. */
+/** The prebuilt DLL shipped with the extension (staged into bridge/prebuilt). */
 export function shippedDllPath(extensionRoot: string, name: BridgeDllName): string {
-  return path.join(extensionRoot, "bridge", name);
+  return path.join(extensionRoot, "bridge", "prebuilt", name);
 }
 
 /** The DLL to install: the freshly built workspace artifact if present, else the shipped one. */
@@ -56,7 +56,7 @@ export function selectDll(extensionRoot: string, name: BridgeDllName, builtExist
 
 /** The hook script source shipped with the extension. */
 export function hookSourcePath(extensionRoot: string): string {
-  return path.join(extensionRoot, "bridge", "Scripts", "Hooks", "DcsStudio.lua");
+  return path.join(extensionRoot, "bridge", "hook", "DcsStudio.lua");
 }
 
 // ── Locked-DLL classification (DCS holds the bridge DLLs while running) ──

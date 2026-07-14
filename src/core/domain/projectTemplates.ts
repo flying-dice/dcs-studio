@@ -48,9 +48,9 @@ export interface TemplateFile {
   contents: string | Uint8Array;
 }
 
-/** Binary/golden assets baked into templates (loaded from native/ at render time). */
+/** Binary/golden assets baked into templates (loaded from bridge/ at render time). */
 export interface TemplateAssets {
-  /** Import library for DCS's own lua.dll (native/lua5.1/lua.lib). */
+  /** Import library for DCS's own lua.dll (bridge/prebuilt/lua.lib, staged from bridge/lua5.1/lua.lib). */
   luaLib: Uint8Array;
 }
 

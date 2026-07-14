@@ -4,19 +4,19 @@ import * as fs from "fs";
 import { spawn } from "child_process";
 import { showError } from "../errors";
 
-// Build the bridge workspace (native/) into dcs_studio_gui.dll +
+// Build the bridge workspace (bridge/) into dcs_studio_gui.dll +
 // dcs_studio_mission.dll (one `cargo build --release` produces both).
 // Requires the user's Rust toolchain + MSVC. The extension ships prebuilt
 // DLLs too, so this is only needed when the bridge source is changed.
 export async function buildBridge(ctx: vscode.ExtensionContext): Promise<void> {
-  const nativeDir = path.join(ctx.extensionUri.fsPath, "native");
-  if (!fs.existsSync(path.join(nativeDir, "Cargo.toml"))) {
-    void showError("Bridge source (native/) is not present in this build.");
+  const bridgeDir = path.join(ctx.extensionUri.fsPath, "bridge");
+  if (!fs.existsSync(path.join(bridgeDir, "Cargo.toml"))) {
+    void showError("Bridge source (bridge/) is not present in this build.");
     return;
   }
   const out = vscode.window.createOutputChannel("DCS Studio Bridge Build");
   out.show(true);
-  out.appendLine(`$ cargo build --release   (cwd: ${nativeDir})`);
+  out.appendLine(`$ cargo build --release   (cwd: ${bridgeDir})`);
 
   await vscode.window.withProgress(
     {
@@ -26,7 +26,7 @@ export async function buildBridge(ctx: vscode.ExtensionContext): Promise<void> {
     },
     () =>
       new Promise<void>((resolve) => {
-        const proc = spawn("cargo", ["build", "--release"], { cwd: nativeDir, shell: true });
+        const proc = spawn("cargo", ["build", "--release"], { cwd: bridgeDir, shell: true });
         proc.stdout.on("data", (d) => out.append(d.toString()));
         proc.stderr.on("data", (d) => out.append(d.toString()));
         proc.on("error", (e) => {

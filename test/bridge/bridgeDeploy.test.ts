@@ -52,10 +52,10 @@ describe("install layout", () => {
 describe("DLL selection (built vs shipped)", () => {
   it("computes both candidate paths from the extension root, per DLL", () => {
     for (const name of BRIDGE_DLLS) {
-      expect(builtDllPath(ROOT, name)).toBe(path.join(ROOT, "native", "target", "release", name));
-      expect(shippedDllPath(ROOT, name)).toBe(path.join(ROOT, "bridge", name));
+      expect(builtDllPath(ROOT, name)).toBe(path.join(ROOT, "bridge", "target", "release", name));
+      expect(shippedDllPath(ROOT, name)).toBe(path.join(ROOT, "bridge", "prebuilt", name));
     }
-    expect(hookSourcePath(ROOT)).toBe(path.join(ROOT, "bridge", "Scripts", "Hooks", "DcsStudio.lua"));
+    expect(hookSourcePath(ROOT)).toBe(path.join(ROOT, "bridge", "hook", "DcsStudio.lua"));
   });
 
   it("prefers the freshly built workspace artifact when it exists", () => {

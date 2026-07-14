@@ -5,8 +5,13 @@ tsconfig.json
 **/*.map
 .gitignore
 package-lock.json
-native/target/**
-bridge/dcs-studio-bridge.lua
+bridge/target/**
+bridge/crates/**
+bridge/lua5.1/**
+bridge/deploy/**
+bridge/.cargo/**
+bridge/Cargo.toml
+bridge/Cargo.lock
 scripts/**
 .dev-sandbox/**
 previews/**

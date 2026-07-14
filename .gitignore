@@ -4,7 +4,8 @@ out/
 .vscode-test/
 .dev-sandbox/
 .claude/settings.local.json
-native/target/
+bridge/target/
+bridge/prebuilt/
 target/
 coverage/
 .playwright-mcp/

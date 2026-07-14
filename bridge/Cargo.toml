@@ -1,0 +1,39 @@
+# The in-DCS bridge workspace. Two cdylibs share one core:
+#   crates/bridge-core    — rlib: debugger, JSON-RPC server/router, protocol,
+#                           Lua surface modules, embedded rt/debug-engine Lua.
+#   crates/bridge-gui     — dcs_studio_gui.dll, loaded by the GameGUI hook
+#                           (bridge/hook/DcsStudio.lua), serves
+#                           JSON-RPC on 127.0.0.1:25569.
+#   crates/bridge-mission — dcs_studio_mission.dll, loaded into the mission
+#                           scripting state by the GUI hook's boot dispatch,
+#                           serves JSON-RPC on 127.0.0.1:25570.
+#
+# Each cdylib gets its OWN copy of every static in bridge-core — statics are
+# never shared across DLL images. That is by design: each DLL owns the
+# debugger/server state for exactly one Lua state.
+[workspace]
+resolver = "2"
+members = [
+    "crates/bridge-core",
+    "crates/bridge-gui",
+    "crates/bridge-mission",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+dcs-bridge-core = { path = "crates/bridge-core" }
+mlua = { version = "0.10", features = ["lua51", "module", "serialize", "macros"] }
+tokio = { version = "1", features = ["full"] }
+actix-web = "4"
+actix-ws = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+# Bundled SQLite (vendored C compiled via `cc`) — no external sqlite3.dll.
+rusqlite = { version = "0.32", features = ["bundled"] }
+log = "0.4"
+log4rs = "1"
