@@ -17,6 +17,7 @@ import {
   statusBarView,
 } from "./core/domain/bridgeProtocol";
 import { ConsolePanel } from "./bridge/consolePanel";
+import { LogPanel } from "./log/logPanel";
 import { injectCommand, ejectCommand } from "./bridge/deploy";
 import { launchDcs, launchCleanup } from "./bridge/launch";
 import { buildBridge } from "./bridge/build";
@@ -221,6 +222,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("dcs.setup.open", () => SetupPanel.show(context, detect)),
     vscode.commands.registerCommand("dcs.bridge.console", () => ConsolePanel.show(context, clients)),
+    vscode.commands.registerCommand("dcs.log.open", () => LogPanel.show(context, manifestPort)),
     // The status bar item's click handler: not palette-contributed, it's only
     // reachable by clicking "DCS: offline"/"at menu"/"mission" in the footer.
     vscode.commands.registerCommand("dcs.bridge.statusBarClick", async () => {

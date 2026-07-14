@@ -2,9 +2,9 @@ import { test, expect } from "@playwright/test";
 import { openPreview, expectSent, hostSend } from "./helpers";
 
 test.describe("nav preview", () => {
-  test("renders all 9 rows, publish hidden by default", async ({ page }) => {
+  test("renders all 10 rows, publish hidden by default", async ({ page }) => {
     await openPreview(page, "nav");
-    await expect(page.getByTestId("nav-item")).toHaveCount(9);
+    await expect(page.getByTestId("nav-item")).toHaveCount(10);
     await expect(page.locator('[data-testid="nav-item"][data-id="publish"]')).toHaveClass(/hidden/);
   });
 

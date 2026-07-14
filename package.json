@@ -239,6 +239,12 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "dcs.log.open",
+        "title": "Open DCS Log Viewer",
+        "category": "DCS Studio",
+        "icon": "$(output)"
+      },
+      {
         "command": "dcs.bridge.inject",
         "title": "Inject Bridge into DCS",
         "category": "DCS Studio",
