@@ -31,13 +31,29 @@
   }
 
   // ── Validation ──
+  /** A symlink source is covered when it equals or nests inside a bundle path. */
+  function coveredByBundle(source, bundlePaths) {
+    const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+    const s = norm(source);
+    return bundlePaths.some((p) => {
+      const b = norm(p);
+      return b === "" || b === "." || s === b || s.startsWith(b + "/");
+    });
+  }
+
   function issues(m) {
     const out = [];
     if (!m.project.name.trim()) out.push("Project name is required.");
-    m.install.forEach((r, i) => {
-      if (!r.source.trim()) out.push(`Install rule ${i + 1}: source is empty.`);
+    const bundlePaths = m.bundle.map((b) => b.path);
+    m.bundle.forEach((r, i) => {
+      if (!r.path.trim()) out.push(`Bundle ${i + 1}: path is empty.`);
+    });
+    m.symlink.forEach((r, i) => {
+      if (!r.source.trim()) out.push(`Symlink ${i + 1}: source is empty.`);
+      else if (!coveredByBundle(r.source, bundlePaths))
+        out.push(`Symlink ${i + 1}: source is not inside any bundled path.`);
       if (splitDest(r.dest).root === "{GameInstall}" && !roots.gameInstall)
-        out.push(`Install rule ${i + 1}: {GameInstall} is not configured (set dcsStudio.gameInstallPath).`);
+        out.push(`Symlink ${i + 1}: {GameInstall} is not configured (set dcsStudio.gameInstallPath).`);
     });
     m.requires_module.forEach((r, i) => {
       if (!r.id.trim()) out.push(`Required module ${i + 1}: id is empty.`);
@@ -76,7 +92,8 @@
       <div class="layout">
         <div class="form" id="form">
           ${sectionProject(m)}
-          ${sectionInstall(m)}
+          ${sectionBundle(m)}
+          ${sectionSymlink(m)}
           ${sectionRequires(m)}
           ${extras ? passthroughNote(m) : ""}
         </div>
@@ -117,7 +134,8 @@
 
   // data-add -> data-testid, per the previews/ data-testid convention doc.
   const ADD_TESTID = {
-    install: "add-install-btn",
+    bundle: "add-bundle-btn",
+    symlink: "add-symlink-btn",
     requires_module: "add-required-module-btn",
   };
 
@@ -134,36 +152,57 @@
       </section>`;
   }
 
-  function sectionInstall(m) {
-    const rows = m.install
+  function sectionBundle(m) {
+    const rows = m.bundle
+      .map(
+        (r, i) => `
+        <div class="row" data-testid="bundle-row" data-row="bundle-${i}">
+          <div class="row-grid two">
+            ${fieldRow("Path", "project-relative", input("bundle", i, "path", r.path, "Mods/tech/my-mod"))}
+          </div>
+          <button class="rm" data-testid="remove-row-btn" data-rm="bundle" data-idx="${i}" title="Remove path">${I.x}</button>
+        </div>`,
+      )
+      .join("");
+    return `
+      <section class="card">
+        <div class="section-label">[[bundle]] <span class="count">${m.bundle.length}</span></div>
+        <p class="blurb">Each entry is a project-relative <span class="mono">path</span> (file or folder) packed into the release archive when you publish.</p>
+        ${rows || `<p class="empty">No bundled content yet.</p>`}
+        <button class="btn ghost add" data-testid="${ADD_TESTID.bundle}" data-add="bundle">${I.plus} Add bundled path</button>
+      </section>`;
+  }
+
+  function sectionSymlink(m) {
+    const rows = m.symlink
       .map((r, i) => {
         const { root, rest } = splitDest(r.dest);
         const resolved = resolveDest(r.dest);
         return `
-        <div class="row" data-testid="install-row" data-row="install-${i}">
+        <div class="row" data-testid="symlink-row" data-row="symlink-${i}">
           <div class="row-grid">
-            ${fieldRow("Source", "project-relative", input("install", i, "source", r.source, "dist/scripts"))}
+            ${fieldRow("Source", "inside a bundled path", input("symlink", i, "source", r.source, "Mods/tech/my-mod/entry.lua"))}
             <label class="field">
               <span class="lbl">Destination</span>
               <span class="dest">
-                <select class="in root" data-sec="install" data-idx="${i}" data-key="__root">
+                <select class="in root" data-sec="symlink" data-idx="${i}" data-key="__root">
                   ${ROOT_TOKENS.map((t) => `<option ${t === root ? "selected" : ""}>${t}</option>`).join("")}
                 </select>
-                <input class="in" data-sec="install" data-idx="${i}" data-key="__rest" value="${esc(rest)}" placeholder="Scripts/my-mod" spellcheck="false" autocomplete="off" />
+                <input class="in" data-sec="symlink" data-idx="${i}" data-key="__rest" value="${esc(rest)}" placeholder="Scripts/my-mod" spellcheck="false" autocomplete="off" />
               </span>
             </label>
           </div>
           <div class="resolved mono" data-testid="resolved-dest">${I.arrow}${resolved ? esc(resolved) : `<span class="warn-text" data-testid="unresolved-warning">${I.warn} {GameInstall} not configured</span>`}</div>
-          <button class="rm" data-testid="remove-row-btn" data-rm="install" data-idx="${i}" title="Remove rule">${I.x}</button>
+          <button class="rm" data-testid="remove-row-btn" data-rm="symlink" data-idx="${i}" title="Remove link">${I.x}</button>
         </div>`;
       })
       .join("");
     return `
       <section class="card">
-        <div class="section-label">[[install]] <span class="count">${m.install.length}</span></div>
-        <p class="blurb">Each rule copies a project-relative <span class="mono">source</span> under a root-anchored <span class="mono">dest</span>. The resolved path shows where it lands on this machine.</p>
-        ${rows || `<p class="empty">No install rules yet.</p>`}
-        <button class="btn ghost add" data-testid="${ADD_TESTID.install}" data-add="install">${I.plus} Add install rule</button>
+        <div class="section-label">[[symlink]] <span class="count">${m.symlink.length}</span></div>
+        <p class="blurb">Each link maps a <span class="mono">source</span> inside the bundled content to a root-anchored <span class="mono">dest</span>, created when a user enables the mod. The resolved path shows where it lands on this machine.</p>
+        ${rows || `<p class="empty">No symlinks yet.</p>`}
+        <button class="btn ghost add" data-testid="${ADD_TESTID.symlink}" data-add="symlink">${I.plus} Add symlink</button>
       </section>`;
   }
 
@@ -198,7 +237,7 @@
         const i = parseInt(idx, 10);
         if (sec === "project") state.model.project[key] = el.value;
         else if (key === "__root" || key === "__rest") {
-          const row = state.model.install[i];
+          const row = state.model.symlink[i];
           const parts = splitDest(row.dest);
           const rootTok = key === "__root" ? el.value : parts.root;
           const rest = key === "__rest" ? el.value : parts.rest;
@@ -218,7 +257,8 @@
     app.querySelectorAll("[data-add]").forEach((el) =>
       el.addEventListener("click", () => {
         const sec = el.dataset.add;
-        if (sec === "install") state.model.install.push({ source: "", dest: "{SavedGames}/Scripts/" });
+        if (sec === "bundle") state.model.bundle.push({ path: "" });
+        else if (sec === "symlink") state.model.symlink.push({ source: "", dest: "{SavedGames}/Scripts/" });
         else if (sec === "requires_module") state.model.requires_module.push({ id: "", name: "" });
         render();
         pushEdit();
@@ -234,9 +274,9 @@
   }
 
   function updateResolved(i) {
-    const row = app.querySelector(`[data-row="install-${i}"] .resolved`);
+    const row = app.querySelector(`[data-row="symlink-${i}"] .resolved`);
     if (!row) return;
-    const resolved = resolveDest(state.model.install[i].dest);
+    const resolved = resolveDest(state.model.symlink[i].dest);
     row.innerHTML = resolved
       ? I.arrow + esc(resolved)
       : `<span class="warn-text" data-testid="unresolved-warning">${I.warn} {GameInstall} not configured</span>`;

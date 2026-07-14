@@ -37,7 +37,7 @@
       <div class="wrap">
         <section class="card">
           <h2>Preflight checks</h2>
-          <p class="sub">These must pass before a release. Build your project so the <span class="mono">[[install]]</span> sources exist.</p>
+          <p class="sub">These must pass before a release. Build your project so the <span class="mono">[[bundle]]</span> paths exist.</p>
           ${checksHtml()}
           ${blocking() ? `<div class="blocked">Resolve the red items above to publish.</div>` : ""}
         </section>
