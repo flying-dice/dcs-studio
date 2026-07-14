@@ -14,7 +14,7 @@ the project conventions and the workflow.
 ## The project manifest: dcs-studio.toml
 
 Every DCS Studio project has a `dcs-studio.toml` at its root. It is the
-source of truth for metadata, dependencies, and how files install into DCS:
+source of truth for metadata and how files install into DCS:
 
 ```toml
 [project]
@@ -23,13 +23,6 @@ version = "0.1.0"
 author = ""
 description = ""
 dcs_min_version = "2.9.0"
-
-# Other Marketplace mods this one needs — installed automatically.
-# `id` is the dependency's GitHub `owner/name`.
-# [[dependencies]]
-# id = "owner/another-mod"
-# version = "*"
-# optional = false
 
 # Install rules: copy matching sources to a destination under a named root.
 [[install]]

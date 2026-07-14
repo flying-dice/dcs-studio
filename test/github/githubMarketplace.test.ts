@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   DISCOVERY_TOPIC,
-  LIBRARY_TOPIC,
   MANIFEST_FILE,
   labelsFrom,
   mapListing,
@@ -17,21 +16,17 @@ import { productInvariants } from "../marketplace/contract";
 describe("marker constants", () => {
   it("match the dcs-studio project markers", () => {
     expect(DISCOVERY_TOPIC).toBe("dcs-studio");
-    expect(LIBRARY_TOPIC).toBe("dcs-studio-library");
     expect(MANIFEST_FILE).toBe("dcs-studio.toml");
   });
 });
 
 describe("labelsFrom", () => {
-  it("drops the marker topics and keeps the rest", () => {
-    expect(labelsFrom(["dcs-studio", "script", "dcs-studio-library", "weapons"])).toEqual([
-      "script",
-      "weapons",
-    ]);
+  it("drops the marker topic and keeps the rest", () => {
+    expect(labelsFrom(["dcs-studio", "script", "weapons"])).toEqual(["script", "weapons"]);
   });
 
-  it("is empty for marker-only topic lists", () => {
-    expect(labelsFrom(["dcs-studio", "dcs-studio-library"])).toEqual([]);
+  it("is empty for a marker-only topic list", () => {
+    expect(labelsFrom(["dcs-studio"])).toEqual([]);
   });
 });
 
@@ -57,14 +52,7 @@ describe("mapListing", () => {
       repo_url: "https://github.com/owner/mod",
       avatar_url: "https://avatars/owner",
       stars: 5,
-      is_library: false,
     });
-  });
-
-  it("marks libraries via the library topic", () => {
-    const l = mapListing(searchItem({ topics: ["dcs-studio", "dcs-studio-library"] }));
-    expect(l.is_library).toBe(true);
-    expect(l.labels).toEqual([]);
   });
 
   it("tolerates missing topics, owner, description, and stars", () => {
@@ -80,7 +68,6 @@ describe("mapListing", () => {
     expect(l.avatar_url).toBe("");
     expect(l.description).toBe("");
     expect(l.stars).toBe(0);
-    expect(l.is_library).toBe(false);
   });
 });
 
@@ -138,9 +125,7 @@ describe("mapProduct", () => {
       ],
       download_size: 110,
       installable: true,
-      is_library: false,
       installs: [],
-      dependencies: [],
       requires: [],
     });
     productInvariants(p);
@@ -153,13 +138,6 @@ describe("mapProduct", () => {
     const p = mapProduct(repoJson(), null, rel, "fallback");
     expect(p.installable).toBe(false);
     expect(p.download_size).toBe(100);
-    productInvariants(p);
-  });
-
-  it("is not installable when the repo is a library, even with a manifest", () => {
-    const p = mapProduct(repoJson({ topics: ["dcs-studio", "dcs-studio-library"] }), null, releaseJson(), "f");
-    expect(p.is_library).toBe(true);
-    expect(p.installable).toBe(false);
     productInvariants(p);
   });
 
@@ -186,7 +164,6 @@ describe("mapProduct", () => {
     expect(p.avatar_url).toBe("");
     expect(p.description).toBe("");
     expect(p.stars).toBe(0);
-    expect(p.is_library).toBe(false);
   });
 });
 

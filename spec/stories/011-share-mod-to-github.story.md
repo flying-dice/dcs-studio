@@ -10,7 +10,7 @@
 
 - Entry points: command **"DCS Studio: Publish Mod to GitHub…"** (`dcs.publish.open`), the cloud-upload icon in the editor title of `dcs-studio.toml`, and the **Publish Mod** launcher row (visible only when a manifest exists).
 - The publish flow shells out to `git` and the `gh` CLI — GitHub auth is `gh auth login`, independent of the editor's GitHub session.
-- Sharing tags the repo with the `dcs-studio` topic (plus `dcs-studio-library` for libraries), which is exactly what Marketplace discovery searches for (story 004).
+- Sharing tags the repo with the `dcs-studio` topic, which is exactly what Marketplace discovery searches for (story 004).
 
 ```gherkin
 Feature: Publish preflight
@@ -59,11 +59,6 @@ Feature: Step 1 — Share to GitHub
       and tags the repo with the "dcs-studio" topic
     And the result reads "Shared → <owner>/<name>. Create a release below."
     And the release step's Repo field is prefilled
-
-  Scenario: Publishing a library
-    Given the user ticks
-      "Publish as a library (dependency-only — adds the dcs-studio-library topic)"
-    Then the repo is additionally tagged "dcs-studio-library"
 
   Scenario: Repo already exists on GitHub
     Given a repo with that name already exists

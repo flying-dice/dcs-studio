@@ -67,8 +67,7 @@ window.__DOCS__ = {
 <h2>Searching and filtering</h2>
 <p>Search, tag filters and sorting (by stars or name) all run instantly in the panel — the listing set is fetched once and filtered client-side. Click a tag on any card to filter by it, and use <strong>Refresh</strong> (or the <code>DCS Studio: Refresh Marketplace</code> command) to re-query GitHub.</p>
 
-<h2>Libraries vs. installable mods</h2>
-<p>A repo additionally tagged <code>dcs-studio-library</code> is a <strong>library</strong> — a shared dependency for other mods, not something you install directly. Libraries appear in the grid but offer <em>Add as dependency</em> instead of <em>Install</em>.</p>
+<h2>Installable mods</h2>
 <p>A mod's <strong>Install</strong> button is live only when its latest GitHub release ships a <code>dcs-studio.toml</code> asset (see <a data-page="mod-bundles">Mod bundles</a>). A repo with the topic but no proper release is browsable but not installable.</p>
 
 <div class="note warn">
@@ -110,7 +109,6 @@ window.__DOCS__ = {
 
 <h2>Prerequisites shown on the product page</h2>
 <ul>
-  <li><strong>Dependencies</strong> — other marketplace mods this one needs; install them alongside.</li>
   <li><strong>Required modules</strong> — stock DCS modules (aircraft, terrains) the mod expects you to own, e.g. <code>ed/f16c</code>. These are informational; DCS Studio can't install DCS modules for you.</li>
 </ul>
 <div class="cmd-row">
@@ -201,14 +199,14 @@ dest   = "{SavedGames}/Scripts/my-mod.lua"   # where it gets linked</code></pre>
 <h2>Templates</h2>
 <table>
   <tr><th>Template</th><th>What you get</th></tr>
-  <tr><td><strong>Blank Project</strong></td><td>Just a <code>dcs-studio.toml</code> with commented examples for dependencies and install rules.</td></tr>
+  <tr><td><strong>Blank Project</strong></td><td>Just a <code>dcs-studio.toml</code> with commented examples for install rules.</td></tr>
   <tr><td><strong>Lua Mission Script</strong></td><td>A <code>Scripts/&lt;name&gt;.lua</code> using the mission environment (<code>env</code>, <code>timer</code>, <code>trigger</code>, <code>world</code>), an install rule targeting <code>{SavedGames}/Scripts</code>, and a README.</td></tr>
   <tr><td><strong>Lua GameGUI Hook</strong></td><td>A <code>Scripts/Hooks/&lt;name&gt;_hook.lua</code> using <code>DCS.setUserCallbacks</code>, installed to <code>{SavedGames}/Scripts/Hooks</code>.</td></tr>
   <tr><td><strong>Rust DLL Mod</strong></td><td>A complete <code>mlua</code> cdylib crate pre-configured to link against DCS's own <code>lua.dll</code>, a loader hook script, and install rules for both the built DLL (<code>{SavedGames}/Mods/tech/&lt;name&gt;/bin</code>) and the hook.</td></tr>
 </table>
 
 <h2>The manifest form</h2>
-<p>Opening any <code>dcs-studio.toml</code> keeps the real text editor and opens an <strong>authoring form beside it</strong>. The two are two-way bound: edit either side and the other follows. The form covers the project info, install rules, dependencies and required modules; anything it doesn't model (custom sections like <code>[release]</code> or <code>[lints]</code>) is preserved verbatim in the file.</p>
+<p>Opening any <code>dcs-studio.toml</code> keeps the real text editor and opens an <strong>authoring form beside it</strong>. The two are two-way bound: edit either side and the other follows. The form covers the project info, install rules and required modules; anything it doesn't model (custom sections like <code>[release]</code> or <code>[lints]</code>) is preserved verbatim in the file.</p>
 <div class="cmd-row">
   <button class="cmd-btn" data-command="dcs.manifest.author">Create / Edit a Mod</button>
   <button class="cmd-btn" data-command="dcs.project.new">New Project from Template</button>
@@ -219,7 +217,7 @@ dest   = "{SavedGames}/Scripts/my-mod.lua"   # where it gets linked</code></pre>
         {
           id: "manifest-reference",
           title: "dcs-studio.toml Reference",
-          lede: "The manifest is a TOML file at the project root. It names the mod, declares what gets installed where, and lists dependencies — it is both the build recipe for publishing and the install plan for users.",
+          lede: "The manifest is a TOML file at the project root. It names the mod and declares what gets installed where — it is both the build recipe for publishing and the install plan for users.",
           body: `
 <h2>Complete example</h2>
 <pre><code>[project]
@@ -228,11 +226,6 @@ version = "1.2.0"
 author = "Viper Drivers"
 description = "Adds new loadout options for the F-16C."
 dcs_min_version = "2.9.0"
-
-[[dependencies]]
-id = "community/shared-weapons-lib"
-version = "*"
-optional = false
 
 [[requires_module]]
 id = "ed/f16c"
@@ -270,20 +263,11 @@ dest = "{SavedGames}/Mods/tech/f16-weapons"</code></pre>
   <tr><td><code>{GameInstall}</code></td><td>The DCS installation folder. Only resolvable if the user has configured it; prefer <code>{SavedGames}</code> whenever DCS supports it.</td></tr>
 </table>
 <div class="note">
-  <p>A mod with <strong>no</strong> install rules publishes fine (with a warning) but ships only its manifest — useful for metadata-only or library packages.</p>
+  <p>A mod with <strong>no</strong> install rules publishes fine (with a warning) but ships only its manifest — useful for metadata-only packages.</p>
 </div>
 
-<h2><code>[[dependencies]]</code> — other marketplace mods</h2>
-<table>
-  <tr><th>Key</th><th>Required</th><th>Meaning</th></tr>
-  <tr><td><code>id</code></td><td>Yes</td><td>The dependency's GitHub <code>owner/repo</code>.</td></tr>
-  <tr><td><code>name</code></td><td>No</td><td>Display name.</td></tr>
-  <tr><td><code>version</code></td><td>No</td><td>Version expression, e.g. <code>"*"</code>.</td></tr>
-  <tr><td><code>optional</code></td><td>No (default <code>false</code>)</td><td>Marks a soft dependency.</td></tr>
-</table>
-
 <h2><code>[[requires_module]]</code> — stock DCS content</h2>
-<p>Declares official DCS modules the user must own (distinct from mod dependencies). Shown as prerequisites on the product page.</p>
+<p>Declares official DCS modules the user must own. Shown as prerequisites on the product page.</p>
 <table>
   <tr><th>Key</th><th>Required</th><th>Meaning</th></tr>
   <tr><td><code>id</code></td><td>Yes</td><td>Module id, e.g. <code>ed/f16c</code>, <code>ed/syria</code>.</td></tr>
@@ -314,7 +298,7 @@ dest = "{SavedGames}/Mods/tech/f16-weapons"</code></pre>
 <ol>
   <li>Initializes git if needed (branch <code>main</code>) and adds <code>.dcs-studio/</code> to <code>.gitignore</code> (release artifacts stay out of the repo).</li>
   <li>Commits any pending changes and creates a <strong>public</strong> GitHub repository via <code>gh repo create</code> (or just pushes if <code>origin</code> already exists).</li>
-  <li>Applies the <code>dcs-studio</code> topic — <strong>this is what makes the marketplace find your repo</strong>. Library packages also get <code>dcs-studio-library</code>.</li>
+  <li>Applies the <code>dcs-studio</code> topic — <strong>this is what makes the marketplace find your repo</strong>.</li>
 </ol>
 
 <h2>Step 2 — Create a release</h2>
@@ -329,7 +313,7 @@ dest = "{SavedGames}/Mods/tech/f16-weapons"</code></pre>
 <table>
   <tr><th>You want</th><th>You need</th></tr>
   <tr><td>Appear in the marketplace grid</td><td>Public GitHub repo with the <code>dcs-studio</code> topic.</td></tr>
-  <tr><td>A live <strong>Install</strong> button</td><td>The <em>latest</em> release must include a <code>dcs-studio.toml</code> asset (and the repo must not be a library).</td></tr>
+  <tr><td>A live <strong>Install</strong> button</td><td>The <em>latest</em> release must include a <code>dcs-studio.toml</code> asset.</td></tr>
   <tr><td>Tags/labels on your card</td><td>Add more GitHub topics — every extra topic becomes a filterable label.</td></tr>
   <tr><td>Users get updates</td><td>Create a release with a new tag; <a data-page="updating-uninstalling">Update</a> follows your latest release.</td></tr>
 </table>

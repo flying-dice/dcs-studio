@@ -25,11 +25,11 @@ the new window:
 - **Storefront** — search, filter by tag (click a card tag or use the dropdown),
   sort by stars/name, refresh.
 - **Product page** — click any card. Rendered README, install plan (source →
-  DCS folder), dependencies, required stock modules (with owned/missing
+  DCS folder), required stock modules (with owned/missing
   verdicts), download size and release assets.
 - **Install flow** — click **Install** to watch the simulated per-node
   download → link progress, then the card flips to **Installed** with an
-  Uninstall action. Libraries show **Add as dependency** instead.
+  Uninstall action.
 - **MissionScripting.lua** — a stub preview of the file the sanitization manager
   will edit (a planned port).
 - **My Mods shortcut** — in My Mods, click **Add shortcut** (or run **DCS

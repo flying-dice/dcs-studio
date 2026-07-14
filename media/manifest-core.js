@@ -14,13 +14,12 @@
   else root.DcsManifestCore = api;
 })(typeof self !== "undefined" ? self : this, function () {
   const ROOT_TOKENS = ["{SavedGames}", "{GameInstall}"];
-  const MODELED_ARRAYS = ["install", "dependencies", "requires_module"];
+  const MODELED_ARRAYS = ["install", "requires_module"];
 
   function emptyModel() {
     return {
       project: { name: "", version: "0.1.0", author: "", description: "" },
       install: [],
-      dependencies: [],
       requires_module: [],
       extras: [], // verbatim blocks for sections the form doesn't model
     };
@@ -56,8 +55,6 @@
         if (modeled) {
           if (aa) {
             if (name === "install") (cur = { source: "", dest: "" }), m.install.push(cur);
-            else if (name === "dependencies")
-              (cur = { id: "", name: "", version: "", optional: false }), m.dependencies.push(cur);
             else (cur = { id: "", name: "" }), m.requires_module.push(cur);
           } else cur = m.project;
           sec = "modeled";
@@ -103,12 +100,6 @@
       L.push(typeof v === "string" ? `${k} = ${q(v)}` : `${k} = ${v}`);
     }
     for (const r of m.install) L.push("", "[[install]]", `source = ${q(r.source)}`, `dest = ${q(r.dest)}`);
-    for (const d of m.dependencies) {
-      L.push("", "[[dependencies]]", `id = ${q(d.id)}`);
-      if (d.name) L.push(`name = ${q(d.name)}`);
-      if (d.version) L.push(`version = ${q(d.version)}`);
-      if (d.optional) L.push("optional = true");
-    }
     for (const r of m.requires_module) {
       L.push("", "[[requires_module]]", `id = ${q(r.id)}`);
       if (r.name) L.push(`name = ${q(r.name)}`);

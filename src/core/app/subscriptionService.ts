@@ -31,7 +31,6 @@ export type OnProgress = (p: Progress) => void;
 /** The resolved install plan parsed from a release's manifest (for display). */
 export interface InstallPlan {
   installs: { source: string; dest: string; resolved: string | null }[];
-  dependencies: { id: string }[];
   requires: { id: string }[];
 }
 
@@ -87,7 +86,6 @@ export class SubscriptionService {
         dest: i.dest,
         resolved: this.ports.manifest.resolveDest(i.dest, r),
       })),
-      dependencies: m.dependencies,
       requires: m.requires_module.map((x) => ({ id: x.id })),
     };
   }

@@ -7,9 +7,8 @@
 
 import type { MarketListing, ProductAsset, ProductDetail } from "./types";
 
-// Marker topics + manifest file — the constants dcs-studio-project exports.
+// Marker topic + manifest file — the constants dcs-studio-project exports.
 export const DISCOVERY_TOPIC = "dcs-studio";
-export const LIBRARY_TOPIC = "dcs-studio-library";
 export const MANIFEST_FILE = "dcs-studio.toml";
 
 /** A repo item in the search-repositories response. */
@@ -41,9 +40,9 @@ export interface ReleaseJson {
   assets: Array<{ name: string; size: number; browser_download_url: string }>;
 }
 
-/** Topics minus the marker topics — the listing's display labels. */
+/** Topics minus the marker topic — the listing's display labels. */
 export function labelsFrom(topics: string[]): string[] {
-  return topics.filter((t) => t !== DISCOVERY_TOPIC && t !== LIBRARY_TOPIC);
+  return topics.filter((t) => t !== DISCOVERY_TOPIC);
 }
 
 /** Map one search item to a marketplace listing. */
@@ -58,7 +57,6 @@ export function mapListing(it: SearchItem): MarketListing {
     repo_url: it.html_url,
     avatar_url: it.owner?.avatar_url ?? "",
     stars: it.stargazers_count ?? 0,
-    is_library: topics.includes(LIBRARY_TOPIC),
   };
 }
 
@@ -70,9 +68,8 @@ export function mapAssets(release: ReleaseJson | null): ProductAsset[] {
 /**
  * Map a repo + README + latest release into the product page. `installable` is the
  * current-release marker: true only when the latest release ships a
- * `dcs-studio.toml` asset AND the repo is not a library. The install PLAN
- * (parsing that manifest) is a later step, so installs/dependencies/requires are
- * left empty here.
+ * `dcs-studio.toml` asset. The install PLAN (parsing that manifest) is a later
+ * step, so installs/requires are left empty here.
  */
 export function mapProduct(
   repo: RepoJson,
@@ -80,7 +77,6 @@ export function mapProduct(
   release: ReleaseJson | null,
   ownerFallback: string,
 ): ProductDetail {
-  const is_library = (repo.topics ?? []).includes(LIBRARY_TOPIC);
   const assets = mapAssets(release);
   const hasManifest = assets.some((a) => a.name === MANIFEST_FILE);
   return {
@@ -96,10 +92,8 @@ export function mapProduct(
     release_url: release?.html_url ?? null,
     assets,
     download_size: assets.reduce((s, a) => s + a.size, 0),
-    installable: hasManifest && !is_library,
-    is_library,
+    installable: hasManifest,
     installs: [],
-    dependencies: [],
     requires: [],
   };
 }

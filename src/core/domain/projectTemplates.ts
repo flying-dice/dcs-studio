@@ -131,14 +131,6 @@ function blank(name: string): TemplateFile[] {
     {
       path: "dcs-studio.toml",
       contents: `${manifestHeader(name)}${projectBlock(name, "blank")}
-# Other Marketplace mods this one needs — installed automatically
-# when yours is. \`id\` is the dependency's \`owner/name\`. (A required
-# stock DCS module is a separate prerequisite — not declared here.)
-# [[dependencies]]
-# id = "owner/another-mod"
-# version = "*"
-# optional = false
-
 # Install rules: copy matching sources to a destination under a named root.
 # [[install]]
 # source = "."
@@ -148,17 +140,6 @@ function blank(name: string): TemplateFile[] {
   ];
 }
 
-// The [[dependencies]] commentary shared by the lua manifests.
-const DEPENDENCIES_COMMENT = `# Other Marketplace mods this one needs — installed automatically
-# when yours is. \`id\` is the dependency's \`owner/name\`. Uncomment to
-# declare one. (A required stock DCS module is a separate
-# prerequisite — not declared here.)
-# [[dependencies]]
-# id = "owner/another-mod"
-# version = "*"
-# optional = false
-`;
-
 function luaMission(name: string): TemplateFile[] {
   const slug = slugify(name);
   const ident = luaIdent(name);
@@ -166,7 +147,6 @@ function luaMission(name: string): TemplateFile[] {
     {
       path: "dcs-studio.toml",
       contents: `${manifestHeader(name)}${projectBlock(name, "lua-mission")}
-${DEPENDENCIES_COMMENT}
 # Install rules: copy matching sources to a destination under a named root.
 [[install]]
 source = "Scripts/${slug}.lua"
@@ -222,7 +202,7 @@ A DCS (Digital Combat Simulator) mission script mod, scaffolded by DCS Studio.
 - \`Scripts/${slug}.lua\` — the script that ships. The manifest's
   [[install]] rule copies this file as-is, so keep the mod self-contained
   in it (add more [[install]] rules if you split into more files).
-- \`dcs-studio.toml\` — project manifest (metadata, dependencies, install rules).
+- \`dcs-studio.toml\` — project manifest (metadata, install rules).
 
 ## Install
 
@@ -259,7 +239,6 @@ function luaHook(name: string): TemplateFile[] {
     {
       path: "dcs-studio.toml",
       contents: `${manifestHeader(name)}${projectBlock(name, "lua-hook")}
-${DEPENDENCIES_COMMENT}
 # Install rules: GameGUI hooks live under Scripts/Hooks, where DCS
 # auto-loads them at start.
 [[install]]
@@ -315,7 +294,7 @@ A DCS (Digital Combat Simulator) GameGUI hook mod, scaffolded by DCS Studio.
 - \`Scripts/Hooks/${ident}_hook.lua\` — the hook that ships. The manifest's
   [[install]] rule copies this file as-is, so keep the mod self-contained
   in it (add more [[install]] rules if you split into more files).
-- \`dcs-studio.toml\` — project manifest (metadata, dependencies, install rules).
+- \`dcs-studio.toml\` — project manifest (metadata, install rules).
 
 ## Install
 

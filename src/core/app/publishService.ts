@@ -8,6 +8,7 @@ import type { ManifestModel, PackagedPayload } from "../domain/types";
 import { payloadBase } from "../domain/archivePolicy";
 import { fmtBytes } from "../domain/format";
 import { gitignoreNeedsEntry, gitignoreWithEntry } from "../domain/publishPolicy";
+import { DISCOVERY_TOPIC } from "../domain/githubMarketplace";
 
 // Publish orchestration, mirroring dcs-studio's Publisher, driven through ports:
 // git (local), gh (repo + release), archive (payload). Share creates the GitHub
@@ -21,7 +22,6 @@ export type Log = (line: string) => void;
 export interface ShareOpts {
   name: string;
   description: string;
-  isLibrary: boolean;
 }
 export interface ShareResult {
   owner: string;
@@ -101,7 +101,7 @@ export class PublishService {
       await git.push(root, "origin", "HEAD:main");
     }
 
-    const topics = opts.isLibrary ? ["dcs-studio", "dcs-studio-library"] : ["dcs-studio"];
+    const topics = [DISCOVERY_TOPIC];
     for (const t of topics) {
       log(`Tagging topic: ${t}`);
       await gh.repoTopicAdd(`${owner}/${opts.name}`, t);

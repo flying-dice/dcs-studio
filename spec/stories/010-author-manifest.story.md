@@ -47,10 +47,6 @@ Feature: Manifest form panel
       And a rule under {GameInstall} with no configured game install path
         shows "⚠ {GameInstall} not configured"
 
-    Scenario: Dependencies
-      Then the [[dependencies]] card captures Id (owner/repo), optional
-        Name and Version, and an "optional" checkbox per dependency
-
     Scenario: Required modules
       Then the [[requires_module]] card captures a Module id and optional Name
       And the blurb explains it is "A presence check only — never installed,
@@ -76,7 +72,6 @@ Feature: Manifest form panel
         | the project name is blank                | Project name is required.                                        |
         | an install rule has an empty source      | Install rule N: source is empty.                                 |
         | a {GameInstall} rule with no path set    | Install rule N: {GameInstall} is not configured (set dcsStudio.gameInstallPath). |
-        | a dependency id is not owner/repo shaped | Dependency N: id should look like owner/repo.                    |
 
     Scenario: Live roots
       When the user changes the DCS path settings

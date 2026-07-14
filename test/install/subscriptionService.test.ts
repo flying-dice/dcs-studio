@@ -189,7 +189,6 @@ function makeWorld() {
 const MODEL: ManifestModel = {
   project: { name: "My Mod", version: "1.0.0", author: "a", description: "" },
   install: [{ source: "Scripts/X", dest: "{SavedGames}/Scripts/X" }],
-  dependencies: [{ id: "utils/dcs-lua-common" }],
   requires_module: [{ id: "ed/f16c" }],
   extras: [],
 };
@@ -276,7 +275,6 @@ describe("fetchPlan", () => {
       installs: [
         { source: "Scripts/X", dest: "{SavedGames}/Scripts/X", resolved: "C:\\SG\\DCS/Scripts/X" },
       ],
-      dependencies: [{ id: "utils/dcs-lua-common" }],
       requires: [{ id: "ed/f16c" }],
     });
     // tmp cleanup

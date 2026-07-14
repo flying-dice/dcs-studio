@@ -7,9 +7,11 @@ test.describe("manifest preview", () => {
     const nameInput = page.locator('[data-sec="project"][data-key="name"]');
     await expect(nameInput).toHaveValue("f16-weapons-expansion");
     await expect(page.getByTestId("install-row")).toHaveCount(2);
-    await expect(page.getByTestId("dep-row")).toHaveCount(1);
     await expect(page.getByTestId("req-row")).toHaveCount(1);
     await expect(page.getByTestId("toml-preview")).toContainText('name = "f16-weapons-expansion"');
+    // [[dependencies]] is not modeled by the form — it round-trips verbatim
+    // through the extras passthrough.
+    await expect(page.getByTestId("toml-preview")).toContainText("[[dependencies]]");
   });
 
   test("typing posts a debounced edit and updates the live TOML preview", async ({ page }) => {

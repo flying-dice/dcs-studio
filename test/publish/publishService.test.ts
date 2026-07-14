@@ -171,7 +171,6 @@ function model(install: { source: string; dest: string }[] = []): ManifestModel 
   return {
     project: { name: "My Mod", version: "1.0.0", author: "me", description: "d" },
     install,
-    dependencies: [],
     requires_module: [],
     extras: [],
   };
@@ -208,7 +207,7 @@ describe("PublishService.share", () => {
   it("rejects when gh is not signed in, before touching git", async () => {
     const r = rig();
     r.gh.loginValue = null;
-    await expect(r.service.share(ROOT, { name: "mod", description: "", isLibrary: false }, r.log)).rejects.toThrow(
+    await expect(r.service.share(ROOT, { name: "mod", description: "" }, r.log)).rejects.toThrow(
       "Not signed in to gh — run `gh auth login`.",
     );
     expect(r.git.calls).toEqual([]);
@@ -217,7 +216,7 @@ describe("PublishService.share", () => {
   it("fresh folder: inits the repo, writes .gitignore, commits, creates + tags the repo", async () => {
     const r = rig();
     r.git.repo = false;
-    const res = await r.service.share(ROOT, { name: "my-mod", description: "A mod", isLibrary: false }, r.log);
+    const res = await r.service.share(ROOT, { name: "my-mod", description: "A mod" }, r.log);
 
     expect(r.git.calls).toEqual([
       ["isRepo", ROOT],
@@ -255,7 +254,7 @@ describe("PublishService.share", () => {
     const r = rig();
     r.git.changes = false;
     r.fs.files.set(gitignorePath, "out/\n.dcs-studio/\n");
-    await r.service.share(ROOT, { name: "mod", description: "", isLibrary: false }, r.log);
+    await r.service.share(ROOT, { name: "mod", description: "" }, r.log);
 
     expect(r.git.calls).toEqual([
       ["isRepo", ROOT],
@@ -270,14 +269,14 @@ describe("PublishService.share", () => {
   it("appends the ignore entry to an existing .gitignore missing a trailing newline", async () => {
     const r = rig();
     r.fs.files.set(gitignorePath, "out/");
-    await r.service.share(ROOT, { name: "mod", description: "", isLibrary: false }, r.log);
+    await r.service.share(ROOT, { name: "mod", description: "" }, r.log);
     expect(r.fs.files.get(gitignorePath)).toBe("out/\n.dcs-studio/\n");
   });
 
   it("repo already exists on GitHub: wires the remote and pushes instead", async () => {
     const r = rig();
     r.gh.repoCreateResult = { created: false, alreadyExists: true };
-    const res = await r.service.share(ROOT, { name: "mod", description: "", isLibrary: false }, r.log);
+    const res = await r.service.share(ROOT, { name: "mod", description: "" }, r.log);
 
     expect(r.git.calls).toEqual(
       expect.arrayContaining([
@@ -294,21 +293,11 @@ describe("PublishService.share", () => {
     r.gh.repoCreate = async () => {
       throw new Error("gh repo create: boom");
     };
-    await expect(r.service.share(ROOT, { name: "mod", description: "", isLibrary: false }, r.log)).rejects.toThrow(
+    await expect(r.service.share(ROOT, { name: "mod", description: "" }, r.log)).rejects.toThrow(
       "gh repo create: boom",
     );
   });
 
-  it("tags a library with both discovery topics, in order", async () => {
-    const r = rig();
-    await r.service.share(ROOT, { name: "lib", description: "", isLibrary: true }, r.log);
-    expect(r.gh.calls.filter((c) => c[0] === "repoTopicAdd")).toEqual([
-      ["repoTopicAdd", "octocat/lib", "dcs-studio"],
-      ["repoTopicAdd", "octocat/lib", "dcs-studio-library"],
-    ]);
-    expect(r.logs).toContain("Tagging topic: dcs-studio");
-    expect(r.logs).toContain("Tagging topic: dcs-studio-library");
-  });
 });
 
 // ── cutRelease ───────────────────────────────────────────────────────────────
