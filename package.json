@@ -4,8 +4,8 @@
   "description": "DCS World mod tooling for VS Code — Marketplace, DCS link, injection & launch, guided publish.",
   "version": "0.14.0",
   "publisher": "flying-dice",
-  "private": true,
-  "license": "UNLICENSED",
+  
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/flying-dice/dcs-studio.git"
