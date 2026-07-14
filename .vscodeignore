@@ -20,3 +20,11 @@ playwright.config.ts
 test-results/**
 playwright-report/**
 .playwright-mcp/**
+.claude/**
+coverage/**
+test/**
+spec/**
+target/**
+.github/**
+vitest.config.ts
+goals/**
