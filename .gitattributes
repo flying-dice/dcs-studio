@@ -1,0 +1,10 @@
+# Force LF in every checkout (CI runs on windows-latest, whose default
+# autocrlf=true turned the working tree CRLF and failed `biome check`'s
+# formatter gate — Biome formats to LF). All text in this repo is stored LF.
+* text=auto eol=lf
+
+# Binary payloads — never touch line endings.
+*.png binary
+*.dll binary
+*.lib binary
+*.miz binary
