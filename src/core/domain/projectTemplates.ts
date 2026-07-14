@@ -33,7 +33,12 @@ export const TEMPLATES: TemplateMeta[] = [
   {
     id: "rust-dll",
     label: "Rust DLL Mod",
-    description: "Native mod: cargo project building a DLL, deployed via install rules.",
+    description: "Native mod: cargo project building a DLL, bundled and symlinked into DCS.",
+  },
+  {
+    id: "mission",
+    label: "Share a Mission",
+    description: "Package a .miz and link it into your DCS user Missions folder.",
   },
 ];
 
@@ -43,9 +48,9 @@ export interface TemplateFile {
   contents: string | Uint8Array;
 }
 
-/** Binary/golden assets baked into templates (loaded from native/ at render time). */
+/** Binary/golden assets baked into templates (loaded from bridge/ at render time). */
 export interface TemplateAssets {
-  /** Import library for DCS's own lua.dll (native/lua5.1/lua.lib). */
+  /** Import library for DCS's own lua.dll (bridge/prebuilt/lua.lib, staged from bridge/lua5.1/lua.lib). */
   luaLib: Uint8Array;
 }
 
@@ -120,6 +125,8 @@ export function render(template: string, name: string, assets: TemplateAssets): 
       return luaHook(name);
     case "rust-dll":
       return rustDll(name, assets);
+    case "mission":
+      return mission(name);
     default:
       return undefined;
   }
@@ -131,33 +138,19 @@ function blank(name: string): TemplateFile[] {
     {
       path: "dcs-studio.toml",
       contents: `${manifestHeader(name)}${projectBlock(name, "blank")}
-# Other Marketplace mods this one needs — installed automatically
-# when yours is. \`id\` is the dependency's \`owner/name\`. (A required
-# stock DCS module is a separate prerequisite — not declared here.)
-# [[dependencies]]
-# id = "owner/another-mod"
-# version = "*"
-# optional = false
-
-# Install rules: copy matching sources to a destination under a named root.
-# [[install]]
-# source = "."
+# [[bundle]] declares what gets packed into the release archive (paths are
+# relative to the project root). [[symlink]] declares which links are created
+# when a user enables the mod — each source is a path inside the bundle.
+# [[bundle]]
+# path = "Mods/${slug}"
+#
+# [[symlink]]
+# source = "Mods/${slug}"
 # dest = "{SavedGames}/Mods/${slug}"
 `,
     },
   ];
 }
-
-// The [[dependencies]] commentary shared by the lua manifests.
-const DEPENDENCIES_COMMENT = `# Other Marketplace mods this one needs — installed automatically
-# when yours is. \`id\` is the dependency's \`owner/name\`. Uncomment to
-# declare one. (A required stock DCS module is a separate
-# prerequisite — not declared here.)
-# [[dependencies]]
-# id = "owner/another-mod"
-# version = "*"
-# optional = false
-`;
 
 function luaMission(name: string): TemplateFile[] {
   const slug = slugify(name);
@@ -166,9 +159,11 @@ function luaMission(name: string): TemplateFile[] {
     {
       path: "dcs-studio.toml",
       contents: `${manifestHeader(name)}${projectBlock(name, "lua-mission")}
-${DEPENDENCIES_COMMENT}
-# Install rules: copy matching sources to a destination under a named root.
-[[install]]
+# Bundle the script into the release, then link it into Saved Games on enable.
+[[bundle]]
+path = "Scripts/${slug}.lua"
+
+[[symlink]]
 source = "Scripts/${slug}.lua"
 dest = "{SavedGames}/Scripts/${slug}.lua"
 `,
@@ -219,16 +214,18 @@ A DCS (Digital Combat Simulator) mission script mod, scaffolded by DCS Studio.
 
 ## Layout
 
-- \`Scripts/${slug}.lua\` — the script that ships. The manifest's
-  [[install]] rule copies this file as-is, so keep the mod self-contained
-  in it (add more [[install]] rules if you split into more files).
-- \`dcs-studio.toml\` — project manifest (metadata, dependencies, install rules).
+- \`Scripts/${slug}.lua\` — the script that ships. The manifest's [[bundle]]
+  entry packs this file and the [[symlink]] entry links it as-is, so keep
+  the mod self-contained in it (add more [[bundle]]/[[symlink]] entries if
+  you split into more files).
+- \`dcs-studio.toml\` — project manifest (metadata, bundle + symlink rules).
 
 ## Install
 
-Install rules in \`dcs-studio.toml\` map project files to your DCS folders via
-named roots (\`{SavedGames}\`, \`{GameInstall}\`), resolved per-machine. The
-scaffolded rule copies \`Scripts/${slug}.lua\` to \`Saved Games/Scripts/${slug}.lua\`.
+The manifest's [[bundle]] entries declare what ships in the release; its
+[[symlink]] entries map bundled files to your DCS folders via named roots
+(\`{SavedGames}\`, \`{GameInstall}\`), resolved per-machine. The scaffolded
+rule links \`Scripts/${slug}.lua\` to \`Saved Games/Scripts/${slug}.lua\`.
 
 ## Where the script runs
 
@@ -259,10 +256,12 @@ function luaHook(name: string): TemplateFile[] {
     {
       path: "dcs-studio.toml",
       contents: `${manifestHeader(name)}${projectBlock(name, "lua-hook")}
-${DEPENDENCIES_COMMENT}
-# Install rules: GameGUI hooks live under Scripts/Hooks, where DCS
-# auto-loads them at start.
-[[install]]
+# Bundle the hook, then link it into Scripts/Hooks, where DCS auto-loads
+# every .lua at start.
+[[bundle]]
+path = "Scripts/Hooks/${ident}_hook.lua"
+
+[[symlink]]
 source = "Scripts/Hooks/${ident}_hook.lua"
 dest = "{SavedGames}/Scripts/Hooks"
 `,
@@ -313,16 +312,18 @@ A DCS (Digital Combat Simulator) GameGUI hook mod, scaffolded by DCS Studio.
 ## Layout
 
 - \`Scripts/Hooks/${ident}_hook.lua\` — the hook that ships. The manifest's
-  [[install]] rule copies this file as-is, so keep the mod self-contained
-  in it (add more [[install]] rules if you split into more files).
-- \`dcs-studio.toml\` — project manifest (metadata, dependencies, install rules).
+  [[bundle]] entry packs this file and the [[symlink]] entry links it as-is,
+  so keep the mod self-contained in it (add more [[bundle]]/[[symlink]]
+  entries if you split into more files).
+- \`dcs-studio.toml\` — project manifest (metadata, bundle + symlink rules).
 
 ## Install
 
-Install rules in \`dcs-studio.toml\` map project files to your DCS folders via
-named roots (\`{SavedGames}\`, \`{GameInstall}\`), resolved per-machine. The
-scaffolded rule copies the hook to \`Saved Games/Scripts/Hooks\`, where DCS
-auto-loads every .lua at start — no mission trigger needed.
+The manifest's [[bundle]] entries declare what ships; its [[symlink]] entries
+map bundled files to your DCS folders via named roots (\`{SavedGames}\`,
+\`{GameInstall}\`), resolved per-machine. The scaffolded rule links the hook
+into \`Saved Games/Scripts/Hooks\`, where DCS auto-loads every .lua at
+start — no mission trigger needed.
 
 ## Where the hook runs
 
@@ -376,13 +377,20 @@ function rustDllManifest(name: string, slug: string, ident: string): TemplateFil
   return {
     path: "dcs-studio.toml",
     contents: `${manifestHeader(name)}${projectBlock(name, "rust-dll")}
-# Install rules: the built DLL lands under Mods/tech, the GameGUI hook
-# under Scripts/Hooks — the same layout the DCS Studio bridge uses.
-[[install]]
+# Bundle the built DLL + the GameGUI hook, then link each into place — the
+# DLL under Mods/tech, the hook under Scripts/Hooks (the DCS Studio bridge
+# layout).
+[[bundle]]
+path = "target/release/${ident}.dll"
+
+[[bundle]]
+path = "Scripts/Hooks/${ident}_hook.lua"
+
+[[symlink]]
 source = "target/release/${ident}.dll"
 dest = "{SavedGames}/Mods/tech/${slug}/bin"
 
-[[install]]
+[[symlink]]
 source = "Scripts/Hooks/${ident}_hook.lua"
 dest = "{SavedGames}/Scripts/Hooks"
 `,
@@ -546,10 +554,9 @@ Produces \`target/release/${ident}.dll\`.
 
 ## Install
 
-DCS Studio's install action applies the
-manifest's [[install]] rules: the DLL goes to
-\`{SavedGames}/Mods/tech/${slug}/bin\`, the GameGUI hook to
-\`{SavedGames}/Scripts/Hooks\`.
+DCS Studio's install action applies the manifest's [[symlink]] rules over the
+bundled content: the DLL links to \`{SavedGames}/Mods/tech/${slug}/bin\`, the
+GameGUI hook to \`{SavedGames}/Scripts/Hooks\`.
 
 ## How loading works
 
@@ -578,6 +585,81 @@ per-frame errors.
 - Expose more Rust to Lua in \`src/lib.rs\` with \`lua.create_function\`;
   return \`LuaResult\` so errors raise in Lua instead of unwinding
   across the FFI line.
+`,
+  };
+}
+
+// No baked .miz: a mission worth sharing can't be string-interpolated, so
+// this template scaffolds the folder + manifest + README only. The README
+// lives INSIDE Missions/ rather than at the project root — the scaffolder
+// only ever creates a directory as a side effect of writing a file into it
+// (see src/project/scaffold.ts's write()), so the README doubles as the
+// placeholder that brings the empty folder into existence. That also means
+// the in-place flow "just works" for a folder that already has a .miz in
+// it: the existing mission is reported skipped, and only the manifest and
+// this README get added around it.
+function mission(name: string): TemplateFile[] {
+  const slug = slugify(name);
+  return [missionManifest(name, slug), missionReadme(name, slug)];
+}
+
+function missionManifest(name: string, slug: string): TemplateFile {
+  return {
+    path: "dcs-studio.toml",
+    contents: `${manifestHeader(name)}${projectBlock(name, "mission")}
+# The mission ships as-is: packaged into the release archive on publish,
+# and symlinked into your DCS user Missions folder on install. Save your
+# .miz into Missions/ — if its filename isn't "${slug}.miz", rename the
+# path/source/dest below to match instead of renaming the mission.
+[[bundle]]
+path = "Missions/${slug}.miz"
+
+[[symlink]]
+source = "Missions/${slug}.miz"
+dest = "{SavedGames}/Missions/${slug}.miz"
+`,
+  };
+}
+
+function missionReadme(name: string, slug: string): TemplateFile {
+  return {
+    path: "Missions/README.md",
+    contents: `# ${name}
+
+A DCS (Digital Combat Simulator) mission, scaffolded by DCS Studio.
+
+## Add your mission
+
+This folder is where the mission you're sharing lives. Save or copy your
+\`.miz\` file in here. The scaffolded \`dcs-studio.toml\` assumes a filename
+of \`${slug}.miz\` in its [[bundle]]/[[symlink]] rule — if your mission's
+real filename differs, rename the rule's \`path\`, \`source\` and \`dest\` to
+match instead of renaming the mission file.
+
+Already have a folder with a \`.miz\` in it? Scaffolding in place keeps the
+existing file (it comes back reported as skipped) and only adds the
+manifest and this README around it — just point the manifest at the
+mission's real name.
+
+## What's a .miz?
+
+A \`.miz\` is a single mission archive: DCS's own zip format, bundling the
+terrain, triggers, units and briefing for one mission into one file. It's
+the smallest unit you can publish and subscribe to.
+
+## Where it lands
+
+The manifest's [[bundle]] entry packs the \`.miz\` into the release archive
+on publish; its [[symlink]] entry links it into your DCS user Missions
+folder (\`Saved Games/DCS/Missions\`) on install — subscribers see it
+straight in the Mission Editor's mission list, no unzip step required.
+
+## Publish → subscribe
+
+Publishing runs preflight checks, packs [[bundle]] paths into a release
+archive, and walks you through **Create a release** on GitHub. A
+subscriber installs your repo from the Marketplace, and the [[symlink]]
+rule above links the .miz into their Missions folder automatically.
 `,
   };
 }

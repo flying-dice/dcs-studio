@@ -3,8 +3,17 @@ import { currentSession } from "../adapters/vscode/auth";
 import { dataDir } from "./dataDir";
 import type { SubscriptionService } from "../core/app/subscriptionService";
 import type { MarketplacePort } from "../core/ports/marketplace";
+import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { JsonLedgerStore } from "../adapters/node/jsonLedgerStore";
+import type { ProcessLauncher } from "../adapters/node/processLauncher";
 import { toModDto, isUpToDate } from "../core/domain/subscriptions";
+import { deriveInstallManifestView } from "../core/domain/installManifestView";
+import {
+  entrypointConsentKey,
+  entrypointRunKey,
+  resolveEntrypointLaunch,
+} from "../core/domain/entrypointLaunch";
+import type { InstallRoots } from "../core/domain/types";
 import { showError } from "../errors";
 
 // The "My Mods" experience: manage subscribed mods — enable/disable the symlinks,
@@ -24,6 +33,8 @@ export class MyModsPanel {
     subs: SubscriptionService,
     ledger: JsonLedgerStore,
     market: MarketplacePort,
+    launcher: ProcessLauncher,
+    roots: InstallRootsPort,
   ): void {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
     if (MyModsPanel.current) {
@@ -36,7 +47,7 @@ export class MyModsPanel {
       retainContextWhenHidden: true,
       localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
     });
-    MyModsPanel.current = new MyModsPanel(panel, context, subs, ledger, market);
+    MyModsPanel.current = new MyModsPanel(panel, context, subs, ledger, market, launcher, roots);
   }
 
   private constructor(
@@ -45,26 +56,57 @@ export class MyModsPanel {
     private readonly subs: SubscriptionService,
     private readonly ledger: JsonLedgerStore,
     private readonly market: MarketplacePort,
+    private readonly launcher: ProcessLauncher,
+    private readonly roots: InstallRootsPort,
   ) {
     this.panel = panel;
     this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+    // A tracked entrypoint that exits/errors on its own refreshes the list so the
+    // Launch/Stop state stays truthful without the user hitting Refresh.
+    this.launcher.setOnChange(() => void this.pushInit());
     void this.pushInit();
+  }
+
+  private installRoots(): InstallRoots {
+    return { savedGames: this.roots.savedGames(), gameInstall: this.roots.gameInstall() || "" };
   }
 
   private async pushInit(): Promise<void> {
     this.ledger.ensureUninstallBat(); // keep the script present so Reveal/Run always work
+    // Each mod carries its launch DTO plus the same install-manifest breakdown
+    // the product page shows, derived from the ledger snapshot (dests shown as
+    // declared tokens — My Mods does not resolve them). Read defensively so
+    // ledgers written before bundles/symlinks existed still render.
+    const mods = (await this.subs.list()).map((s) => ({
+      ...toModDto(s),
+      manifest: deriveInstallManifestView({
+        bundles: s.bundles ?? [],
+        symlinks: (s.symlinks ?? []).map((x) => ({ source: x.source, dest: x.dest, resolved: null })),
+        entrypoints: s.entrypoints ?? [],
+        missionScripts: s.missionScripts ?? [],
+      }),
+    }));
+    // Running state keyed exactly as the webview looks it up (`<repo>::<id>`),
+    // translated here to the launcher's (lowercased) tracking keys.
+    const running: Record<string, boolean> = {};
+    for (const m of mods) {
+      for (const ep of m.entrypoints) {
+        running[`${m.repo}::${ep.id}`] = this.launcher.isRunning(entrypointRunKey(m.repo, ep.id));
+      }
+    }
     this.post({
       type: "init",
       dataDir: dataDir(),
       uninstallBat: this.ledger.uninstallBatPath(),
-      mods: (await this.subs.list()).map(toModDto),
+      mods,
+      running,
     });
   }
 
-  private async onMessage(msg: { type: string; repo?: string; url?: string }): Promise<void> {
+  private async onMessage(msg: { type: string; repo?: string; url?: string; id?: string; page?: string }): Promise<void> {
     const repo = msg.repo;
     switch (msg.type) {
       case "refresh":
@@ -74,10 +116,22 @@ export class MyModsPanel {
         if (repo) await this.act(repo, () => this.subs.enable(repo), "Enabled");
         break;
       case "disable":
-        if (repo) await this.act(repo, () => this.subs.disable(repo), "Disabled");
+        if (repo) {
+          await this.stopRepoEntrypoints(repo); // stop running exes before unlinking
+          await this.act(repo, () => this.subs.disable(repo), "Disabled");
+        }
         break;
       case "uninstall":
-        if (repo) await this.act(repo, () => this.subs.unsubscribe(repo), "Uninstalled");
+        if (repo) {
+          await this.stopRepoEntrypoints(repo);
+          await this.act(repo, () => this.subs.unsubscribe(repo), "Uninstalled");
+        }
+        break;
+      case "launch":
+        if (repo && msg.id) await this.launchEntrypoint(repo, msg.id);
+        break;
+      case "stop":
+        if (repo && msg.id) this.stopEntrypoint(repo, msg.id);
         break;
       case "update":
         if (repo) await this.runUpdate(repo);
@@ -90,6 +144,9 @@ export class MyModsPanel {
         break;
       case "openExternal":
         if (msg.url) void vscode.env.openExternal(vscode.Uri.parse(msg.url));
+        break;
+      case "openDocs":
+        void vscode.commands.executeCommand("dcs.docs.open", msg.page ?? "sandbox");
         break;
       case "createShortcut":
         void vscode.commands.executeCommand("dcs.mymods.createShortcut");
@@ -149,11 +206,58 @@ export class MyModsPanel {
     }
   }
 
+  /**
+   * Launch a mod entrypoint as a tracked process. First launch of a given
+   * mod+entrypoint prompts a modal confirm naming the exe; "Always allow for
+   * this mod" persists consent in globalState. Declining does not launch. Errors
+   * (missing exe, spawn failure) surface both as a notification and inline.
+   */
+  private async launchEntrypoint(repo: string, id: string): Promise<void> {
+    const sub = (await this.subs.list()).find((s) => s.repo === repo);
+    const ep = sub?.entrypoints?.find((e) => e.id === id);
+    if (!sub || !ep) return;
+    const plan = resolveEntrypointLaunch(ep, sub.dir, this.installRoots());
+
+    const consentKey = entrypointConsentKey(repo, id);
+    if (!this.context.globalState.get<boolean>(consentKey)) {
+      const choice = await vscode.window.showWarningMessage(
+        `Launch "${ep.name}" from ${repo}?`,
+        { modal: true, detail: `This runs a mod-shipped executable:\n${plan.exe}` },
+        "Launch",
+        "Always allow for this mod",
+      );
+      if (!choice) return; // declined — do not launch
+      if (choice === "Always allow for this mod") await this.context.globalState.update(consentKey, true);
+    }
+
+    try {
+      this.launcher.launch(entrypointRunKey(repo, id), plan);
+      this.post({ type: "entrypoint", repo, id, running: true });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      void showError(`Launch failed: ${message}`, e);
+      this.post({ type: "entrypoint", repo, id, running: false, error: message });
+    }
+  }
+
+  /** Stop a single tracked entrypoint (kills its process tree). */
+  private stopEntrypoint(repo: string, id: string): void {
+    this.launcher.stop(entrypointRunKey(repo, id));
+    this.post({ type: "entrypoint", repo, id, running: false });
+  }
+
+  /** Stop every declared entrypoint of a mod (used before disable/uninstall). */
+  private async stopRepoEntrypoints(repo: string): Promise<void> {
+    const sub = (await this.subs.list()).find((s) => s.repo === repo);
+    for (const ep of sub?.entrypoints ?? []) this.launcher.stop(entrypointRunKey(repo, ep.id));
+  }
+
   private post(msg: unknown): void {
     void this.panel.webview.postMessage(msg);
   }
   private dispose(): void {
     MyModsPanel.current = undefined;
+    this.launcher.setOnChange(() => {}); // stop refreshing a disposed panel
     this.panel.dispose();
     while (this.disposables.length) this.disposables.pop()?.dispose();
   }

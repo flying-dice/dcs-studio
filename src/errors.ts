@@ -6,7 +6,7 @@ import * as os from "os";
 // versions). The target repo comes from package.json's `bugs.url`.
 
 const REPORT_ACTION = "Report Issue";
-const EXTENSION_ID = "dcs-studio.dcs-studio";
+const EXTENSION_ID = "flying-dice.dcs-studio";
 // GitHub caps GET URLs around 8k; keep the whole body comfortably under it.
 const MAX_STACK_CHARS = 1500;
 

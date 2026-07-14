@@ -2,10 +2,10 @@
   "name": "dcs-studio",
   "displayName": "DCS Studio",
   "description": "DCS World mod tooling for VS Code — Marketplace, DCS link, injection & launch, guided publish.",
-  "version": "0.13.0",
-  "publisher": "dcs-studio",
-  "private": true,
-  "license": "UNLICENSED",
+  "version": "0.14.0",
+  "publisher": "flying-dice",
+  
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/flying-dice/dcs-studio.git"
@@ -233,10 +233,28 @@
         "icon": "$(discard)"
       },
       {
+        "command": "dcs.mission.hooks.install",
+        "title": "Install mod mission-script hooks in MissionScripting.lua",
+        "category": "DCS Studio",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "dcs.mission.hooks.remove",
+        "title": "Remove mod mission-script hooks from MissionScripting.lua",
+        "category": "DCS Studio",
+        "icon": "$(debug-disconnect)"
+      },
+      {
         "command": "dcs.bridge.console",
         "title": "Open Lua Console",
         "category": "DCS Studio",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "dcs.log.open",
+        "title": "Open DCS Log Viewer",
+        "category": "DCS Studio",
+        "icon": "$(output)"
       },
       {
         "command": "dcs.bridge.inject",
@@ -335,6 +353,16 @@
           "command": "dcs.mission.restore",
           "when": "resourceFilename == MissionScripting.lua",
           "group": "1_dcs@1"
+        },
+        {
+          "command": "dcs.mission.hooks.install",
+          "when": "resourceFilename == MissionScripting.lua",
+          "group": "1_dcs@2"
+        },
+        {
+          "command": "dcs.mission.hooks.remove",
+          "when": "resourceFilename == MissionScripting.lua",
+          "group": "1_dcs@3"
         }
       ]
     },
@@ -375,6 +403,13 @@
           "type": "number",
           "default": 25570,
           "markdownDescription": "Port of the **mission bridge** JSON-RPC server (`dcs_studio_mission.dll`, mission scripting state; only up while a mission runs). Must match the port the injected DLL binds — change only if 25570 clashes."
+        },
+        "dcsStudio.explorerWildcardDepth": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "maximum": 5,
+          "markdownDescription": "How many tree levels a `**` segment costs when the **Lua Console Explorer** sweeps a path pattern (e.g. `_G/**/Units`). Higher values let a sweep descend further under a `**`, at the cost of more fetches against the 200-fetch budget."
         }
       }
     }
@@ -385,9 +420,14 @@
     "watch": "tsc -watch -p ./",
     "dev": "node scripts/dev.mjs",
     "test": "vitest run",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "preview": "node scripts/serve.mjs 4173",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.125.0",
     "@vitest/coverage-v8": "^4.1.10",

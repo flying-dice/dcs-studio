@@ -8,9 +8,9 @@ import type { ProductDetail } from "../../src/core/domain/types";
 export function productInvariants(p: ProductDetail): void {
   // The download size is exactly the sum of the advertised assets.
   expect(p.download_size).toBe(p.assets.reduce((s, a) => s + a.size, 0));
-  // Installability requires a manifest asset in the release and a non-library repo.
+  // Installability requires a manifest asset in the release.
   const hasManifest = p.assets.some((a) => a.name === "dcs-studio.toml");
-  expect(p.installable).toBe(hasManifest && !p.is_library);
+  expect(p.installable).toBe(hasManifest);
   // A product without a release cannot be installable.
   if (p.release_tag === null) expect(p.installable).toBe(false);
 }

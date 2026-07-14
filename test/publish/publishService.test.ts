@@ -167,12 +167,14 @@ class FakeManifest implements ManifestPort {
   }
 }
 
-function model(install: { source: string; dest: string }[] = []): ManifestModel {
+function model(bundle: { path: string }[] = []): ManifestModel {
   return {
     project: { name: "My Mod", version: "1.0.0", author: "me", description: "d" },
-    install,
-    dependencies: [],
+    bundle,
+    symlink: [],
     requires_module: [],
+    entrypoint: [],
+    mission_script: [],
     extras: [],
   };
 }
@@ -208,7 +210,7 @@ describe("PublishService.share", () => {
   it("rejects when gh is not signed in, before touching git", async () => {
     const r = rig();
     r.gh.loginValue = null;
-    await expect(r.service.share(ROOT, { name: "mod", description: "", isLibrary: false }, r.log)).rejects.toThrow(
+    await expect(r.service.share(ROOT, { name: "mod", description: "" }, r.log)).rejects.toThrow(
       "Not signed in to gh — run `gh auth login`.",
     );
     expect(r.git.calls).toEqual([]);
@@ -217,7 +219,7 @@ describe("PublishService.share", () => {
   it("fresh folder: inits the repo, writes .gitignore, commits, creates + tags the repo", async () => {
     const r = rig();
     r.git.repo = false;
-    const res = await r.service.share(ROOT, { name: "my-mod", description: "A mod", isLibrary: false }, r.log);
+    const res = await r.service.share(ROOT, { name: "my-mod", description: "A mod" }, r.log);
 
     expect(r.git.calls).toEqual([
       ["isRepo", ROOT],
@@ -255,7 +257,7 @@ describe("PublishService.share", () => {
     const r = rig();
     r.git.changes = false;
     r.fs.files.set(gitignorePath, "out/\n.dcs-studio/\n");
-    await r.service.share(ROOT, { name: "mod", description: "", isLibrary: false }, r.log);
+    await r.service.share(ROOT, { name: "mod", description: "" }, r.log);
 
     expect(r.git.calls).toEqual([
       ["isRepo", ROOT],
@@ -270,14 +272,14 @@ describe("PublishService.share", () => {
   it("appends the ignore entry to an existing .gitignore missing a trailing newline", async () => {
     const r = rig();
     r.fs.files.set(gitignorePath, "out/");
-    await r.service.share(ROOT, { name: "mod", description: "", isLibrary: false }, r.log);
+    await r.service.share(ROOT, { name: "mod", description: "" }, r.log);
     expect(r.fs.files.get(gitignorePath)).toBe("out/\n.dcs-studio/\n");
   });
 
   it("repo already exists on GitHub: wires the remote and pushes instead", async () => {
     const r = rig();
     r.gh.repoCreateResult = { created: false, alreadyExists: true };
-    const res = await r.service.share(ROOT, { name: "mod", description: "", isLibrary: false }, r.log);
+    const res = await r.service.share(ROOT, { name: "mod", description: "" }, r.log);
 
     expect(r.git.calls).toEqual(
       expect.arrayContaining([
@@ -294,21 +296,11 @@ describe("PublishService.share", () => {
     r.gh.repoCreate = async () => {
       throw new Error("gh repo create: boom");
     };
-    await expect(r.service.share(ROOT, { name: "mod", description: "", isLibrary: false }, r.log)).rejects.toThrow(
+    await expect(r.service.share(ROOT, { name: "mod", description: "" }, r.log)).rejects.toThrow(
       "gh repo create: boom",
     );
   });
 
-  it("tags a library with both discovery topics, in order", async () => {
-    const r = rig();
-    await r.service.share(ROOT, { name: "lib", description: "", isLibrary: true }, r.log);
-    expect(r.gh.calls.filter((c) => c[0] === "repoTopicAdd")).toEqual([
-      ["repoTopicAdd", "octocat/lib", "dcs-studio"],
-      ["repoTopicAdd", "octocat/lib", "dcs-studio-library"],
-    ]);
-    expect(r.logs).toContain("Tagging topic: dcs-studio");
-    expect(r.logs).toContain("Tagging topic: dcs-studio-library");
-  });
 });
 
 // ── cutRelease ───────────────────────────────────────────────────────────────
@@ -319,11 +311,11 @@ const manifestAsset = path.join(outDir, "dcs-studio.toml");
 const releaseOpts = { owner: "octocat", name: "mod", tag: "v1.0.0", notes: "" };
 
 /** A rig whose manifest + files are set up for a successful release. */
-function releaseRig(install: { source: string; dest: string }[] = []) {
+function releaseRig(bundle: { path: string }[] = []) {
   const r = rig();
   r.fs.files.set(manifestPath, "[project]");
-  r.manifest.model = model(install);
-  for (const rule of install) r.fs.files.set(path.join(ROOT, rule.source), "built");
+  r.manifest.model = model(bundle);
+  for (const b of bundle) r.fs.files.set(path.join(ROOT, b.path), "built");
   r.archive.packaged = {
     volumes: [path.join(outDir, "dcs-studio-mod-v1.0.0.7z")],
     totalBytes: 2048,
@@ -351,20 +343,26 @@ describe("PublishService.cutRelease", () => {
     await expect(r.service.cutRelease(ROOT, releaseOpts, r.log)).rejects.toThrow("7z not found.");
   });
 
-  it("rejects when an install source has not been built", async () => {
-    const r = releaseRig([{ source: "out/built", dest: "d" }]);
-    r.manifest.model = model([
-      { source: "out/built", dest: "d" },
-      { source: "out/missing", dest: "d" },
-    ]);
+  it("rejects when a bundle path has not been built", async () => {
+    const r = releaseRig([{ path: "out/built" }]);
+    r.manifest.model = model([{ path: "out/built" }, { path: "out/missing" }]);
     await expect(r.service.cutRelease(ROOT, releaseOpts, r.log)).rejects.toThrow(
-      "Install source missing: out/missing — build the project first.",
+      "Bundle path missing: out/missing — build the project first.",
     );
     expect(r.archive.calls.filter((c) => c[0] === "packagePayload")).toEqual([]);
   });
 
+  it("dedupes repeated bundle paths in the archive file list", async () => {
+    const r = releaseRig([{ path: "out/mod" }]);
+    // A model carrying the same path twice must produce one archive entry.
+    r.manifest.model = model([{ path: "out/mod" }, { path: "out/mod" }]);
+    await r.service.cutRelease(ROOT, releaseOpts, r.log);
+    const pack = r.archive.calls.find((c) => c[0] === "packagePayload");
+    expect(pack?.[2]).toEqual(["dcs-studio.toml", "out/mod"]);
+  });
+
   it("small payload: packages a single volume and releases manifest + volume", async () => {
-    const r = releaseRig([{ source: "out/mod", dest: "d" }]);
+    const r = releaseRig([{ path: "out/mod" }]);
     const res = await r.service.cutRelease(ROOT, { ...releaseOpts, notes: "hello" }, r.log);
 
     expect(r.archive.calls).toEqual([
@@ -400,7 +398,7 @@ describe("PublishService.cutRelease", () => {
   });
 
   it("oversized payload: splits into volumes via the archive policy and uploads them all", async () => {
-    const r = releaseRig([{ source: "out/mod", dest: "d" }]);
+    const r = releaseRig([{ path: "out/mod" }]);
     r.archive.packaged = {
       volumes: [path.join(outDir, "a.7z.001"), path.join(outDir, "a.7z.002")],
       totalBytes: 3 * 1024 * 1024 * 1024,
@@ -436,7 +434,7 @@ describe("PublishService.cutRelease", () => {
     expect(order.indexOf("releaseDelete")).toBeLessThan(order.indexOf("releaseCreate"));
   });
 
-  it("ships only the manifest when there are no install rules", async () => {
+  it("ships only the manifest when there are no bundle paths", async () => {
     const r = releaseRig();
     await r.service.cutRelease(ROOT, releaseOpts, r.log);
     const pack = r.archive.calls.find((c) => c[0] === "packagePayload");

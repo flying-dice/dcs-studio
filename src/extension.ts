@@ -6,15 +6,20 @@ import {
   desanitizeMission,
   sanitizeMission,
   restoreMission,
+  installMissionHooks,
+  removeMissionHooks,
 } from "./mission/missionPanel";
 import { BridgeClient } from "./bridge/client";
 import { BridgeClients } from "./bridge/clients";
 import {
   GUI_BRIDGE_PORT,
   MISSION_BRIDGE_PORT,
+  OFFLINE_DISPATCH_OPTIONS,
+  statusBarClickAction,
   statusBarView,
 } from "./core/domain/bridgeProtocol";
 import { ConsolePanel } from "./bridge/consolePanel";
+import { LogPanel } from "./log/logPanel";
 import { injectCommand, ejectCommand } from "./bridge/deploy";
 import { launchDcs, launchCleanup } from "./bridge/launch";
 import { buildBridge } from "./bridge/build";
@@ -48,6 +53,7 @@ import { SevenZipArchive } from "./adapters/node/sevenZip";
 import { FetchDownloader } from "./adapters/node/downloader";
 import { Linker } from "./adapters/node/linker";
 import { JsonLedgerStore } from "./adapters/node/jsonLedgerStore";
+import { ProcessLauncher } from "./adapters/node/processLauncher";
 import { GitCli } from "./adapters/node/git";
 import { GhCli } from "./adapters/node/gh";
 import { RegExeRegistry } from "./adapters/node/registry";
@@ -135,13 +141,18 @@ export function activate(context: vscode.ExtensionContext): void {
   const archive = new SevenZipArchive();
   const manifestPort = new VsCodeManifestPort(context);
   const ledger = new JsonLedgerStore(dataDir);
+  const installRoots = new VsCodeInstallRoots();
+  // Tracks mod entrypoint processes launched from My Mods. A single shared
+  // instance so running state survives closing/reopening the panel. On IDE exit
+  // its children are deliberately left running (see deactivate()).
+  const launcher = new ProcessLauncher();
   const subscriptions = new SubscriptionService({
     ledger,
     archive,
     downloader: new FetchDownloader(),
     linker: new Linker(),
     manifest: manifestPort,
-    roots: new VsCodeInstallRoots(),
+    roots: installRoots,
     fs: fsPort,
     clock: new SystemClock(),
   });
@@ -172,7 +183,7 @@ export function activate(context: vscode.ExtensionContext): void {
       MarketplacePanel.show(context, subscriptions, marketplace);
     }),
     vscode.commands.registerCommand("dcs.mymods.open", () =>
-      MyModsPanel.show(context, subscriptions, ledger, marketplace),
+      MyModsPanel.show(context, subscriptions, ledger, marketplace, launcher, installRoots),
     ),
     vscode.commands.registerCommand("dcs.docs.open", (page?: string) => DocsPanel.show(context, page)),
     vscode.commands.registerCommand("dcs.skills.open", () => SkillsPanel.show(context, skills)),
@@ -186,6 +197,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("dcs.mission.desanitize", () => void desanitizeMission(missionSanitize)),
     vscode.commands.registerCommand("dcs.mission.sanitize", () => void sanitizeMission(missionSanitize)),
     vscode.commands.registerCommand("dcs.mission.restore", () => void restoreMission(missionSanitize)),
+    vscode.commands.registerCommand("dcs.mission.hooks.install", () => void installMissionHooks(missionSanitize)),
+    vscode.commands.registerCommand("dcs.mission.hooks.remove", () => void removeMissionHooks(missionSanitize)),
   );
 
   // A storefront entry point that's always visible, mirroring the real app's
@@ -198,10 +211,13 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(status);
 
   // ── Bridges: live in-sim links + Lua console (clients created above) ──
-  // A status item reflecting both bridges; click opens the console. The
-  // rendering rule is pure (statusBarView) and covered by domain tests.
+  // A status item reflecting both bridges; click routes through a dispatcher
+  // (dcs.bridge.statusBarClick below): online it opens the console directly,
+  // offline it offers Launch DCS alongside Console/Inject. The rendering rule
+  // (statusBarView) and the click decision (statusBarClickAction) are pure and
+  // covered by domain tests.
   const bridgeStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
-  bridgeStatus.command = "dcs.bridge.console";
+  bridgeStatus.command = "dcs.bridge.statusBarClick";
   context.subscriptions.push(
     bridgeStatus,
     clients.onStatus((s) => {
@@ -216,6 +232,20 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("dcs.setup.open", () => SetupPanel.show(context, detect)),
     vscode.commands.registerCommand("dcs.bridge.console", () => ConsolePanel.show(context, clients)),
+    vscode.commands.registerCommand("dcs.log.open", () => LogPanel.show(context, manifestPort)),
+    // The status bar item's click handler: not palette-contributed, it's only
+    // reachable by clicking "DCS: offline"/"at menu"/"mission" in the footer.
+    vscode.commands.registerCommand("dcs.bridge.statusBarClick", async () => {
+      if (statusBarClickAction(clients.current) === "openConsole") {
+        ConsolePanel.show(context, clients);
+        return;
+      }
+      const picked = await vscode.window.showQuickPick(
+        OFFLINE_DISPATCH_OPTIONS.map((o) => ({ label: o.label, description: o.description, command: o.command })),
+        { title: "DCS Bridge Offline", placeHolder: "Neither bridge is reachable — choose an action" },
+      );
+      if (picked) void vscode.commands.executeCommand(picked.command);
+    }),
     vscode.commands.registerCommand("dcs.bridge.inject", () => injectCommand(context)),
     vscode.commands.registerCommand("dcs.bridge.eject", () => ejectCommand()),
     vscode.commands.registerCommand("dcs.bridge.launch", async () => {
@@ -240,7 +270,7 @@ export function activate(context: vscode.ExtensionContext): void {
       handleUri: (uri) => {
         if (uri.path !== MYMODS_URI_PATH) return;
         if (!vscode.workspace.workspaceFolders?.length) {
-          MyModsPanel.show(context, subscriptions, ledger, marketplace);
+          MyModsPanel.show(context, subscriptions, ledger, marketplace, launcher, installRoots);
           return;
         }
         void context.globalState.update(PENDING_MYMODS_KEY, Date.now()).then(() => {
@@ -257,7 +287,7 @@ export function activate(context: vscode.ExtensionContext): void {
   if (pendingMods) {
     void context.globalState.update(PENDING_MYMODS_KEY, undefined);
     if (Date.now() - pendingMods < 30_000 && !vscode.workspace.workspaceFolders?.length) {
-      MyModsPanel.show(context, subscriptions, ledger, marketplace);
+      MyModsPanel.show(context, subscriptions, ledger, marketplace, launcher, installRoots);
     }
   }
 
@@ -344,4 +374,8 @@ export function deactivate(): void {
   bridge?.dispose();
   // Best-effort cleanup: eject the bridge if DCS isn't holding the DLL.
   launchCleanup();
+  // Mod entrypoint processes (ProcessLauncher) are deliberately LEFT RUNNING on
+  // IDE exit — matching the DCS launcher's policy of not killing DCS when the
+  // extension shuts down. The tracking map simply goes away with the process; a
+  // companion app like SRS keeps running until the user stops it themselves.
 }

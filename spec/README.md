@@ -74,7 +74,7 @@ Feature: DCS Studio extension
 | [009](stories/009-create-project-from-template.story.md) | Create a Mod Project from a Template |
 | [010](stories/010-author-manifest.story.md) | Author the Manifest with the Two-Way Form |
 | [011](stories/011-share-mod-to-github.story.md) | Publish: Preflight & Share to GitHub |
-| [012](stories/012-cut-release.story.md) | Publish: Package & Cut a Release |
+| [012](stories/012-create-release.story.md) | Publish: Package & Create a Release |
 
 ### Epic 4 — Prepare the sim
 | Story | Title |
@@ -93,6 +93,7 @@ Feature: DCS Studio extension
 | [020](stories/020-debug-lua-breakpoints.story.md) | Debug Lua inside DCS: Breakpoints & Stepping |
 | [021](stories/021-debug-inspect-state.story.md) | Debug Lua inside DCS: Inspect & Modify State |
 | [022](stories/022-debug-resilience.story.md) | Debug Lua inside DCS: Errors & Sim Safety |
+| [024](stories/024-tail-dcs-log.story.md) | Tail dcs.log (DCS Log Viewer) |
 
 ### Epic 6 — AI-assisted development
 | Story | Title |
@@ -109,7 +110,7 @@ Feature: DCS Studio extension
 
 | Term | Meaning |
 | --- | --- |
-| **Manifest** | `dcs-studio.toml` — project metadata, `[[install]]` rules, `[[dependencies]]`, `[[requires_module]]` |
+| **Manifest** | `dcs-studio.toml` — project metadata, `[[bundle]]`/`[[symlink]]` rules, `[[requires_module]]` |
 | **Named roots** | `{SavedGames}` and `{GameInstall}` — the two anchor points install destinations resolve against |
 | **Subscribe / enable** | Download+unpack into the data dir / link the unpacked files into DCS (junction, hard link or symlink) |
 | **Bridge** | The in-DCS JSON-RPC servers: `dcs_studio_gui.dll` (GameGUI hook state, port 25569) + `dcs_studio_mission.dll` (mission scripting state, port 25570, booted by the hook at mission start), installed with the `DcsStudio.lua` hook |

@@ -3,7 +3,7 @@
 (function () {
   const vscode = acquireVsCodeApi();
   const app = document.getElementById("app");
-  const state = { dataDir: "", uninstallBat: "", mods: [], busy: {}, progress: {} };
+  const state = { dataDir: "", uninstallBat: "", mods: [], busy: {}, progress: {}, running: {}, epError: {} };
 
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -17,32 +17,141 @@
     gh: `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.4 9.4 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.35 4.8-4.58 5.05.36.32.68.94.68 1.9 0 2.10-.02 2.32-.02 2.64 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>`,
     refresh: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>`,
     desktop: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`,
+    dot: `<svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="6"/></svg>`,
+    warn: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>`,
+    box: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5V8Z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg>`,
+    link: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg>`,
+    term: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>`,
+    script: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>`,
   };
+
+  const RISK_LABEL = {
+    "links-files": "links files",
+    "runs-executable": "runs executable",
+    "pre-sanitize-script": "pre-sanitize script",
+  };
+  const RISK_WARN = { "runs-executable": true, "pre-sanitize-script": true };
+
+  // ── Install-manifest breakdown (issue #12) — the same transparency the product
+  // page shows, for already-installed mods, driven from the ledger snapshot. ──
+  function riskBadges(view) {
+    if (!view || !view.known || !view.risks.length) return "";
+    return `<div class="mm-risks" data-testid="mod-risks">${view.risks
+      .map(
+        (r) =>
+          `<span class="mm-risk${RISK_WARN[r] ? " warn" : ""}" data-testid="mod-risk-badge" data-risk="${esc(r)}">${
+            RISK_WARN[r] ? ICO.warn : ""
+          }${esc(RISK_LABEL[r] || r)}</span>`,
+      )
+      .join("")}</div>`;
+  }
+
+  function sanitizeNotice(count) {
+    const n = count === 1 ? "1 script that runs" : count + " scripts that run";
+    return `<div class="mm-alert" data-testid="mod-sanitize-notice">
+      <div class="mm-alert-head">${ICO.warn} Script Execution Notice</div>
+      <div>This mod includes ${esc(n)} <strong>before</strong> DCS World's scripting sandbox is applied, with full os/io/lfs/require access. Ensure you trust the source.</div>
+      <button class="mm-link" data-testid="mod-sanitize-learn-more" data-docs="sandbox">Learn more about script sanitization</button>
+    </div>`;
+  }
+
+  function manifestBlock(m) {
+    const v = m.manifest;
+    if (!v || !v.known) return "";
+    const c = v.counts;
+    if (!c.bundles && !c.symlinks && !c.entrypoints && !c.missionScripts) return "";
+    const rows = [];
+    rows.push(riskBadges(v));
+    if (c.beforeSanitize) rows.push(sanitizeNotice(c.beforeSanitize));
+    if (v.symlinks.length)
+      rows.push(
+        `<div class="mm-sec" data-testid="mod-symlinks"><div class="mm-sec-h">${ICO.link} Symlinks <span class="mm-count">${c.symlinks}</span></div>` +
+          v.symlinks
+            .map((s) => `<div class="mm-item" data-testid="mod-symlink"><span class="mono">${esc(s.source)}</span> &rarr; <span class="mono">${esc(s.resolved || s.dest)}</span></div>`)
+            .join("") +
+          `</div>`,
+      );
+    if (v.entrypoints.length)
+      rows.push(
+        `<div class="mm-sec warn" data-testid="mod-executables"><div class="mm-sec-h warn">${ICO.warn} Executables <span class="mm-count warn">${c.entrypoints}</span></div>` +
+          v.entrypoints
+            .map((e) => `<div class="mm-item" data-testid="mod-executable">${ICO.term} <strong>${esc(e.name)}</strong> <span class="mono">${esc(e.exe)}</span></div>`)
+            .join("") +
+          `</div>`,
+      );
+    if (v.missionScripts.length)
+      rows.push(
+        `<div class="mm-sec${c.beforeSanitize ? " warn" : ""}" data-testid="mod-mission-scripts"><div class="mm-sec-h${c.beforeSanitize ? " warn" : ""}">${ICO.script} Mission scripts <span class="mm-count">${c.missionScripts}</span>${
+          c.beforeSanitize ? ` <span class="mm-count warn" data-testid="mod-before-sanitize-badge">${c.beforeSanitize} before-sanitize</span>` : ""
+        }</div>` +
+          v.missionScripts
+            .map(
+              (s) =>
+                `<div class="mm-item${s.beforeSanitize ? " warn" : ""}" data-testid="mod-mission-script" data-run="${esc(s.run_on)}">${ICO.script} <strong>${esc(s.name)}</strong>${
+                  s.beforeSanitize ? ` <span class="mm-badge warn">before-sanitize</span>` : ""
+                } <span class="mono">${esc(s.path)}</span></div>`,
+            )
+            .join("") +
+          `</div>`,
+      );
+    return `<div class="mm-manifest" data-testid="mod-manifest" data-repo="${esc(m.repo)}">${rows.join("")}</div>`;
+  }
+
+  // One entrypoint row (Launch/Stop + running state + inline error). Only shown
+  // under enabled mods that declare [[entrypoint]] blocks.
+  function epRow(m, ep) {
+    const key = m.repo + "::" + ep.id;
+    const running = !!state.running[key];
+    const err = state.epError[key];
+    return `
+      <div class="ep-row" data-testid="entrypoint-row" data-ep="${esc(key)}">
+        <div class="ep-info">
+          <span class="ep-name">${esc(ep.name || ep.id)}</span>
+          <span class="ep-exe mono">${esc(ep.exe)}</span>
+          ${err ? `<span class="ep-error" data-testid="entrypoint-error">${esc(err)}</span>` : ""}
+        </div>
+        <div class="ep-actions">
+          ${running
+            ? `<span class="ep-state" data-testid="entrypoint-running">${ICO.dot} Running</span><button class="btn secondary" data-stop="${esc(m.repo)}" data-id="${esc(ep.id)}" data-testid="stop-btn">Stop</button>`
+            : `<button class="btn" data-launch="${esc(m.repo)}" data-id="${esc(ep.id)}" data-testid="launch-btn">Launch</button>`}
+        </div>
+      </div>`;
+  }
+
+  function entrypointsBlock(m) {
+    const eps = m.entrypoints || [];
+    if (!m.enabled || !eps.length) return "";
+    return `<div class="entrypoints" data-testid="entrypoints" data-repo="${esc(m.repo)}">${eps.map((ep) => epRow(m, ep)).join("")}</div>`;
+  }
 
   function modRow(m) {
     const busy = state.busy[m.repo];
     const prog = state.progress[m.repo];
     return `
-      <div class="mod">
-        <label class="switch" title="${m.enabled ? "Enabled — symlinked into DCS" : "Disabled — unpacked but not linked"}">
-          <input type="checkbox" data-toggle="${esc(m.repo)}" ${m.enabled ? "checked" : ""} ${busy ? "disabled" : ""} />
-          <span class="slider"></span>
-        </label>
-        <div class="info">
-          <div class="name">${esc(m.name)}</div>
-          <div class="meta">
-            <span>${esc(m.repo)}</span>
-            <span>${esc(m.tag)}</span>
-            <span class="pill ${m.enabled ? "on" : "off"}">${m.enabled ? m.links + " link" + (m.links === 1 ? "" : "s") : "disabled"}</span>
-            ${prog ? `<span class="progress"><span class="spin">${ICO.refresh}</span> ${esc(prog)}</span>` : ""}
+      <div class="mod-wrap">
+        <div class="mod">
+          <label class="switch" title="${m.enabled ? "Enabled — symlinked into DCS" : "Disabled — unpacked but not linked"}">
+            <input type="checkbox" data-toggle="${esc(m.repo)}" ${m.enabled ? "checked" : ""} ${busy ? "disabled" : ""} />
+            <span class="slider"></span>
+          </label>
+          <div class="info">
+            <div class="name">${esc(m.name)}</div>
+            <div class="meta">
+              <span>${esc(m.repo)}</span>
+              <span>${esc(m.tag)}</span>
+              <span class="pill ${m.enabled ? "on" : "off"}">${m.enabled ? m.links + " link" + (m.links === 1 ? "" : "s") : "disabled"}</span>
+              ${prog ? `<span class="progress"><span class="spin">${ICO.refresh}</span> ${esc(prog)}</span>` : ""}
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn secondary" data-update="${esc(m.repo)}" ${busy ? "disabled" : ""} title="Check for and install a newer release">${ICO.update} Update</button>
+            <button class="btn secondary icon-btn" data-dir="${esc(m.repo)}" title="Open the unpacked folder">${ICO.folder}</button>
+            <button class="btn secondary icon-btn" data-gh="${esc(m.repo)}" title="View on GitHub">${ICO.gh}</button>
+            <button class="btn secondary icon-btn danger" data-uninstall="${esc(m.repo)}" ${busy ? "disabled" : ""} title="Uninstall (remove links + unpacked files)">${ICO.trash}</button>
           </div>
         </div>
-        <div class="actions">
-          <button class="btn secondary" data-update="${esc(m.repo)}" ${busy ? "disabled" : ""} title="Check for and install a newer release">${ICO.update} Update</button>
-          <button class="btn secondary icon-btn" data-dir="${esc(m.repo)}" title="Open the unpacked folder">${ICO.folder}</button>
-          <button class="btn secondary icon-btn" data-gh="${esc(m.repo)}" title="View on GitHub">${ICO.gh}</button>
-          <button class="btn secondary icon-btn danger" data-uninstall="${esc(m.repo)}" ${busy ? "disabled" : ""} title="Uninstall (remove links + unpacked files)">${ICO.trash}</button>
-        </div>
+        ${entrypointsBlock(m)}
+        ${manifestBlock(m)}
       </div>`;
   }
 
@@ -85,14 +194,29 @@
     document.querySelectorAll("[data-uninstall]").forEach((el) => el.addEventListener("click", () => { state.busy[el.dataset.uninstall] = true; post({ type: "uninstall", repo: el.dataset.uninstall }); }));
     document.querySelectorAll("[data-dir]").forEach((el) => el.addEventListener("click", () => post({ type: "openDir", repo: el.dataset.dir })));
     document.querySelectorAll("[data-gh]").forEach((el) => el.addEventListener("click", () => post({ type: "openExternal", url: "https://github.com/" + el.dataset.gh })));
+    document.querySelectorAll("[data-launch]").forEach((el) =>
+      el.addEventListener("click", () => post({ type: "launch", repo: el.dataset.launch, id: el.dataset.id })),
+    );
+    document.querySelectorAll("[data-stop]").forEach((el) =>
+      el.addEventListener("click", () => post({ type: "stop", repo: el.dataset.stop, id: el.dataset.id })),
+    );
+    document.querySelectorAll("[data-docs]").forEach((el) =>
+      el.addEventListener("click", () => post({ type: "openDocs", page: el.dataset.docs })),
+    );
   }
 
   window.addEventListener("message", (e) => {
     const m = e.data;
     if (!m) return;
-    if (m.type === "init") { state.dataDir = m.dataDir; state.uninstallBat = m.uninstallBat || ""; state.mods = m.mods; state.busy = {}; state.progress = {}; render(); }
+    if (m.type === "init") { state.dataDir = m.dataDir; state.uninstallBat = m.uninstallBat || ""; state.mods = m.mods; state.busy = {}; state.progress = {}; state.running = m.running || {}; state.epError = {}; render(); }
     else if (m.type === "busy") { state.busy[m.repo] = m.busy; render(); }
     else if (m.type === "progress") { state.progress[m.repo] = m.label; render(); }
+    else if (m.type === "entrypoint") {
+      const key = m.repo + "::" + m.id;
+      state.running[key] = !!m.running;
+      if (m.error) state.epError[key] = m.error; else delete state.epError[key];
+      render();
+    }
   });
 
   post({ type: "refresh" });

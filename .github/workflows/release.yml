@@ -1,0 +1,90 @@
+name: Release extension
+
+# Ship flow (GitHub is the source of truth): bump "version" in package.json,
+# tag the commit vX.Y.Z, push the tag. This packages the .vsix (with freshly
+# built bridge DLLs staged into bridge/prebuilt/) and attaches it to a GitHub
+# Release for that tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Package & publish GitHub release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript compile
+        run: npm run compile
+
+      - name: Unit tests + coverage gate
+        run: npx vitest run --coverage
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bridge
+
+      - name: Build bridge DLLs (release)
+        run: cargo build --release --workspace
+        working-directory: bridge
+
+      - name: Stage prebuilt payload (DLLs + scaffold lua.lib)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force bridge/prebuilt | Out-Null
+          Copy-Item bridge/target/release/dcs_studio_gui.dll bridge/prebuilt/
+          Copy-Item bridge/target/release/dcs_studio_mission.dll bridge/prebuilt/
+          Copy-Item bridge/lua5.1/lua.lib bridge/prebuilt/
+
+      - name: Guard - tag matches package.json version
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $pkg = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          if ($pkg -ne $tag) { throw "package.json version ($pkg) != tag ($tag)" }
+
+      - name: Package .vsix
+        run: npx @vscode/vsce package
+
+      - name: Create GitHub release with .vsix + bridge DLLs
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # The DLLs also ship inside the vsix; attaching them (and the hook)
+        # separately lets a bridge-only deploy grab them without the extension.
+        run: >-
+          gh release create "${{ github.ref_name }}"
+          (Get-Item *.vsix).FullName
+          bridge/prebuilt/dcs_studio_gui.dll
+          bridge/prebuilt/dcs_studio_mission.dll
+          bridge/hook/DcsStudio.lua
+          --title "DCS Studio ${{ github.ref_name }}"
+          --generate-notes
+
+      # Marketplace publishing is deliberately manual: download the .vsix from
+      # the GitHub Release and drag it into
+      # https://marketplace.visualstudio.com/manage/publishers/flying-dice
+      # for the releases worth publishing.
+      - name: Upload .vsix artifact (manual runs)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dcs-studio-vsix
+          path: "*.vsix"

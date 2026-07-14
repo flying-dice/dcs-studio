@@ -51,3 +51,34 @@ export interface DestFacts {
 export function shouldMergeInto(f: DestFacts): boolean {
   return f.srcIsDir && f.destIsDir && !f.destIsSymlink;
 }
+
+/** Facts about an existing destination when deciding how to (re)link it. */
+export interface ExistingDestFacts extends DestFacts {
+  /**
+   * The existing destination is a link/hard link that already points at our
+   * source (junction/symlink resolves to it, or same inode) — i.e. a link left
+   * by a previous enable, not a foreign file.
+   */
+  ownedByUs: boolean;
+}
+
+/**
+ * How to treat an existing destination during an enable:
+ * - `merge` — a real directory to enter and link children of individually.
+ * - `enter` — a FILE source whose dest is an existing real directory: the rule
+ *   means "link the file into that folder" (the lua-hook template's
+ *   `dest = "{SavedGames}/Scripts/Hooks"` shape), so the link is created at
+ *   `dest/<basename(source)>` — where adopt/conflict then apply per file.
+ * - `adopt` — a link we already created for this source; a re-enable is
+ *   idempotent, so accept and re-track it without touching the filesystem.
+ * - `conflict` — a foreign file/dir (or a link pointing elsewhere); fail, naming
+ *   the exact destination that clashed.
+ */
+export type DestDisposition = "merge" | "enter" | "adopt" | "conflict";
+
+/** Decide how to treat an existing destination (see {@link DestDisposition}). */
+export function classifyExistingDest(f: ExistingDestFacts): DestDisposition {
+  if (shouldMergeInto(f)) return "merge";
+  if (!f.srcIsDir && f.destIsDir && !f.destIsSymlink) return "enter";
+  return f.ownedByUs ? "adopt" : "conflict";
+}

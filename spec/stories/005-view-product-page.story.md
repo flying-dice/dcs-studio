@@ -44,12 +44,6 @@ Feature: Product page
       Then the card shows "Installed", an "Uninstall" button,
         and the note "Enable/disable/update it under My Mods."
 
-    Scenario: Library
-      Given the repo carries the "dcs-studio-library" topic
-      Then the card explains
-        "A dependency-only library — used by other mods, not installed into DCS directly."
-      And no Install button is offered
-
     Scenario: Not installable
       Given the latest release ships no "dcs-studio.toml"
       Then the card warns
@@ -59,7 +53,7 @@ Feature: Product page
   Rule: The aside states the install facts
 
     Scenario: Install plan
-      Given the release manifest declares [[install]] rules
+      Given the release manifest declares [[symlink]] rules
       Then an "Install plan" card lists each rule as
         source → resolved absolute destination on this machine
 
@@ -75,9 +69,8 @@ Feature: Product page
 
 ## Design intent (not yet implemented)
 
-The preview fixtures (`src/marketplace/mockData.ts`) model two behaviours the live page does not yet render:
+The preview fixtures (`src/marketplace/mockData.ts`) model one behaviour the live page does not yet render:
 
 - **Owned/missing verdicts** on required DCS modules (green "owned" / red "missing" per module).
-- A **dependencies section** listing other Marketplace mods the manifest depends on, and an **"Add as dependency"** action on library product pages.
 
-These should be treated as intended future scope for this story.
+This should be treated as intended future scope for this story.

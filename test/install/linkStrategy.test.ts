@@ -3,6 +3,7 @@ import {
   chooseLinkStrategy,
   sameVolume,
   shouldMergeInto,
+  classifyExistingDest,
 } from "../../src/core/domain/linkStrategy";
 
 describe("sameVolume", () => {
@@ -49,5 +50,37 @@ describe("shouldMergeInto", () => {
 
   it("does not merge into a junction/symlink (lstat reports it as a symlink)", () => {
     expect(shouldMergeInto({ srcIsDir: true, destIsDir: true, destIsSymlink: true })).toBe(false);
+  });
+});
+
+describe("classifyExistingDest", () => {
+  it("merges into a real directory regardless of ownership", () => {
+    expect(
+      classifyExistingDest({ srcIsDir: true, destIsDir: true, destIsSymlink: false, ownedByUs: false }),
+    ).toBe("merge");
+  });
+
+  it("adopts a link we already created (idempotent re-enable)", () => {
+    expect(
+      classifyExistingDest({ srcIsDir: true, destIsDir: true, destIsSymlink: true, ownedByUs: true }),
+    ).toBe("adopt");
+  });
+
+  it("conflicts on a foreign destination we do not own", () => {
+    expect(
+      classifyExistingDest({ srcIsDir: false, destIsDir: false, destIsSymlink: false, ownedByUs: false }),
+    ).toBe("conflict");
+  });
+
+  it("enters an existing real directory when the source is a file (file-into-folder rule)", () => {
+    expect(
+      classifyExistingDest({ srcIsDir: false, destIsDir: true, destIsSymlink: false, ownedByUs: false }),
+    ).toBe("enter");
+  });
+
+  it("does not enter a directory that is itself a link (junction) we do not own", () => {
+    expect(
+      classifyExistingDest({ srcIsDir: false, destIsDir: true, destIsSymlink: true, ownedByUs: false }),
+    ).toBe("conflict");
   });
 });

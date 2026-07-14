@@ -249,6 +249,29 @@ describe("BridgeClient over a scripted transport", () => {
     expect(transport.last.sent.filter((s) => s.includes("repl_poll")).length).toBe(0);
   });
 
+  it("replSignature calls repl_signature with the env+ref and resolves the params", async () => {
+    open();
+    const p = client.replSignature("gui", 7);
+    const req = lastSent(transport);
+    expect(req).toMatchObject({ method: "repl_signature", params: { env: "gui", ref: 7 } });
+    transport.last.handlers.onMessage?.(
+      JSON.stringify({ id: req.id, result: { ok: true, params: "text, displayTime, clearView" } }),
+    );
+    await expect(p).resolves.toEqual({ ok: true, params: "text, displayTime, clearView" });
+  });
+
+  it("replSignature answers synchronously for the mission env (no repl_poll machinery)", async () => {
+    open();
+    const p = client.replSignature("mission", 3);
+    const req = lastSent(transport);
+    expect(req).toMatchObject({ method: "repl_signature", params: { env: "mission", ref: 3 } });
+    transport.last.handlers.onMessage?.(
+      JSON.stringify({ id: req.id, result: { ok: true, params: "", native: true } }),
+    );
+    await expect(p).resolves.toEqual({ ok: true, params: "", native: true });
+    expect(transport.last.sent.filter((s) => s.includes("repl_poll")).length).toBe(0);
+  });
+
   it("names the bridge via its label in error messages", async () => {
     const t2 = new FakeTransport();
     const mission = new BridgeClient("127.0.0.1", 25570, t2, "Mission bridge");

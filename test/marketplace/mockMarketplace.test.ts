@@ -18,14 +18,7 @@ describe("MockMarketplace.discover", () => {
       expect(typeof l.name).toBe("string");
       expect(typeof l.stars).toBe("number");
       expect(Array.isArray(l.labels)).toBe(true);
-      expect(typeof l.is_library).toBe("boolean");
     }
-  });
-
-  it("includes dependency-only libraries flagged as such", async () => {
-    const listings = await port.discover("anything");
-    const libs = listings.filter((l) => l.is_library);
-    expect(libs.map((l) => l.repo)).toEqual(["dcs-scripting/moose-lite", "utils/dcs-lua-common"]);
   });
 });
 
@@ -47,7 +40,6 @@ describe("MockMarketplace.loadProduct", () => {
     expect(p.name).toBe(listing.name);
     expect(p.author).toBe(listing.author);
     expect(p.stars).toBe(listing.stars);
-    expect(p.is_library).toBe(listing.is_library);
     expect(p.release_tag).toBeNull();
     expect(p.assets).toEqual([]);
     expect(p.installable).toBe(false);
@@ -60,12 +52,6 @@ describe("MockMarketplace.loadProduct", () => {
       expect(p.repo).toBe(listing.repo);
       productInvariants(p);
     }
-  });
-
-  it("libraries are never installable (same rule as the GitHub mapping)", async () => {
-    const moose = await port.loadProduct("dcs-scripting/moose-lite");
-    expect(moose.is_library).toBe(true);
-    expect(moose.installable).toBe(false);
   });
 
   it("throws the adapter's not-found message shape for an unknown repo", async () => {

@@ -9,7 +9,7 @@
 ## Context
 
 - Entry points: command **"DCS Studio: Open Marketplace"** (`dcs.marketplace.open`), the **Browse Mods** launcher row, and the **"$(package) DCS Marketplace"** status bar item. **"DCS Studio: Refresh Marketplace"** re-runs discovery when the panel is open.
-- Discovery searches GitHub for public repositories tagged with the topic from `dcsStudio.discoveryTopic` (default `dcs-studio`). Repos tagged `dcs-studio-library` are libraries.
+- Discovery searches GitHub for public repositories tagged with the topic from `dcsStudio.discoveryTopic` (default `dcs-studio`).
 - GitHub auth uses VS Code's built-in GitHub provider with empty scopes — it only raises the API rate limit; anonymous browsing is allowed.
 
 ```gherkin
@@ -56,7 +56,6 @@ Feature: Storefront grid
     Then each card shows the owner avatar, mod name, "by <author>",
       a star count, a description clamped to three lines,
       and up to six tag chips
-    And a repo tagged as a library additionally shows a "library" badge
     And the card footer offers "Details" and "GitHub ↗"
 
   Scenario: Searching

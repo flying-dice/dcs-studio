@@ -8,7 +8,7 @@
 
 ## Context
 
-- Command: **"DCS Studio: Build Bridge (cargo)"** (`dcs.bridge.build`). The extension ships a prebuilt DLL, so this is only needed after editing `native/`.
+- Command: **"DCS Studio: Build Bridge (cargo)"** (`dcs.bridge.build`). The extension ships a prebuilt DLL, so this is only needed after editing `bridge/`.
 - Output streams to an Output channel named **"DCS Studio Bridge Build"**; a non-cancellable notification spinner shows while building.
 
 ```gherkin
@@ -18,7 +18,7 @@ Feature: Cargo bridge build
     Given the bridge source is present and the Rust toolchain is on PATH
     When the user runs "Build Bridge (cargo)"
     Then the "DCS Studio Bridge Build" output channel opens
-      starting with "$ cargo build --release   (cwd: <nativeDir>)"
+      starting with "$ cargo build --release   (cwd: <bridgeDir>)"
     And a progress notification shows
       "Building DCS bridge (cargo build --release)…"
     And cargo's stdout and stderr stream live into the channel
@@ -26,7 +26,7 @@ Feature: Cargo bridge build
       "Bridge built. Run DCS Studio: Inject, or Launch DCS, to use it."
 
   Scenario: The built DLL takes precedence
-    Given a release build exists under native/target/release
+    Given a release build exists under bridge/target/release
     When the user next injects or launches (stories 014/015)
     Then the freshly built DLL is deployed instead of the shipped one
 
@@ -43,7 +43,7 @@ Feature: Cargo bridge build
       "Could not run cargo. Is the Rust toolchain installed and on PATH?"
 
   Scenario: Source not shipped
-    Given this build of the extension does not include the native/ source
+    Given this build of the extension does not include the bridge/ source
     Then the command fails with
-      "Bridge source (native/) is not present in this build."
+      "Bridge source (bridge/) is not present in this build."
 ```

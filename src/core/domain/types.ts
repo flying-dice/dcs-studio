@@ -8,6 +8,39 @@ export interface ModLink {
   dest: string;
 }
 
+/**
+ * A declared executable entrypoint a mod can launch as a tracked process.
+ * `exe`/`cwd` are paths relative to the unpacked mod dir; `args` may contain
+ * `{SavedGames}`/`{GameInstall}` tokens expanded at launch. Mirrors a
+ * `[[entrypoint]]` block in media/manifest-core.js.
+ */
+export interface ManifestEntrypoint {
+  id: string;
+  name: string;
+  exe: string;
+  args?: string[];
+  cwd?: string;
+}
+
+/** Which side of MissionScripting.lua's sanitize lockdown a mod script runs on. */
+export type MissionScriptRunOn = "before-sanitize" | "after-sanitize";
+
+/**
+ * A Lua script a mod wants run at mission start via DCS Studio's managed
+ * MissionScripting.lua entrypoint. `path` is project/bundle-relative (covered by
+ * a `[[bundle]]` entry, exactly like an entrypoint `exe`); the aggregator dofiles
+ * the file from its unpacked location. `run_on="before-sanitize"` runs with the
+ * FULL unsanitized Lua environment (os/io/lfs/require) — a security-sensitive
+ * capability surfaced with warnings. Mirrors a `[[mission_script]]` block in
+ * media/manifest-core.js.
+ */
+export interface ManifestMissionScript {
+  name: string;
+  purpose?: string;
+  path: string;
+  run_on: MissionScriptRunOn;
+}
+
 /** A subscribed mod's persisted ledger entry (`subscriptions.json` value). */
 export interface Subscription {
   repo: string;
@@ -17,6 +50,33 @@ export interface Subscription {
   dir: string;
   enabled: boolean;
   links: ModLink[];
+  /**
+   * Bundled content the mod ships (`[[bundle]]` paths), snapshotted from its
+   * manifest at subscribe time so My Mods can show the same install breakdown the
+   * product page shows without re-fetching. Absent on older ledgers — read
+   * defensively (`?? []`).
+   */
+  bundles: { path: string }[];
+  /**
+   * Symlink rules the mod declares (`[[symlink]]` source → dest), snapshotted at
+   * subscribe time for the My Mods install breakdown. Dests are the declared
+   * token paths (`{SavedGames}/…`); My Mods shows them unresolved. Absent on
+   * older ledgers — read defensively (`?? []`).
+   */
+  symlinks: { source: string; dest: string }[];
+  /**
+   * Executable entrypoints the mod declares, snapshotted from its manifest at
+   * subscribe time so My Mods can offer Launch/Stop without re-fetching. Absent
+   * on ledgers written before this field existed — read defensively (`?? []`).
+   */
+  entrypoints: ManifestEntrypoint[];
+  /**
+   * Mission scripts the mod declares, snapshotted from its manifest at subscribe
+   * time so the pre/post-sanitize aggregators can be regenerated on every
+   * enable/disable without re-fetching manifests. Absent on older ledgers —
+   * read defensively (`?? []`).
+   */
+  missionScripts: ManifestMissionScript[];
 }
 
 /** The DCS install roots a manifest destination is resolved against. */
@@ -25,12 +85,26 @@ export interface InstallRoots {
   gameInstall: string;
 }
 
-/** Parsed `dcs-studio.toml` model (mirrors media/manifest-core.js output). */
+/**
+ * Parsed `dcs-studio.toml` model (mirrors media/manifest-core.js output).
+ *
+ * `bundle` is what gets packed into the release 7z; `symlink` is which links are
+ * created on enable (each `source` a path inside the bundle). The legacy
+ * single-array install format (one `{source,dest}` rule meaning both pack and
+ * link) is NOT supported (pre-release breaking change, 2026-07): it is not
+ * parsed into `bundle`/`symlink` at all, falls through to `extras` like any
+ * unmodeled section, and publish preflight rejects a manifest whose extras
+ * contain one (see publishChecks.ts).
+ */
 export interface ManifestModel {
   project: { name: string; version: string; author: string; description: string };
-  install: { source: string; dest: string }[];
-  dependencies: { id: string }[];
+  bundle: { path: string }[];
+  symlink: { source: string; dest: string }[];
   requires_module: { id: string }[];
+  /** Executable entrypoints declared via `[[entrypoint]]` blocks. */
+  entrypoint: ManifestEntrypoint[];
+  /** Mission scripts declared via `[[mission_script]]` blocks. */
+  mission_script: ManifestMissionScript[];
   extras: string[];
 }
 
@@ -59,7 +133,6 @@ export interface MarketListing {
   repo_url: string;
   avatar_url: string;
   stars: number;
-  is_library: boolean;
 }
 
 /** A marketplace product page (repo header + latest-release facts). */
@@ -74,12 +147,16 @@ export interface ProductDetail {
   readme: string | null;
   release_tag: string | null;
   release_url: string | null;
+  /**
+   * ISO-8601 publish time of the latest release (GitHub's `published_at`), or
+   * null when there is no release. A trust signal (last-release recency) — it
+   * rides the same `releases/latest` payload, so surfacing it adds no API call.
+   */
+  release_date: string | null;
   assets: ProductAsset[];
   download_size: number;
   installable: boolean;
-  is_library: boolean;
   installs: { source: string; dest: string }[];
-  dependencies: { id: string; name: string; version: string; optional: boolean }[];
   requires: { id: string; name: string; installed: boolean }[];
 }
 

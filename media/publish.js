@@ -1,5 +1,5 @@
 // @ts-nocheck
-// Publish panel: preflight checks, Share to GitHub (repo + push), Cut a release
+// Publish panel: preflight checks, Share to GitHub (repo + push), Create a release
 // (7z-packaged, volume-split payload + standalone manifest).
 (function () {
   const vscode = acquireVsCodeApi();
@@ -37,7 +37,7 @@
       <div class="wrap">
         <section class="card">
           <h2>Preflight checks</h2>
-          <p class="sub">These must pass before a release. Build your project so the <span class="mono">[[install]]</span> sources exist.</p>
+          <p class="sub">These must pass before a release. Build your project so the <span class="mono">[[bundle]]</span> paths exist.</p>
           ${checksHtml()}
           ${blocking() ? `<div class="blocked">Resolve the red items above to publish.</div>` : ""}
         </section>
@@ -51,14 +51,13 @@
           <div class="grid2" style="margin-top:12px">
             <div class="field"><span class="lbl">Repository name</span><input class="in" id="repoName" value="${esc(state.repo ? state.repo.name : state.defaults.name)}" placeholder="my-cool-mod" spellcheck="false" /></div>
             <div class="field"><span class="lbl">Description</span><input class="in" id="repoDesc" value="${esc(state.defaults.description)}" placeholder="One line about the mod" spellcheck="false" /></div>
-            <div class="field full"><label class="check-row"><input type="checkbox" id="isLibrary" /> <span class="lbl" style="margin:0">Publish as a library (dependency-only — adds the <span class="mono">dcs-studio-library</span> topic)</span></label></div>
           </div>
           <button class="btn" id="shareBtn" ${blocking() ? "disabled" : ""}>Share to GitHub</button>
           <div class="result ok" id="shareResult" style="display:none"></div>
         </section>
 
         <section class="card">
-          <h2>2 · Cut a release</h2>
+          <h2>2 · Create a release</h2>
           <p class="sub">Packages the manifest + install sources into a 7z payload (split into GitHub-safe volumes when large) and uploads it with the standalone <span class="mono">dcs-studio.toml</span> alongside.</p>
           <div class="grid2">
             <div class="field"><span class="lbl">Repo (owner/name)</span><input class="in" id="relRepo" value="${esc(state.repo ? state.repo.owner + "/" + state.repo.name : "")}" placeholder="owner/name" spellcheck="false" /></div>
@@ -88,7 +87,6 @@
         opts: {
           name: document.getElementById("repoName").value.trim(),
           description: document.getElementById("repoDesc").value.trim(),
-          isLibrary: document.getElementById("isLibrary").checked,
         },
       });
     });
@@ -131,7 +129,7 @@
       case "shareDone": {
         const r = document.getElementById("shareResult");
         r.style.display = "block";
-        r.innerHTML = `Shared → <button class="btn link" data-open="${esc(m.result.owner)}/${esc(m.result.name)}">${esc(m.result.owner)}/${esc(m.result.name)}</button>. Cut a release below.`;
+        r.innerHTML = `Shared → <button class="btn link" data-open="${esc(m.result.owner)}/${esc(m.result.name)}">${esc(m.result.owner)}/${esc(m.result.name)}</button>. Create a release below.`;
         r.querySelector("[data-open]").addEventListener("click", (ev) => vscode.postMessage({ type: "openExternal", url: "https://github.com/" + ev.target.dataset.open }));
         const relRepo = document.getElementById("relRepo");
         if (relRepo && !relRepo.value) relRepo.value = m.result.owner + "/" + m.result.name;

@@ -1,0 +1,140 @@
+:root {
+  --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
+  --muted: var(--vscode-descriptionForeground);
+  --mono: var(--vscode-editor-font-family, monospace);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+}
+#app { display: flex; flex-direction: column; height: 100vh; }
+.hidden { display: none !important; }
+
+/* Toolbar */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.levels { display: flex; gap: 4px; }
+.chip {
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--muted);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-family: var(--mono);
+  padding: 2px 9px;
+  cursor: pointer;
+  opacity: 0.5;
+}
+.chip.active { opacity: 1; color: var(--vscode-foreground); }
+.chip.level-info.active { border-color: var(--vscode-charts-blue, #4daafc); color: var(--vscode-charts-blue, #4daafc); }
+.chip.level-warning.active { border-color: var(--vscode-charts-yellow, #cca700); color: var(--vscode-charts-yellow, #cca700); }
+.chip.level-error.active { border-color: var(--vscode-errorForeground, #f14c4c); color: var(--vscode-errorForeground, #f14c4c); }
+.chip.level-alert.active { border-color: var(--vscode-errorForeground, #f14c4c); color: var(--vscode-errorForeground, #f14c4c); }
+.chip.level-debug.active { border-color: var(--muted); color: var(--muted); }
+.chip.mine { border-color: var(--vscode-focusBorder, #007fd4); }
+.chip.mine.active { background: var(--vscode-focusBorder, #007fd4); color: var(--vscode-button-foreground, #fff); opacity: 1; }
+.filter-input {
+  flex: 1;
+  min-width: 140px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--vscode-input-border, var(--border));
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font-family: var(--mono);
+  font-size: 12px;
+  outline: none;
+}
+.filter-input.invalid { border-color: var(--vscode-errorForeground, #f14c4c); outline: 1px solid var(--vscode-errorForeground, #f14c4c); }
+.count { font-family: var(--mono); color: var(--muted); font-size: 11px; }
+.dropped { font-family: var(--mono); color: var(--vscode-charts-yellow, #cca700); font-size: 11px; }
+.btn {
+  border: none;
+  border-radius: 5px;
+  font-size: 11px;
+  padding: 5px 10px;
+  background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.2));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  cursor: pointer;
+}
+.btn:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.35)); }
+.btn.subtle { background: none; border: 1px solid var(--border); }
+
+/* Body / missing-file pane */
+.body { flex: 1; min-height: 0; display: flex; }
+.missing-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 30px;
+  text-align: center;
+  color: var(--muted);
+}
+.missing-pane code { font-family: var(--mono); color: var(--vscode-foreground); }
+.missing-pane .hint { font-size: 12px; }
+
+/* Grid */
+.grid-wrap { flex: 1; min-height: 0; position: relative; display: flex; }
+.grid {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.entry-wrap { padding: 0 12px; }
+.row { display: flex; gap: 10px; padding: 1px 0; white-space: pre-wrap; word-break: break-word; }
+/* Fixed columns must never wrap — hh:mm:ss.mmm is exactly 12ch. */
+.row .time { color: var(--muted); flex-shrink: 0; width: 12ch; white-space: nowrap; }
+.row .level { flex-shrink: 0; width: 60px; font-weight: 600; white-space: nowrap; }
+.row .subsystem { flex-shrink: 0; width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-symbolIcon-variableForeground, var(--vscode-charts-blue, #75beff)); }
+.row .message { flex: 1; }
+.row.level-info .level { color: var(--vscode-charts-blue, #4daafc); }
+.row.level-warning .level { color: var(--vscode-charts-yellow, #cca700); }
+.row.level-error .level, .row.level-alert .level { color: var(--vscode-errorForeground, #f14c4c); }
+.row.level-debug .level { color: var(--muted); }
+.row.level-other .level { color: var(--muted); }
+.row.mine { background: rgba(0, 127, 212, 0.08); border-left: 2px solid var(--vscode-focusBorder, #007fd4); margin-left: -2px; padding-left: 2px; }
+.cont-lines { margin-left: 94px; padding-left: 10px; border-left: 1px solid var(--border); color: var(--muted); }
+.cont-line { white-space: pre-wrap; word-break: break-word; }
+.divider {
+  margin: 6px 12px;
+  padding: 3px 0;
+  text-align: center;
+  color: var(--muted);
+  font-style: italic;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+}
+
+/* Autoscroll pill */
+.autoscroll-pill {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: none;
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 11px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.autoscroll-pill:hover { background: var(--vscode-button-hoverBackground); }

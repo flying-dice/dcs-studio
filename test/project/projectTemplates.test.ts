@@ -23,8 +23,14 @@ function text(files: TemplateFile[], path: string): string {
 }
 
 describe("TEMPLATES metadata", () => {
-  it("lists the four template tiles, ids unique, all fields filled", () => {
-    expect(TEMPLATES.map((t) => t.id)).toEqual(["blank", "lua-mission", "lua-hook", "rust-dll"]);
+  it("lists the five template tiles, ids unique, all fields filled", () => {
+    expect(TEMPLATES.map((t) => t.id)).toEqual([
+      "blank",
+      "lua-mission",
+      "lua-hook",
+      "rust-dll",
+      "mission",
+    ]);
     for (const t of TEMPLATES) {
       expect(t.label).toBeTruthy();
       expect(t.description).toBeTruthy();
@@ -166,7 +172,6 @@ describe("blank template", () => {
     expect(toml).toContain('dcs_min_version = "2.9.0"');
     // Install rule stays commented, slugged from the name.
     expect(toml).toContain('# dest = "{SavedGames}/Mods/my-mod"');
-    expect(toml).toContain("# [[dependencies]]");
   });
 
   it("TOML-escapes quotes/backslashes in the project name value", () => {
@@ -182,11 +187,15 @@ describe("lua-mission template", () => {
     expect(paths(files)).toEqual(["dcs-studio.toml", "Scripts/red-flag-24.lua", "README.md"]);
   });
 
-  it("wires the install rule to the slugged script path", () => {
+  it("bundles and symlinks the slugged script path, emitting no legacy [[install]]", () => {
     const toml = text(files, "dcs-studio.toml");
     expect(toml).toContain('template = "lua-mission"');
+    expect(toml).toContain("[[bundle]]");
+    expect(toml).toContain('path = "Scripts/red-flag-24.lua"');
+    expect(toml).toContain("[[symlink]]");
     expect(toml).toContain('source = "Scripts/red-flag-24.lua"');
     expect(toml).toContain('dest = "{SavedGames}/Scripts/red-flag-24.lua"');
+    expect(toml).not.toContain("[[install]]");
   });
 
   it("uses the ident inside the script and the name in its banner", () => {
@@ -266,13 +275,18 @@ describe("rust-dll template", () => {
     expect(lib.contents).toBeInstanceOf(Uint8Array);
   });
 
-  it("installs the DLL and the hook per the bridge layout", () => {
+  it("bundles + symlinks the DLL and the hook per the bridge layout", () => {
     const toml = text(files, "dcs-studio.toml");
     expect(toml).toContain('template = "rust-dll"');
+    expect(toml).toContain("[[bundle]]");
+    expect(toml).toContain('path = "target/release/fast_telemetry.dll"');
+    expect(toml).toContain('path = "Scripts/Hooks/fast_telemetry_hook.lua"');
+    expect(toml).toContain("[[symlink]]");
     expect(toml).toContain('source = "target/release/fast_telemetry.dll"');
     expect(toml).toContain('dest = "{SavedGames}/Mods/tech/fast-telemetry/bin"');
     expect(toml).toContain('source = "Scripts/Hooks/fast_telemetry_hook.lua"');
     expect(toml).toContain('dest = "{SavedGames}/Scripts/Hooks"');
+    expect(toml).not.toContain("[[install]]");
   });
 
   it("keeps the Cargo package/lib name in sync with the ident", () => {
@@ -326,5 +340,59 @@ describe("rust-dll template", () => {
     expect(cargo).toContain('name = "mod_104th"');
     const toml = text(digits, "dcs-studio.toml");
     expect(toml).toContain('dest = "{SavedGames}/Mods/tech/104th/bin"');
+  });
+});
+
+describe("mission template", () => {
+  const files = render("mission", "Red Flag Finale", assets)!;
+
+  it("produces exactly the manifest and the README inside Missions/", () => {
+    expect(paths(files)).toEqual(["dcs-studio.toml", "Missions/README.md"]);
+  });
+
+  it("has no other file — no baked .miz is shipped", () => {
+    for (const f of files) {
+      expect(typeof f.contents).toBe("string");
+    }
+  });
+
+  it("bundles and symlinks the slugged .miz path into the DCS Missions folder", () => {
+    const toml = text(files, "dcs-studio.toml");
+    expect(toml).toContain('template = "mission"');
+    expect(toml).toContain("[[bundle]]");
+    expect(toml).toContain('path = "Missions/red-flag-finale.miz"');
+    expect(toml).toContain("[[symlink]]");
+    expect(toml).toContain('source = "Missions/red-flag-finale.miz"');
+    expect(toml).toContain('dest = "{SavedGames}/Missions/red-flag-finale.miz"');
+    expect(toml).not.toContain("[[install]]");
+  });
+
+  it("READMEs where to add the mission and how the rule matches its filename", () => {
+    const md = text(files, "Missions/README.md");
+    expect(md).toContain("# Red Flag Finale");
+    expect(md).toContain("Save or copy your");
+    expect(md).toContain("`.miz` file in here");
+    expect(md).toContain("`red-flag-finale.miz`");
+    expect(md).toContain("Scaffolding in place keeps the");
+    expect(md).toContain("existing file (it comes back reported as skipped)");
+  });
+
+  it("READMEs the .miz format and where it lands for subscribers", () => {
+    const md = text(files, "Missions/README.md");
+    expect(md).toContain("single mission archive");
+    expect(md).toContain("Saved Games/DCS/Missions");
+    expect(md).toContain("Mission Editor's mission list");
+  });
+
+  it("READMEs the publish/subscribe flow via a GitHub release", () => {
+    const md = text(files, "Missions/README.md");
+    expect(md).toContain("**Create a release**");
+    expect(md).toContain("subscriber installs your repo from the Marketplace");
+  });
+
+  it("uses a plain slug (no keyword-dodging ident needed, unlike the Lua templates)", () => {
+    const kwFiles = render("mission", "end", assets)!;
+    const toml = text(kwFiles, "dcs-studio.toml");
+    expect(toml).toContain('path = "Missions/end.miz"');
   });
 });

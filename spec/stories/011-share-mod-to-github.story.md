@@ -10,7 +10,7 @@
 
 - Entry points: command **"DCS Studio: Publish Mod to GitHub…"** (`dcs.publish.open`), the cloud-upload icon in the editor title of `dcs-studio.toml`, and the **Publish Mod** launcher row (visible only when a manifest exists).
 - The publish flow shells out to `git` and the `gh` CLI — GitHub auth is `gh auth login`, independent of the editor's GitHub session.
-- Sharing tags the repo with the `dcs-studio` topic (plus `dcs-studio-library` for libraries), which is exactly what Marketplace discovery searches for (story 004).
+- Sharing tags the repo with the `dcs-studio` topic, which is exactly what Marketplace discovery searches for (story 004).
 
 ```gherkin
 Feature: Publish preflight
@@ -24,10 +24,11 @@ Feature: Publish preflight
     When the Publish panel opens
     Then it runs and displays these checks with ok/warn/error dots:
       | Check           | Error condition and message                                          |
-      | Manifest        | "dcs-studio.toml not found in the workspace root." / "Could not parse dcs-studio.toml." |
+      | Manifest        | "dcs-studio.toml not found in the workspace root." / "Could not parse dcs-studio.toml." / rejects a manifest still using the legacy single-array install format — replace each rule with [[bundle]] + [[symlink]]. |
       | Project name    | "[project] name is required."                                        |
-      | Install rules   | warn: "No [[install]] rules — the release will ship only the manifest." |
-      | Install sources | "N of M source(s) missing — build the project first." or "N source(s) are symlinks (refused by the packager)." |
+      | Bundle paths    | warn: "No [[bundle]] paths — the release will ship only the manifest." |
+      | Bundle paths    | "N of M bundle path(s) missing — build the project first." or "N bundle path(s) are symlinks (refused by the packager)." |
+      | Symlink coverage | "N symlink source(s) not inside any [[bundle]] path."                |
       | 7-Zip           | "7z not found. Install 7-Zip (7-zip.org) and retry."                 |
       | git             | "git not found on PATH."                                             |
       | GitHub CLI      | "gh not found. Install from cli.github.com." / "gh is not signed in. Run: gh auth login" |
@@ -57,13 +58,8 @@ Feature: Step 1 — Share to GitHub
       commits pending changes as "Publish with DCS Studio",
       creates the public repo and pushes,
       and tags the repo with the "dcs-studio" topic
-    And the result reads "Shared → <owner>/<name>. Cut a release below."
+    And the result reads "Shared → <owner>/<name>. Create a release below."
     And the release step's Repo field is prefilled
-
-  Scenario: Publishing a library
-    Given the user ticks
-      "Publish as a library (dependency-only — adds the dcs-studio-library topic)"
-    Then the repo is additionally tagged "dcs-studio-library"
 
   Scenario: Repo already exists on GitHub
     Given a repo with that name already exists

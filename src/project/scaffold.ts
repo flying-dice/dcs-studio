@@ -17,11 +17,16 @@ import {
 // that's already open. This is the adapter: all validation and planning lives
 // in core/domain/scaffoldPlan; here we probe the filesystem and execute.
 
-/** Load the assets templates embed (the lua import lib) from native/. */
+/** Load the assets templates embed (the lua import lib) from bridge/. The vsix
+ *  ships it in bridge/prebuilt (bridge/lua5.1 is a build-only input, excluded
+ *  from the package); running from source falls back to bridge/lua5.1. */
 export async function loadTemplateAssets(extensionUri: vscode.Uri): Promise<TemplateAssets> {
-  const luaLib = await vscode.workspace.fs.readFile(
-    vscode.Uri.joinPath(extensionUri, "native", "lua5.1", "lua.lib"),
-  );
+  const luaLib = await vscode.workspace.fs
+    .readFile(vscode.Uri.joinPath(extensionUri, "bridge", "prebuilt", "lua.lib"))
+    .then(
+      (bytes) => bytes,
+      () => vscode.workspace.fs.readFile(vscode.Uri.joinPath(extensionUri, "bridge", "lua5.1", "lua.lib")),
+    );
   return { luaLib };
 }
 

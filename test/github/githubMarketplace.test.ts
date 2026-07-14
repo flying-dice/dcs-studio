@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   DISCOVERY_TOPIC,
-  LIBRARY_TOPIC,
   MANIFEST_FILE,
   labelsFrom,
   mapListing,
@@ -17,21 +16,17 @@ import { productInvariants } from "../marketplace/contract";
 describe("marker constants", () => {
   it("match the dcs-studio project markers", () => {
     expect(DISCOVERY_TOPIC).toBe("dcs-studio");
-    expect(LIBRARY_TOPIC).toBe("dcs-studio-library");
     expect(MANIFEST_FILE).toBe("dcs-studio.toml");
   });
 });
 
 describe("labelsFrom", () => {
-  it("drops the marker topics and keeps the rest", () => {
-    expect(labelsFrom(["dcs-studio", "script", "dcs-studio-library", "weapons"])).toEqual([
-      "script",
-      "weapons",
-    ]);
+  it("drops the marker topic and keeps the rest", () => {
+    expect(labelsFrom(["dcs-studio", "script", "weapons"])).toEqual(["script", "weapons"]);
   });
 
-  it("is empty for marker-only topic lists", () => {
-    expect(labelsFrom(["dcs-studio", "dcs-studio-library"])).toEqual([]);
+  it("is empty for a marker-only topic list", () => {
+    expect(labelsFrom(["dcs-studio"])).toEqual([]);
   });
 });
 
@@ -57,14 +52,7 @@ describe("mapListing", () => {
       repo_url: "https://github.com/owner/mod",
       avatar_url: "https://avatars/owner",
       stars: 5,
-      is_library: false,
     });
-  });
-
-  it("marks libraries via the library topic", () => {
-    const l = mapListing(searchItem({ topics: ["dcs-studio", "dcs-studio-library"] }));
-    expect(l.is_library).toBe(true);
-    expect(l.labels).toEqual([]);
   });
 
   it("tolerates missing topics, owner, description, and stars", () => {
@@ -80,13 +68,13 @@ describe("mapListing", () => {
     expect(l.avatar_url).toBe("");
     expect(l.description).toBe("");
     expect(l.stars).toBe(0);
-    expect(l.is_library).toBe(false);
   });
 });
 
 const releaseJson = (over: Partial<ReleaseJson> = {}): ReleaseJson => ({
   tag_name: "v1.2.3",
   html_url: "https://github.com/owner/mod/releases/tag/v1.2.3",
+  published_at: "2026-01-01T00:00:00Z",
   assets: [
     { name: "mod.7z", size: 100, browser_download_url: "https://dl/mod.7z" },
     { name: "dcs-studio.toml", size: 10, browser_download_url: "https://dl/manifest" },
@@ -132,15 +120,14 @@ describe("mapProduct", () => {
       readme: "# readme",
       release_tag: "v1.2.3",
       release_url: "https://github.com/owner/mod/releases/tag/v1.2.3",
+      release_date: "2026-01-01T00:00:00Z",
       assets: [
         { name: "mod.7z", size: 100, url: "https://dl/mod.7z" },
         { name: "dcs-studio.toml", size: 10, url: "https://dl/manifest" },
       ],
       download_size: 110,
       installable: true,
-      is_library: false,
       installs: [],
-      dependencies: [],
       requires: [],
     });
     productInvariants(p);
@@ -156,17 +143,16 @@ describe("mapProduct", () => {
     productInvariants(p);
   });
 
-  it("is not installable when the repo is a library, even with a manifest", () => {
-    const p = mapProduct(repoJson({ topics: ["dcs-studio", "dcs-studio-library"] }), null, releaseJson(), "f");
-    expect(p.is_library).toBe(true);
-    expect(p.installable).toBe(false);
-    productInvariants(p);
+  it("maps a release without published_at to a null release_date", () => {
+    const rel = releaseJson({ published_at: undefined });
+    expect(mapProduct(repoJson(), null, rel, "fallback").release_date).toBeNull();
   });
 
   it("handles a repo without a release (null tag/url, empty assets)", () => {
     const p = mapProduct(repoJson(), null, null, "fallback");
     expect(p.release_tag).toBeNull();
     expect(p.release_url).toBeNull();
+    expect(p.release_date).toBeNull();
     expect(p.assets).toEqual([]);
     expect(p.download_size).toBe(0);
     expect(p.installable).toBe(false);
@@ -186,7 +172,6 @@ describe("mapProduct", () => {
     expect(p.avatar_url).toBe("");
     expect(p.description).toBe("");
     expect(p.stars).toBe(0);
-    expect(p.is_library).toBe(false);
   });
 });
 
