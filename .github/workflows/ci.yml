@@ -47,3 +47,12 @@ jobs:
       - name: Rust workspace builds (both bridge DLLs)
         run: cargo build --release --workspace
         working-directory: bridge
+
+      - name: Upload bridge DLLs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-dlls
+          path: |
+            bridge/target/release/dcs_studio_gui.dll
+            bridge/target/release/dcs_studio_mission.dll
+            bridge/hook/DcsStudio.lua

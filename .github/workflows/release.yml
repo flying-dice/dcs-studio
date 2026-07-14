@@ -62,12 +62,21 @@ jobs:
       - name: Package .vsix
         run: npx @vscode/vsce package
 
-      - name: Create GitHub release with .vsix
+      - name: Create GitHub release with .vsix + bridge DLLs
         if: github.ref_type == 'tag'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" (Get-Item *.vsix).FullName --title "DCS Studio ${{ github.ref_name }}" --generate-notes
+        # The DLLs also ship inside the vsix; attaching them (and the hook)
+        # separately lets a bridge-only deploy grab them without the extension.
+        run: >-
+          gh release create "${{ github.ref_name }}"
+          (Get-Item *.vsix).FullName
+          bridge/prebuilt/dcs_studio_gui.dll
+          bridge/prebuilt/dcs_studio_mission.dll
+          bridge/hook/DcsStudio.lua
+          --title "DCS Studio ${{ github.ref_name }}"
+          --generate-notes
 
       - name: Upload .vsix artifact (manual runs)
         if: github.ref_type != 'tag'
