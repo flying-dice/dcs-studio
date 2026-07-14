@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { openPreview } from "./helpers";
 
-const PREVIEWS = ["skills", "nav", "docs", "manifest", "marketplace", "log"];
+const PREVIEWS = ["skills", "nav", "docs", "manifest", "marketplace", "log", "mymods"];
 
 for (const name of PREVIEWS) {
   test.describe(`smoke: ${name}`, () => {

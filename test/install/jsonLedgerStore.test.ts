@@ -28,6 +28,7 @@ const sub: Subscription = {
   dir: path.join("D:", "data", "Owner__Repo"),
   enabled: true,
   links: [{ id: "Owner/Repo:0", dest: "C:\\SG\\DCS\\Scripts\\X" }],
+  entrypoints: [],
 };
 
 describe("load", () => {

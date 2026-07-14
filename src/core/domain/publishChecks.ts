@@ -129,6 +129,37 @@ export function computePreflight(facts: PreflightFacts): Check[] {
         });
       }
     }
+    // Executable entrypoints: every exe must ship inside a bundled path (or the
+    // installed mod could never launch it), and ids must be unique so the ledger
+    // and launch tracking can key on them. Exe-only mods (entrypoints, no
+    // symlinks) are perfectly valid — they still bundle the exe. Pure checks.
+    if (m.entrypoint.length) {
+      const bundlePaths = m.bundle.map((b) => b.path);
+      const uncovered = m.entrypoint.filter((e) => !isCoveredByBundle(e.exe, bundlePaths)).map((e) => e.exe);
+      const ids = m.entrypoint.map((e) => e.id);
+      const dupes = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))];
+      if (uncovered.length) {
+        checks.push({
+          label: "Executables",
+          level: "error",
+          detail: `${uncovered.length} entrypoint exe(s) not inside any [[bundle]] path.`,
+          items: uncovered.map((e) => `not bundled: ${e}`),
+        });
+      } else if (dupes.length) {
+        checks.push({
+          label: "Executables",
+          level: "error",
+          detail: `${dupes.length} duplicate entrypoint id(s) — each [[entrypoint]] id must be unique.`,
+          items: dupes.map((id) => `duplicate id: ${id}`),
+        });
+      } else {
+        checks.push({
+          label: "Executables",
+          level: "ok",
+          detail: `${m.entrypoint.length} entrypoint(s) covered by bundled content.`,
+        });
+      }
+    }
   }
 
   checks.push(

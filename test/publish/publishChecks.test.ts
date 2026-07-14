@@ -13,6 +13,7 @@ function manifest(over: Partial<ManifestModel> = {}): ManifestModel {
     bundle: [],
     symlink: [],
     requires_module: [],
+    entrypoint: [],
     extras: [],
     ...over,
   };
@@ -198,6 +199,105 @@ describe("computePreflight — symlink coverage", () => {
       detail: "1 symlink source(s) not inside any [[bundle]] path.",
       items: ["not bundled: Scripts/orphan.lua"],
     });
+  });
+});
+
+describe("computePreflight — executables", () => {
+  it("emits no Executables check when the manifest has no entrypoints", () => {
+    expect(byLabel(computePreflight(facts()), "Executables")).toBeUndefined();
+  });
+
+  it("is ok when every entrypoint exe is inside a bundled path", () => {
+    const m = manifest({
+      bundle: [{ path: "Server" }],
+      entrypoint: [
+        { id: "srs", name: "SRS", exe: "Server/SR-Server.exe" },
+        { id: "client", name: "Client", exe: "Server/SR-Client.exe" },
+      ],
+    });
+    expect(byLabel(computePreflight(facts({ manifest: m })), "Executables")).toEqual({
+      label: "Executables",
+      level: "ok",
+      detail: "2 entrypoint(s) covered by bundled content.",
+    });
+  });
+
+  it("errors listing entrypoint exes not inside any bundle path", () => {
+    const m = manifest({
+      bundle: [{ path: "Server" }],
+      entrypoint: [
+        { id: "srs", name: "SRS", exe: "Server/SR-Server.exe" },
+        { id: "orphan", name: "Orphan", exe: "elsewhere/tool.exe" },
+      ],
+    });
+    expect(byLabel(computePreflight(facts({ manifest: m })), "Executables")).toEqual({
+      label: "Executables",
+      level: "error",
+      detail: "1 entrypoint exe(s) not inside any [[bundle]] path.",
+      items: ["not bundled: elsewhere/tool.exe"],
+    });
+  });
+
+  it("errors on duplicate entrypoint ids (when all exes are covered)", () => {
+    const m = manifest({
+      bundle: [{ path: "bin" }],
+      entrypoint: [
+        { id: "app", name: "A", exe: "bin/a.exe" },
+        { id: "app", name: "B", exe: "bin/b.exe" },
+      ],
+    });
+    expect(byLabel(computePreflight(facts({ manifest: m })), "Executables")).toEqual({
+      label: "Executables",
+      level: "error",
+      detail: "1 duplicate entrypoint id(s) — each [[entrypoint]] id must be unique.",
+      items: ["duplicate id: app"],
+    });
+  });
+
+  it("reports uncovered exes ahead of duplicate ids when both occur", () => {
+    const m = manifest({
+      bundle: [{ path: "bin" }],
+      entrypoint: [
+        { id: "app", name: "A", exe: "bin/a.exe" },
+        { id: "app", name: "B", exe: "nope/b.exe" },
+      ],
+    });
+    const c = byLabel(computePreflight(facts({ manifest: m })), "Executables");
+    expect(c?.detail).toBe("1 entrypoint exe(s) not inside any [[bundle]] path.");
+  });
+
+  it("places Executables after Symlink coverage in the check order", () => {
+    const m = manifest({
+      bundle: [{ path: "bin" }],
+      symlink: [{ source: "bin", dest: "{SavedGames}/bin" }],
+      entrypoint: [{ id: "app", name: "A", exe: "bin/a.exe" }],
+    });
+    const labels = computePreflight(
+      facts({ manifest: m, bundle: [{ source: "bin", missing: false, symlink: false }] }),
+    ).map((c) => c.label);
+    expect(labels).toEqual([
+      "Project name",
+      "Bundle paths",
+      "Symlink coverage",
+      "Executables",
+      "7-Zip",
+      "git",
+      "GitHub CLI",
+    ]);
+  });
+
+  it("an exe-only mod (entrypoints, no symlinks) is fully valid — no errors", () => {
+    const m = manifest({
+      bundle: [{ path: "Server" }],
+      symlink: [],
+      entrypoint: [{ id: "srs", name: "SRS", exe: "Server/SR-Server.exe" }],
+    });
+    const checks = computePreflight(
+      facts({ manifest: m, bundle: [{ source: "Server", missing: false, symlink: false }] }),
+    );
+    expect(checks.filter((c) => c.level === "error")).toEqual([]);
+    expect(byLabel(checks, "Symlink coverage")).toBeUndefined();
+    expect(byLabel(checks, "Executables")?.level).toBe("ok");
   });
 });
 

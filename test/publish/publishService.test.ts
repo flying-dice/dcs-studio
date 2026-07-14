@@ -173,6 +173,7 @@ function model(bundle: { path: string }[] = []): ManifestModel {
     bundle,
     symlink: [],
     requires_module: [],
+    entrypoint: [],
     extras: [],
   };
 }

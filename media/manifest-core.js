@@ -19,7 +19,7 @@
   // (see normalizeInstall) rather than stored, so emission only ever writes the
   // new blocks — that IS the migration path. New array sections (a future
   // [[entrypoint]] etc.) drop in by adding a name here and a create-case below.
-  const MODELED_ARRAYS = ["bundle", "symlink", "requires_module"];
+  const MODELED_ARRAYS = ["bundle", "symlink", "requires_module", "entrypoint"];
   // Legacy sections recognised only so the parser can normalize them away.
   const LEGACY_ARRAYS = ["install"];
 
@@ -31,6 +31,8 @@
       // Which links are created on enable: source is a path inside the bundle.
       symlink: [],
       requires_module: [],
+      // Executable entrypoints the mod can launch as tracked processes.
+      entrypoint: [],
       extras: [], // verbatim blocks for sections the form doesn't model
     };
   }
@@ -54,9 +56,29 @@
     }
   }
 
+  /**
+   * Parse a single-line TOML inline array of scalars, e.g. `["--min", "-v"]`,
+   * into a JS array. Deliberately tolerant (v1): multiline arrays are not
+   * supported — the form only ever emits single-line arrays. Each element is
+   * run back through parseVal so quoted strings, bools and ints all work.
+   */
+  function parseArray(v) {
+    const inner = v.replace(/^\[/, "").replace(/\]$/, "");
+    const out = [];
+    const re = /\s*("(?:[^"\\]|\\.)*"|'[^']*'|[^,]+?)\s*(?:,|$)/g;
+    let m;
+    while ((m = re.exec(inner)) !== null) {
+      if (m.index === re.lastIndex) re.lastIndex++; // guard against empty matches
+      const tok = m[1].trim();
+      if (tok) out.push(parseVal(tok));
+    }
+    return out;
+  }
+
   function parseVal(v) {
     if (v === "true") return true;
     if (v === "false") return false;
+    if (/^\[[\s\S]*\]$/.test(v)) return parseArray(v);
     if (/^".*"$/.test(v)) return v.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
     if (/^'.*'$/.test(v)) return v.slice(1, -1);
     if (/^-?\d+$/.test(v)) return parseInt(v, 10);
@@ -87,6 +109,7 @@
             if (name === "install") (cur = { source: "", dest: "" }), installRules.push(cur);
             else if (name === "bundle") (cur = { path: "" }), m.bundle.push(cur);
             else if (name === "symlink") (cur = { source: "", dest: "" }), m.symlink.push(cur);
+            else if (name === "entrypoint") (cur = { id: "", name: "", exe: "" }), m.entrypoint.push(cur);
             else (cur = { id: "", name: "" }), m.requires_module.push(cur);
           } else cur = m.project;
           sec = "modeled";
@@ -137,6 +160,11 @@
     for (const r of m.requires_module) {
       L.push("", "[[requires_module]]", `id = ${q(r.id)}`);
       if (r.name) L.push(`name = ${q(r.name)}`);
+    }
+    for (const r of m.entrypoint) {
+      L.push("", "[[entrypoint]]", `id = ${q(r.id)}`, `name = ${q(r.name)}`, `exe = ${q(r.exe)}`);
+      if (r.args && r.args.length) L.push(`args = [${r.args.map(q).join(", ")}]`);
+      if (r.cwd) L.push(`cwd = ${q(r.cwd)}`);
     }
     let out = L.join("\n") + "\n";
     if (m.extras && m.extras.length) out += "\n" + m.extras.join("\n\n") + "\n";

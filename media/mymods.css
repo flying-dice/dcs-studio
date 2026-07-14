@@ -42,6 +42,19 @@ header { position: sticky; top: 0; z-index: 5; display: flex; align-items: cente
 .switch input:checked + .slider { background: color-mix(in srgb, var(--ok) 30%, var(--vscode-input-background)); border-color: var(--ok); }
 .switch input:checked + .slider::before { transform: translateX(17px); background: var(--ok); }
 
+/* entrypoints (executable launch/stop rows under an enabled mod) */
+.mod-wrap { display: flex; flex-direction: column; }
+.mod-wrap .mod { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.entrypoints { border: 1px solid var(--border); border-top: none; border-radius: 0 0 10px 10px; background: color-mix(in srgb, var(--card) 60%, transparent); padding: 4px 16px 8px 62px; display: flex; flex-direction: column; }
+.ep-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
+.ep-row:first-child { border-top: none; }
+.ep-info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.ep-name { font-weight: 600; font-size: 13px; }
+.ep-exe { font-size: 11px; color: var(--muted); word-break: break-all; }
+.ep-error { font-size: 11px; color: var(--vscode-errorForeground, #f14c4c); margin-top: 2px; }
+.ep-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.ep-state { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--ok); }
+
 .empty { text-align: center; color: var(--muted); padding: 60px 20px; }
 .empty .big { font-size: 15px; font-weight: 600; color: var(--vscode-foreground); margin-bottom: 6px; }
 .spin { display: inline-block; animation: spin 0.9s linear infinite; }

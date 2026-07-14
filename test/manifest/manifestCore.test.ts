@@ -110,11 +110,103 @@ dest = "{SavedGames}/Scripts/a.lua"
     expect(reparsed.symlink).toEqual(model.symlink);
   });
 
-  it("an empty manifest yields empty bundle/symlink arrays", () => {
+  it("an empty manifest yields empty bundle/symlink/entrypoint arrays", () => {
     const model = parseToml("");
     expect(model.bundle).toEqual([]);
     expect(model.symlink).toEqual([]);
     expect(model.requires_module).toEqual([]);
+    expect(model.entrypoint).toEqual([]);
+  });
+});
+
+describe("manifest-core: [[entrypoint]] blocks", () => {
+  it("parses id/name/exe with optional args array + cwd", () => {
+    const model = parseToml(`[project]
+name = "DCS-SRS"
+
+[[bundle]]
+path = "Server"
+
+[[entrypoint]]
+id = "srs-server"
+name = "SRS Server"
+exe = "Server/SR-Server.exe"
+args = ["--minimized", "-v"]
+cwd = "Server"
+`);
+    expect(model.entrypoint).toEqual([
+      { id: "srs-server", name: "SRS Server", exe: "Server/SR-Server.exe", args: ["--minimized", "-v"], cwd: "Server" },
+    ]);
+  });
+
+  it("parses an entrypoint with no args and no cwd", () => {
+    const model = parseToml(`[project]
+name = "m"
+
+[[entrypoint]]
+id = "app"
+name = "App"
+exe = "bin/app.exe"
+`);
+    expect(model.entrypoint).toEqual([{ id: "app", name: "App", exe: "bin/app.exe" }]);
+  });
+
+  it("parses an empty args array as []", () => {
+    const model = parseToml(`[project]
+name = "m"
+
+[[entrypoint]]
+id = "app"
+name = "App"
+exe = "app.exe"
+args = []
+`);
+    expect(model.entrypoint[0].args).toEqual([]);
+  });
+
+  it("emits id/name/exe always and args/cwd only when present, round-tripping stably", () => {
+    const model = parseToml(`[project]
+name = "m"
+
+[[bundle]]
+path = "bin"
+
+[[entrypoint]]
+id = "a"
+name = "A"
+exe = "bin/a.exe"
+args = ["--flag"]
+cwd = "bin"
+
+[[entrypoint]]
+id = "b"
+name = "B"
+exe = "bin/b.exe"
+`);
+    const emitted = emitToml(model);
+    expect(emitted).toContain("[[entrypoint]]");
+    expect(emitted).toContain('id = "a"');
+    expect(emitted).toContain('exe = "bin/a.exe"');
+    expect(emitted).toContain('args = ["--flag"]');
+    expect(emitted).toContain('cwd = "bin"');
+    // The second entrypoint has no args/cwd — those lines are omitted for it.
+    const reparsed = parseToml(emitted);
+    expect(reparsed.entrypoint).toEqual(model.entrypoint);
+  });
+
+  it("preserves {SavedGames}/{GameInstall} tokens inside args verbatim through round-trip", () => {
+    const model = parseToml(`[project]
+name = "m"
+
+[[entrypoint]]
+id = "a"
+name = "A"
+exe = "a.exe"
+args = ["--sg", "{SavedGames}/x", "{GameInstall}/y"]
+`);
+    expect(model.entrypoint[0].args).toEqual(["--sg", "{SavedGames}/x", "{GameInstall}/y"]);
+    const reparsed = parseToml(emitToml(model));
+    expect(reparsed.entrypoint[0].args).toEqual(["--sg", "{SavedGames}/x", "{GameInstall}/y"]);
   });
 });
 

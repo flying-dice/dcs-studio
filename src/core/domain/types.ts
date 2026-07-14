@@ -8,6 +8,20 @@ export interface ModLink {
   dest: string;
 }
 
+/**
+ * A declared executable entrypoint a mod can launch as a tracked process.
+ * `exe`/`cwd` are paths relative to the unpacked mod dir; `args` may contain
+ * `{SavedGames}`/`{GameInstall}` tokens expanded at launch. Mirrors a
+ * `[[entrypoint]]` block in media/manifest-core.js.
+ */
+export interface ManifestEntrypoint {
+  id: string;
+  name: string;
+  exe: string;
+  args?: string[];
+  cwd?: string;
+}
+
 /** A subscribed mod's persisted ledger entry (`subscriptions.json` value). */
 export interface Subscription {
   repo: string;
@@ -17,6 +31,12 @@ export interface Subscription {
   dir: string;
   enabled: boolean;
   links: ModLink[];
+  /**
+   * Executable entrypoints the mod declares, snapshotted from its manifest at
+   * subscribe time so My Mods can offer Launch/Stop without re-fetching. Absent
+   * on ledgers written before this field existed — read defensively (`?? []`).
+   */
+  entrypoints: ManifestEntrypoint[];
 }
 
 /** The DCS install roots a manifest destination is resolved against. */
@@ -40,6 +60,8 @@ export interface ManifestModel {
   bundle: { path: string }[];
   symlink: { source: string; dest: string }[];
   requires_module: { id: string }[];
+  /** Executable entrypoints declared via `[[entrypoint]]` blocks. */
+  entrypoint: ManifestEntrypoint[];
   extras: string[];
 }
 
