@@ -14,13 +14,33 @@ export interface Check {
   items?: string[];
 }
 
-/** The probed state of one `[[install]]` source path. */
+/** The probed state of one `[[bundle]]` path. */
 export interface SourceProbe {
   source: string;
   /** The path does not exist (an `lstat` threw). */
   missing: boolean;
   /** The path exists and is a symbolic link (refused by the packager). */
   symlink: boolean;
+}
+
+/** Normalize a project-relative path for comparison (slashes, trailing slash). */
+function normPath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+/**
+ * Whether a `[[symlink]].source` is covered by some `[[bundle]].path` — equal to
+ * it, or nested inside it. A bundle path of `.` (or empty) is the whole project
+ * and covers everything. Coverage is what lets a mod bundle a folder and link
+ * only one file inside it; an uncovered source would link a path the payload
+ * never shipped.
+ */
+export function isCoveredByBundle(source: string, bundlePaths: string[]): boolean {
+  const s = normPath(source);
+  return bundlePaths.some((p) => {
+    const b = normPath(p);
+    return b === "" || b === "." || s === b || s.startsWith(b + "/");
+  });
 }
 
 /** gh CLI presence + auth facts. */
@@ -35,8 +55,8 @@ export interface PreflightFacts {
   manifestExists: boolean;
   /** The parsed manifest, or null when absent/unparseable. */
   manifest: ManifestModel | null;
-  /** One probe per `[[install]]` source (only meaningful when a manifest has rules). */
-  sources: SourceProbe[];
+  /** One probe per `[[bundle]]` path (only meaningful when a manifest has bundles). */
+  bundle: SourceProbe[];
   /** The resolved 7-Zip command/path, or null when unavailable. */
   sevenZip: string | null;
   /** Whether git is available on PATH. */
@@ -66,27 +86,47 @@ export function computePreflight(facts: PreflightFacts): Check[] {
         ? { label: "Project name", level: "ok", detail: m.project.name }
         : { label: "Project name", level: "error", detail: "[project] name is required." },
     );
-    if (!m.install.length) {
-      checks.push({ label: "Install rules", level: "warn", detail: "No [[install]] rules — the release will ship only the manifest." });
+    if (!m.bundle.length) {
+      checks.push({ label: "Bundle paths", level: "warn", detail: "No [[bundle]] paths — the release will ship only the manifest." });
     } else {
-      const missing = facts.sources.filter((s) => s.missing).map((s) => s.source);
-      const symlinks = facts.sources.filter((s) => !s.missing && s.symlink).map((s) => s.source);
+      const missing = facts.bundle.filter((s) => s.missing).map((s) => s.source);
+      const symlinks = facts.bundle.filter((s) => !s.missing && s.symlink).map((s) => s.source);
       if (missing.length) {
         checks.push({
-          label: "Install sources",
+          label: "Bundle paths",
           level: "error",
-          detail: `${missing.length} of ${m.install.length} source(s) missing — build the project first.`,
+          detail: `${missing.length} of ${m.bundle.length} bundle path(s) missing — build the project first.`,
           items: missing.map((s) => `missing: ${s}`),
         });
       } else if (symlinks.length) {
         checks.push({
-          label: "Install sources",
+          label: "Bundle paths",
           level: "error",
-          detail: `${symlinks.length} source(s) are symlinks (refused by the packager).`,
+          detail: `${symlinks.length} bundle path(s) are symlinks (refused by the packager).`,
           items: symlinks.map((s) => `symlink: ${s}`),
         });
       } else {
-        checks.push({ label: "Install sources", level: "ok", detail: `${m.install.length} source(s) present.` });
+        checks.push({ label: "Bundle paths", level: "ok", detail: `${m.bundle.length} bundle path(s) present.` });
+      }
+    }
+    // Every symlink source must live inside bundled content, or the link would
+    // point at a file the payload never shipped. Pure check — no fs needed.
+    if (m.symlink.length) {
+      const bundlePaths = m.bundle.map((b) => b.path);
+      const uncovered = m.symlink.filter((s) => !isCoveredByBundle(s.source, bundlePaths)).map((s) => s.source);
+      if (uncovered.length) {
+        checks.push({
+          label: "Symlink coverage",
+          level: "error",
+          detail: `${uncovered.length} symlink source(s) not inside any [[bundle]] path.`,
+          items: uncovered.map((s) => `not bundled: ${s}`),
+        });
+      } else {
+        checks.push({
+          label: "Symlink coverage",
+          level: "ok",
+          detail: `${m.symlink.length} symlink(s) covered by bundled content.`,
+        });
       }
     }
   }

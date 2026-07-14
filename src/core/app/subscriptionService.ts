@@ -81,10 +81,10 @@ export class SubscriptionService {
     await this.ports.fs.remove(tmp);
     const r = this.roots();
     return {
-      installs: m.install.map((i) => ({
-        source: i.source,
-        dest: i.dest,
-        resolved: this.ports.manifest.resolveDest(i.dest, r),
+      installs: m.symlink.map((s) => ({
+        source: s.source,
+        dest: s.dest,
+        resolved: this.ports.manifest.resolveDest(s.dest, r),
       })),
       requires: m.requires_module.map((x) => ({ id: x.id })),
     };
@@ -153,7 +153,7 @@ export class SubscriptionService {
     const model = this.ports.manifest.parseToml(await this.ports.fs.readText(path.join(sub.dir, MANIFEST)));
     const r = this.roots();
     const defs: LinkDefinition[] = [];
-    model.install.forEach((rule, i) => {
+    model.symlink.forEach((rule, i) => {
       const resolved = this.ports.manifest.resolveDest(rule.dest, r);
       if (!resolved) throw new Error(`Cannot resolve ${rule.dest} — configure {GameInstall} in Settings.`);
       defs.push({ id: `${repo}:${i}`, src: path.join(sub.dir, rule.source), dest: resolved });

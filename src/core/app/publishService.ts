@@ -12,8 +12,8 @@ import { DISCOVERY_TOPIC } from "../domain/githubMarketplace";
 
 // Publish orchestration, mirroring dcs-studio's Publisher, driven through ports:
 // git (local), gh (repo + release), archive (payload). Share creates the GitHub
-// repo and pushes; cutRelease packages the manifest + [[install]] sources into a
-// 7z payload (volume-split when large), then creates a release with the
+// repo and pushes; cutRelease packages the manifest + every [[bundle]] path into
+// a 7z payload (volume-split when large), then creates a release with the
 // standalone dcs-studio.toml sitting alongside every payload volume.
 
 /** Streaming progress callback — one human-readable line per step. */
@@ -122,10 +122,13 @@ export class PublishService {
     if (!(await archive.available())) throw new Error("7z not found.");
 
     const files = ["dcs-studio.toml"];
-    for (const r of m.install) {
-      const abs = path.join(root, r.source);
-      if (!(await fs.exists(abs))) throw new Error(`Install source missing: ${r.source} — build the project first.`);
-      files.push(r.source);
+    const seen = new Set<string>();
+    for (const b of m.bundle) {
+      if (seen.has(b.path)) continue; // dedupe: one archive entry per path
+      seen.add(b.path);
+      const abs = path.join(root, b.path);
+      if (!(await fs.exists(abs))) throw new Error(`Bundle path missing: ${b.path} — build the project first.`);
+      files.push(b.path);
     }
 
     const outDir = path.join(root, ".dcs-studio", "release");

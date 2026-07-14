@@ -85,8 +85,8 @@ window.__DOCS__ = {
           body: `
 <h2>What happens when you click Install</h2>
 <ol>
-  <li><strong>Subscribe</strong> — the mod's <a data-page="mod-bundles">bundle</a> (its <code>.7z</code> payload, possibly split into numbered volumes) is downloaded from the GitHub release and extracted with 7-Zip into your local mod data directory.</li>
-  <li><strong>Enable</strong> — each <code>[[install]]</code> rule in the mod's manifest is resolved and a link is created from the unpacked files into your DCS folders (Saved Games and/or the game install).</li>
+  <li><strong>Subscribe</strong> — the mod's <a data-page="mod-bundles">bundle</a> (its <code>.7z</code> payload, possibly split into numbered volumes) is downloaded from the GitHub release and extracted with 7-Zip into your local mod data directory. The payload contains every <code>[[bundle]]</code> path the author declared.</li>
+  <li><strong>Enable</strong> — each <code>[[symlink]]</code> rule in the mod's manifest is resolved and a link is created from the unpacked files into your DCS folders (Saved Games and/or the game install). Because bundling and linking are separate, a mod can ship a whole folder but link only a file or two from inside it.</li>
 </ol>
 <p>Before installing, the marketplace shows you the <strong>install plan</strong> — exactly which paths will be linked where — by reading the standalone <code>dcs-studio.toml</code> asset from the release, without downloading the payload.</p>
 
@@ -99,13 +99,19 @@ window.__DOCS__ = {
 <p>This directory is deliberately <em>outside</em> DCS's folders so the sim never scans raw unpacked assets. Change it with the <code>dcsStudio.dataDir</code> setting.</p>
 
 <h2>Links, not copies</h2>
-<p>Enabling a mod places links into DCS's folders instead of copying files:</p>
-<ul>
-  <li>a <strong>directory</strong> is linked as an NTFS <em>junction</em>,</li>
-  <li>a <strong>file on the same drive</strong> as a <em>hard link</em>,</li>
-  <li>a <strong>file on another drive</strong> as a <em>symlink</em> (Windows may show a one-time elevation prompt for this case).</li>
-</ul>
+<p>Enabling a mod places links into DCS's folders instead of copying files. The primitive depends on what the <code>[[symlink]].source</code> is and whether it lands on the same drive:</p>
+<table>
+  <tr><th>Source</th><th>Destination</th><th>Link primitive</th></tr>
+  <tr><td>Directory</td><td>Does not exist yet</td><td>NTFS <em>junction</em> (no elevation needed)</td></tr>
+  <tr><td>Directory</td><td><strong>Existing real directory</strong> (e.g. <code>Scripts/Hooks</code>)</td><td><em>Merged into</em>: each child is linked individually, so the shared DCS folder is never replaced</td></tr>
+  <tr><td>File</td><td>Same drive</td><td><em>Hard link</em></td></tr>
+  <tr><td>File</td><td>Another drive</td><td><em>Symlink</em> (Windows may show a one-time elevation prompt)</td></tr>
+</table>
+<p>Re-enabling a mod whose links are already in place is idempotent — a link DCS Studio already created for that source is re-adopted, not treated as a clash. A destination occupied by a <em>foreign</em> file (or a link pointing elsewhere) is a conflict: the enable fails, naming the exact path, so an unrelated file is never overwritten.</p>
 <p>Links cost no disk space, and disabling a mod is instant — the links are removed while the downloaded files stay put. If any link fails to create, the whole enable is rolled back so you're never left half-installed.</p>
+
+<h2>Uninstall semantics</h2>
+<p>Disabling or uninstalling removes <strong>only the links DCS Studio created</strong>. Junctions are removed with a plain directory-unlink that can never delete <em>through</em> the link into your real mod files or DCS install, and a folder that was merged-into keeps everything that wasn't ours. Uninstall additionally deletes the mod's unpacked payload from the data directory; the surrounding DCS folders are left exactly as they were.</p>
 
 <h2>Prerequisites shown on the product page</h2>
 <ul>
@@ -127,7 +133,7 @@ window.__DOCS__ = {
 <table>
   <tr><th>Asset</th><th>Purpose</th></tr>
   <tr><td><code>dcs-studio.toml</code></td><td>The manifest, uploaded standalone so the marketplace can read the install plan <em>without</em> downloading the payload. Its presence is also what makes the release installable.</td></tr>
-  <tr><td><code>dcs-studio-&lt;name&gt;-&lt;tag&gt;.7z</code></td><td>The payload: the manifest plus every <code>[[install]]</code> source path, compressed with 7-Zip.</td></tr>
+  <tr><td><code>dcs-studio-&lt;name&gt;-&lt;tag&gt;.7z</code></td><td>The payload: the manifest plus every <code>[[bundle]]</code> path, compressed with 7-Zip.</td></tr>
   <tr><td><code>…&#8203;.7z.001</code>, <code>.002</code>, …</td><td>Large payloads are split into numbered volumes (1.5&nbsp;GiB each by default) because GitHub rejects single assets over 2&nbsp;GiB. The installer downloads all volumes and extracts them as one archive.</td></tr>
 </table>
 
@@ -137,8 +143,8 @@ window.__DOCS__ = {
 Scripts/my-mod.lua
 Scripts/Hooks/my-mod_hook.lua
 target/release/my-mod.dll</code></pre>
-<p>On install this tree is extracted verbatim into the mod's folder under the <a data-page="installing-mods">data directory</a>. The manifest's <code>[[install]]</code> rules then map paths in that tree to destinations in DCS:</p>
-<pre><code>[[install]]
+<p>On install this tree is extracted verbatim into the mod's folder under the <a data-page="installing-mods">data directory</a>. The manifest's <code>[[symlink]]</code> rules then map paths in that tree to destinations in DCS:</p>
+<pre><code>[[symlink]]
 source = "Scripts/my-mod.lua"                # path inside the bundle
 dest   = "{SavedGames}/Scripts/my-mod.lua"   # where it gets linked</code></pre>
 <p><code>{SavedGames}</code> resolves to your DCS Saved Games write dir; <code>{GameInstall}</code> to the game install folder. See the <a data-page="manifest-reference">manifest reference</a> for the full rules.</p>
@@ -199,14 +205,14 @@ dest   = "{SavedGames}/Scripts/my-mod.lua"   # where it gets linked</code></pre>
 <h2>Templates</h2>
 <table>
   <tr><th>Template</th><th>What you get</th></tr>
-  <tr><td><strong>Blank Project</strong></td><td>Just a <code>dcs-studio.toml</code> with commented examples for install rules.</td></tr>
-  <tr><td><strong>Lua Mission Script</strong></td><td>A <code>Scripts/&lt;name&gt;.lua</code> using the mission environment (<code>env</code>, <code>timer</code>, <code>trigger</code>, <code>world</code>), an install rule targeting <code>{SavedGames}/Scripts</code>, and a README.</td></tr>
-  <tr><td><strong>Lua GameGUI Hook</strong></td><td>A <code>Scripts/Hooks/&lt;name&gt;_hook.lua</code> using <code>DCS.setUserCallbacks</code>, installed to <code>{SavedGames}/Scripts/Hooks</code>.</td></tr>
-  <tr><td><strong>Rust DLL Mod</strong></td><td>A complete <code>mlua</code> cdylib crate pre-configured to link against DCS's own <code>lua.dll</code>, a loader hook script, and install rules for both the built DLL (<code>{SavedGames}/Mods/tech/&lt;name&gt;/bin</code>) and the hook.</td></tr>
+  <tr><td><strong>Blank Project</strong></td><td>Just a <code>dcs-studio.toml</code> with commented examples for bundle + symlink rules.</td></tr>
+  <tr><td><strong>Lua Mission Script</strong></td><td>A <code>Scripts/&lt;name&gt;.lua</code> using the mission environment (<code>env</code>, <code>timer</code>, <code>trigger</code>, <code>world</code>), a bundle + symlink pair targeting <code>{SavedGames}/Scripts</code>, and a README.</td></tr>
+  <tr><td><strong>Lua GameGUI Hook</strong></td><td>A <code>Scripts/Hooks/&lt;name&gt;_hook.lua</code> using <code>DCS.setUserCallbacks</code>, bundled and linked into <code>{SavedGames}/Scripts/Hooks</code>.</td></tr>
+  <tr><td><strong>Rust DLL Mod</strong></td><td>A complete <code>mlua</code> cdylib crate pre-configured to link against DCS's own <code>lua.dll</code>, a loader hook script, and bundle + symlink rules for both the built DLL (<code>{SavedGames}/Mods/tech/&lt;name&gt;/bin</code>) and the hook.</td></tr>
 </table>
 
 <h2>The manifest form</h2>
-<p>Opening any <code>dcs-studio.toml</code> keeps the real text editor and opens an <strong>authoring form beside it</strong>. The two are two-way bound: edit either side and the other follows. The form covers the project info, install rules and required modules; anything it doesn't model (custom sections like <code>[release]</code> or <code>[lints]</code>) is preserved verbatim in the file.</p>
+<p>Opening any <code>dcs-studio.toml</code> keeps the real text editor and opens an <strong>authoring form beside it</strong>. The two are two-way bound: edit either side and the other follows. The form covers the project info, bundled content, symlinks and required modules; anything it doesn't model (custom sections like <code>[release]</code> or <code>[lints]</code>) is preserved verbatim in the file.</p>
 <div class="cmd-row">
   <button class="cmd-btn" data-command="dcs.manifest.author">Create / Edit a Mod</button>
   <button class="cmd-btn" data-command="dcs.project.new">New Project from Template</button>
@@ -217,7 +223,7 @@ dest   = "{SavedGames}/Scripts/my-mod.lua"   # where it gets linked</code></pre>
         {
           id: "manifest-reference",
           title: "dcs-studio.toml Reference",
-          lede: "The manifest is a TOML file at the project root. It names the mod and declares what gets installed where — it is both the build recipe for publishing and the install plan for users.",
+          lede: "The manifest is a TOML file at the project root. It names the mod and declares what gets bundled and what gets linked — it is both the build recipe for publishing and the install plan for users.",
           body: `
 <h2>Complete example</h2>
 <pre><code>[project]
@@ -231,13 +237,23 @@ dcs_min_version = "2.9.0"
 id = "ed/f16c"
 name = "F-16C Viper"
 
-[[install]]
-source = "Scripts/f16-weapons.lua"
-dest = "{SavedGames}/Scripts/f16-weapons.lua"
+# What gets packed into the release archive.
+[[bundle]]
+path = "Mods/tech/f16-weapons"
 
-[[install]]
-source = "Mods/tech/f16-weapons"
-dest = "{SavedGames}/Mods/tech/f16-weapons"</code></pre>
+[[bundle]]
+path = "Scripts/f16-weapons.lua"
+
+# Which links are created when a user enables the mod. A symlink source is a
+# path INSIDE the bundled content — you can bundle a whole folder and link
+# just one file from inside it.
+[[symlink]]
+source = "Mods/tech/f16-weapons/entry.lua"
+dest = "{SavedGames}/Mods/tech/f16-weapons/entry.lua"
+
+[[symlink]]
+source = "Scripts/f16-weapons.lua"
+dest = "{SavedGames}/Scripts/f16-weapons.lua"</code></pre>
 
 <h2><code>[project]</code> — identity</h2>
 <table>
@@ -249,11 +265,18 @@ dest = "{SavedGames}/Mods/tech/f16-weapons"</code></pre>
   <tr><td><em>anything else</em></td><td>No</td><td>Extra keys (e.g. <code>dcs_min_version</code>, <code>template</code>) are preserved verbatim — the tooling never strips what it doesn't model.</td></tr>
 </table>
 
-<h2><code>[[install]]</code> — what goes where</h2>
-<p>Zero or more rules. Each links one path from your project into a DCS folder when a user enables the mod, and defines what gets packed into the <a data-page="mod-bundles">bundle</a> when you publish.</p>
+<h2><code>[[bundle]]</code> — what gets packed</h2>
+<p>Zero or more entries. Each declares one path packed into the release <a data-page="mod-bundles">bundle</a> (the <code>.7z</code>) when you publish. Bundling is decoupled from linking: bundle a whole folder here, then link only the pieces you need with <code>[[symlink]]</code>.</p>
 <table>
   <tr><th>Key</th><th>Required</th><th>Meaning</th></tr>
-  <tr><td><code>source</code></td><td>Yes</td><td>A file or directory, <strong>relative to the project root</strong>. Must exist on disk at publish time and must not be a symlink.</td></tr>
+  <tr><td><code>path</code></td><td>Yes</td><td>A file or directory, <strong>relative to the project root</strong>. Must exist on disk at publish time and must not itself be a symlink (the packager refuses symlinks). Repeated identical paths are packed once.</td></tr>
+</table>
+
+<h2><code>[[symlink]]</code> — what gets linked on enable</h2>
+<p>Zero or more links, created when a user enables the mod and removed when they disable it. Each <code>source</code> must resolve to a path <strong>inside the bundled content</strong> — preflight rejects a symlink whose source no <code>[[bundle]]</code> path covers, because the payload would never ship that file.</p>
+<table>
+  <tr><th>Key</th><th>Required</th><th>Meaning</th></tr>
+  <tr><td><code>source</code></td><td>Yes</td><td>A path inside a bundled path (equal to a <code>[[bundle]].path</code>, or nested under one), <strong>relative to the project root</strong>.</td></tr>
   <tr><td><code>dest</code></td><td>Yes</td><td>Destination path beginning with a root token (below).</td></tr>
 </table>
 <h3>Destination root tokens</h3>
@@ -262,8 +285,30 @@ dest = "{SavedGames}/Mods/tech/f16-weapons"</code></pre>
   <tr><td><code>{SavedGames}</code></td><td>The user's DCS write dir, e.g. <code>%USERPROFILE%\\Saved Games\\DCS</code>. The default — a dest with no token is treated as under <code>{SavedGames}</code>.</td></tr>
   <tr><td><code>{GameInstall}</code></td><td>The DCS installation folder. Only resolvable if the user has configured it; prefer <code>{SavedGames}</code> whenever DCS supports it.</td></tr>
 </table>
+
+<h3>How a symlink is created (folder vs file)</h3>
+<p>The link primitive is chosen from what the <code>source</code> is and where the <code>dest</code> lands; see <a data-page="installing-mods">Installing mods</a> for the full table. In short: a <strong>folder</strong> becomes an NTFS junction; a <strong>file on the same drive</strong> a hard link; a <strong>file on another drive</strong> a symlink. If the <code>dest</code> is an <strong>existing real directory</strong> (e.g. <code>Scripts/Hooks</code>) and the source is a directory, the source is <em>merged into</em> it child-by-child so a shared DCS folder is never clobbered. Uninstalling removes only the links DCS Studio created — never the surrounding real files.</p>
+
 <div class="note">
-  <p>A mod with <strong>no</strong> install rules publishes fine (with a warning) but ships only its manifest — useful for metadata-only packages.</p>
+  <p>A mod with <strong>no</strong> <code>[[bundle]]</code> paths publishes fine (with a warning) but ships only its manifest — useful for metadata-only packages. A mod may bundle content without linking any of it (an asset pack consumed by another mod).</p>
+</div>
+
+<h2>Legacy <code>[[install]]</code> (deprecated)</h2>
+<p>Older manifests used a single <code>[[install]] { source, dest }</code> array where one rule meant <em>both</em> "pack this" and "link this". That form still installs from old published releases and still loads in the editor, but it is deprecated in favour of the split blocks. Each legacy rule is exactly equivalent to a <code>[[bundle]]</code> plus a <code>[[symlink]]</code>:</p>
+<pre><code># legacy
+[[install]]
+source = "Scripts/mod.lua"
+dest = "{SavedGames}/Scripts/mod.lua"
+
+# equivalent modern form
+[[bundle]]
+path = "Scripts/mod.lua"
+
+[[symlink]]
+source = "Scripts/mod.lua"
+dest = "{SavedGames}/Scripts/mod.lua"</code></pre>
+<div class="note">
+  <p><strong>Migration:</strong> DCS Studio reads a legacy <code>[[install]]</code> file without rewriting it, but the moment you edit and save through the form it is re-emitted as <code>[[bundle]]</code> + <code>[[symlink]]</code> — that save <em>is</em> the migration, and it is one-way. A manifest may carry both forms at once; the legacy rules are folded in and identical entries de-duplicated.</p>
 </div>
 
 <h2><code>[[requires_module]]</code> — stock DCS content</h2>
@@ -287,7 +332,8 @@ dest = "{SavedGames}/Mods/tech/f16-weapons"</code></pre>
 <p>The Publish panel runs a preflight and shows a checklist. It verifies:</p>
 <ul>
   <li><code>dcs-studio.toml</code> exists at the workspace root, parses, and has a non-blank <code>project.name</code>;</li>
-  <li>every <code>[[install]].source</code> exists on disk (build first!) and none is a symlink — the packager refuses symlinks;</li>
+  <li>every <code>[[bundle]].path</code> exists on disk (build first!) and none is a symlink — the packager refuses symlinks;</li>
+  <li>every <code>[[symlink]].source</code> is covered by a <code>[[bundle]]</code> path (you can't link content the payload never ships);</li>
   <li><strong>7-Zip</strong> is installed (or set <code>dcsStudio.sevenZipPath</code>);</li>
   <li><strong>git</strong> is installed;</li>
   <li>the <strong>GitHub CLI</strong> (<code>gh</code>) is installed <em>and</em> signed in (<code>gh auth login</code>).</li>
@@ -304,7 +350,7 @@ dest = "{SavedGames}/Mods/tech/f16-weapons"</code></pre>
 <h2>Step 2 — Create a release</h2>
 <p>Enter a tag (your manifest <code>version</code> is suggested) and optional notes. DCS Studio then:</p>
 <ol>
-  <li>packs <code>dcs-studio.toml</code> + every install source into <code>dcs-studio-&lt;name&gt;-&lt;tag&gt;.7z</code> under <code>.dcs-studio/release/</code>, splitting into numbered volumes if it exceeds ~1.5&nbsp;GiB;</li>
+  <li>packs <code>dcs-studio.toml</code> + every <code>[[bundle]]</code> path into <code>dcs-studio-&lt;name&gt;-&lt;tag&gt;.7z</code> under <code>.dcs-studio/release/</code>, splitting into numbered volumes if it exceeds ~1.5&nbsp;GiB;</li>
   <li>uploads the payload <em>and</em> a standalone <code>dcs-studio.toml</code> as release assets;</li>
   <li>creates the git tag and GitHub release. Re-publishing the same tag first deletes the old release+tag, so releasing <code>1.0.0</code> twice is safe and idempotent.</li>
 </ol>
