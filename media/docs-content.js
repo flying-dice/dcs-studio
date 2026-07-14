@@ -341,6 +341,28 @@ cwd = "Server"</code></pre>
   <li><strong>On IDE exit.</strong> DCS Studio deliberately leaves launched processes running when it closes (the same policy as the DCS launcher, which never kills DCS on exit) — a companion app keeps running until you stop it.</li>
 </ul>
 
+<h2><code>[[mission_script]]</code> — Lua run at mission start</h2>
+<p>Zero or more Lua scripts DCS Studio runs at mission start through its <a data-page="mission-scripting">managed <code>MissionScripting.lua</code> entrypoint</a>. Use this when a mod needs Lua to run automatically for every mission — MOOSE-style frameworks, telemetry exporters, server-side script packs — rather than being loaded by a mission trigger.</p>
+<table>
+  <tr><th>Key</th><th>Required</th><th>Meaning</th></tr>
+  <tr><td><code>name</code></td><td>Yes</td><td>Display name shown to subscribers and used as the aggregator tag. Preflight rejects an empty name.</td></tr>
+  <tr><td><code>purpose</code></td><td>No</td><td>One line explaining what the script does, shown to subscribers.</td></tr>
+  <tr><td><code>path</code></td><td>Yes</td><td>Path to the <code>.lua</code> file, relative to the bundled payload. Must be covered by a <code>[[bundle]]</code> path, exactly like a symlink source or an entrypoint exe.</td></tr>
+  <tr><td><code>run_on</code></td><td>Yes</td><td><code>"after-sanitize"</code> (the safe default — runs in the normal sandboxed mission environment) or <code>"before-sanitize"</code> (runs with the full unsanitized Lua environment).</td></tr>
+</table>
+<pre><code>[[bundle]]
+path = "Scripts/my-framework"
+
+[[mission_script]]
+name = "My Framework loader"
+purpose = "Boots the framework so missions can require it"
+path = "Scripts/my-framework/loader.lua"
+run_on = "after-sanitize"</code></pre>
+<div class="note warn">
+  <p><strong>Security — <code>before-sanitize</code> runs unsandboxed.</strong> A <code>run_on = "before-sanitize"</code> script executes <em>before</em> DCS's lockdown, with full <code>os</code>, <code>io</code>, <code>lfs</code> and <code>require</code>/<code>package</code> access — i.e. arbitrary file and process access on the subscriber's machine. That is the point for some mods (exporters, hooks bridges) and also the entire risk. Only use it when a mod genuinely needs it. The marketplace will surface a prominent warning on any mod that injects pre-sanitization code so subscribers can judge the source before installing; the manifest form marks these rows with a warning too.</p>
+</div>
+<p>How it runs: DCS Studio owns two <code>dofile</code> trigger lines in <code>&lt;gameInstall&gt;/Scripts/MissionScripting.lua</code> — one before the sanitize block, one after — and regenerates two managed aggregator files in <code>Saved Games/DCS/Scripts/</code> from your enabled mods on every enable/disable. See <a data-page="mission-scripting">MissionScripting</a>.</p>
+
 <h2><code>[[requires_module]]</code> — stock DCS content</h2>
 <p>Declares official DCS modules the user must own. Shown as prerequisites on the product page.</p>
 <table>
@@ -440,6 +462,21 @@ cwd = "Server"</code></pre>
 </div>
 <div class="cmd-row">
   <button class="cmd-btn" data-command="dcs.mission.open">Open MissionScripting.lua</button>
+</div>
+
+<h2>Managed mod mission-script hooks</h2>
+<p>Separately from the sanitize toggle above, DCS Studio can own two <code>dofile</code> trigger lines in <code>MissionScripting.lua</code> so mods that declare <a data-page="manifest-schema"><code>[[mission_script]]</code></a> blocks run automatically at mission start:</p>
+<ul>
+  <li><code>dofile(lfs.writedir()..'Scripts/DcsStudioMissionScriptsBeforeSanitize.lua')</code> — inserted <strong>before</strong> the sanitize block, so its scripts run with the full unsanitized Lua environment.</li>
+  <li><code>dofile(lfs.writedir()..'Scripts/DcsStudioMissionScriptsAfterSanitize.lua')</code> — inserted <strong>after</strong> it, for scripts that run in the normal sandbox.</li>
+</ul>
+<p>Those two aggregator files (in <code>Saved Games/DCS/Scripts/</code>) are <strong>regenerated from scratch</strong> from your enabled mods every time you enable or disable one — a disabled or uninstalled mod leaves no trace. Installing the hooks is idempotent and backup-first (the same <code>.dcsstudio.bak</code> snapshot), validates the trigger positions, and one-click-fixes a missing or misplaced line. Removing them clears the lines cleanly.</p>
+<div class="note warn">
+  <p><strong>Independent of the bridge.</strong> These hooks are for <em>mod</em> mission scripts only. The DCS Studio bridge boots via a GUI hook and does <em>not</em> edit <code>MissionScripting.lua</code> — the two mechanisms coexist. And a <code>before-sanitize</code> script runs with full <code>os</code>/<code>io</code>/<code>lfs</code>/<code>require</code> access; only install hooks for mods whose source you trust.</p>
+</div>
+<div class="cmd-row">
+  <button class="cmd-btn" data-command="dcs.mission.hooks.install">Install mod mission-script hooks</button>
+  <button class="cmd-btn" data-command="dcs.mission.hooks.remove">Remove mod mission-script hooks</button>
 </div>
 `,
         },

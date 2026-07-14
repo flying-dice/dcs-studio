@@ -22,6 +22,25 @@ export interface ManifestEntrypoint {
   cwd?: string;
 }
 
+/** Which side of MissionScripting.lua's sanitize lockdown a mod script runs on. */
+export type MissionScriptRunOn = "before-sanitize" | "after-sanitize";
+
+/**
+ * A Lua script a mod wants run at mission start via DCS Studio's managed
+ * MissionScripting.lua entrypoint. `path` is project/bundle-relative (covered by
+ * a `[[bundle]]` entry, exactly like an entrypoint `exe`); the aggregator dofiles
+ * the file from its unpacked location. `run_on="before-sanitize"` runs with the
+ * FULL unsanitized Lua environment (os/io/lfs/require) — a security-sensitive
+ * capability surfaced with warnings. Mirrors a `[[mission_script]]` block in
+ * media/manifest-core.js.
+ */
+export interface ManifestMissionScript {
+  name: string;
+  purpose?: string;
+  path: string;
+  run_on: MissionScriptRunOn;
+}
+
 /** A subscribed mod's persisted ledger entry (`subscriptions.json` value). */
 export interface Subscription {
   repo: string;
@@ -37,6 +56,13 @@ export interface Subscription {
    * on ledgers written before this field existed — read defensively (`?? []`).
    */
   entrypoints: ManifestEntrypoint[];
+  /**
+   * Mission scripts the mod declares, snapshotted from its manifest at subscribe
+   * time so the pre/post-sanitize aggregators can be regenerated on every
+   * enable/disable without re-fetching manifests. Absent on older ledgers —
+   * read defensively (`?? []`).
+   */
+  missionScripts: ManifestMissionScript[];
 }
 
 /** The DCS install roots a manifest destination is resolved against. */
@@ -62,6 +88,8 @@ export interface ManifestModel {
   requires_module: { id: string }[];
   /** Executable entrypoints declared via `[[entrypoint]]` blocks. */
   entrypoint: ManifestEntrypoint[];
+  /** Mission scripts declared via `[[mission_script]]` blocks. */
+  mission_script: ManifestMissionScript[];
   extras: string[];
 }
 

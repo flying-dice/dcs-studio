@@ -233,6 +233,18 @@
         "icon": "$(discard)"
       },
       {
+        "command": "dcs.mission.hooks.install",
+        "title": "Install mod mission-script hooks in MissionScripting.lua",
+        "category": "DCS Studio",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "dcs.mission.hooks.remove",
+        "title": "Remove mod mission-script hooks from MissionScripting.lua",
+        "category": "DCS Studio",
+        "icon": "$(debug-disconnect)"
+      },
+      {
         "command": "dcs.bridge.console",
         "title": "Open Lua Console",
         "category": "DCS Studio",
@@ -341,6 +353,16 @@
           "command": "dcs.mission.restore",
           "when": "resourceFilename == MissionScripting.lua",
           "group": "1_dcs@1"
+        },
+        {
+          "command": "dcs.mission.hooks.install",
+          "when": "resourceFilename == MissionScripting.lua",
+          "group": "1_dcs@2"
+        },
+        {
+          "command": "dcs.mission.hooks.remove",
+          "when": "resourceFilename == MissionScripting.lua",
+          "group": "1_dcs@3"
         }
       ]
     },

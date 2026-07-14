@@ -5,6 +5,12 @@ import {
   scanItems,
   type MissionStatus,
 } from "../domain/missionSanitize";
+import {
+  installTriggers,
+  removeTriggers,
+  triggerStatus,
+  type TriggerStatuses,
+} from "../domain/missionScriptTrigger";
 
 // Use-case service for managing MissionScripting.lua's sanitization block. Pure
 // parsing/edit computation lives in core/domain/missionSanitize; this layer owns
@@ -48,5 +54,36 @@ export class MissionSanitizeService {
     if (!(await this.fs.exists(bak))) throw new Error("No backup found.");
     await this.fs.copy(bak, p);
     return this.status(p);
+  }
+
+  /** Per-line status of the managed mod-script trigger dofile lines. */
+  async triggerStatus(p: string): Promise<TriggerStatuses> {
+    return triggerStatus(await this.fs.readText(p));
+  }
+
+  /** Idempotently install/fix both trigger lines; backs up on first change. */
+  async installTriggers(p: string): Promise<TriggerStatuses> {
+    await this.applyTriggerEdit(p, installTriggers);
+    return this.triggerStatus(p);
+  }
+
+  /** Remove both trigger lines; backs up on first change. */
+  async removeTriggers(p: string): Promise<TriggerStatuses> {
+    await this.applyTriggerEdit(p, removeTriggers);
+    return this.triggerStatus(p);
+  }
+
+  /** Read → compute the trigger edit → back up on first change → write. */
+  private async applyTriggerEdit(
+    p: string,
+    edit: (content: string) => { content: string; changed: boolean },
+  ): Promise<void> {
+    const original = await this.fs.readText(p);
+    const { content, changed } = edit(original);
+    if (changed) {
+      const bak = backupPath(p);
+      if (!(await this.fs.exists(bak))) await this.fs.copy(p, bak);
+      await this.fs.writeText(p, content);
+    }
   }
 }

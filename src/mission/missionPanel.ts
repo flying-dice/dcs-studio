@@ -121,3 +121,55 @@ export async function restoreMission(svc: MissionSanitizeService): Promise<void>
     void showError(permissionHint(e), e);
   }
 }
+
+/** A human summary of the two trigger statuses, e.g. "before: valid, after: missing". */
+function summarizeTriggers(s: { before: string; after: string }): string {
+  return `before-sanitize: ${s.before}, after-sanitize: ${s.after}`;
+}
+
+/**
+ * Install/fix the managed mod-script trigger dofile lines in MissionScripting.lua
+ * (idempotent, backup-first). If both are already valid, reports and does
+ * nothing further. These are the MOD-script hooks; they are independent of the
+ * bridge boot, which uses no MissionScripting.lua edits.
+ */
+export async function installMissionHooks(svc: MissionSanitizeService): Promise<void> {
+  const p = await requireFile();
+  if (!p) return;
+  const open = vscode.workspace.textDocuments.find((d) => d.uri.fsPath.toLowerCase() === p.toLowerCase());
+  if (open?.isDirty) {
+    void vscode.window.showWarningMessage(
+      "MissionScripting.lua has unsaved changes. Save or close it first, then try again.",
+    );
+    return;
+  }
+  try {
+    const status = await svc.installTriggers(p);
+    await refreshOpen(p);
+    void vscode.window.showInformationMessage(
+      `Mission-script hooks installed in MissionScripting.lua (${summarizeTriggers(status)}). Backup: ${path.basename(backupPath(p))}.`,
+    );
+  } catch (e) {
+    void showError(permissionHint(e), e);
+  }
+}
+
+/** Remove the managed mod-script trigger dofile lines from MissionScripting.lua. */
+export async function removeMissionHooks(svc: MissionSanitizeService): Promise<void> {
+  const p = await requireFile();
+  if (!p) return;
+  const open = vscode.workspace.textDocuments.find((d) => d.uri.fsPath.toLowerCase() === p.toLowerCase());
+  if (open?.isDirty) {
+    void vscode.window.showWarningMessage(
+      "MissionScripting.lua has unsaved changes. Save or close it first, then try again.",
+    );
+    return;
+  }
+  try {
+    await svc.removeTriggers(p);
+    await refreshOpen(p);
+    void vscode.window.showInformationMessage("Mission-script hooks removed from MissionScripting.lua.");
+  } catch (e) {
+    void showError(permissionHint(e), e);
+  }
+}

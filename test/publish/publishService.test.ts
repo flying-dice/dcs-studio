@@ -174,6 +174,7 @@ function model(bundle: { path: string }[] = []): ManifestModel {
     symlink: [],
     requires_module: [],
     entrypoint: [],
+    mission_script: [],
     extras: [],
   };
 }

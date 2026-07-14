@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { FileSystemPort } from "../../src/core/ports/filesystem";
 import { MissionSanitizeService } from "../../src/core/app/missionSanitizeService";
 import { allItems, backupPath } from "../../src/core/domain/missionSanitize";
+import { BEFORE_TRIGGER, AFTER_TRIGGER } from "../../src/core/domain/missionScriptTrigger";
 
 const LUA = "C:\\DCS\\Scripts\\MissionScripting.lua";
 const BAK = backupPath(LUA);
@@ -145,5 +146,52 @@ describe("MissionSanitizeService.restore", () => {
     expect(s.exists).toBe(true);
     expect(s.backupExists).toBe(true);
     for (const item of s.items) expect(item.sanitized).toBe(true);
+  });
+});
+
+// The managed mod-script trigger dofile lines, over the same live file + backup.
+describe("MissionSanitizeService.triggerStatus", () => {
+  it("reports both triggers missing on a pristine file", async () => {
+    const { svc } = setup({ [LUA]: PRISTINE });
+    expect(await svc.triggerStatus(LUA)).toEqual({ before: "missing", after: "missing" });
+  });
+});
+
+describe("MissionSanitizeService.installTriggers", () => {
+  it("backs up on first change with the frozen filename, writes, and reports both valid", async () => {
+    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    const status = await svc.installTriggers(LUA);
+    expect(fs.copies).toEqual([[LUA, BAK]]);
+    expect(fs.files.get(BAK)).toBe(PRISTINE);
+    expect(fs.writes).toEqual([LUA]);
+    expect(fs.files.get(LUA)).toContain(BEFORE_TRIGGER);
+    expect(fs.files.get(LUA)).toContain(AFTER_TRIGGER);
+    expect(status).toEqual({ before: "valid", after: "valid" });
+  });
+
+  it("is idempotent — a second install neither backs up again nor rewrites", async () => {
+    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    await svc.installTriggers(LUA);
+    await svc.installTriggers(LUA);
+    expect(fs.copies).toEqual([[LUA, BAK]]); // only the first change copied
+    expect(fs.writes).toEqual([LUA]); // only the first change wrote
+  });
+});
+
+describe("MissionSanitizeService.removeTriggers", () => {
+  it("removes the trigger lines and reports both missing", async () => {
+    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    await svc.installTriggers(LUA);
+    const status = await svc.removeTriggers(LUA);
+    expect(fs.files.get(LUA)).toBe(PRISTINE); // fully restored
+    expect(fs.copies).toEqual([[LUA, BAK]]); // backup was made once, not again
+    expect(status).toEqual({ before: "missing", after: "missing" });
+  });
+
+  it("neither backs up nor writes when there are no triggers to remove", async () => {
+    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    await svc.removeTriggers(LUA);
+    expect(fs.copies).toEqual([]);
+    expect(fs.writes).toEqual([]);
   });
 });

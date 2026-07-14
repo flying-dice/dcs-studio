@@ -29,6 +29,7 @@ const sub: Subscription = {
   enabled: true,
   links: [{ id: "Owner/Repo:0", dest: "C:\\SG\\DCS\\Scripts\\X" }],
   entrypoints: [],
+  missionScripts: [],
 };
 
 describe("load", () => {
