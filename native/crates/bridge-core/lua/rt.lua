@@ -13,6 +13,11 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
   -- capped sweep can register ~200 fetches × up to 1000 children.
   local MAX_REFS = 500000
   local MAX_DEPTH = 200 -- encode recursion guard; deeper nests become "<max depth>"
+  -- The debug library may be absent entirely (a sanitized or embedded state):
+  -- degrade to plain "function" previews and an explicit signature error
+  -- instead of indexing a nil global. pcall can't protect `debug.getinfo`
+  -- itself when `debug` is nil — the index raises before the call starts.
+  local dbg = type(debug) == "table" and debug or nil
 
   local function esc_str(s)
     s = string.gsub(s, "\\", "\\\\")
@@ -157,7 +162,10 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
       -- Order matters: detect C functions first (they have no nparams even in
       -- Lua versions that provide it), then fall back when nparams is absent
       -- (PUC 5.1 / a sanitized debug lib gives only nups from "u").
-      local ok, info = pcall(debug.getinfo, v, "uS")
+      if not dbg or type(dbg.getinfo) ~= "function" then
+        return "function"
+      end
+      local ok, info = pcall(dbg.getinfo, v, "uS")
       if not ok or type(info) ~= "table" then
         return "function"
       end
@@ -317,37 +325,37 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
     if type(fn) ~= "function" then
       return RT.encode({ ok = false, err = "stale ref (state was reset?) - inspect again and retry" })
     end
+    if not dbg or type(dbg.getinfo) ~= "function" or type(dbg.sethook) ~= "function" or type(dbg.getlocal) ~= "function" then
+      return RT.encode({ ok = false, err = "signature unavailable - debug library not present" })
+    end
     -- C functions FIRST: debug.getlocal on a C frame never terminates the
     -- capture loop, so bail before hooking anything.
-    local okS, sinfo = pcall(debug.getinfo, fn, "S")
+    local okS, sinfo = pcall(dbg.getinfo, fn, "S")
     if okS and type(sinfo) == "table" and sinfo.what == "C" then
       return RT.encode({ ok = true, params = "", native = true })
-    end
-    if type(debug) ~= "table" or type(debug.sethook) ~= "function" or type(debug.getlocal) ~= "function" then
-      return RT.encode({ ok = false, err = "signature unavailable - debug library not present" })
     end
     local names = {}
     -- Capture and restore whatever hook was installed (the debugger's, say) on
     -- every exit path.
-    local prev_hook, prev_mask, prev_count = debug.gethook()
+    local prev_hook, prev_mask, prev_count = dbg.gethook()
     local function restore()
       if prev_hook then
-        debug.sethook(prev_hook, prev_mask or "", prev_count or 0)
+        dbg.sethook(prev_hook, prev_mask or "", prev_count or 0)
       else
-        debug.sethook()
+        dbg.sethook()
       end
     end
     local hook = function()
       -- Frame 1 is this hook; frame 2 is the just-entered callee. Ignore any
       -- frame that is not our target (e.g. pcall itself), so getlocal never
       -- runs against a C frame.
-      local fi = debug.getinfo(2, "f")
+      local fi = dbg.getinfo(2, "f")
       if not fi or fi.func ~= fn then
         return
       end
       local i = 1
       while true do
-        local name = debug.getlocal(2, i)
+        local name = dbg.getlocal(2, i)
         if name == nil or name == "(*temporary)" then
           break
         end
@@ -356,7 +364,7 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
       end
       error("") -- abort before the body runs
     end
-    debug.sethook(hook, "c") -- call events only
+    dbg.sethook(hook, "c") -- call events only
     pcall(fn)
     restore()
     return RT.encode({ ok = true, params = table.concat(names, ", ") })

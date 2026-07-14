@@ -291,7 +291,9 @@ mod tests {
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn rt_explorer_and_signatures() {
-        let lua = Lua::new();
+        // SAFETY: test-only state; `unsafe_new` loads the debug stdlib, which
+        // the signature/arity paths need (DCS states expose `debug` too).
+        let lua = unsafe { Lua::unsafe_new() };
         lua.load(crate::RT_SOURCE).exec().expect("install RT");
         lua.load(
             r#"
@@ -343,6 +345,35 @@ mod tests {
         )
         .exec()
         .expect("rt explorer/signature suite");
+    }
+
+    /// Without the debug library (`Lua::new()` omits it, as do sanitized DCS
+    /// states), the RT degrades instead of raising: function previews drop the
+    /// arity suffix and `signature_json` reports unavailability.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn rt_explorer_degrades_without_debug_library() {
+        let lua = Lua::new();
+        lua.load(crate::RT_SOURCE).exec().expect("install RT");
+        lua.load(
+            r#"
+            local RT = assert(__DCS_STUDIO_RT, "RT installed")
+            assert(debug == nil, "harness state really has no debug library")
+
+            G = { fn3 = function(a, b, c) return 1 end }
+
+            -- Preview degrades to a bare "function" (no arity, no error).
+            local r = RT.inspect_json("G.fn3")
+            assert(r:find('"value":"function"') and not r:find("args"), "bare function preview: " .. r)
+
+            -- Signature resolution reports unavailability rather than raising.
+            local fref = tonumber(r:match('"ref"%s*:%s*(%d+)'))
+            local s = RT.signature_json(fref)
+            assert(s:find('"ok":false') and s:find("debug library not present"), "sig unavailable: " .. s)
+            "#,
+        )
+        .exec()
+        .expect("rt degraded (no debug) suite");
     }
 
     /// Every key registered on the live module table (and each sub-namespace
