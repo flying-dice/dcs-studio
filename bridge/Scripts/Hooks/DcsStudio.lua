@@ -211,6 +211,14 @@ local started, err = pcall(function()
     params = { { name = "ref", type = "number", required = true }, REPL_ENV_META },
   })
 
+  router:add_method("repl_signature", function(params)
+    local envname = repl_env(params)
+    return rt_envelope(envname, string.format("signature_json(%d)", (params and params.ref) or 0))
+  end, {
+    description = "Resolve a function ref's real parameter names (never runs the function): { ok, params?, native?, err? }.",
+    params = { { name = "ref", type = "number", required = true }, REPL_ENV_META },
+  })
+
   router:add_method("repl_clear", function(params)
     return rt_envelope(repl_env(params), "clear_json()")
   end, {

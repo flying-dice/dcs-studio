@@ -235,7 +235,9 @@ export interface ReplVariable {
   name: string;
   type: string;
   value: string;
-  /** > 0 means expandable via replExpand; 0 is a leaf. */
+  /** > 0 means the value has a live sim-side ref; branch on `type` to use it —
+   * a `table` is expandable via replExpand, a `function` is signature-resolvable
+   * via replSignature. 0 is a leaf. */
   ref: number;
 }
 
@@ -245,6 +247,16 @@ export interface ReplInspectResult {
   type?: string;
   value?: string;
   ref?: number;
+}
+
+/** Result of replSignature: a function ref's resolved parameter names. `native`
+ * marks a C function (no Lua parameter names); `params` is the comma-joined
+ * name list ("" for a 0-arg or native function). */
+export interface ReplSignatureResult {
+  ok: boolean;
+  err?: string;
+  params?: string;
+  native?: boolean;
 }
 
 /** One frame of a pause snapshot (bridge debug_state → snapshot JSON). */

@@ -5,10 +5,13 @@
 -- via the version guard, so a fresh state heals itself on the next call. Pure
 -- Lua 5.1 with no require. Entry points return JSON strings because
 -- dostring_in can only pass strings between states.
-if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 1) then
-  local RT = { version = 1, refs = {}, nrefs = 0 }
+if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
+  local RT = { version = 2, refs = {}, nrefs = 0 }
   local MAX_TABLE_CHILDREN = 1000 -- cap children returned for one expand
-  local MAX_REFS = 100000 -- ref ceiling so a huge drill-down can't pin unbounded memory
+  -- Ref ceiling so a huge drill-down can't pin unbounded memory. Raised for v2:
+  -- functions now consume refs too (single table slots each), and a budget-
+  -- capped sweep can register ~200 fetches × up to 1000 children.
+  local MAX_REFS = 500000
   local MAX_DEPTH = 200 -- encode recursion guard; deeper nests become "<max depth>"
 
   local function esc_str(s)
@@ -149,7 +152,29 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 1) then
         end
       end
       return "table (" .. count .. ")"
-    elseif t == "function" or t == "userdata" or t == "thread" then
+    elseif t == "function" then
+      -- Arity preview from debug.getinfo ONLY — never call the function.
+      -- Order matters: detect C functions first (they have no nparams even in
+      -- Lua versions that provide it), then fall back when nparams is absent
+      -- (PUC 5.1 / a sanitized debug lib gives only nups from "u").
+      local ok, info = pcall(debug.getinfo, v, "uS")
+      if not ok or type(info) ~= "table" then
+        return "function"
+      end
+      if info.what == "C" then
+        return "function (native)"
+      end
+      if info.nparams == nil then
+        return "function"
+      end
+      if info.isvararg then
+        if info.nparams == 0 then
+          return "function (varargs)"
+        end
+        return "function (" .. info.nparams .. "+ args)"
+      end
+      return "function (" .. info.nparams .. " args)"
+    elseif t == "userdata" or t == "thread" then
       return t
     else
       return tostring(v)
@@ -161,6 +186,16 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 1) then
     RT.nrefs = RT.nrefs + 1
     RT.refs[RT.nrefs] = v
     return RT.nrefs
+  end
+
+  -- A ref > 0 is handed out for anything the client can drill into: tables
+  -- (expand) and functions (resolve signature). The client branches on `type`.
+  local function ref_for(v)
+    local t = type(v)
+    if t == "table" or t == "function" then
+      return register(v)
+    end
+    return 0
   end
 
   local function compile(code)
@@ -212,11 +247,7 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 1) then
     if not ok then
       return RT.encode({ ok = false, err = tostring(res) })
     end
-    local ref = 0
-    if type(res) == "table" then
-      ref = register(res)
-    end
-    return RT.encode({ ok = true, type = type(res), value = preview(res), ref = ref })
+    return RT.encode({ ok = true, type = type(res), value = preview(res), ref = ref_for(res) })
   end
 
   function RT.expand_json(ref)
@@ -237,11 +268,7 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 1) then
     for i = 1, #keys do
       local k = keys[i]
       local val = v[k]
-      local cref = 0
-      if type(val) == "table" then
-        cref = register(val)
-      end
-      out[#out + 1] = { name = tostring(k), type = type(val), value = preview(val), ref = cref }
+      out[#out + 1] = { name = tostring(k), type = type(val), value = preview(val), ref = ref_for(val) }
     end
     if truncated then
       out[#out + 1] = { name = "…", type = "string", value = "(truncated)", ref = 0 }
@@ -277,6 +304,62 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 1) then
       v = res
     end
     return "OK:" .. RT.encode(v, true)
+  end
+
+  -- Resolve a function's real parameter names WITHOUT running its body — the
+  -- fiddle "GET_ARGS" trick, hardened. Install a call hook, then pcall the
+  -- function: the hook fires the instant the body is entered (arguments already
+  -- bound as the first locals), reads their names via debug.getlocal, and
+  -- error()s out so the body never executes. { ok, params } | { ok, native } |
+  -- { ok = false, err }.
+  function RT.signature_json(ref)
+    local fn = RT.refs[ref or 0]
+    if type(fn) ~= "function" then
+      return RT.encode({ ok = false, err = "stale ref (state was reset?) - inspect again and retry" })
+    end
+    -- C functions FIRST: debug.getlocal on a C frame never terminates the
+    -- capture loop, so bail before hooking anything.
+    local okS, sinfo = pcall(debug.getinfo, fn, "S")
+    if okS and type(sinfo) == "table" and sinfo.what == "C" then
+      return RT.encode({ ok = true, params = "", native = true })
+    end
+    if type(debug) ~= "table" or type(debug.sethook) ~= "function" or type(debug.getlocal) ~= "function" then
+      return RT.encode({ ok = false, err = "signature unavailable - debug library not present" })
+    end
+    local names = {}
+    -- Capture and restore whatever hook was installed (the debugger's, say) on
+    -- every exit path.
+    local prev_hook, prev_mask, prev_count = debug.gethook()
+    local function restore()
+      if prev_hook then
+        debug.sethook(prev_hook, prev_mask or "", prev_count or 0)
+      else
+        debug.sethook()
+      end
+    end
+    local hook = function()
+      -- Frame 1 is this hook; frame 2 is the just-entered callee. Ignore any
+      -- frame that is not our target (e.g. pcall itself), so getlocal never
+      -- runs against a C frame.
+      local fi = debug.getinfo(2, "f")
+      if not fi or fi.func ~= fn then
+        return
+      end
+      local i = 1
+      while true do
+        local name = debug.getlocal(2, i)
+        if name == nil or name == "(*temporary)" then
+          break
+        end
+        names[i] = name
+        i = i + 1
+      end
+      error("") -- abort before the body runs
+    end
+    debug.sethook(hook, "c") -- call events only
+    pcall(fn)
+    restore()
+    return RT.encode({ ok = true, params = table.concat(names, ", ") })
   end
 
   __DCS_STUDIO_RT = RT

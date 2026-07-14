@@ -6,7 +6,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       all: true,
-      include: ["src/core/**"],
+      include: ["src/core/**", "media/explorer-core.js"],
       thresholds: {
         perFile: true,
         lines: 100,

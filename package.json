@@ -381,6 +381,13 @@
           "type": "number",
           "default": 25570,
           "markdownDescription": "Port of the **mission bridge** JSON-RPC server (`dcs_studio_mission.dll`, mission scripting state; only up while a mission runs). Must match the port the injected DLL binds — change only if 25570 clashes."
+        },
+        "dcsStudio.explorerWildcardDepth": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "maximum": 5,
+          "markdownDescription": "How many tree levels a `**` segment costs when the **Lua Console Explorer** sweeps a path pattern (e.g. `_G/**/Units`). Higher values let a sweep descend further under a `**`, at the cost of more fetches against the 200-fetch budget."
         }
       }
     }

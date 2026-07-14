@@ -11,6 +11,7 @@ import {
   PING_INTERVAL_MS,
   PING_TIMEOUT_MS,
   ReplInspectResult,
+  ReplSignatureResult,
   ReplVariable,
   buildRequest,
   dcsTimeFromPing,
@@ -34,6 +35,7 @@ export {
   DebugEnv,
   ReplVariable,
   ReplInspectResult,
+  ReplSignatureResult,
   DebugFrame,
   DebugSnapshot,
   DebugState,
@@ -131,6 +133,14 @@ export class BridgeClient {
   /** Children of a ref handed out by replInspect/replExpand in the same env. */
   replExpand(env: LuaEnv, ref: number): Promise<{ variables: ReplVariable[] }> {
     return this.replCall("repl_expand", { env, ref });
+  }
+
+  /** Resolve a function ref's real parameter names (the runtime never calls the
+   * function — it reads them off a call hook). Same ref namespace as
+   * replInspect/replExpand; branch on the variable's `type` to know a ref is a
+   * function rather than a table. */
+  replSignature(env: LuaEnv, ref: number): Promise<ReplSignatureResult> {
+    return this.replCall("repl_signature", { env, ref });
   }
 
   /** Release every explorer ref held inside `env`. */

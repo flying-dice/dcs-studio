@@ -149,6 +149,13 @@ end, {
   params = { { name = "ref", type = "number", required = true } },
 })
 
+router:add_method("repl_signature", function(params)
+  return rt_envelope(RT.signature_json((params and params.ref) or 0))
+end, {
+  description = "Resolve a function ref's real parameter names (never runs the function): { ok, params?, native?, err? }.",
+  params = { { name = "ref", type = "number", required = true } },
+})
+
 router:add_method("repl_clear", function()
   return rt_envelope(RT.clear_json())
 end, {

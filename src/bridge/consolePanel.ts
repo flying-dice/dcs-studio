@@ -12,9 +12,13 @@ import { BridgeClients } from "./clients";
 // bridge (port 25570), everything else → the GUI bridge. Code runs via
 // `repl_eval` and shows the return value; `print` output streams in via
 // `console_read` polling — each bridge has its OWN output ring, so both are
-// tailed. An Explorer tab drills into Lua tables lazily
-// (repl_inspect/repl_expand) and can export any table in full as JSON: the sim
-// writes the file, we copy it wherever the user picks.
+// tailed. An Explorer tab is a lazy `_G` tree per env
+// (repl_inspect/repl_expand) with function signatures resolved on demand
+// (repl_signature — the runtime reads parameter names off a call hook, never
+// running the function), a path-glob sweep bounded by the
+// `dcsStudio.explorerWildcardDepth` setting (pushed to the webview as a
+// `config` message), and a full-table JSON export: the sim writes the file, we
+// copy it wherever the user picks.
 export class ConsolePanel {
   public static current: ConsolePanel | undefined;
   private static readonly viewType = "dcsStudio.console";
@@ -56,6 +60,15 @@ export class ConsolePanel {
     this.disposables.push(this.clients.onStatus((s) => this.postStatus(s)));
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
 
+    // The sweep's `**` depth budget is a user setting; push it now and whenever
+    // it changes so the explorer's sweep math stays in sync without a reload.
+    this.postConfig();
+    this.disposables.push(
+      vscode.workspace.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration("dcsStudio.explorerWildcardDepth")) this.postConfig();
+      }),
+    );
+
     // Stream sim `print` output from BOTH bridges while connected.
     this.pollTimer = setInterval(() => void this.poll(), 1000);
   }
@@ -75,6 +88,12 @@ export class ConsolePanel {
     const env: LuaEnv = msg.env ?? "gui";
     const client = this.clients.forEnv(env);
     switch (msg.type) {
+      case "ready":
+        // The webview finished booting — (re)push the current status and the
+        // explorer's sweep-depth config so it renders from a known state.
+        this.postStatus(this.clients.current);
+        this.postConfig();
+        break;
       case "eval": {
         if (typeof msg.code !== "string") return;
         try {
@@ -90,7 +109,19 @@ export class ConsolePanel {
         if (typeof msg.expr !== "string") return;
         try {
           const r = await client.replInspect(env, msg.expr);
-          this.post({ type: "inspectResult", id: msg.id, env, expr: msg.expr, ...r });
+          // `luaType` (not `type`) carries the value's Lua type — the envelope's
+          // own `type` field is "inspectResult" and must not be shadowed.
+          this.post({
+            type: "inspectResult",
+            id: msg.id,
+            env,
+            expr: msg.expr,
+            ok: r.ok,
+            err: r.err,
+            luaType: r.type,
+            value: r.value,
+            ref: r.ref,
+          });
         } catch (e) {
           this.post({ type: "inspectResult", id: msg.id, env, expr: msg.expr, ok: false, err: errText(e) });
         }
@@ -103,6 +134,16 @@ export class ConsolePanel {
           this.post({ type: "expandResult", nodeId: msg.nodeId, ok: true, variables: r.variables ?? [] });
         } catch (e) {
           this.post({ type: "expandResult", nodeId: msg.nodeId, ok: false, err: errText(e) });
+        }
+        break;
+      }
+      case "signature": {
+        if (typeof msg.ref !== "number") return;
+        try {
+          const r = await client.replSignature(env, msg.ref);
+          this.post({ type: "signatureResult", reqId: msg.reqId, ok: r.ok, params: r.params, native: r.native, err: r.err });
+        } catch (e) {
+          this.post({ type: "signatureResult", reqId: msg.reqId, ok: false, err: errText(e) });
         }
         break;
       }
@@ -208,6 +249,14 @@ export class ConsolePanel {
     this.post({ type: "status", status: s });
   }
 
+  /** Push the explorer's sweep depth budget (the `**` wildcard cost). */
+  private postConfig(): void {
+    const wildcardDepth = vscode.workspace
+      .getConfiguration("dcsStudio")
+      .get<number>("explorerWildcardDepth", 1);
+    this.post({ type: "config", wildcardDepth });
+  }
+
   private post(msg: unknown): void {
     void this.panel.webview.postMessage(msg);
   }
@@ -241,6 +290,7 @@ export class ConsolePanel {
 </head>
 <body>
   <div id="app"></div>
+  <script nonce="${nonce}" src="${media("explorer-core.js")}"></script>
   <script nonce="${nonce}" src="${media("console.js")}"></script>
 </body>
 </html>`;

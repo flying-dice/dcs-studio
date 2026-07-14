@@ -31,7 +31,8 @@ Feature: Lua console
 
     Scenario: Offline disables execution
       Given the bridge is offline
-      Then the Run and Inspect buttons are disabled
+      Then the Console Run button and the Explorer controls
+        (filter, sweep and refresh) are disabled
 
     Scenario: Offline shows an inline launch button (story 015)
       Given both bridges are offline
