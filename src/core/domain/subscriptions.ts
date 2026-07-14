@@ -7,11 +7,11 @@
 // Subscription>`) and the generated `uninstall-all.bat` bytes are FROZEN — this
 // module is the single source of truth for both.
 
-import type { Subscription, ModLink } from "./types";
+import type { Subscription, ModLink, ManifestEntrypoint } from "./types";
 
 // The Subscription/ModLink shapes live in the shared types module; re-export them
 // so subscription code can import everything it needs from one place.
-export type { Subscription, ModLink };
+export type { Subscription, ModLink, ManifestEntrypoint };
 
 /** The manifest file name a subscribed mod ships (asset + on-disk). */
 export const MANIFEST = "dcs-studio.toml";
@@ -40,11 +40,22 @@ export interface ModDto {
   enabled: boolean;
   dir: string;
   links: number;
+  /** Declared executable entrypoints (so the webview can offer Launch/Stop). */
+  entrypoints: ManifestEntrypoint[];
 }
 
 /** Project a subscription to the My Mods list DTO (link count, not the links). */
 export function toModDto(s: Subscription): ModDto {
-  return { repo: s.repo, name: s.name, tag: s.tag, enabled: s.enabled, dir: s.dir, links: s.links.length };
+  return {
+    repo: s.repo,
+    name: s.name,
+    tag: s.tag,
+    enabled: s.enabled,
+    dir: s.dir,
+    links: s.links.length,
+    // Defensive: ledgers written before entrypoints existed have no field.
+    entrypoints: s.entrypoints ?? [],
+  };
 }
 
 /** Whether a subscription is already on `releaseTag` (skip the update). */

@@ -191,6 +191,7 @@ const MODEL: ManifestModel = {
   bundle: [{ path: "Scripts/X" }],
   symlink: [{ source: "Scripts/X", dest: "{SavedGames}/Scripts/X" }],
   requires_module: [{ id: "ed/f16c" }],
+  entrypoint: [],
   extras: [],
 };
 
@@ -212,6 +213,7 @@ const seeded = (over: Partial<Subscription> = {}): Subscription => ({
   dir: MOD_DIR,
   enabled: false,
   links: [],
+  entrypoints: [],
   ...over,
 });
 
@@ -343,6 +345,7 @@ describe("subscribe", () => {
       dir: MOD_DIR,
       enabled: false,
       links: [],
+      entrypoints: [],
     });
     expect(w.ledger.store["owner/repo"]).toEqual(sub);
 
@@ -377,6 +380,29 @@ describe("subscribe", () => {
     // removed once (pre-download reset) plus once after extraction.
     const dlRemovals = w.fs.removed.filter((p) => p === DL_DIR);
     expect(dlRemovals).toHaveLength(2);
+  });
+
+  it("snapshots the unpacked manifest's entrypoints onto the ledger entry", async () => {
+    const w = makeWorld();
+    const withEps: ManifestModel = {
+      ...MODEL,
+      entrypoint: [{ id: "srs", name: "SRS", exe: "Server/SR.exe", args: ["--min"], cwd: "Server" }],
+    };
+    w.archive.unpacked.set("dcs-studio.toml", JSON.stringify(withEps));
+
+    const sub = await w.service.subscribe(target(), undefined, w.onProgress);
+
+    expect(sub.entrypoints).toEqual([
+      { id: "srs", name: "SRS", exe: "Server/SR.exe", args: ["--min"], cwd: "Server" },
+    ]);
+    expect(w.ledger.store["owner/repo"].entrypoints).toEqual(sub.entrypoints);
+  });
+
+  it("snapshots no entrypoints when the payload has no manifest on disk", async () => {
+    const w = makeWorld();
+    // No archive.unpacked manifest → readText throws → tolerant empty snapshot.
+    const sub = await w.service.subscribe(target(), undefined, w.onProgress);
+    expect(sub.entrypoints).toEqual([]);
   });
 
   it("preserves the prior enabled state and links on re-subscribe (update path)", async () => {

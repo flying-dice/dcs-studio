@@ -17,6 +17,7 @@ const sub = (over: Partial<Subscription> = {}): Subscription => ({
   dir: "D:\\data\\Owner__Repo",
   enabled: false,
   links: [],
+  entrypoints: [],
   ...over,
 });
 
@@ -45,13 +46,14 @@ describe("keyOf", () => {
 });
 
 describe("toModDto", () => {
-  it("projects the webview fields and counts links", () => {
+  it("projects the webview fields, counts links, and carries entrypoints", () => {
     const s = sub({
       enabled: true,
       links: [
         { id: "a:0", dest: "C:\\SG\\x" },
         { id: "a:1", dest: "C:\\SG\\y" },
       ],
+      entrypoints: [{ id: "srs", name: "SRS", exe: "Server/SR.exe" }],
     });
     expect(toModDto(s)).toEqual({
       repo: "Owner/Repo",
@@ -60,7 +62,14 @@ describe("toModDto", () => {
       enabled: true,
       dir: "D:\\data\\Owner__Repo",
       links: 2,
+      entrypoints: [{ id: "srs", name: "SRS", exe: "Server/SR.exe" }],
     });
+  });
+
+  it("defaults entrypoints to [] for a legacy ledger entry that predates the field", () => {
+    const legacy = sub();
+    delete (legacy as Partial<Subscription>).entrypoints;
+    expect(toModDto(legacy).entrypoints).toEqual([]);
   });
 });
 

@@ -58,6 +58,14 @@
     m.requires_module.forEach((r, i) => {
       if (!r.id.trim()) out.push(`Required module ${i + 1}: id is empty.`);
     });
+    const epIds = m.entrypoint.map((e) => e.id);
+    m.entrypoint.forEach((r, i) => {
+      if (!r.id.trim()) out.push(`Executable ${i + 1}: id is empty.`);
+      else if (epIds.indexOf(r.id) !== i) out.push(`Executable ${i + 1}: duplicate id "${r.id}".`);
+      if (!r.exe.trim()) out.push(`Executable ${i + 1}: exe is empty.`);
+      else if (!coveredByBundle(r.exe, bundlePaths))
+        out.push(`Executable ${i + 1}: exe is not inside any bundled path.`);
+    });
     return out;
   }
 
@@ -94,6 +102,7 @@
           ${sectionProject(m)}
           ${sectionBundle(m)}
           ${sectionSymlink(m)}
+          ${sectionEntrypoint(m)}
           ${sectionRequires(m)}
           ${extras ? passthroughNote(m) : ""}
         </div>
@@ -137,6 +146,7 @@
     bundle: "add-bundle-btn",
     symlink: "add-symlink-btn",
     requires_module: "add-required-module-btn",
+    entrypoint: "add-entrypoint-btn",
   };
 
   function sectionProject(m) {
@@ -206,6 +216,36 @@
       </section>`;
   }
 
+  function sectionEntrypoint(m) {
+    const rows = m.entrypoint
+      .map(
+        (r, i) => `
+        <div class="row" data-testid="entrypoint-row" data-row="entrypoint-${i}">
+          <div class="row-grid two">
+            ${fieldRow("Id", "unique slug", input("entrypoint", i, "id", r.id, "srs-server"))}
+            ${fieldRow("Name", "shown in My Mods", input("entrypoint", i, "name", r.name, "SRS Server"))}
+          </div>
+          <div class="row-grid two">
+            ${fieldRow("Executable", "inside a bundled path", input("entrypoint", i, "exe", r.exe, "Server/SR-Server.exe"))}
+            ${fieldRow("Working dir", "optional; defaults to the exe's folder", input("entrypoint", i, "cwd", r.cwd || "", "Server"))}
+          </div>
+          <label class="field">
+            <span class="lbl">Arguments<span class="hint">one per line; {SavedGames}/{GameInstall} expanded at launch</span></span>
+            <textarea class="in" data-testid="entrypoint-args" data-sec="entrypoint" data-idx="${i}" data-key="__args" rows="2" spellcheck="false" placeholder="--minimized">${esc((r.args || []).join("\n"))}</textarea>
+          </label>
+          <button class="rm" data-testid="remove-row-btn" data-rm="entrypoint" data-idx="${i}" title="Remove executable">${I.x}</button>
+        </div>`,
+      )
+      .join("");
+    return `
+      <section class="card">
+        <div class="section-label">[[entrypoint]] <span class="count">${m.entrypoint.length}</span></div>
+        <p class="blurb">Executables the mod can launch as tracked processes from <span class="mono">My Mods</span>. Each <span class="mono">exe</span> is a path inside the bundled content; the first launch asks the user to confirm.</p>
+        ${rows || `<p class="empty">No executables.</p>`}
+        <button class="btn ghost add" data-testid="${ADD_TESTID.entrypoint}" data-add="entrypoint">${I.plus} Add executable</button>
+      </section>`;
+  }
+
   function sectionRequires(m) {
     const rows = m.requires_module
       .map(
@@ -243,6 +283,9 @@
           const rest = key === "__rest" ? el.value : parts.rest;
           row.dest = rest ? `${rootTok}/${rest.replace(/^\/+/, "")}` : rootTok;
           updateResolved(i);
+        } else if (key === "__args") {
+          // One arg per line; blank lines dropped. Keeps args that contain spaces.
+          state.model.entrypoint[i].args = el.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
         } else state.model[sec][i][key] = el.value;
         changed();
       });
@@ -260,6 +303,7 @@
         if (sec === "bundle") state.model.bundle.push({ path: "" });
         else if (sec === "symlink") state.model.symlink.push({ source: "", dest: "{SavedGames}/Scripts/" });
         else if (sec === "requires_module") state.model.requires_module.push({ id: "", name: "" });
+        else if (sec === "entrypoint") state.model.entrypoint.push({ id: "", name: "", exe: "" });
         render();
         pushEdit();
       }),

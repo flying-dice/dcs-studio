@@ -311,6 +311,36 @@ dest = "{SavedGames}/Scripts/mod.lua"</code></pre>
   <p><strong>Migration:</strong> DCS Studio reads a legacy <code>[[install]]</code> file without rewriting it, but the moment you edit and save through the form it is re-emitted as <code>[[bundle]]</code> + <code>[[symlink]]</code> — that save <em>is</em> the migration, and it is one-way. A manifest may carry both forms at once; the legacy rules are folded in and identical entries de-duplicated.</p>
 </div>
 
+<h2><code>[[entrypoint]]</code> — executables the mod can launch</h2>
+<p>Zero or more executable entrypoints. Some mods are not (only) DCS content — they ship a companion app (e.g. an SRS server) meant to be launched as a process. Each block declares one executable that appears with a <strong>Launch / Stop</strong> control in <a data-page="installing-mods">My Mods</a> once the mod is enabled.</p>
+<table>
+  <tr><th>Key</th><th>Required</th><th>Meaning</th></tr>
+  <tr><td><code>id</code></td><td>Yes</td><td>A unique slug identifying this entrypoint (e.g. <code>srs-server</code>). Must be unique within the manifest — preflight rejects duplicates.</td></tr>
+  <tr><td><code>name</code></td><td>Yes</td><td>Display name shown in My Mods, e.g. <code>"SRS Server"</code>.</td></tr>
+  <tr><td><code>exe</code></td><td>Yes</td><td>Path to the executable, <strong>relative to the unpacked mod dir</strong>. Must be covered by a <code>[[bundle]]</code> path (the payload has to ship it), exactly like a symlink source.</td></tr>
+  <tr><td><code>args</code></td><td>No</td><td>Array of command-line arguments, e.g. <code>["--minimized"]</code>. Each may contain the <code>{SavedGames}</code>/<code>{GameInstall}</code> root tokens, expanded at launch. In the form, enter one argument per line.</td></tr>
+  <tr><td><code>cwd</code></td><td>No</td><td>Working directory, relative to the unpacked mod dir. Defaults to the directory containing the <code>exe</code>.</td></tr>
+</table>
+<pre><code>[[bundle]]
+path = "Server"
+
+[[entrypoint]]
+id = "srs-server"
+name = "SRS Server"
+exe = "Server/SR-Server.exe"
+args = ["--minimized"]
+cwd = "Server"</code></pre>
+<div class="note">
+  <p><strong>Exe-only mods are valid.</strong> A mod may declare <code>[[entrypoint]]</code> blocks with <em>no</em> <code>[[symlink]]</code> rules at all — it still bundles the exe and installs normally; enabling it just links nothing.</p>
+</div>
+<h3>Trust, running state, and lifecycle</h3>
+<ul>
+  <li><strong>First-launch consent.</strong> Launching a mod-shipped executable is gated: the first time you launch a given mod + entrypoint, DCS Studio shows a modal naming the exe path. Choose <em>Launch</em> to run it once, or <em>Always allow for this mod</em> to remember the choice. Declining does not launch.</li>
+  <li><strong>Tracked, not fire-and-forget.</strong> Launched processes are tracked so My Mods can show a running state and offer <em>Stop</em> (which kills the whole process tree).</li>
+  <li><strong>Stop on disable / uninstall.</strong> Disabling or uninstalling a mod first stops any of its running entrypoints.</li>
+  <li><strong>On IDE exit.</strong> DCS Studio deliberately leaves launched processes running when it closes (the same policy as the DCS launcher, which never kills DCS on exit) — a companion app keeps running until you stop it.</li>
+</ul>
+
 <h2><code>[[requires_module]]</code> — stock DCS content</h2>
 <p>Declares official DCS modules the user must own. Shown as prerequisites on the product page.</p>
 <table>
@@ -334,6 +364,7 @@ dest = "{SavedGames}/Scripts/mod.lua"</code></pre>
   <li><code>dcs-studio.toml</code> exists at the workspace root, parses, and has a non-blank <code>project.name</code>;</li>
   <li>every <code>[[bundle]].path</code> exists on disk (build first!) and none is a symlink — the packager refuses symlinks;</li>
   <li>every <code>[[symlink]].source</code> is covered by a <code>[[bundle]]</code> path (you can't link content the payload never ships);</li>
+  <li>every <code>[[entrypoint]].exe</code> is covered by a <code>[[bundle]]</code> path and every entrypoint <code>id</code> is unique;</li>
   <li><strong>7-Zip</strong> is installed (or set <code>dcsStudio.sevenZipPath</code>);</li>
   <li><strong>git</strong> is installed;</li>
   <li>the <strong>GitHub CLI</strong> (<code>gh</code>) is installed <em>and</em> signed in (<code>gh auth login</code>).</li>

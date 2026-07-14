@@ -51,6 +51,7 @@ import { SevenZipArchive } from "./adapters/node/sevenZip";
 import { FetchDownloader } from "./adapters/node/downloader";
 import { Linker } from "./adapters/node/linker";
 import { JsonLedgerStore } from "./adapters/node/jsonLedgerStore";
+import { ProcessLauncher } from "./adapters/node/processLauncher";
 import { GitCli } from "./adapters/node/git";
 import { GhCli } from "./adapters/node/gh";
 import { RegExeRegistry } from "./adapters/node/registry";
@@ -138,13 +139,18 @@ export function activate(context: vscode.ExtensionContext): void {
   const archive = new SevenZipArchive();
   const manifestPort = new VsCodeManifestPort(context);
   const ledger = new JsonLedgerStore(dataDir);
+  const installRoots = new VsCodeInstallRoots();
+  // Tracks mod entrypoint processes launched from My Mods. A single shared
+  // instance so running state survives closing/reopening the panel. On IDE exit
+  // its children are deliberately left running (see deactivate()).
+  const launcher = new ProcessLauncher();
   const subscriptions = new SubscriptionService({
     ledger,
     archive,
     downloader: new FetchDownloader(),
     linker: new Linker(),
     manifest: manifestPort,
-    roots: new VsCodeInstallRoots(),
+    roots: installRoots,
     fs: fsPort,
     clock: new SystemClock(),
   });
@@ -175,7 +181,7 @@ export function activate(context: vscode.ExtensionContext): void {
       MarketplacePanel.show(context, subscriptions, marketplace);
     }),
     vscode.commands.registerCommand("dcs.mymods.open", () =>
-      MyModsPanel.show(context, subscriptions, ledger, marketplace),
+      MyModsPanel.show(context, subscriptions, ledger, marketplace, launcher, installRoots),
     ),
     vscode.commands.registerCommand("dcs.docs.open", (page?: string) => DocsPanel.show(context, page)),
     vscode.commands.registerCommand("dcs.skills.open", () => SkillsPanel.show(context, skills)),
@@ -260,7 +266,7 @@ export function activate(context: vscode.ExtensionContext): void {
       handleUri: (uri) => {
         if (uri.path !== MYMODS_URI_PATH) return;
         if (!vscode.workspace.workspaceFolders?.length) {
-          MyModsPanel.show(context, subscriptions, ledger, marketplace);
+          MyModsPanel.show(context, subscriptions, ledger, marketplace, launcher, installRoots);
           return;
         }
         void context.globalState.update(PENDING_MYMODS_KEY, Date.now()).then(() => {
@@ -277,7 +283,7 @@ export function activate(context: vscode.ExtensionContext): void {
   if (pendingMods) {
     void context.globalState.update(PENDING_MYMODS_KEY, undefined);
     if (Date.now() - pendingMods < 30_000 && !vscode.workspace.workspaceFolders?.length) {
-      MyModsPanel.show(context, subscriptions, ledger, marketplace);
+      MyModsPanel.show(context, subscriptions, ledger, marketplace, launcher, installRoots);
     }
   }
 
@@ -364,4 +370,8 @@ export function deactivate(): void {
   bridge?.dispose();
   // Best-effort cleanup: eject the bridge if DCS isn't holding the DLL.
   launchCleanup();
+  // Mod entrypoint processes (ProcessLauncher) are deliberately LEFT RUNNING on
+  // IDE exit — matching the DCS launcher's policy of not killing DCS when the
+  // extension shuts down. The tracking map simply goes away with the process; a
+  // companion app like SRS keeps running until the user stops it themselves.
 }

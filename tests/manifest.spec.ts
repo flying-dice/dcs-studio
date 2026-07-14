@@ -26,6 +26,51 @@ test.describe("manifest preview", () => {
     await expect(preview).toContainText("[[dependencies]]");
   });
 
+  test("seeds the Executables card from an [[entrypoint]] block, round-tripping args/cwd", async ({ page }) => {
+    await openPreview(page, "manifest");
+    await expect(page.getByTestId("entrypoint-row")).toHaveCount(1);
+
+    const row = page.getByTestId("entrypoint-row").first();
+    await expect(row.locator('[data-key="id"]')).toHaveValue("f16-tool");
+    await expect(row.locator('[data-key="name"]')).toHaveValue("F16 Config Tool");
+    await expect(row.locator('[data-key="exe"]')).toHaveValue("Mods/tech/F16Weapons/tool.exe");
+    await expect(row.locator('[data-key="cwd"]')).toHaveValue("Mods/tech/F16Weapons");
+    await expect(row.getByTestId("entrypoint-args")).toHaveValue("--quiet");
+
+    const preview = page.getByTestId("toml-preview");
+    await expect(preview).toContainText("[[entrypoint]]");
+    await expect(preview).toContainText('id = "f16-tool"');
+    await expect(preview).toContainText('exe = "Mods/tech/F16Weapons/tool.exe"');
+    await expect(preview).toContainText('args = ["--quiet"]');
+    await expect(preview).toContainText('cwd = "Mods/tech/F16Weapons"');
+  });
+
+  test("editing args (one per line) re-emits a TOML array", async ({ page }) => {
+    await openPreview(page, "manifest");
+    const args = page.getByTestId("entrypoint-row").first().getByTestId("entrypoint-args");
+    await args.fill("--minimized\n--port 5002");
+    const preview = page.getByTestId("toml-preview");
+    await expect(preview).toContainText('args = ["--minimized", "--port 5002"]');
+  });
+
+  test("an entrypoint exe outside all bundled paths flags a coverage issue", async ({ page }) => {
+    await openPreview(page, "manifest");
+    const exe = page.getByTestId("entrypoint-row").first().locator('[data-key="exe"]');
+    await exe.fill("nowhere/tool.exe");
+    await expect(page.getByTestId("validation-issues")).toContainText("exe is not inside any bundled path");
+  });
+
+  test("add / remove entrypoint rows", async ({ page }) => {
+    await openPreview(page, "manifest");
+    await expect(page.getByTestId("entrypoint-row")).toHaveCount(1);
+
+    await page.getByTestId("add-entrypoint-btn").click();
+    await expect(page.getByTestId("entrypoint-row")).toHaveCount(2);
+
+    await page.getByTestId("entrypoint-row").last().getByTestId("remove-row-btn").click();
+    await expect(page.getByTestId("entrypoint-row")).toHaveCount(1);
+  });
+
   test("typing posts a debounced edit and updates the live TOML preview", async ({ page }) => {
     await openPreview(page, "manifest");
     const nameInput = page.locator('[data-sec="project"][data-key="name"]');

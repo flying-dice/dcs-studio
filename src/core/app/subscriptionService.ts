@@ -125,6 +125,19 @@ export class SubscriptionService {
     return dir;
   }
 
+  /**
+   * Read the unpacked manifest's `[[entrypoint]]` blocks for the ledger snapshot.
+   * Tolerant: an older payload without a manifest on disk yields no entrypoints.
+   */
+  private async readEntrypoints(dir: string): Promise<Subscription["entrypoints"]> {
+    try {
+      const model = this.ports.manifest.parseToml(await this.ports.fs.readText(path.join(dir, MANIFEST)));
+      return model.entrypoint;
+    } catch {
+      return [];
+    }
+  }
+
   /** Subscribe: download + unpack (does not enable/link). */
   async subscribe(target: InstallTarget, token: string | undefined, onProgress: OnProgress): Promise<Subscription> {
     const dir = await this.downloadAndUnpack(target, token, onProgress);
@@ -137,6 +150,8 @@ export class SubscriptionService {
       dir,
       enabled: existing?.enabled ?? false,
       links: existing?.links ?? [],
+      // Snapshot declared entrypoints so My Mods can launch without re-fetching.
+      entrypoints: await this.readEntrypoints(dir),
     };
     subs[ledgerKey(target.repo)] = sub;
     await this.ports.ledger.save(subs);
