@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   computeGhCheck,
   computePreflight,
+  isCoveredByBundle,
   type PreflightFacts,
 } from "../../src/core/domain/publishChecks";
 import type { ManifestModel } from "../../src/core/domain/types";
@@ -9,7 +10,8 @@ import type { ManifestModel } from "../../src/core/domain/types";
 function manifest(over: Partial<ManifestModel> = {}): ManifestModel {
   return {
     project: { name: "My Mod", version: "1.0.0", author: "me", description: "d" },
-    install: [],
+    bundle: [],
+    symlink: [],
     requires_module: [],
     extras: [],
     ...over,
@@ -21,7 +23,7 @@ function facts(over: Partial<PreflightFacts> = {}): PreflightFacts {
   return {
     manifestExists: true,
     manifest: manifest(),
-    sources: [],
+    bundle: [],
     sevenZip: "C:\\Program Files\\7-Zip\\7z.exe",
     gitAvailable: true,
     gh: { present: true, authed: true },
@@ -41,9 +43,9 @@ describe("computePreflight — manifest checks", () => {
       level: "error",
       detail: "dcs-studio.toml not found in the workspace root.",
     });
-    // No project-name/install checks are possible without a manifest.
+    // No project-name/bundle checks are possible without a manifest.
     expect(byLabel(checks, "Project name")).toBeUndefined();
-    expect(byLabel(checks, "Install rules")).toBeUndefined();
+    expect(byLabel(checks, "Bundle paths")).toBeUndefined();
   });
 
   it("errors when the manifest exists but does not parse", () => {
@@ -72,86 +74,151 @@ describe("computePreflight — manifest checks", () => {
   });
 });
 
-describe("computePreflight — install sources", () => {
-  it("warns when there are no [[install]] rules", () => {
+describe("computePreflight — bundle paths", () => {
+  it("warns when there are no [[bundle]] paths", () => {
     const checks = computePreflight(facts());
-    expect(byLabel(checks, "Install rules")).toEqual({
-      label: "Install rules",
+    expect(byLabel(checks, "Bundle paths")).toEqual({
+      label: "Bundle paths",
       level: "warn",
-      detail: "No [[install]] rules — the release will ship only the manifest.",
+      detail: "No [[bundle]] paths — the release will ship only the manifest.",
     });
   });
 
-  it("is ok when every source is present and none are symlinks", () => {
-    const m = manifest({ install: [{ source: "out/a", dest: "{SavedGames}/a" }, { source: "out/b", dest: "{SavedGames}/b" }] });
+  it("is ok when every bundle path is present and none are symlinks", () => {
+    const m = manifest({ bundle: [{ path: "out/a" }, { path: "out/b" }] });
     const checks = computePreflight(
       facts({
         manifest: m,
-        sources: [
+        bundle: [
           { source: "out/a", missing: false, symlink: false },
           { source: "out/b", missing: false, symlink: false },
         ],
       }),
     );
-    expect(byLabel(checks, "Install sources")).toEqual({
-      label: "Install sources",
+    expect(byLabel(checks, "Bundle paths")).toEqual({
+      label: "Bundle paths",
       level: "ok",
-      detail: "2 source(s) present.",
+      detail: "2 bundle path(s) present.",
     });
   });
 
-  it("errors on missing sources with a per-item breakdown", () => {
-    const m = manifest({ install: [{ source: "out/a", dest: "d" }, { source: "out/b", dest: "d" }] });
+  it("errors on missing bundle paths with a per-item breakdown", () => {
+    const m = manifest({ bundle: [{ path: "out/a" }, { path: "out/b" }] });
     const checks = computePreflight(
       facts({
         manifest: m,
-        sources: [
+        bundle: [
           { source: "out/a", missing: true, symlink: false },
           { source: "out/b", missing: false, symlink: false },
         ],
       }),
     );
-    expect(byLabel(checks, "Install sources")).toEqual({
-      label: "Install sources",
+    expect(byLabel(checks, "Bundle paths")).toEqual({
+      label: "Bundle paths",
       level: "error",
-      detail: "1 of 2 source(s) missing — build the project first.",
+      detail: "1 of 2 bundle path(s) missing — build the project first.",
       items: ["missing: out/a"],
     });
   });
 
-  it("errors on symlinked sources when none are missing", () => {
-    const m = manifest({ install: [{ source: "out/a", dest: "d" }, { source: "out/b", dest: "d" }] });
+  it("errors on symlinked bundle paths when none are missing", () => {
+    const m = manifest({ bundle: [{ path: "out/a" }, { path: "out/b" }] });
     const checks = computePreflight(
       facts({
         manifest: m,
-        sources: [
+        bundle: [
           { source: "out/a", missing: false, symlink: true },
           { source: "out/b", missing: false, symlink: false },
         ],
       }),
     );
-    expect(byLabel(checks, "Install sources")).toEqual({
-      label: "Install sources",
+    expect(byLabel(checks, "Bundle paths")).toEqual({
+      label: "Bundle paths",
       level: "error",
-      detail: "1 source(s) are symlinks (refused by the packager).",
+      detail: "1 bundle path(s) are symlinks (refused by the packager).",
       items: ["symlink: out/a"],
     });
   });
 
   it("reports missing ahead of symlinks when both occur", () => {
-    const m = manifest({ install: [{ source: "out/a", dest: "d" }, { source: "out/b", dest: "d" }] });
+    const m = manifest({ bundle: [{ path: "out/a" }, { path: "out/b" }] });
     const checks = computePreflight(
       facts({
         manifest: m,
-        sources: [
+        bundle: [
           { source: "out/a", missing: true, symlink: false },
           { source: "out/b", missing: false, symlink: true },
         ],
       }),
     );
-    const c = byLabel(checks, "Install sources");
-    expect(c?.detail).toBe("1 of 2 source(s) missing — build the project first.");
+    const c = byLabel(checks, "Bundle paths");
+    expect(c?.detail).toBe("1 of 2 bundle path(s) missing — build the project first.");
     expect(c?.items).toEqual(["missing: out/a"]);
+  });
+});
+
+describe("computePreflight — symlink coverage", () => {
+  it("emits no coverage check when the manifest has no symlinks", () => {
+    const checks = computePreflight(facts());
+    expect(byLabel(checks, "Symlink coverage")).toBeUndefined();
+  });
+
+  it("is ok when every symlink source is inside a bundled path", () => {
+    const m = manifest({
+      bundle: [{ path: "Mods/tech/x" }],
+      symlink: [
+        { source: "Mods/tech/x", dest: "{SavedGames}/Mods/tech/x" },
+        { source: "Mods/tech/x/entry.lua", dest: "{SavedGames}/Mods/tech/x/entry.lua" },
+      ],
+    });
+    const checks = computePreflight(
+      facts({ manifest: m, bundle: [{ source: "Mods/tech/x", missing: false, symlink: false }] }),
+    );
+    expect(byLabel(checks, "Symlink coverage")).toEqual({
+      label: "Symlink coverage",
+      level: "ok",
+      detail: "2 symlink(s) covered by bundled content.",
+    });
+  });
+
+  it("errors listing symlink sources not inside any bundle path", () => {
+    const m = manifest({
+      bundle: [{ path: "Mods/tech/x" }],
+      symlink: [
+        { source: "Mods/tech/x/entry.lua", dest: "{SavedGames}/a" },
+        { source: "Scripts/orphan.lua", dest: "{SavedGames}/b" },
+      ],
+    });
+    const checks = computePreflight(
+      facts({ manifest: m, bundle: [{ source: "Mods/tech/x", missing: false, symlink: false }] }),
+    );
+    expect(byLabel(checks, "Symlink coverage")).toEqual({
+      label: "Symlink coverage",
+      level: "error",
+      detail: "1 symlink source(s) not inside any [[bundle]] path.",
+      items: ["not bundled: Scripts/orphan.lua"],
+    });
+  });
+});
+
+describe("isCoveredByBundle", () => {
+  it("covers an exact match and a nested path", () => {
+    expect(isCoveredByBundle("Mods/x", ["Mods/x"])).toBe(true);
+    expect(isCoveredByBundle("Mods/x/entry.lua", ["Mods/x"])).toBe(true);
+  });
+
+  it("rejects a sibling that merely shares a prefix", () => {
+    expect(isCoveredByBundle("Mods/xtra", ["Mods/x"])).toBe(false);
+    expect(isCoveredByBundle("Scripts/a", ["Mods/x"])).toBe(false);
+  });
+
+  it("normalizes separators and trailing slashes", () => {
+    expect(isCoveredByBundle("Mods\\x\\entry.lua", ["Mods/x/"])).toBe(true);
+  });
+
+  it("treats '.' or '' as the whole project (covers everything)", () => {
+    expect(isCoveredByBundle("anything/here", ["."])).toBe(true);
+    expect(isCoveredByBundle("anything/here", [""])).toBe(true);
   });
 });
 
@@ -183,7 +250,18 @@ describe("computePreflight — tools", () => {
 
   it("keeps the check order: manifest checks, 7-Zip, git, GitHub CLI", () => {
     const labels = computePreflight(facts()).map((c) => c.label);
-    expect(labels).toEqual(["Project name", "Install rules", "7-Zip", "git", "GitHub CLI"]);
+    expect(labels).toEqual(["Project name", "Bundle paths", "7-Zip", "git", "GitHub CLI"]);
+  });
+
+  it("inserts symlink coverage right after bundle paths when symlinks exist", () => {
+    const m = manifest({
+      bundle: [{ path: "out/a" }],
+      symlink: [{ source: "out/a", dest: "{SavedGames}/a" }],
+    });
+    const labels = computePreflight(
+      facts({ manifest: m, bundle: [{ source: "out/a", missing: false, symlink: false }] }),
+    ).map((c) => c.label);
+    expect(labels).toEqual(["Project name", "Bundle paths", "Symlink coverage", "7-Zip", "git", "GitHub CLI"]);
   });
 });
 

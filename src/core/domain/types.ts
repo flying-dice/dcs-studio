@@ -25,10 +25,20 @@ export interface InstallRoots {
   gameInstall: string;
 }
 
-/** Parsed `dcs-studio.toml` model (mirrors media/manifest-core.js output). */
+/**
+ * Parsed `dcs-studio.toml` model (mirrors media/manifest-core.js output).
+ *
+ * `bundle` is what gets packed into the release 7z; `symlink` is which links are
+ * created on enable (each `source` a path inside the bundle). Legacy
+ * `[[install]] {source,dest}` blocks are normalized at parse time into
+ * `bundle {path:source}` + `symlink {source,dest}`, so nothing downstream sees
+ * `install` — old published releases keep installing, new emission writes only
+ * the split blocks.
+ */
 export interface ManifestModel {
   project: { name: string; version: string; author: string; description: string };
-  install: { source: string; dest: string }[];
+  bundle: { path: string }[];
+  symlink: { source: string; dest: string }[];
   requires_module: { id: string }[];
   extras: string[];
 }

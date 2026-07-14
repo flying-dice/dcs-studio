@@ -188,7 +188,8 @@ function makeWorld() {
 
 const MODEL: ManifestModel = {
   project: { name: "My Mod", version: "1.0.0", author: "a", description: "" },
-  install: [{ source: "Scripts/X", dest: "{SavedGames}/Scripts/X" }],
+  bundle: [{ path: "Scripts/X" }],
+  symlink: [{ source: "Scripts/X", dest: "{SavedGames}/Scripts/X" }],
   requires_module: [{ id: "ed/f16c" }],
   extras: [],
 };
@@ -285,7 +286,7 @@ describe("fetchPlan", () => {
   it("resolves {GameInstall} dests to null when the game install is unconfigured", async () => {
     const w = makeWorld();
     w.roots.game = undefined;
-    const model: ManifestModel = { ...MODEL, install: [{ source: "Mods/X", dest: "{GameInstall}/Mods/X" }] };
+    const model: ManifestModel = { ...MODEL, symlink: [{ source: "Mods/X", dest: "{GameInstall}/Mods/X" }] };
     w.downloader.content.set("https://dl/dcs-studio.toml", JSON.stringify(model));
     const plan = await w.service.fetchPlan(
       [{ name: "dcs-studio.toml", size: 1, url: "https://dl/dcs-studio.toml" }],
@@ -434,7 +435,7 @@ describe("enable", () => {
   it("throws the exact message when a dest cannot be resolved", async () => {
     const w = makeWorld();
     w.roots.game = undefined;
-    const model = { ...MODEL, install: [{ source: "Mods/X", dest: "{GameInstall}/Mods/X" }] };
+    const model = { ...MODEL, symlink: [{ source: "Mods/X", dest: "{GameInstall}/Mods/X" }] };
     w.ledger.store = { "owner/repo": seeded() };
     w.fs.files.set(path.join(MOD_DIR, "dcs-studio.toml"), JSON.stringify(model));
 

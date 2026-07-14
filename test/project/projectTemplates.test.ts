@@ -181,11 +181,15 @@ describe("lua-mission template", () => {
     expect(paths(files)).toEqual(["dcs-studio.toml", "Scripts/red-flag-24.lua", "README.md"]);
   });
 
-  it("wires the install rule to the slugged script path", () => {
+  it("bundles and symlinks the slugged script path, emitting no legacy [[install]]", () => {
     const toml = text(files, "dcs-studio.toml");
     expect(toml).toContain('template = "lua-mission"');
+    expect(toml).toContain("[[bundle]]");
+    expect(toml).toContain('path = "Scripts/red-flag-24.lua"');
+    expect(toml).toContain("[[symlink]]");
     expect(toml).toContain('source = "Scripts/red-flag-24.lua"');
     expect(toml).toContain('dest = "{SavedGames}/Scripts/red-flag-24.lua"');
+    expect(toml).not.toContain("[[install]]");
   });
 
   it("uses the ident inside the script and the name in its banner", () => {
@@ -265,13 +269,18 @@ describe("rust-dll template", () => {
     expect(lib.contents).toBeInstanceOf(Uint8Array);
   });
 
-  it("installs the DLL and the hook per the bridge layout", () => {
+  it("bundles + symlinks the DLL and the hook per the bridge layout", () => {
     const toml = text(files, "dcs-studio.toml");
     expect(toml).toContain('template = "rust-dll"');
+    expect(toml).toContain("[[bundle]]");
+    expect(toml).toContain('path = "target/release/fast_telemetry.dll"');
+    expect(toml).toContain('path = "Scripts/Hooks/fast_telemetry_hook.lua"');
+    expect(toml).toContain("[[symlink]]");
     expect(toml).toContain('source = "target/release/fast_telemetry.dll"');
     expect(toml).toContain('dest = "{SavedGames}/Mods/tech/fast-telemetry/bin"');
     expect(toml).toContain('source = "Scripts/Hooks/fast_telemetry_hook.lua"');
     expect(toml).toContain('dest = "{SavedGames}/Scripts/Hooks"');
+    expect(toml).not.toContain("[[install]]");
   });
 
   it("keeps the Cargo package/lib name in sync with the ident", () => {

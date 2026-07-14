@@ -33,7 +33,7 @@ export const TEMPLATES: TemplateMeta[] = [
   {
     id: "rust-dll",
     label: "Rust DLL Mod",
-    description: "Native mod: cargo project building a DLL, deployed via install rules.",
+    description: "Native mod: cargo project building a DLL, bundled and symlinked into DCS.",
   },
 ];
 
@@ -131,9 +131,14 @@ function blank(name: string): TemplateFile[] {
     {
       path: "dcs-studio.toml",
       contents: `${manifestHeader(name)}${projectBlock(name, "blank")}
-# Install rules: copy matching sources to a destination under a named root.
-# [[install]]
-# source = "."
+# [[bundle]] declares what gets packed into the release archive (paths are
+# relative to the project root). [[symlink]] declares which links are created
+# when a user enables the mod — each source is a path inside the bundle.
+# [[bundle]]
+# path = "Mods/${slug}"
+#
+# [[symlink]]
+# source = "Mods/${slug}"
 # dest = "{SavedGames}/Mods/${slug}"
 `,
     },
@@ -147,8 +152,11 @@ function luaMission(name: string): TemplateFile[] {
     {
       path: "dcs-studio.toml",
       contents: `${manifestHeader(name)}${projectBlock(name, "lua-mission")}
-# Install rules: copy matching sources to a destination under a named root.
-[[install]]
+# Bundle the script into the release, then link it into Saved Games on enable.
+[[bundle]]
+path = "Scripts/${slug}.lua"
+
+[[symlink]]
 source = "Scripts/${slug}.lua"
 dest = "{SavedGames}/Scripts/${slug}.lua"
 `,
@@ -199,16 +207,18 @@ A DCS (Digital Combat Simulator) mission script mod, scaffolded by DCS Studio.
 
 ## Layout
 
-- \`Scripts/${slug}.lua\` — the script that ships. The manifest's
-  [[install]] rule copies this file as-is, so keep the mod self-contained
-  in it (add more [[install]] rules if you split into more files).
-- \`dcs-studio.toml\` — project manifest (metadata, install rules).
+- \`Scripts/${slug}.lua\` — the script that ships. The manifest's [[bundle]]
+  entry packs this file and the [[symlink]] entry links it as-is, so keep
+  the mod self-contained in it (add more [[bundle]]/[[symlink]] entries if
+  you split into more files).
+- \`dcs-studio.toml\` — project manifest (metadata, bundle + symlink rules).
 
 ## Install
 
-Install rules in \`dcs-studio.toml\` map project files to your DCS folders via
-named roots (\`{SavedGames}\`, \`{GameInstall}\`), resolved per-machine. The
-scaffolded rule copies \`Scripts/${slug}.lua\` to \`Saved Games/Scripts/${slug}.lua\`.
+The manifest's [[bundle]] entries declare what ships in the release; its
+[[symlink]] entries map bundled files to your DCS folders via named roots
+(\`{SavedGames}\`, \`{GameInstall}\`), resolved per-machine. The scaffolded
+rule links \`Scripts/${slug}.lua\` to \`Saved Games/Scripts/${slug}.lua\`.
 
 ## Where the script runs
 
@@ -239,9 +249,12 @@ function luaHook(name: string): TemplateFile[] {
     {
       path: "dcs-studio.toml",
       contents: `${manifestHeader(name)}${projectBlock(name, "lua-hook")}
-# Install rules: GameGUI hooks live under Scripts/Hooks, where DCS
-# auto-loads them at start.
-[[install]]
+# Bundle the hook, then link it into Scripts/Hooks, where DCS auto-loads
+# every .lua at start.
+[[bundle]]
+path = "Scripts/Hooks/${ident}_hook.lua"
+
+[[symlink]]
 source = "Scripts/Hooks/${ident}_hook.lua"
 dest = "{SavedGames}/Scripts/Hooks"
 `,
@@ -292,16 +305,18 @@ A DCS (Digital Combat Simulator) GameGUI hook mod, scaffolded by DCS Studio.
 ## Layout
 
 - \`Scripts/Hooks/${ident}_hook.lua\` — the hook that ships. The manifest's
-  [[install]] rule copies this file as-is, so keep the mod self-contained
-  in it (add more [[install]] rules if you split into more files).
-- \`dcs-studio.toml\` — project manifest (metadata, install rules).
+  [[bundle]] entry packs this file and the [[symlink]] entry links it as-is,
+  so keep the mod self-contained in it (add more [[bundle]]/[[symlink]]
+  entries if you split into more files).
+- \`dcs-studio.toml\` — project manifest (metadata, bundle + symlink rules).
 
 ## Install
 
-Install rules in \`dcs-studio.toml\` map project files to your DCS folders via
-named roots (\`{SavedGames}\`, \`{GameInstall}\`), resolved per-machine. The
-scaffolded rule copies the hook to \`Saved Games/Scripts/Hooks\`, where DCS
-auto-loads every .lua at start — no mission trigger needed.
+The manifest's [[bundle]] entries declare what ships; its [[symlink]] entries
+map bundled files to your DCS folders via named roots (\`{SavedGames}\`,
+\`{GameInstall}\`), resolved per-machine. The scaffolded rule links the hook
+into \`Saved Games/Scripts/Hooks\`, where DCS auto-loads every .lua at
+start — no mission trigger needed.
 
 ## Where the hook runs
 
@@ -355,13 +370,20 @@ function rustDllManifest(name: string, slug: string, ident: string): TemplateFil
   return {
     path: "dcs-studio.toml",
     contents: `${manifestHeader(name)}${projectBlock(name, "rust-dll")}
-# Install rules: the built DLL lands under Mods/tech, the GameGUI hook
-# under Scripts/Hooks — the same layout the DCS Studio bridge uses.
-[[install]]
+# Bundle the built DLL + the GameGUI hook, then link each into place — the
+# DLL under Mods/tech, the hook under Scripts/Hooks (the DCS Studio bridge
+# layout).
+[[bundle]]
+path = "target/release/${ident}.dll"
+
+[[bundle]]
+path = "Scripts/Hooks/${ident}_hook.lua"
+
+[[symlink]]
 source = "target/release/${ident}.dll"
 dest = "{SavedGames}/Mods/tech/${slug}/bin"
 
-[[install]]
+[[symlink]]
 source = "Scripts/Hooks/${ident}_hook.lua"
 dest = "{SavedGames}/Scripts/Hooks"
 `,
@@ -525,10 +547,9 @@ Produces \`target/release/${ident}.dll\`.
 
 ## Install
 
-DCS Studio's install action applies the
-manifest's [[install]] rules: the DLL goes to
-\`{SavedGames}/Mods/tech/${slug}/bin\`, the GameGUI hook to
-\`{SavedGames}/Scripts/Hooks\`.
+DCS Studio's install action applies the manifest's [[symlink]] rules over the
+bundled content: the DLL links to \`{SavedGames}/Mods/tech/${slug}/bin\`, the
+GameGUI hook to \`{SavedGames}/Scripts/Hooks\`.
 
 ## How loading works
 
