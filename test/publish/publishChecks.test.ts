@@ -10,7 +10,6 @@ function manifest(over: Partial<ManifestModel> = {}): ManifestModel {
   return {
     project: { name: "My Mod", version: "1.0.0", author: "me", description: "d" },
     install: [],
-    dependencies: [],
     requires_module: [],
     extras: [],
     ...over,

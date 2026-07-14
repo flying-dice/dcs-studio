@@ -109,7 +109,7 @@ Feature: DCS Studio extension
 
 | Term | Meaning |
 | --- | --- |
-| **Manifest** | `dcs-studio.toml` — project metadata, `[[install]]` rules, `[[dependencies]]`, `[[requires_module]]` |
+| **Manifest** | `dcs-studio.toml` — project metadata, `[[install]]` rules, `[[requires_module]]` |
 | **Named roots** | `{SavedGames}` and `{GameInstall}` — the two anchor points install destinations resolve against |
 | **Subscribe / enable** | Download+unpack into the data dir / link the unpacked files into DCS (junction, hard link or symlink) |
 | **Bridge** | The in-DCS JSON-RPC servers: `dcs_studio_gui.dll` (GameGUI hook state, port 25569) + `dcs_studio_mission.dll` (mission scripting state, port 25570, booted by the hook at mission start), installed with the `DcsStudio.lua` hook |

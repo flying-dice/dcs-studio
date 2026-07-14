@@ -166,7 +166,6 @@ describe("blank template", () => {
     expect(toml).toContain('dcs_min_version = "2.9.0"');
     // Install rule stays commented, slugged from the name.
     expect(toml).toContain('# dest = "{SavedGames}/Mods/my-mod"');
-    expect(toml).toContain("# [[dependencies]]");
   });
 
   it("TOML-escapes quotes/backslashes in the project name value", () => {

@@ -39,10 +39,6 @@
       if (splitDest(r.dest).root === "{GameInstall}" && !roots.gameInstall)
         out.push(`Install rule ${i + 1}: {GameInstall} is not configured (set dcsStudio.gameInstallPath).`);
     });
-    m.dependencies.forEach((d, i) => {
-      if (!d.id.trim()) out.push(`Dependency ${i + 1}: id (owner/repo) is empty.`);
-      else if (!/^[^/]+\/[^/]+$/.test(d.id.trim())) out.push(`Dependency ${i + 1}: id should look like owner/repo.`);
-    });
     m.requires_module.forEach((r, i) => {
       if (!r.id.trim()) out.push(`Required module ${i + 1}: id is empty.`);
     });
@@ -81,7 +77,6 @@
         <div class="form" id="form">
           ${sectionProject(m)}
           ${sectionInstall(m)}
-          ${sectionDeps(m)}
           ${sectionRequires(m)}
           ${extras ? passthroughNote(m) : ""}
         </div>
@@ -123,7 +118,6 @@
   // data-add -> data-testid, per the previews/ data-testid convention doc.
   const ADD_TESTID = {
     install: "add-install-btn",
-    dependencies: "add-dependency-btn",
     requires_module: "add-required-module-btn",
   };
 
@@ -170,33 +164,6 @@
         <p class="blurb">Each rule copies a project-relative <span class="mono">source</span> under a root-anchored <span class="mono">dest</span>. The resolved path shows where it lands on this machine.</p>
         ${rows || `<p class="empty">No install rules yet.</p>`}
         <button class="btn ghost add" data-testid="${ADD_TESTID.install}" data-add="install">${I.plus} Add install rule</button>
-      </section>`;
-  }
-
-  function sectionDeps(m) {
-    const rows = m.dependencies
-      .map(
-        (d, i) => `
-        <div class="row" data-testid="dep-row" data-row="dep-${i}">
-          <div class="row-grid four">
-            ${fieldRow("Id", "owner/repo", input("dependencies", i, "id", d.id, "owner/repo"))}
-            ${fieldRow("Name", "optional", input("dependencies", i, "name", d.name, "Display name"))}
-            ${fieldRow("Version", "optional", input("dependencies", i, "version", d.version, "* or ^1.0"))}
-            <label class="field check">
-              <input type="checkbox" data-sec="dependencies" data-idx="${i}" data-key="optional" ${d.optional ? "checked" : ""} />
-              <span class="lbl">optional</span>
-            </label>
-          </div>
-          <button class="rm" data-testid="remove-row-btn" data-rm="dependencies" data-idx="${i}" title="Remove dependency">${I.x}</button>
-        </div>`,
-      )
-      .join("");
-    return `
-      <section class="card">
-        <div class="section-label">[[dependencies]] <span class="count">${m.dependencies.length}</span></div>
-        <p class="blurb">Other Marketplace mods (by <span class="mono">owner/repo</span>) installed transitively with this one.</p>
-        ${rows || `<p class="empty">No dependencies.</p>`}
-        <button class="btn ghost add" data-testid="${ADD_TESTID.dependencies}" data-add="dependencies">${I.plus} Add dependency</button>
       </section>`;
   }
 
@@ -252,8 +219,6 @@
       el.addEventListener("click", () => {
         const sec = el.dataset.add;
         if (sec === "install") state.model.install.push({ source: "", dest: "{SavedGames}/Scripts/" });
-        else if (sec === "dependencies")
-          state.model.dependencies.push({ id: "", name: "", version: "", optional: false });
         else if (sec === "requires_module") state.model.requires_module.push({ id: "", name: "" });
         render();
         pushEdit();

@@ -51,7 +51,6 @@
           <div class="grid2" style="margin-top:12px">
             <div class="field"><span class="lbl">Repository name</span><input class="in" id="repoName" value="${esc(state.repo ? state.repo.name : state.defaults.name)}" placeholder="my-cool-mod" spellcheck="false" /></div>
             <div class="field"><span class="lbl">Description</span><input class="in" id="repoDesc" value="${esc(state.defaults.description)}" placeholder="One line about the mod" spellcheck="false" /></div>
-            <div class="field full"><label class="check-row"><input type="checkbox" id="isLibrary" /> <span class="lbl" style="margin:0">Publish as a library (dependency-only — adds the <span class="mono">dcs-studio-library</span> topic)</span></label></div>
           </div>
           <button class="btn" id="shareBtn" ${blocking() ? "disabled" : ""}>Share to GitHub</button>
           <div class="result ok" id="shareResult" style="display:none"></div>
@@ -88,7 +87,6 @@
         opts: {
           name: document.getElementById("repoName").value.trim(),
           description: document.getElementById("repoDesc").value.trim(),
-          isLibrary: document.getElementById("isLibrary").checked,
         },
       });
     });

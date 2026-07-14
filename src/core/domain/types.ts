@@ -29,7 +29,6 @@ export interface InstallRoots {
 export interface ManifestModel {
   project: { name: string; version: string; author: string; description: string };
   install: { source: string; dest: string }[];
-  dependencies: { id: string }[];
   requires_module: { id: string }[];
   extras: string[];
 }
@@ -59,7 +58,6 @@ export interface MarketListing {
   repo_url: string;
   avatar_url: string;
   stars: number;
-  is_library: boolean;
 }
 
 /** A marketplace product page (repo header + latest-release facts). */
@@ -77,9 +75,7 @@ export interface ProductDetail {
   assets: ProductAsset[];
   download_size: number;
   installable: boolean;
-  is_library: boolean;
   installs: { source: string; dest: string }[];
-  dependencies: { id: string; name: string; version: string; optional: boolean }[];
   requires: { id: string; name: string; installed: boolean }[];
 }
 

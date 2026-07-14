@@ -12,8 +12,7 @@ import {
 
 // GitHub REST adapter for `MarketplacePort`. Discovery mirrors dcs-studio's
 // studio-services/market.rs: search public repos by the `dcs-studio` topic; the
-// repo's other topics become the listing's labels; the `dcs-studio-library`
-// topic marks a dependency-only library. All response mapping and the
+// repo's other topics become the listing's labels. All response mapping and the
 // installability rule are pure functions in core/domain/githubMarketplace.ts —
 // this file owns only HTTP + headers. Auth is the adapter's concern: the
 // injected `AuthPort` supplies a token (silently, per call).
@@ -68,9 +67,8 @@ async function discover(topic: string, token: string | undefined): Promise<Marke
 /**
  * A repo's product page: header, README, and latest-release facts. `installable`
  * is the current-release marker — true only when the latest release ships a
- * `dcs-studio.toml` asset and the repo is not a library. The install PLAN
- * (parsing that manifest) is the install step; here `installs`/`dependencies`/
- * `requires` are left empty.
+ * `dcs-studio.toml` asset. The install PLAN (parsing that manifest) is the
+ * install step; here `installs`/`requires` are left empty.
  */
 async function loadProduct(owner: string, name: string, token: string | undefined): Promise<ProductDetail> {
   const repo = await ghJson<RepoJson>(`${API}/repos/${owner}/${name}`, token);

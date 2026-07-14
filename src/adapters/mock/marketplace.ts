@@ -34,7 +34,6 @@ export const LISTINGS: MarketListing[] = [
     repo_url: "https://github.com/viper-drivers/f16-weapons-expansion",
     avatar_url: avatar("u/9919"),
     stars: 342,
-    is_library: false,
   },
   {
     repo: "syria-collective/syria-4k-textures",
@@ -46,7 +45,6 @@ export const LISTINGS: MarketListing[] = [
     repo_url: "https://github.com/syria-collective/syria-4k-textures",
     avatar_url: avatar("u/1024"),
     stars: 512,
-    is_library: false,
   },
   {
     repo: "hoggit-liveries/usaf-aggressors",
@@ -58,19 +56,17 @@ export const LISTINGS: MarketListing[] = [
     repo_url: "https://github.com/hoggit-liveries/usaf-aggressors",
     avatar_url: avatar("u/2048"),
     stars: 289,
-    is_library: false,
   },
   {
     repo: "dcs-scripting/moose-lite",
     name: "MOOSE Lite",
     author: "dcs-scripting",
     description:
-      "A trimmed MOOSE core for mission scripting — spawning, zones and scheduling without the full framework weight. Dependency-only.",
+      "A trimmed MOOSE toolkit for mission scripting — spawning, zones and scheduling without the full framework weight.",
     labels: ["script", "framework"],
     repo_url: "https://github.com/dcs-scripting/moose-lite",
     avatar_url: avatar("u/3072"),
     stars: 1203,
-    is_library: true,
   },
   {
     repo: "kneeboard-lab/dynamic-kneeboards",
@@ -82,7 +78,6 @@ export const LISTINGS: MarketListing[] = [
     repo_url: "https://github.com/kneeboard-lab/dynamic-kneeboards",
     avatar_url: avatar("u/4096"),
     stars: 176,
-    is_library: false,
   },
   {
     repo: "carrier-ops/supercarrier-plus",
@@ -94,7 +89,6 @@ export const LISTINGS: MarketListing[] = [
     repo_url: "https://github.com/carrier-ops/supercarrier-plus",
     avatar_url: avatar("u/5120"),
     stars: 431,
-    is_library: false,
   },
   {
     repo: "sound-mods/immersive-cockpit-audio",
@@ -106,7 +100,6 @@ export const LISTINGS: MarketListing[] = [
     repo_url: "https://github.com/sound-mods/immersive-cockpit-audio",
     avatar_url: avatar("u/6144"),
     stars: 98,
-    is_library: false,
   },
   {
     repo: "mission-makers/operation-eastern-storm",
@@ -118,19 +111,16 @@ export const LISTINGS: MarketListing[] = [
     repo_url: "https://github.com/mission-makers/operation-eastern-storm",
     avatar_url: avatar("u/7168"),
     stars: 254,
-    is_library: false,
   },
   {
     repo: "utils/dcs-lua-common",
     name: "dcs-lua-common",
     author: "utils",
-    description:
-      "Shared Lua helpers (vec math, table utils, logging) used by several DCS Studio mods. Add it as a dependency, not an install.",
-    labels: ["script", "library"],
+    description: "Shared Lua helpers (vec math, table utils, logging) for mission scripting.",
+    labels: ["script"],
     repo_url: "https://github.com/utils/dcs-lua-common",
     avatar_url: avatar("u/8192"),
     stars: 67,
-    is_library: true,
   },
   {
     repo: "weather-systems/real-weather-injector",
@@ -142,7 +132,6 @@ export const LISTINGS: MarketListing[] = [
     repo_url: "https://github.com/weather-systems/real-weather-injector",
     avatar_url: avatar("u/9216"),
     stars: 388,
-    is_library: false,
   },
   {
     repo: "viper-drivers/hud-color-tweaks",
@@ -154,7 +143,6 @@ export const LISTINGS: MarketListing[] = [
     repo_url: "https://github.com/viper-drivers/hud-color-tweaks",
     avatar_url: avatar("u/10240"),
     stars: 143,
-    is_library: false,
   },
   {
     repo: "training/bfm-trainer",
@@ -166,7 +154,6 @@ export const LISTINGS: MarketListing[] = [
     repo_url: "https://github.com/training/bfm-trainer",
     avatar_url: avatar("u/11264"),
     stars: 201,
-    is_library: false,
   },
 ];
 
@@ -225,13 +212,9 @@ Multiplayer: all clients need the mod installed for the loadouts to sync.
     ],
     download_size: 4.2 * MB,
     installable: true,
-    is_library: false,
     installs: [
       { source: "Scripts/WeaponsExpansion", dest: "Saved Games/DCS/Scripts/WeaponsExpansion" },
       { source: "Mods/tech/F16Weapons", dest: "Saved Games/DCS/Mods/tech/F16Weapons" },
-    ],
-    dependencies: [
-      { id: "utils/dcs-lua-common", name: "dcs-lua-common", version: "*", optional: false },
     ],
     requires: [{ id: "ed/f16c", name: "F-16C Viper", installed: true }],
   },
@@ -247,9 +230,9 @@ Multiplayer: all clients need the mod installed for the loadouts to sync.
     release_url: "https://github.com/dcs-scripting/moose-lite/releases/tag/v0.9.0",
     readme: `# MOOSE Lite
 
-A dependency-only library. Add it to your project's \`CargoLua.toml\` and
-\`require\` the pieces you need — it does **not** install anything into DCS on its
-own.
+A trimmed MOOSE core for mission scripting — spawning, zones and scheduling
+without the full framework weight. Drop it into your Saved Games \`Scripts\`
+folder and \`require\` the pieces you need.
 
 ## Modules
 
@@ -264,12 +247,21 @@ local Spawn = require("moose_lite.spawn")
 Spawn.new("Red CAP"):Schedule(300)
 \`\`\`
 `,
-    assets: [],
-    download_size: 0,
-    installable: false,
-    is_library: true,
-    installs: [],
-    dependencies: [],
+    assets: [
+      {
+        name: "moose-lite-v0.9.0.zip",
+        size: 0.6 * MB,
+        url: assetUrl("dcs-scripting/moose-lite", "v0.9.0", "moose-lite-v0.9.0.zip"),
+      },
+      {
+        name: "dcs-studio.toml",
+        size: 0.6 * KB,
+        url: assetUrl("dcs-scripting/moose-lite", "v0.9.0", "dcs-studio.toml"),
+      },
+    ],
+    download_size: 0.6 * MB,
+    installable: true,
+    installs: [{ source: "Scripts/MooseLite", dest: "Saved Games/DCS/Scripts/MooseLite" }],
     requires: [],
   },
   "mission-makers/operation-eastern-storm": {
@@ -306,11 +298,9 @@ Install, then find it under **Campaigns** in the DCS main menu.
     ],
     download_size: 128 * MB,
     installable: true,
-    is_library: false,
     installs: [
       { source: "Campaigns/EasternStorm", dest: "Saved Games/DCS/Missions/Campaigns/EasternStorm" },
     ],
-    dependencies: [],
     requires: [
       { id: "ed/syria", name: "Syria Map", installed: false },
       { id: "ed/fa18c", name: "F/A-18C Hornet", installed: true },
@@ -353,11 +343,9 @@ releases page instead.
     ],
     download_size: 1.8 * 1024 * MB,
     installable: true,
-    is_library: false,
     installs: [
       { source: "Textures/Syria4K", dest: "Saved Games/DCS/Mods/terrains/Syria/Textures" },
     ],
-    dependencies: [],
     requires: [{ id: "ed/syria", name: "Syria Map", installed: false }],
   },
 };
@@ -384,9 +372,7 @@ function synthesize(listing: MarketListing): ProductDetail {
     assets: [],
     download_size: 0,
     installable: false,
-    is_library: listing.is_library,
     installs: [],
-    dependencies: [],
     requires: [],
   };
 }
