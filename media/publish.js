@@ -1,5 +1,5 @@
 // @ts-nocheck
-// Publish panel: preflight checks, Share to GitHub (repo + push), Cut a release
+// Publish panel: preflight checks, Share to GitHub (repo + push), Create a release
 // (7z-packaged, volume-split payload + standalone manifest).
 (function () {
   const vscode = acquireVsCodeApi();
@@ -58,7 +58,7 @@
         </section>
 
         <section class="card">
-          <h2>2 · Cut a release</h2>
+          <h2>2 · Create a release</h2>
           <p class="sub">Packages the manifest + install sources into a 7z payload (split into GitHub-safe volumes when large) and uploads it with the standalone <span class="mono">dcs-studio.toml</span> alongside.</p>
           <div class="grid2">
             <div class="field"><span class="lbl">Repo (owner/name)</span><input class="in" id="relRepo" value="${esc(state.repo ? state.repo.owner + "/" + state.repo.name : "")}" placeholder="owner/name" spellcheck="false" /></div>
@@ -131,7 +131,7 @@
       case "shareDone": {
         const r = document.getElementById("shareResult");
         r.style.display = "block";
-        r.innerHTML = `Shared → <button class="btn link" data-open="${esc(m.result.owner)}/${esc(m.result.name)}">${esc(m.result.owner)}/${esc(m.result.name)}</button>. Cut a release below.`;
+        r.innerHTML = `Shared → <button class="btn link" data-open="${esc(m.result.owner)}/${esc(m.result.name)}">${esc(m.result.owner)}/${esc(m.result.name)}</button>. Create a release below.`;
         r.querySelector("[data-open]").addEventListener("click", (ev) => vscode.postMessage({ type: "openExternal", url: "https://github.com/" + ev.target.dataset.open }));
         const relRepo = document.getElementById("relRepo");
         if (relRepo && !relRepo.value) relRepo.value = m.result.owner + "/" + m.result.name;

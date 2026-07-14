@@ -109,7 +109,7 @@ export class PublishService {
     return { owner, name: opts.name, url: `https://github.com/${owner}/${opts.name}` };
   }
 
-  /** Package the payload (volume-split when large) and cut a GitHub release with
+  /** Package the payload (volume-split when large) and create a GitHub release with
    *  the standalone manifest alongside every payload volume. */
   async cutRelease(root: string, opts: ReleaseOpts, log: Log): Promise<ReleaseResult> {
     const { gh, archive, fs, manifest } = this.ports;

@@ -43,7 +43,7 @@ Feature: Launcher sidebar navigation
       Then the "Create a Mod" row is relabelled "Edit Project"
         with description "Open the dcs-studio.toml editor"
       And a "Publish Mod" row appears
-        with description "Preflight, share to GitHub & cut a release"
+        with description "Preflight, share to GitHub & create a release"
 
     Scenario: Manifest changes are reflected live
       Given the launcher is visible

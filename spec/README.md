@@ -74,7 +74,7 @@ Feature: DCS Studio extension
 | [009](stories/009-create-project-from-template.story.md) | Create a Mod Project from a Template |
 | [010](stories/010-author-manifest.story.md) | Author the Manifest with the Two-Way Form |
 | [011](stories/011-share-mod-to-github.story.md) | Publish: Preflight & Share to GitHub |
-| [012](stories/012-cut-release.story.md) | Publish: Package & Cut a Release |
+| [012](stories/012-create-release.story.md) | Publish: Package & Create a Release |
 
 ### Epic 4 — Prepare the sim
 | Story | Title |

@@ -57,7 +57,7 @@ Feature: Step 1 — Share to GitHub
       commits pending changes as "Publish with DCS Studio",
       creates the public repo and pushes,
       and tags the repo with the "dcs-studio" topic
-    And the result reads "Shared → <owner>/<name>. Cut a release below."
+    And the result reads "Shared → <owner>/<name>. Create a release below."
     And the release step's Repo field is prefilled
 
   Scenario: Publishing a library
