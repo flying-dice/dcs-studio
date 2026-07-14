@@ -282,6 +282,69 @@ mod tests {
         .expect("sqlite lua suite");
     }
 
+    /// The console/REPL runtime (`RT_SOURCE`, injected into remote states)
+    /// drives its explorer entry points against a live Lua state: tables AND
+    /// functions get refs; the arity preview falls back cleanly on PUC 5.1
+    /// (no `nparams`); `signature_json` resolves real parameter names without
+    /// running the body, returns 0-arg cleanly, flags C functions as native
+    /// without hanging, and errors on a stale ref.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn rt_explorer_and_signatures() {
+        let lua = Lua::new();
+        lua.load(crate::RT_SOURCE).exec().expect("install RT");
+        lua.load(
+            r#"
+            local RT = assert(__DCS_STUDIO_RT, "RT installed")
+            assert(RT.version == 2, "RT is v2")
+
+            G = {
+              tbl = { a = 1, b = 2 },
+              fn3 = function(text, displayTime, clearView) return 1 end,
+              fn0 = function() end,
+              prnt = print,
+            }
+
+            -- A function inspection registers a ref and types as a function.
+            local r = RT.inspect_json("G.fn3")
+            local fref = tonumber(r:match('"ref"%s*:%s*(%d+)'))
+            assert(r:find('"type":"function"'), "fn3 typed function")
+            assert(fref and fref > 0, "fn3 got a ref")
+
+            -- Real parameter names, resolved without running the body.
+            local s = RT.signature_json(fref)
+            assert(s:find('"ok":true'), "sig ok")
+            assert(s:find('"params":"text, displayTime, clearView"'), "resolved names: " .. s)
+
+            -- A 0-arg function terminates the capture loop cleanly.
+            local r0 = RT.inspect_json("G.fn0")
+            local f0 = tonumber(r0:match('"ref"%s*:%s*(%d+)'))
+            assert(RT.signature_json(f0):find('"params":""'), "0-arg empty params")
+
+            -- A C function (print) is flagged native and never hangs the loop.
+            local rp = RT.inspect_json("G.prnt")
+            assert(rp:find('function %(native%)'), "print native preview: " .. rp)
+            local fp = tonumber(rp:match('"ref"%s*:%s*(%d+)'))
+            assert(RT.signature_json(fp):find('"native":true'), "print native sig")
+
+            -- A stale ref errors rather than crashing.
+            local st = RT.signature_json(999999)
+            assert(st:find('"ok":false') and st:find('stale ref'), "stale ref err: " .. st)
+
+            -- Expanding a table lists function children with their type + ref.
+            local gref = tonumber(RT.inspect_json("G"):match('"ref"%s*:%s*(%d+)'))
+            local ex = RT.expand_json(gref)
+            assert(ex:find('"name":"fn3"') and ex:find('"type":"function"'), "expand types functions")
+
+            -- clear releases every ref.
+            RT.clear_json()
+            assert(RT.signature_json(fref):find("stale ref"), "cleared refs are stale")
+            "#,
+        )
+        .exec()
+        .expect("rt explorer/signature suite");
+    }
+
     /// Every key registered on the live module table (and each sub-namespace
     /// table) has a recorded `.d.lua` type — the facade can't register a
     /// binding without documenting it.
