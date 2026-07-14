@@ -27,7 +27,7 @@ use tokio::sync::oneshot::Receiver;
 use tokio::task::spawn_local;
 use tokio::time::timeout;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
+const DEFAULT_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// The running server's request queue, reachable DLL-wide so any code in this
 /// DLL's Lua state can drain it — not just the holder of the `JsonRpcServer`
