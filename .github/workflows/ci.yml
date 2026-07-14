@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+jobs:
+  gates:
+    name: Quality gates
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript compile
+        run: npm run compile
+
+      - name: Unit tests + coverage gate (100% per-file on src/core)
+        run: npx vitest run --coverage
+
+      - name: Install Playwright browser
+        run: npx playwright install chromium
+
+      - name: Webview e2e (previews harness)
+        run: npm run test:e2e
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bridge
+
+      # Build gate only: the lua-runtime-gated unit tests need DCS's own
+      # lua.dll on PATH at process load (not redistributable to CI). Run them
+      # locally per .claude/skills/dcs-dev:
+      #   cd bridge; cargo test --workspace -- --include-ignored --skip regenerate_dlua_golden
+      - name: Rust workspace builds (both bridge DLLs)
+        run: cargo build --release --workspace
+        working-directory: bridge
