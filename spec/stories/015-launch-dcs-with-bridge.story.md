@@ -8,9 +8,14 @@
 
 ## Context
 
-- Command: **"DCS Studio: Launch DCS (with bridge)"** (`dcs.bridge.launch`). Requires `dcsStudio.gameInstallPath`.
-- The bridge serves a WebSocket on `ws://127.0.0.1:25569/ws` (localhost only); the extension pings every 2 s and reconnects automatically with backoff.
+- Command: **"DCS Studio: Launch DCS (with bridge)"** (`dcs.bridge.launch`). Requires `dcsStudio.gameInstallPath`. This is the single implementation — every entrypoint below funnels into the same command.
+- The bridge serves a WebSocket on `ws://127.0.0.1:25569/ws` (GUI bridge) and `ws://127.0.0.1:25570/ws` (mission bridge, up only while a mission is loaded); the extension pings both every 2 s and reconnects automatically with backoff.
 - Connection state is mirrored in the status bar item, the launcher footer (story 002) and the Lua console header (story 017).
+- "DCS offline" always means the **GUI bridge** is unreachable — it's up whenever DCS runs, so it is the "is DCS running" signal. A mission bridge that's down while the GUI bridge is up (at the menu, or between missions) is never treated as "DCS offline".
+- Beyond the Command Palette, three prominent entrypoints reach the launch command:
+  - the status bar item's click dispatcher (below),
+  - an inline "Launch DCS (with bridge)" button in the Lua console's offline status line (story 017),
+  - the launcher sidebar footer, which mirrors the same connection state (story 002).
 
 ```gherkin
 Feature: Managed DCS launch
@@ -44,6 +49,30 @@ Feature: Managed DCS launch
     Given DCS was launched by the extension
     When the DCS process exits
     Then the bridge files are automatically ejected
+
+Feature: Prominent launch entrypoints
+  The launch command is reachable beyond the Command Palette, wherever the
+  offline state is surfaced — every entrypoint reuses "dcs.bridge.launch"
+  as its single implementation, preconditions and all.
+
+  Scenario: Status bar click while offline
+    Given the GUI bridge is not connected ("DCS: offline")
+    When the user clicks the bridge status bar item
+    Then a quick pick offers "Launch DCS (with bridge)", "Open Lua Console" and "Inject Bridge"
+    And choosing "Launch DCS (with bridge)" runs "dcs.bridge.launch"
+
+  Scenario: Status bar click while online
+    Given the GUI bridge is connected (at menu or mission running)
+    When the user clicks the bridge status bar item
+    Then the Lua console opens directly, with no intermediate quick pick
+
+  Scenario: Console inline launch button
+    Given the Lua console is open and both bridges are offline
+    Then the status line shows a "Launch DCS (with bridge)" button
+    When the user clicks it
+    Then "dcs.bridge.launch" runs
+    And the button reads "Launching…" and is disabled while the launch is in flight
+    And the button disappears once the GUI bridge connects
 
 Feature: Live connection state
 

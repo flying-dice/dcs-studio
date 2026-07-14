@@ -24,14 +24,22 @@ Feature: Lua console
       Then the status line shows "<label>"
 
       Examples:
-        | state                      | label                                          |
-        | offline                    | Bridge offline — start DCS (or Inject + restart it) |
-        | connected, at menu         | Connected — at menu (no mission)               |
-        | connected, mission running | Mission running (with "sim t = <N>s")          |
+        | state                      | label                                                |
+        | offline                    | Bridge offline — click Launch DCS (with bridge) to connect |
+        | connected, at menu         | Connected — at menu (no mission)                     |
+        | connected, mission running | Mission running (with "sim t = <N>s")                |
 
     Scenario: Offline disables execution
       Given the bridge is offline
       Then the Run and Inspect buttons are disabled
+
+    Scenario: Offline shows an inline launch button (story 015)
+      Given both bridges are offline
+      Then the status line shows a "Launch DCS (with bridge)" button
+      When the user clicks it
+      Then a "launch" message posts to the extension host, which runs "dcs.bridge.launch"
+      And the button reads "Launching…" and is disabled until the bridge connects (or a timeout re-enables it)
+      And the button is hidden once either bridge is connected
 
   Rule: The environment is an explicit choice
 

@@ -126,6 +126,12 @@ export class ConsolePanel {
       case "clear":
         // Client-side clear only; the sim buffer keeps its own tail.
         break;
+      case "launch":
+        // The offline status line's inline CTA — funnel into the same
+        // dcs.bridge.launch command as the Command Palette and the status
+        // bar dispatcher (single implementation, per ARCHITECTURE.md).
+        void vscode.commands.executeCommand("dcs.bridge.launch");
+        break;
     }
   }
 

@@ -12,6 +12,8 @@ import { BridgeClients } from "./bridge/clients";
 import {
   GUI_BRIDGE_PORT,
   MISSION_BRIDGE_PORT,
+  OFFLINE_DISPATCH_OPTIONS,
+  statusBarClickAction,
   statusBarView,
 } from "./core/domain/bridgeProtocol";
 import { ConsolePanel } from "./bridge/consolePanel";
@@ -198,10 +200,13 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(status);
 
   // ── Bridges: live in-sim links + Lua console (clients created above) ──
-  // A status item reflecting both bridges; click opens the console. The
-  // rendering rule is pure (statusBarView) and covered by domain tests.
+  // A status item reflecting both bridges; click routes through a dispatcher
+  // (dcs.bridge.statusBarClick below): online it opens the console directly,
+  // offline it offers Launch DCS alongside Console/Inject. The rendering rule
+  // (statusBarView) and the click decision (statusBarClickAction) are pure and
+  // covered by domain tests.
   const bridgeStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
-  bridgeStatus.command = "dcs.bridge.console";
+  bridgeStatus.command = "dcs.bridge.statusBarClick";
   context.subscriptions.push(
     bridgeStatus,
     clients.onStatus((s) => {
@@ -216,6 +221,19 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("dcs.setup.open", () => SetupPanel.show(context, detect)),
     vscode.commands.registerCommand("dcs.bridge.console", () => ConsolePanel.show(context, clients)),
+    // The status bar item's click handler: not palette-contributed, it's only
+    // reachable by clicking "DCS: offline"/"at menu"/"mission" in the footer.
+    vscode.commands.registerCommand("dcs.bridge.statusBarClick", async () => {
+      if (statusBarClickAction(clients.current) === "openConsole") {
+        ConsolePanel.show(context, clients);
+        return;
+      }
+      const picked = await vscode.window.showQuickPick(
+        OFFLINE_DISPATCH_OPTIONS.map((o) => ({ label: o.label, description: o.description, command: o.command })),
+        { title: "DCS Bridge Offline", placeHolder: "Neither bridge is reachable — choose an action" },
+      );
+      if (picked) void vscode.commands.executeCommand(picked.command);
+    }),
     vscode.commands.registerCommand("dcs.bridge.inject", () => injectCommand(context)),
     vscode.commands.registerCommand("dcs.bridge.eject", () => ejectCommand()),
     vscode.commands.registerCommand("dcs.bridge.launch", async () => {
