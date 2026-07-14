@@ -29,3 +29,4 @@ target/**
 vitest.config.ts
 goals/**
 biome.json
+screenshots/**

@@ -1,139 +1,173 @@
-# DCS Studio (VS Code extension) — preview
+# DCS Studio
 
-A bootstrap of the DCS Studio toolchain as a VS Code extension, focused on the
-**mod-consumer experience**: browsing and installing community mods from the
-Marketplace. It ships with sample data so the full UX runs offline, with no DCS
-install, no GitHub sign-in and no Rust backend.
+**Build, debug, and share DCS World mods and missions — without leaving VS Code.**
 
-## Run it
+DCS Studio brings the whole content-creator workflow for [DCS World](https://www.digitalcombatsimulator.com/) into your editor: a
+community **marketplace** to discover and one-click-install mods, a guided path
+from an empty folder to a **published mod on GitHub**, and a live link into a
+running sim for a **Lua console, a step debugger, and log tailing**. It's built
+for mission scripters and mod makers — including people who have never touched
+git before.
 
-```
-npm install
-npm run compile
-```
+![The DCS Studio marketplace inside VS Code, showing a grid of community mod cards with search, tag and sort controls.](screenshots/marketplace.png)
 
-Then press **F5** ("Run Extension") to launch an Extension Development Host. In
-the new window:
+*The Marketplace: every public GitHub repo tagged `dcs-studio` shows up here — search, filter by tag, sort by stars, and install in one click.*
 
-- Click the **DCS Studio** icon in the activity bar → **Browse the Marketplace**,
-  or
-- Run **DCS Studio: Open Marketplace** from the Command Palette, or
-- Click **DCS Marketplace** in the status bar.
+DCS Studio is part of the [dcs-dropzone](https://github.com/flying-dice/dcs-dropzone)
+ecosystem, aimed squarely at **creators**. If you just want to *play* other
+people's mods, dcs-dropzone is the companion installer for you. DCS Studio is
+where you *make and publish* them.
 
-### What you can try
+---
 
-- **Storefront** — search, filter by tag (click a card tag or use the dropdown),
-  sort by stars/name, refresh.
-- **Product page** — click any card. Rendered README, install plan (source →
-  DCS folder), required stock modules (with owned/missing
-  verdicts), download size and release assets.
-- **Install flow** — click **Install** to watch the simulated per-node
-  download → link progress, then the card flips to **Installed** with an
-  Uninstall action.
-- **MissionScripting.lua** — a stub preview of the file the sanitization manager
-  will edit (a planned port).
-- **My Mods shortcut** — in My Mods, click **Add shortcut** (or run **DCS
-  Studio: Add My Mods Shortcut**) to put a Desktop / Start Menu shortcut down
-  that launches straight into My Mods in its own window — no project, no folder
-  picker. Under the hood it's a `vscode://dcs-studio.dcs-studio/mymods` deep
-  link opened with `--new-window`.
+## What you can do
 
-## Debug Lua inside DCS
+- 🛒 **Discover & install mods** from a GitHub-backed marketplace — no account, no central registry, no gatekeeper.
+- 🧩 **Manage your installs** — enable, disable, update or cleanly uninstall, with links (not copies) into your DCS folders.
+- 🏗️ **Scaffold a project** from a template (mission script, GameGUI hook, Rust DLL, or "just share a `.miz`") with a form-driven manifest — no hand-written TOML.
+- 🚀 **Publish to GitHub** in three guided steps, even if you've never used git — DCS Studio creates the repo, tags it, and cuts the release for you.
+- 🖥️ **Run Lua live in the sim** with a REPL console and a browsable view of every global table.
+- 🐞 **Debug Lua inside DCS** with real breakpoints, stepping, watches and variable inspection — press <kbd>F5</kbd> on a `.lua` file.
+- 📜 **Tail `dcs.log`** with level filters and a live view of what your mod is doing.
 
-Full VS Code debugging (breakpoints, stepping, variables, watch, debug
-console) for scripts running **inside the sim**, in both Lua environments:
+---
 
-- **Mission** — the mission scripting sandbox (`trigger.action`, `coalition`,
-  `world`, …). Needs a running mission and a desanitized
-  `MissionScripting.lua` (command: **DCS Studio: Desanitize
-  MissionScripting.lua**, then restart DCS).
-- **GUI (hooks)** — the GameGUI state (`DCS.*`, `net.*`) where GUI hooks live.
+## Feature tour
 
-### Use it
+### Manage everything you've installed
 
-1. **DCS Studio: Launch DCS (with bridge)** (or Inject + start DCS yourself)
-   and wait for the status bar to show the bridge online.
-2. Open a `.lua` file, set breakpoints in the gutter.
-3. Click the **run/debug dropdown** in the editor title (▷) and pick **Debug
-   Lua in DCS Mission** / **Run Lua in DCS Mission** (or the GUI variants) —
-   or press **F5** (defaults to the mission environment; add a `dcs-lua`
-   launch configuration to customize).
+![The My Mods panel listing installed mods with enable/disable toggles, update and uninstall actions, and a clean-uninstall script.](screenshots/my-mods.png)
 
-While paused you get the call stack, Locals/Upvalues/Globals scopes with lazy
-table expansion, conditional breakpoints, watches, hover evaluation, and real
-assignment from the Debug Console (`x = 42` writes through `debug.setlocal`).
-`print(...)` output streams to the Debug Console. Step Over/Into/Out, Pause
-(break-all) and Stop (kills a runaway loop) all work; an uncaught error pauses
-with the crash frames inspectable (`pauseOnError: false` disables that).
+*My Mods is mission control for your installs: flip mods on or off, pull updates from their GitHub release, or uninstall without leftovers. Installs are lightweight links into your DCS folders — disabling is instant and never touches the downloaded files. A one-click "clean uninstall" removes every DCS Studio link if you ever want a fresh slate.*
 
-### How it works
+### Create a mod without writing TOML
 
-Each environment is served by its own bridge DLL with its own JSON-RPC
-server: `dcs_studio_gui.dll` in the GameGUI hook state (port 25569) and
-`dcs_studio_mission.dll` in the mission scripting state (port 25570, booted
-into the mission by the GUI hook at mission start — which is why
-MissionScripting.lua must be desanitized). Each DLL holds its own breakpoint
-registry and pause/resume flags, and its WebSocket server keeps accepting
-editor requests on a background thread even while the sim thread is frozen at
-a breakpoint. The debug engine (Lua, embedded in the DLLs) runs your chunk
-under a scoped `debug.sethook` line hook and pumps its own RPC queue
-(`jsonrpc.process_queue`) while paused. The VS Code side is an inline Debug
-Adapter (`src/debug/adapter.ts`) that picks the bridge for the session's env,
-maps DAP onto its `debug_*` JSON-RPC and polls `debug_state` (250 ms) for
-stop/termination — a held breakpoint auto-continues after 30 s if the editor
-vanishes, so a crashed editor can never freeze the sim forever. Both servers
-also expose `POST /rpc` and `rpc.discover`, so scripts and LLM agents can
-drive the sim with plain HTTP (see `skills/dcs-studio/SKILL.md`).
+![The Create a Mod view: a dcs-studio.toml manifest open in the editor alongside a two-way-bound manifest form with project, bundle, symlink and entrypoint sections.](screenshots/manifest-form.png)
 
-After changing the hook or DLL, re-run **DCS Studio: Inject Bridge into DCS**
-(or Launch, which injects) and restart DCS to pick it up.
+*Start from a template and DCS Studio scaffolds a working project, `dcs-studio.toml` and all. Opening the manifest gives you a form beside the editor that's two-way bound to the file — edit either side and the other follows. The manifest declares what gets **bundled** into your release and what gets **linked** into DCS on install; it's both your build recipe and the install plan users see before they download anything.*
 
-## How this maps to the real port
+### Run Lua live in the running sim
 
-| Preview piece | Real extension |
-| --- | --- |
-| `media/marketplace.js` mock data | JSON-RPC to a headless Rust sidecar wrapping `studio-services` |
-| Simulated install progress | `market_install_with_progress` over the sidecar; real junction/symlink linking |
-| Webview storefront | Same webview shell; data comes from the sidecar instead of `__BOOTSTRAP__` |
-| MissionScripting stub | CodeLens/editor-title sanitize toggle over the real file |
+![The DCS Lua Console REPL showing a return _G._APP_VERSION query evaluated against the live sim, with a GUI/mission environment picker.](screenshots/lua-console.png)
 
-The storefront layout and states are a faithful reproduction of the current
-SvelteKit `/marketplace` route and product page, retimed to VS Code theme tokens
-so it feels native in light and dark.
+*The DCS Console is a live Lua REPL against a running DCS. Pick your target — the **GUI/hooks** state (`DCS.*`, `net.*`) or the **mission** scripting sandbox (`trigger.action`, `coalition`, `world`…) — type Lua, and see the result. `print(...)` output streams straight into the console.*
 
-## Layout
+### Explore live game state
 
-```
-src/extension.ts              activation, launcher view, commands, status bar
-src/marketplace/panel.ts      webview host: CSP shell, data bootstrap, host messages
-src/mission/missionPanel.ts   MissionScripting.lua stub (planned port)
-media/marketplace.{css,js}    storefront SPA (grid, product page, install sim)
-```
+![The Console Explorer tab showing a lazily-expandable tree of the live _G global table, filtered by glob path patterns.](screenshots/lua-explorer.png)
 
-## Webview previews & tests
+*The Explorer tab drills into live Lua tables as a lazily-expanding tree — filter with glob path patterns (e.g. `_G/**/Units`) to sweep straight to what you want. It's the fastest way to see what's actually in the sim right now.*
 
-`src/core/**` is unit-tested with Vitest (`npm test`, 100% per-file coverage —
-see `vitest.config.ts`). The webviews (`media/*.js`) are vanilla JS running in
-a VS Code webview with no host process, so they're covered separately with
-**Playwright against standalone browser harnesses** — no VS Code, Electron or
-Rust sidecar involved:
+### Export the unit database (and any table) to JSON
 
-```
-previews/<name>.html      loads the real media/<name>.js unmodified, stubs
-                           acquireVsCodeApi via previews/harness.js, and
-                           seeds fixture data from previews/fixtures/<name>.js
-tests/<name>.spec.ts      Playwright specs against those harnesses, driven by
-                           data-testid attributes (see the convention comment
-                           atop tests/helpers.ts)
-```
+![An exported mission/table JSON file open in the VS Code editor, showing coalition, bullseye and nav-point data.](screenshots/json-export.png)
 
-```
-npm run preview      # serves previews/ at http://127.0.0.1:4173 for manual
-                      # click-through (toasts show every posted message)
-npm run test:e2e      # runs the full Playwright suite headless
-npm run test:ui       # Playwright's interactive UI mode, for debugging
-```
+*Any live table can be exported to a JSON file of your choice — handy for the DCS **unit database** (units, weapons, pylons with resolved store names) or a snapshot of the current mission. Big dumps are written to disk rather than squeezed through the socket, so exporting "everything" just works.*
 
-`npm test` (Vitest) and `npm run test:e2e` (Playwright) are fully isolated —
-Vitest only looks under `test/**/*.test.ts`, Playwright only under
-`tests/**/*.spec.ts` — so neither run picks up the other's specs.
+### Watch the log while you develop
+
+![The DCS Log viewer tailing dcs.log with INFO/WARNING/ERROR/DEBUG/ALERT filter chips, a regex filter, and a per-mod filter.](screenshots/log-viewer.png)
+
+*The DCS Log viewer tails `dcs.log` in real time with level chips (INFO, WARNING, ERROR, DEBUG, ALERT), a regex filter, and a one-click "just my mod" filter — so you can spot your `[my_mod] loaded` line without scrolling through thousands of engine messages.*
+
+### Debug Lua inside DCS
+
+Full VS Code debugging — breakpoints, stepping, call stack, Locals/Upvalues/Globals
+scopes, watches, hover evaluation, and a Debug Console you can assign into
+(`x = 42` writes back into the paused frame) — for scripts running **inside the
+live sim**, in both DCS Lua environments:
+
+- **Mission** — the mission scripting sandbox. Needs a running mission and a desanitized `MissionScripting.lua` (see below).
+- **GUI (hooks)** — the GameGUI state where hooks live.
+
+Open any `.lua` file, set breakpoints in the gutter, and press <kbd>F5</kbd> (or
+use the run/debug buttons in the editor title bar). A held breakpoint
+auto-continues after 30 seconds if the editor disappears, so a crashed editor
+can never freeze the sim.
+
+### Safely manage the MissionScripting sandbox
+
+![MissionScripting.lua open in the editor with the sandbox lockdown lines commented out (desanitized), plus the MissionScripting toggle in the sidebar.](screenshots/missionscripting.png)
+
+*DCS ships its mission Lua environment locked down — `os`, `io`, `lfs`, `require` and `package` are stripped for safety. Mission-side tooling (the bridge, the mission debugger, and some mods) needs some of that restored. **Desanitize** comments out the lockdown lines and writes a pristine backup first; **Re-sanitize** restores stock behaviour; **Restore** brings back the backup if an update ever clobbers the file. It's an honest, reversible toggle — desanitizing grants filesystem and OS access to mission scripts, so re-sanitize when you're done developing.*
+
+### Teach your AI agent the project
+
+![The Agent Skills panel offering to install the bundled dcs-studio skill file into the current repository's .claude/skills folder.](screenshots/agent-skills.png)
+
+*DCS Studio bundles a skill file that teaches AI coding agents (Claude Code and compatible tools) how to write DCS mods, edit the manifest, and drive the bridge. Install it into your repo and commit it, and every contributor's agent picks it up.*
+
+### Learn as you go
+
+![The in-app Documentation panel showing the "Welcome to DCS Studio" page with a table-of-contents sidebar covering the mod manager, creating mods and tools.](screenshots/documentation.png)
+
+*Every feature has a guide built right into the extension — from finding mods to the full `dcs-studio.toml` reference to the publish flow. No need to leave the editor to figure out what a button does.*
+
+---
+
+## Getting started
+
+### 1. Install
+
+- **From the Marketplace:** search for **DCS Studio** in the VS Code Extensions view and click Install.
+- **From a `.vsix`:** download the latest release, then run **Extensions: Install from VSIX…** from the Command Palette.
+
+### 2. Point DCS Studio at your DCS folders
+
+Open the **DCS Studio** icon in the activity bar → **Settings**. The setup panel
+auto-detects the two paths most features need and shows a green check when each
+is valid:
+
+![The DCS Setup panel detecting the DCS Saved Games (userdata) folder and the DCS installation folder, with Browse buttons and validation badges.](screenshots/dcs-setup.png)
+
+*DCS Setup finds your **Saved Games** write dir (where mods link and the bridge installs — validated by its `Config` folder) and your **DCS installation** (where `DCS.exe` lives — used to launch the sim). Both auto-detect; override with Browse if you run a non-standard layout.*
+
+### 3. Turn on the live features (optional)
+
+The console, debugger and log tailing talk to DCS through a small **bridge**
+(a native DLL + hook script that installs into your Saved Games folder):
+
+1. Run **DCS Studio: Launch DCS (with bridge)** — this injects the bridge and starts DCS for you (when DCS exits, the bridge is ejected automatically). Or inject it yourself with **Inject Bridge into DCS** and launch DCS however you like.
+2. Wait for the status bar to show the bridge online (*at menu* or *mission running*).
+3. For the **mission** environment (mission debugger / mission console), also run **DCS Studio: Desanitize MissionScripting.lua** and restart DCS. This unlocks the mission Lua sandbox so the mission bridge can boot — a reversible change with an automatic backup. Re-sanitize when you're done.
+
+### 4. Make something
+
+Run **Create a Mod** from the sidebar, pick a template, and you're off. When
+you're ready, **Publish Mod** walks you through sharing it to GitHub and cutting
+a release — the two things that make your mod appear in the marketplace for
+everyone else.
+
+---
+
+## Requirements
+
+- **VS Code** `^1.125.0` or newer.
+- **Windows** — DCS World is Windows-only, and so are the paths and links DCS Studio manages.
+- **DCS World** installed — needed for installing mods, the live bridge, and everything that touches the sim. (The marketplace itself works without DCS.)
+- **git** and the **GitHub CLI** (`gh`, signed in) — only needed if you want to *publish* a mod. Not required for browsing, installing, or scripting.
+- **7-Zip** — used to pack and unpack mod payloads. Auto-detected on your PATH; set a path in Settings if it lives somewhere unusual.
+
+---
+
+## What DCS Studio *isn't*
+
+DCS Studio is deliberately focused. It is **not**:
+
+- **A Lua language server** — no autocomplete, no type-checking, no linting of your Lua. Pair it with a Lua LSP extension if you want that.
+- **A dependency manager or bundler** — it packs the paths you declare and links them into DCS; it doesn't resolve npm-style dependency trees or transpile anything.
+- **A player-facing mod installer** — for *installing and running* other people's mods as a player, use the companion [dcs-dropzone](https://github.com/flying-dice/dcs-dropzone). DCS Studio is the authoring and publishing side of the same ecosystem.
+
+GitHub Releases are the source of truth for every mod — there's no server to
+sign up for and nothing self-hosted.
+
+---
+
+## Development
+
+DCS Studio is open source under the [MIT license](LICENSE). Contributions welcome.
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — the hexagonal core, the composition root, and how the pieces fit together.
+- **Automation & agents** — both bridges expose a JSON-RPC HTTP API (`POST /rpc`) and serve an **OpenRPC** document via `rpc.discover`, so scripts and LLM agents can drive a running sim over plain HTTP. See [`skills/dcs-studio/SKILL.md`](skills/dcs-studio/SKILL.md).
+- **Build:** `npm install && npm run compile`, then press <kbd>F5</kbd> to launch an Extension Development Host.
+- **Tests:** `npm test` (Vitest unit tests, 100% per-file core coverage) and `npm run test:e2e` (Playwright webview specs).

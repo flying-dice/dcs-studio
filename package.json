@@ -1,7 +1,7 @@
 {
   "name": "dcs-studio",
   "displayName": "DCS Studio",
-  "description": "DCS World mod tooling for VS Code — Marketplace, DCS link, injection & launch, guided publish.",
+  "description": "Build, debug, and publish DCS World mods and missions from VS Code — community marketplace, live in-sim Lua console & debugger, and one-click GitHub publishing.",
   "version": "0.15.0",
   "publisher": "flying-dice",
   "license": "MIT",
@@ -17,8 +17,20 @@
     "vscode": "^1.125.0"
   },
   "categories": [
+    "Debuggers",
     "Other"
   ],
+  "keywords": [
+    "dcs",
+    "dcs-world",
+    "lua",
+    "mission-scripting",
+    "modding"
+  ],
+  "galleryBanner": {
+    "color": "#181818",
+    "theme": "dark"
+  },
   "main": "./out/extension.js",
   "activationEvents": [
     "onStartupFinished",
