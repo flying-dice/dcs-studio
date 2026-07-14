@@ -13,10 +13,12 @@ git before.
 
 *The Marketplace: every public GitHub repo tagged `dcs-studio` shows up here — search, filter by tag, sort by stars, and install in one click.*
 
-DCS Studio is part of the [dcs-dropzone](https://github.com/flying-dice/dcs-dropzone)
-ecosystem, aimed squarely at **creators**. If you just want to *play* other
-people's mods, dcs-dropzone is the companion installer for you. DCS Studio is
-where you *make and publish* them.
+DCS Studio is the successor to [dcs-dropzone](https://github.com/flying-dice/dcs-dropzone)
+and [dcs-fiddle](https://github.com/flying-dice/dcs-fiddle), rolling both into one
+toolchain. Discovering, installing and managing other people's mods — what dropzone
+did — now lives in the **Marketplace** and **My Mods** panels; live in-sim Lua — what
+fiddle did — now lives in the **Lua console and explorer**. Whether you *play* mods or
+*make and publish* them, it's all one workflow here.
 
 ---
 
@@ -156,7 +158,6 @@ DCS Studio is deliberately focused. It is **not**:
 
 - **A Lua language server** — no autocomplete, no type-checking, no linting of your Lua. Pair it with a Lua LSP extension if you want that.
 - **A dependency manager or bundler** — it packs the paths you declare and links them into DCS; it doesn't resolve npm-style dependency trees or transpile anything.
-- **A player-facing mod installer** — for *installing and running* other people's mods as a player, use the companion [dcs-dropzone](https://github.com/flying-dice/dcs-dropzone). DCS Studio is the authoring and publishing side of the same ecosystem.
 
 GitHub Releases are the source of truth for every mod — there's no server to
 sign up for and nothing self-hosted.
@@ -169,5 +170,6 @@ DCS Studio is open source under the [MIT license](LICENSE). Contributions welcom
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — the hexagonal core, the composition root, and how the pieces fit together.
 - **Automation & agents** — both bridges expose a JSON-RPC HTTP API (`POST /rpc`) and serve an **OpenRPC** document via `rpc.discover`, so scripts and LLM agents can drive a running sim over plain HTTP. See [`skills/dcs-studio/SKILL.md`](skills/dcs-studio/SKILL.md).
+- **Bridge JSON-RPC API** — the full method surface for both bridges is documented, with live-fetch and Playground links, in [`docs/bridge-api.md`](docs/bridge-api.md). Browse it instantly in the OpenRPC Playground: [GUI bridge](https://playground.open-rpc.org/?url=https://raw.githubusercontent.com/flying-dice/dcs-studio/main/bridge/crates/bridge-gui/openrpc/dcs_studio_gui.openrpc.json) · [mission bridge](https://playground.open-rpc.org/?url=https://raw.githubusercontent.com/flying-dice/dcs-studio/main/bridge/crates/bridge-mission/openrpc/dcs_studio_mission.openrpc.json).
 - **Build:** `npm install && npm run compile`, then press <kbd>F5</kbd> to launch an Extension Development Host.
 - **Tests:** `npm test` (Vitest unit tests, 100% per-file core coverage) and `npm run test:e2e` (Playwright webview specs).

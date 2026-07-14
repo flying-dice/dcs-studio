@@ -69,6 +69,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         # The DLLs also ship inside the vsix; attaching them (and the hook)
         # separately lets a bridge-only deploy grab them without the extension.
+        # The two .openrpc.json goldens ride along so each bridge's JSON-RPC
+        # schema ships versioned next to the DLL that serves it.
         # If a release for this tag already exists (e.g. a draft was pre-created
         # for testing and then published, which is what created the tag), refresh
         # its assets instead of failing on the duplicate.
@@ -78,7 +80,9 @@ jobs:
             (Get-Item *.vsix).FullName,
             "bridge/prebuilt/dcs_studio_gui.dll",
             "bridge/prebuilt/dcs_studio_mission.dll",
-            "bridge/hook/DcsStudio.lua"
+            "bridge/hook/DcsStudio.lua",
+            "bridge/crates/bridge-gui/openrpc/dcs_studio_gui.openrpc.json",
+            "bridge/crates/bridge-mission/openrpc/dcs_studio_mission.openrpc.json"
           )
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {

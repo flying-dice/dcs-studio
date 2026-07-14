@@ -189,6 +189,9 @@ curl -s http://127.0.0.1:25570/rpc -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":"3","method":"repl_eval","params":{"code":"return #world.getAirbases()"}}'
 ```
 
+Browse the whole surface without a sim: the checked-in OpenRPC documents and
+OpenRPC Playground deep links are in `docs/bridge-api.md` in the dcs-studio repo.
+
 The full surface (per `rpc.discover`): `ping`, `eval`, `console_read`,
 `emit_dlua`, `dump_globals`, `repl_*` (eval/inspect/expand/clear/export),
 `debug_*` (run/state/continue/pause/stop/expand/eval/inspect/

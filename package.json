@@ -481,6 +481,7 @@
     "watch": "tsc -watch -p ./",
     "lint": "biome check",
     "lint:fix": "biome check --write",
+    "docs:bridge": "node scripts/generate-bridge-docs.mjs",
     "dev": "node scripts/dev.mjs",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
