@@ -49,11 +49,15 @@ else {
     $candidates = @(
         (Join-Path $env:USERPROFILE "Saved Games\DCS"),
         (Join-Path $env:USERPROFILE "Saved Games\DCS.openbeta")
-    )
-    $WriteDir = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $WriteDir) {
-        throw "No DCS write dir found (checked: $($candidates -join '; ')). Pass -WriteDir to override."
+    ) | Where-Object { Test-Path $_ }
+    if (-not $candidates) {
+        throw "No DCS write dir found under '$env:USERPROFILE\Saved Games'. Pass -WriteDir to override."
     }
+    # Both stable and openbeta dirs can coexist; the LIVE one is the dir whose
+    # dcs.log was written most recently — first-existing would guess wrong.
+    $WriteDir = $candidates |
+        Sort-Object { $log = Join-Path $_ "Logs\dcs.log"; if (Test-Path $log) { (Get-Item $log).LastWriteTime } else { [datetime]::MinValue } } -Descending |
+        Select-Object -First 1
 }
 Write-Host "Using DCS write dir: $WriteDir"
 
