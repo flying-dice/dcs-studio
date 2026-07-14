@@ -1,10 +1,21 @@
-import { lstatSync, mkdirSync, rmSync, existsSync, linkSync, symlinkSync, statSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import {
+  lstatSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+  linkSync,
+  symlinkSync,
+  statSync,
+  readdirSync,
+  realpathSync,
+  type Stats,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { platform } from "node:os";
 import { spawn } from "node:child_process";
 import type { LinkerPort } from "../../core/ports/linker";
 import type { LinkDefinition, InstalledLink, ResolvedLink, LinkResult, DisableResult } from "../../core/domain/types";
-import { chooseLinkStrategy, sameVolume, shouldMergeInto } from "../../core/domain/linkStrategy";
+import { chooseLinkStrategy, sameVolume, classifyExistingDest } from "../../core/domain/linkStrategy";
 
 // Node adapter for `LinkerPort`, ported from dcs-dropzone/packages/linker (the
 // proven impl): create/remove the links between unpacked assets in the data dir
@@ -39,6 +50,24 @@ function createSymlinkElevated(link: string, target: string): Promise<{ ok: true
     p.on("error", (e) => resolve({ ok: false, message: e.message }));
     p.on("exit", (c) => (c === 0 ? resolve({ ok: true }) : resolve({ ok: false, message: err.trim() || `exit ${c}` })));
   });
+}
+
+/**
+ * Whether an existing destination is a link we created for this exact source:
+ * a junction/symlink whose real path resolves to `src`, or a hard link sharing
+ * `src`'s inode. Used to make a re-enable idempotent instead of a conflict.
+ */
+function destPointsAtSrc(dest: string, src: string, destStat: Stats): boolean {
+  try {
+    if (destStat.isSymbolicLink()) {
+      return resolve(realpathSync(dest)) === resolve(realpathSync(src));
+    }
+    const d = statSync(dest);
+    const s = statSync(src);
+    return d.ino !== 0 && d.ino === s.ino && d.dev === s.dev;
+  } catch {
+    return false;
+  }
 }
 
 /** Create one link, choosing junction / hard link / symlink by platform + shape. */
@@ -143,13 +172,15 @@ export class Linker implements LinkerPort {
     if (destStat) {
       // A real directory (not a junction/symlink — lstat reports those as
       // symbolic links) that already exists, like Scripts\Hooks, is merged
-      // into rather than treated as a conflict.
-      const merge = shouldMergeInto({
+      // into. A link we already created for this source (idempotent re-enable)
+      // is adopted. Anything else is a genuine foreign-file conflict.
+      const disposition = classifyExistingDest({
         srcIsDir: srcStat.isDirectory(),
         destIsDir: destStat.isDirectory(),
         destIsSymlink: destStat.isSymbolicLink(),
+        ownedByUs: destPointsAtSrc(link.dest, link.src, destStat),
       });
-      if (merge) {
+      if (disposition === "merge") {
         const created: ResolvedLink[] = [];
         for (const entry of readdirSync(link.src)) {
           const child = await this.createLink({
@@ -164,6 +195,11 @@ export class Linker implements LinkerPort {
           created.push(...child.links);
         }
         return { ok: true, links: created };
+      }
+      if (disposition === "adopt") {
+        // Re-enable with our link still present: no filesystem change, just
+        // re-track it so the ledger and disable stay correct.
+        return { ok: true, links: [{ id: link.id, src: link.src, dest: link.dest }] };
       }
       return { ok: false, message: `Destination path already exists: ${link.dest}` };
     }

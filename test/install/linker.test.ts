@@ -109,6 +109,43 @@ describe("Linker.enable", () => {
     expect(res.message).toBe(`Destination path already exists: ${dest}`);
   });
 
+  it("re-enabling is idempotent: adopts links we already created (issue #3)", async () => {
+    writeSrcFile("Hooks/mod-hook.lua");
+    writeSrcFile("Hooks/nested/deep.lua");
+    const dest = path.join(dcs, "Scripts", "Hooks");
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, "existing-hook.lua"), "keep me");
+    const defs = [{ id: "m:0", src: path.join(src, "Hooks"), dest }];
+
+    const first = await new Linker().enable(defs);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    // A second enable with the links still present must succeed, not throw
+    // "Destination path already exists", and re-report the same links.
+    const second = await new Linker().enable(defs);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.created.map((l) => l.id).sort()).toEqual(["m:0/mod-hook.lua", "m:0/nested"]);
+    expect(fs.readFileSync(path.join(dest, "mod-hook.lua"), "utf8")).toBe("x");
+    expect(fs.readFileSync(path.join(dest, "nested", "deep.lua"), "utf8")).toBe("x");
+    expect(fs.readFileSync(path.join(dest, "existing-hook.lua"), "utf8")).toBe("keep me");
+  });
+
+  it("re-enabling a top-level directory link is idempotent (issue #3)", async () => {
+    writeSrcFile("Hooks/mod-hook.lua");
+    const dest = path.join(dcs, "Scripts", "Hooks");
+    const defs = [{ id: "m:0", src: path.join(src, "Hooks"), dest }];
+
+    const first = await new Linker().enable(defs);
+    expect(first.ok).toBe(true);
+    const second = await new Linker().enable(defs);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.created).toEqual([{ id: "m:0", src: path.join(src, "Hooks"), dest }]);
+    expect(fs.readFileSync(path.join(dest, "mod-hook.lua"), "utf8")).toBe("x");
+  });
+
   it("rolls back earlier definitions when a later one fails", async () => {
     writeSrcFile("Hooks/mod-hook.lua");
     const okDest = path.join(dcs, "Scripts", "Hooks");
