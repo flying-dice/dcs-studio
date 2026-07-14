@@ -66,7 +66,7 @@ export function statusBarView(s: DualBridgeStatus): { text: string; tooltip: str
   if (!s.gui.connected && !s.mission.connected) {
     return {
       text: "$(debug-disconnect) DCS: offline",
-      tooltip: "Neither bridge is reachable. Launch DCS (or Inject + restart it).",
+      tooltip: "Neither bridge is reachable. Click for options: Launch DCS (with bridge), Open Lua Console, or Inject Bridge.",
     };
   }
   const t = displayTime(s);
@@ -89,6 +89,50 @@ export function statusBarView(s: DualBridgeStatus): { text: string; tooltip: str
     tooltip: "GUI bridge connected — at the menu. The mission bridge starts with a mission. Click for the Lua console.",
   };
 }
+
+// ── Status bar click dispatcher ──
+// The status bar item is the most prominent "DCS: offline" signal in the IDE.
+// Clicking it while online keeps opening the console directly; clicking it
+// while offline instead offers a quick-pick that surfaces the launch command
+// (previously reachable only via the Command Palette) alongside the console
+// and inject actions. "Offline" here is deliberately just the GUI bridge —
+// the mission bridge only exists while a mission is loaded, so a mission
+// bridge that's down while the GUI bridge is up (at menu, or sanitized
+// MissionScripting.lua) must NOT be treated as "DCS offline".
+
+export type StatusBarClickAction = "openConsole" | "offlineDispatch";
+
+/** What clicking the bridge status bar item should do. */
+export function statusBarClickAction(s: DualBridgeStatus): StatusBarClickAction {
+  return s.gui.connected ? "openConsole" : "offlineDispatch";
+}
+
+export interface DispatchOption {
+  label: string;
+  description: string;
+  command: string;
+}
+
+/** Offered by the status bar dispatcher when the GUI bridge is offline. Every
+ * option reuses an existing command — this is purely a discoverability
+ * affordance, not a new implementation. */
+export const OFFLINE_DISPATCH_OPTIONS: readonly DispatchOption[] = [
+  {
+    label: "$(rocket) Launch DCS (with bridge)",
+    description: "Inject the bridge and start DCS.exe",
+    command: "dcs.bridge.launch",
+  },
+  {
+    label: "$(terminal) Open Lua Console",
+    description: "Open the console now (Run/Inspect stay disabled until connected)",
+    command: "dcs.bridge.console",
+  },
+  {
+    label: "$(plug) Inject Bridge",
+    description: "Install the bridge DLLs without launching DCS",
+    command: "dcs.bridge.inject",
+  },
+];
 
 /**
  * Why a mission-env action can't proceed right now, or null when the mission

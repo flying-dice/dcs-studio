@@ -9,7 +9,7 @@
 ## Context
 
 - The **DCS Studio** activity-bar container hosts one webview view (`dcsStudio.launcher`) rendering navigation rows.
-- Two status bar items exist: **"$(package) DCS Marketplace"** (always) and a live bridge status item.
+- Two status bar items exist: **"$(package) DCS Marketplace"** (always) and a live bridge status item. The bridge item's click routes through a dispatcher: offline it offers the launch entrypoint (story 015) alongside the console and inject; online it opens the console directly.
 - The view adapts to workspace state: manifest presence toggles author rows; skill updates badge the Agent Skills row; bridge status drives the footer.
 
 ```gherkin
@@ -91,13 +91,18 @@ Feature: Status bar entry points
     Given the bridge is <state>
     Then the status bar shows "<text>"
     When the user clicks it
-    Then the Lua console opens
+    Then "<click behavior>"
 
     Examples:
-      | state                | text                             |
-      | offline              | $(debug-disconnect) DCS: offline |
-      | connected, at menu   | $(plug) DCS: at menu             |
-      | mission running (N s) | $(rocket) DCS: mission <N>s      |
+      | state                | text                             | click behavior                                                          |
+      | offline              | $(debug-disconnect) DCS: offline | a quick pick offers Launch DCS (with bridge) / Open Lua Console / Inject Bridge |
+      | connected, at menu   | $(plug) DCS: at menu             | the Lua console opens directly                                          |
+      | mission running (N s) | $(rocket) DCS: mission <N>s      | the Lua console opens directly                                          |
+
+  Scenario: Offline click routes to the launch entrypoint (story 015)
+    Given the GUI bridge is not connected
+    When the user clicks the bridge status bar item and picks "Launch DCS (with bridge)"
+    Then "dcs.bridge.launch" runs (see story 015 for its full behavior)
 
 Feature: Error reporting escape hatch
   Every error notification raised through the extension's error helper

@@ -28,11 +28,15 @@
     { id: "export", label: "Export state" },
   ];
 
+  let launching = false;
+  let launchTimer = null;
+
   const app = document.getElementById("app");
   app.innerHTML = `
     <div class="status">
       <span class="dot off" id="dot"></span>
       <span class="label" id="statusLabel">Connecting…</span>
+      <button class="btn launch" id="launchBtn" style="display:none">Launch DCS (with bridge)</button>
       <span class="warn" id="envWarn"></span>
       <select id="envSel" title="Environment Lua runs in"></select>
       <span class="time" id="statusTime"></span>
@@ -67,6 +71,7 @@
   const runBtn = document.getElementById("run");
   const dot = document.getElementById("dot");
   const statusLabel = document.getElementById("statusLabel");
+  const launchBtn = document.getElementById("launchBtn");
   const statusTime = document.getElementById("statusTime");
   const envWarn = document.getElementById("envWarn");
   const envSel = document.getElementById("envSel");
@@ -86,6 +91,22 @@
     env = envSel.value;
     persist();
     renderStatus();
+  });
+
+  // Offline CTA: funnels into the same dcs.bridge.launch command as the
+  // status bar and Command Palette. No completion signal comes back over
+  // this channel, so "launching" is a local guard that clears itself either
+  // when a status push shows we're online (renderStatus) or after a timeout
+  // (a failed launch — e.g. a precondition error toast — leaves us offline).
+  launchBtn.addEventListener("click", () => {
+    launching = true;
+    renderStatus();
+    vscode.postMessage({ type: "launch" });
+    clearTimeout(launchTimer);
+    launchTimer = setTimeout(() => {
+      launching = false;
+      renderStatus();
+    }, 15000);
   });
 
   function persist() {
@@ -265,7 +286,7 @@
     let offline = false;
     if (!gui.connected && !mission.connected) {
       dot.className = "dot off";
-      statusLabel.textContent = "Bridge offline — start DCS (or Inject + restart it)";
+      statusLabel.textContent = "Bridge offline — click Launch DCS (with bridge) to connect";
       statusTime.textContent = "";
       offline = true;
     } else if (mission.connected) {
@@ -280,6 +301,20 @@
       dot.className = "dot menu";
       statusLabel.textContent = "Connected — at menu (no mission)";
       statusTime.textContent = "";
+    }
+    // The launch CTA only makes sense while fully offline; once either
+    // bridge answers, drop the local "launching" guard too so a later
+    // disconnect starts the button fresh (not stuck disabled).
+    if (offline) {
+      launchBtn.style.display = "";
+      launchBtn.disabled = launching;
+      launchBtn.textContent = launching ? "Launching…" : "Launch DCS (with bridge)";
+    } else {
+      launchBtn.style.display = "none";
+      if (launching) {
+        launching = false;
+        clearTimeout(launchTimer);
+      }
     }
     // The selected env's bridge drives the warning and the buttons.
     let warn = "";

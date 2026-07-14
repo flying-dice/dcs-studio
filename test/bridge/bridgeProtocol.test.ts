@@ -151,10 +151,12 @@ import {
   GUI_BRIDGE_PORT,
   INITIAL_DUAL_STATUS,
   MISSION_BRIDGE_PORT,
+  OFFLINE_DISPATCH_OPTIONS,
   bridgeForEnv,
   combinedState,
   displayTime,
   missionStartFailure,
+  statusBarClickAction,
   statusBarView,
 } from "../../src/core/domain/bridgeProtocol";
 
@@ -254,6 +256,33 @@ describe("statusBarView", () => {
     const v = statusBarView(dual(MENU, OFF));
     expect(v.text).toBe("$(plug) DCS: at menu");
     expect(v.tooltip).toContain("mission bridge starts with a mission");
+  });
+});
+
+describe("statusBarClickAction", () => {
+  it("opens the console when the GUI bridge is connected, regardless of mission bridge state", () => {
+    expect(statusBarClickAction(dual(MENU, OFF))).toBe("openConsole");
+    expect(statusBarClickAction(dual(MENU, IN_MISSION))).toBe("openConsole");
+    expect(statusBarClickAction(dual(IN_MISSION, OFF))).toBe("openConsole");
+  });
+
+  it("dispatches when the GUI bridge is down, even if the mission bridge (transiently) reports connected", () => {
+    expect(statusBarClickAction(dual(OFF, OFF))).toBe("offlineDispatch");
+    expect(statusBarClickAction(dual(OFF, IN_MISSION))).toBe("offlineDispatch");
+  });
+});
+
+describe("OFFLINE_DISPATCH_OPTIONS", () => {
+  it("offers launch, console and inject, each mapped to its existing command", () => {
+    expect(OFFLINE_DISPATCH_OPTIONS.map((o) => o.command)).toEqual([
+      "dcs.bridge.launch",
+      "dcs.bridge.console",
+      "dcs.bridge.inject",
+    ]);
+    for (const o of OFFLINE_DISPATCH_OPTIONS) {
+      expect(o.label.length).toBeGreaterThan(0);
+      expect(o.description.length).toBeGreaterThan(0);
+    }
   });
 });
 

@@ -39,6 +39,7 @@ body {
   outline: none;
 }
 .status .time { font-family: var(--mono); color: var(--muted); font-size: 11px; }
+.status .btn.launch { padding: 3px 10px; font-size: 11px; }
 
 /* Tabs */
 .tabs {
