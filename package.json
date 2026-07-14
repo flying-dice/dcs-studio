@@ -385,9 +385,14 @@
     "watch": "tsc -watch -p ./",
     "dev": "node scripts/dev.mjs",
     "test": "vitest run",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "preview": "node scripts/serve.mjs 4173",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.125.0",
     "@vitest/coverage-v8": "^4.1.10",

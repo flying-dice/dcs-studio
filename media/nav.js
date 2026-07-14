@@ -38,13 +38,13 @@
 
   function itemHtml(it) {
     return `
-      <button class="nav-item${it.hidden ? " hidden" : ""}" data-id="${it.id}" data-command="${it.command}" title="${esc(it.label)}">
+      <button class="nav-item${it.hidden ? " hidden" : ""}" data-testid="nav-item" data-id="${it.id}" data-command="${it.command}" title="${esc(it.label)}">
         ${I[it.icon]}
         <span class="txt">
           <span class="label">${esc(it.label)}</span>
           <span class="desc">${esc(it.desc)}</span>
         </span>
-        <span class="badge hidden"></span>
+        <span class="badge hidden" data-testid="nav-badge"></span>
         <span class="chev">${I.chev}</span>
       </button>`;
   }
@@ -67,9 +67,9 @@
       ${footer.map(itemHtml).join("")}
     </nav>
     <div class="footer">
-      <span class="dot off" id="dot"></span>
-      <span class="flabel" id="flabel">Bridge offline</span>
-      <span class="ftime" id="ftime"></span>
+      <span class="dot off" id="dot" data-testid="status-dot"></span>
+      <span class="flabel" id="flabel" data-testid="status-label">Bridge offline</span>
+      <span class="ftime" id="ftime" data-testid="status-time"></span>
     </div>
   `;
 

@@ -21,14 +21,14 @@
         : pages[0] && pages[0].id;
 
   app.innerHTML = `
-    <div class="toc">
+    <div class="toc" data-testid="toc">
       <div class="kicker">DCS&nbsp;Studio&nbsp;Docs</div>
       ${DOCS.sections
         .map(
           (s) => `
         <div class="group">
           <div class="kicker">${esc(s.title)}</div>
-          ${s.pages.map((p) => `<a class="page" data-page="${p.id}">${esc(p.title)}</a>`).join("")}
+          ${s.pages.map((p) => `<a class="page" data-testid="toc-link" data-page="${p.id}">${esc(p.title)}</a>`).join("")}
         </div>`,
         )
         .join("")}
@@ -45,8 +45,8 @@
     const next = pages[i + 1];
     if (!prev && !next) return "";
     return `<div class="pager">
-      ${prev ? `<a data-page="${prev.id}"><span class="dir">Previous</span><span class="name">${esc(prev.title)}</span></a>` : ""}
-      ${next ? `<a class="next" data-page="${next.id}"><span class="dir">Next</span><span class="name">${esc(next.title)}</span></a>` : ""}
+      ${prev ? `<a data-testid="pager-prev" data-page="${prev.id}"><span class="dir">Previous</span><span class="name">${esc(prev.title)}</span></a>` : ""}
+      ${next ? `<a class="next" data-testid="pager-next" data-page="${next.id}"><span class="dir">Next</span><span class="name">${esc(next.title)}</span></a>` : ""}
     </div>`;
   }
 
@@ -61,11 +61,14 @@
     const section = DOCS.sections.find((s) => s.pages.includes(page));
     pageEl.innerHTML = `
       <div class="kicker">${esc(section ? section.title : "")}</div>
-      <h1>${esc(page.title)}</h1>
+      <h1 data-testid="page-title">${esc(page.title)}</h1>
       ${page.lede ? `<p class="lede">${page.lede}</p>` : ""}
-      ${page.body}
+      <div data-testid="page-body">${page.body}</div>
       ${pagerHtml(current)}
     `;
+    // The page body's "try it" buttons are content (docs-content.js), not
+    // markup owned by this file — tag them here rather than in every page.
+    pageEl.querySelectorAll(".cmd-btn").forEach((btn) => btn.setAttribute("data-testid", "command-btn"));
     contentEl.scrollTop = 0;
   }
 

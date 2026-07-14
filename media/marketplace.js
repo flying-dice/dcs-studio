@@ -134,19 +134,19 @@
       <div class="toolbar">
         <div class="search">
           <span class="glass">${I.search}</span>
-          <input id="q" placeholder="Search mods…" spellcheck="false" autocomplete="off" value="${esc(state.query)}" />
+          <input id="q" data-testid="search-input" placeholder="Search mods…" spellcheck="false" autocomplete="off" value="${esc(state.query)}" />
         </div>
-        <select id="tag" aria-label="Filter by tag">
+        <select id="tag" data-testid="tag-select" aria-label="Filter by tag">
           <option value="">All tags</option>
           ${allTags.map((t) => `<option value="${esc(t)}" ${t === state.activeTag ? "selected" : ""}>${esc(t)}</option>`).join("")}
         </select>
-        <select id="sort" aria-label="Sort">
+        <select id="sort" data-testid="sort-select" aria-label="Sort">
           <option value="stars" ${state.sort === "stars" ? "selected" : ""}>Most stars</option>
           <option value="name" ${state.sort === "name" ? "selected" : ""}>Name</option>
         </select>
         <button class="btn secondary" id="refresh" ${state.listBusy ? "disabled" : ""}>${state.listBusy ? `<span class="spin">${I.refresh}</span>` : I.refresh} Refresh</button>
       </div>
-      ${state.listError ? `<div class="market-error">${I.warn} ${esc(state.listError)}</div>` : ""}
+      ${state.listError ? `<div class="market-error" data-testid="list-error">${I.warn} ${esc(state.listError)}</div>` : ""}
       <div id="gridwrap">${grid}</div>
     `;
     document.getElementById("q").addEventListener("input", (e) => {
@@ -167,12 +167,12 @@
   function renderWall() {
     app.innerHTML = `
       <header><span class="brand-kicker">DCS&nbsp;Studio</span><span class="brand-title">Marketplace</span></header>
-      <div class="wall">
+      <div class="wall" data-testid="signin-wall">
         <div class="wall-lock">${I.lock}</div>
         <h2>Sign in to browse the Marketplace</h2>
         <p>Discovery searches GitHub for public repositories tagged <span class="mono">${esc(state.topic)}</span>. Signing in raises the rate limit and lets you install into your DCS folders.</p>
-        <button class="btn" id="signin">${I.github} Sign in with GitHub</button>
-        <button class="link" id="anon">Browse without signing in</button>
+        <button class="btn" id="signin" data-testid="signin-btn">${I.github} Sign in with GitHub</button>
+        <button class="link" id="anon" data-testid="browse-anon-btn">Browse without signing in</button>
       </div>`;
     document.getElementById("signin").addEventListener("click", () => post({ type: "signIn" }));
     document.getElementById("anon").addEventListener("click", () => post({ type: "browseAnon" }));
@@ -196,25 +196,25 @@
 
   function gridHtml() {
     if (state.listBusy && state.listings.length === 0)
-      return `<div class="empty"><span class="spin">${I.refresh}</span> Searching GitHub…</div>`;
+      return `<div class="empty" data-testid="list-loading"><span class="spin">${I.refresh}</span> Searching GitHub…</div>`;
     const xs = filtered();
     if (xs.length === 0) {
       if (state.listings.length === 0)
-        return `<div class="empty">No public repos are tagged <span class="mono">${esc(state.topic)}</span> yet. Publish one by adding the <span class="mono">${esc(state.topic)}</span> topic to a GitHub repo.</div>`;
-      return `<div class="empty">No mods match your search.</div>`;
+        return `<div class="empty" data-testid="list-empty">No public repos are tagged <span class="mono">${esc(state.topic)}</span> yet. Publish one by adding the <span class="mono">${esc(state.topic)}</span> topic to a GitHub repo.</div>`;
+      return `<div class="empty" data-testid="list-empty">No mods match your search.</div>`;
     }
     return `<div class="grid">${xs.map(card).join("")}</div>`;
   }
 
   function card(m) {
     return `
-      <div class="card">
+      <div class="card" data-testid="mod-card" data-repo="${esc(m.repo)}">
         <button class="card-head" data-open="${esc(m.repo)}">
           <img class="avatar" src="${esc(m.avatar_url)}" alt="" data-fallback="${esc(m.name)}" />
           <span style="min-width:0;flex:1">
             <span class="card-title-row">
-              <span class="card-title">${esc(m.name)}</span>
-              ${m.is_library ? `<span class="badge">library</span>` : ""}
+              <span class="card-title" data-testid="card-title">${esc(m.name)}</span>
+              ${m.is_library ? `<span class="badge" data-testid="library-badge">library</span>` : ""}
             </span>
             <span class="card-author">by ${esc(m.author)}</span>
           </span>
@@ -274,39 +274,39 @@
 
     let action = "";
     if (p.is_library) {
-      action = `<div class="installed-row">${I.lib} Library</div>
+      action = `<div class="installed-row" data-testid="installed-row">${I.lib} Library</div>
         <p class="note">A dependency-only library — used by other mods, not installed into DCS directly.</p>`;
     } else if (!p.installable) {
       action = `<p class="note warn">${I.warn} Not installable — the latest release ships no <span class="mono">dcs-studio.toml</span>${p.release_tag ? "" : " (no release yet)"}.</p>`;
     } else if (state.installed) {
-      action = `<div class="installed-row">${I.check} Installed</div>
-        <button class="btn secondary block" id="uninstall" style="margin-top:10px">${I.trash} Uninstall</button>
+      action = `<div class="installed-row" data-testid="installed-row">${I.check} Installed</div>
+        <button class="btn secondary block" id="uninstall" data-testid="uninstall-btn" style="margin-top:10px">${I.trash} Uninstall</button>
         <p class="note">Enable/disable/update it under <b>My Mods</b>.</p>`;
     } else if (state.installing) {
       const pct = Math.round((state.installing.pct || 0) * 100);
-      action = `<div class="progress"><div style="font-size:12px;display:flex;gap:6px;align-items:center"><span class="spin">${I.refresh}</span> ${esc(state.installing.label)}</div>
+      action = `<div class="progress" data-testid="install-progress"><div style="font-size:12px;display:flex;gap:6px;align-items:center"><span class="spin">${I.refresh}</span> ${esc(state.installing.label)}</div>
         <div class="bar"><span style="width:${state.installing.phase === "download" ? pct : 100}%"></span></div></div>`;
     } else {
-      action = `<button class="btn block" id="install">${I.download} Install</button>
+      action = `<button class="btn block" id="install" data-testid="install-btn">${I.download} Install</button>
         <p class="note">Downloads &amp; unpacks to your data dir, then links the files into your DCS folders.</p>`;
     }
-    if (state.installError) action += `<p class="note warn" style="margin-top:8px">${I.warn} ${esc(state.installError)}</p>`;
+    if (state.installError) action += `<p class="note warn" data-testid="install-error" style="margin-top:8px">${I.warn} ${esc(state.installError)}</p>`;
 
     const plan = state.plan;
     const planCard =
       plan && plan.installs && plan.installs.length
-        ? `<div class="aside-card"><div class="section-label">${I.folder} Install plan</div>${plan.installs
+        ? `<div class="aside-card" data-testid="install-plan"><div class="section-label">${I.folder} Install plan</div>${plan.installs
             .map((r) => `<div class="plan-item"><div>${esc(r.source)}</div><div class="plan-dest">${I.arrow}${esc(r.resolved || r.dest)}</div></div>`)
             .join("")}</div>`
         : "";
     const reqCard =
       plan && plan.requires && plan.requires.length
-        ? `<div class="aside-card"><div class="section-label">${I.warn} Requires DCS modules</div>${plan.requires.map((r) => `<div class="kv"><span class="name">${esc(r.id)}</span></div>`).join("")}</div>`
+        ? `<div class="aside-card" data-testid="requires-card"><div class="section-label">${I.warn} Requires DCS modules</div>${plan.requires.map((r) => `<div class="kv"><span class="name">${esc(r.id)}</span></div>`).join("")}</div>`
         : "";
 
     app.innerHTML = `
       <header>
-        <button class="icon-btn" id="back" title="Back to Marketplace">${I.back}</button>
+        <button class="icon-btn" id="back" data-testid="back-btn" title="Back to Marketplace">${I.back}</button>
         <span class="brand-kicker">Marketplace</span>
         <span class="spacer"></span>
       </header>
@@ -315,7 +315,7 @@
           <div style="display:flex;gap:12px;align-items:flex-start">
             <img class="avatar lg" src="${esc(p.avatar_url)}" alt="" data-fallback="${esc(p.name)}" />
             <div style="min-width:0">
-              <h1>${esc(p.name)}</h1>
+              <h1 data-testid="product-title">${esc(p.name)}</h1>
               <div class="product-meta">
                 <span>by ${esc(p.author)}</span>
                 <span>${I.star}${p.stars}</span>
@@ -325,7 +325,7 @@
           </div>
           ${p.description ? `<p class="product-desc">${esc(p.description)}</p>` : ""}
           <div class="section-label">${I.book} Readme</div>
-          <div class="prose">${p.readme ? md(p.readme) : "<p class='note'>This repo has no README.</p>"}</div>
+          <div class="prose" data-testid="readme">${p.readme ? md(p.readme) : "<p class='note'>This repo has no README.</p>"}</div>
         </main>
         <aside>
           <div class="aside-card">${action}</div>
@@ -354,7 +354,7 @@
   }
 
   function productShell(inner) {
-    return `<header><button class="icon-btn" id="back" title="Back to Marketplace">${I.back}</button><span class="brand-kicker">Marketplace</span></header>${inner}`;
+    return `<header><button class="icon-btn" id="back" data-testid="back-btn" title="Back to Marketplace">${I.back}</button><span class="brand-kicker">Marketplace</span></header>${inner}`;
   }
   function wireBack() {
     const b = document.getElementById("back");

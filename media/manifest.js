@@ -91,7 +91,7 @@
             <span class="section-label">Document</span>
             <span class="target mono">${esc(baseName(boot.targetPath))}</span>
           </div>
-          <pre class="toml" id="toml"></pre>
+          <pre class="toml" id="toml" data-testid="toml-preview"></pre>
           <div id="issues"></div>
         </aside>
       </div>
@@ -117,8 +117,15 @@
     return `<label class="field"><span class="lbl">${esc(label)}${hint ? `<span class="hint">${esc(hint)}</span>` : ""}</span>${inner}</label>`;
   }
   function input(sec, idx, key, value, ph) {
-    return `<input class="in" data-sec="${sec}" data-idx="${idx}" data-key="${key}" value="${esc(value)}" placeholder="${esc(ph || "")}" spellcheck="false" autocomplete="off" />`;
+    return `<input class="in" data-testid="manifest-input" data-sec="${sec}" data-idx="${idx}" data-key="${key}" value="${esc(value)}" placeholder="${esc(ph || "")}" spellcheck="false" autocomplete="off" />`;
   }
+
+  // data-add -> data-testid, per the previews/ data-testid convention doc.
+  const ADD_TESTID = {
+    install: "add-install-btn",
+    dependencies: "add-dependency-btn",
+    requires_module: "add-required-module-btn",
+  };
 
   function sectionProject(m) {
     return `
@@ -139,7 +146,7 @@
         const { root, rest } = splitDest(r.dest);
         const resolved = resolveDest(r.dest);
         return `
-        <div class="row" data-row="install-${i}">
+        <div class="row" data-testid="install-row" data-row="install-${i}">
           <div class="row-grid">
             ${fieldRow("Source", "project-relative", input("install", i, "source", r.source, "dist/scripts"))}
             <label class="field">
@@ -152,8 +159,8 @@
               </span>
             </label>
           </div>
-          <div class="resolved mono">${I.arrow}${resolved ? esc(resolved) : `<span class="warn-text">${I.warn} {GameInstall} not configured</span>`}</div>
-          <button class="rm" data-rm="install" data-idx="${i}" title="Remove rule">${I.x}</button>
+          <div class="resolved mono" data-testid="resolved-dest">${I.arrow}${resolved ? esc(resolved) : `<span class="warn-text" data-testid="unresolved-warning">${I.warn} {GameInstall} not configured</span>`}</div>
+          <button class="rm" data-testid="remove-row-btn" data-rm="install" data-idx="${i}" title="Remove rule">${I.x}</button>
         </div>`;
       })
       .join("");
@@ -162,7 +169,7 @@
         <div class="section-label">[[install]] <span class="count">${m.install.length}</span></div>
         <p class="blurb">Each rule copies a project-relative <span class="mono">source</span> under a root-anchored <span class="mono">dest</span>. The resolved path shows where it lands on this machine.</p>
         ${rows || `<p class="empty">No install rules yet.</p>`}
-        <button class="btn ghost add" data-add="install">${I.plus} Add install rule</button>
+        <button class="btn ghost add" data-testid="${ADD_TESTID.install}" data-add="install">${I.plus} Add install rule</button>
       </section>`;
   }
 
@@ -170,7 +177,7 @@
     const rows = m.dependencies
       .map(
         (d, i) => `
-        <div class="row" data-row="dep-${i}">
+        <div class="row" data-testid="dep-row" data-row="dep-${i}">
           <div class="row-grid four">
             ${fieldRow("Id", "owner/repo", input("dependencies", i, "id", d.id, "owner/repo"))}
             ${fieldRow("Name", "optional", input("dependencies", i, "name", d.name, "Display name"))}
@@ -180,7 +187,7 @@
               <span class="lbl">optional</span>
             </label>
           </div>
-          <button class="rm" data-rm="dependencies" data-idx="${i}" title="Remove dependency">${I.x}</button>
+          <button class="rm" data-testid="remove-row-btn" data-rm="dependencies" data-idx="${i}" title="Remove dependency">${I.x}</button>
         </div>`,
       )
       .join("");
@@ -189,7 +196,7 @@
         <div class="section-label">[[dependencies]] <span class="count">${m.dependencies.length}</span></div>
         <p class="blurb">Other Marketplace mods (by <span class="mono">owner/repo</span>) installed transitively with this one.</p>
         ${rows || `<p class="empty">No dependencies.</p>`}
-        <button class="btn ghost add" data-add="dependencies">${I.plus} Add dependency</button>
+        <button class="btn ghost add" data-testid="${ADD_TESTID.dependencies}" data-add="dependencies">${I.plus} Add dependency</button>
       </section>`;
   }
 
@@ -197,12 +204,12 @@
     const rows = m.requires_module
       .map(
         (r, i) => `
-        <div class="row" data-row="req-${i}">
+        <div class="row" data-testid="req-row" data-row="req-${i}">
           <div class="row-grid two">
             ${fieldRow("Module id", "stock DCS module", input("requires_module", i, "id", r.id, "F-16C_50"))}
             ${fieldRow("Name", "optional", input("requires_module", i, "name", r.name, "F-16C Viper"))}
           </div>
-          <button class="rm" data-rm="requires_module" data-idx="${i}" title="Remove requirement">${I.x}</button>
+          <button class="rm" data-testid="remove-row-btn" data-rm="requires_module" data-idx="${i}" title="Remove requirement">${I.x}</button>
         </div>`,
       )
       .join("");
@@ -211,7 +218,7 @@
         <div class="section-label">[[requires_module]] <span class="count">${m.requires_module.length}</span></div>
         <p class="blurb">Stock DCS modules the user must already own. A presence check only — never installed, only warned about.</p>
         ${rows || `<p class="empty">No required modules.</p>`}
-        <button class="btn ghost add" data-add="requires_module">${I.plus} Add required module</button>
+        <button class="btn ghost add" data-testid="${ADD_TESTID.requires_module}" data-add="requires_module">${I.plus} Add required module</button>
       </section>`;
   }
 
@@ -267,7 +274,7 @@
     const resolved = resolveDest(state.model.install[i].dest);
     row.innerHTML = resolved
       ? I.arrow + esc(resolved)
-      : `<span class="warn-text">${I.warn} {GameInstall} not configured</span>`;
+      : `<span class="warn-text" data-testid="unresolved-warning">${I.warn} {GameInstall} not configured</span>`;
   }
 
   function renderPreview() {
@@ -275,8 +282,8 @@
     const probs = issues(state.model);
     const box = document.getElementById("issues");
     box.innerHTML = probs.length
-      ? `<ul class="issues">${probs.map((p) => `<li>${I.warn}${esc(p)}</li>`).join("")}</ul>`
-      : `<p class="ok">Manifest looks valid.</p>`;
+      ? `<ul class="issues" data-testid="validation-issues">${probs.map((p) => `<li>${I.warn}${esc(p)}</li>`).join("")}</ul>`
+      : `<p class="ok" data-testid="validation-ok">Manifest looks valid.</p>`;
   }
 
   // ── Host → webview ──
