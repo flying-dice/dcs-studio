@@ -40,11 +40,12 @@ export class ProcessLauncher {
     const child = spawn(plan.exe, plan.args, { cwd: plan.cwd, detached: true, stdio: "ignore" });
     this.running.set(key, child);
     child.on("error", (e) => {
+      if (this.running.get(key) !== child) return; // stale event from a replaced child
       this.running.delete(key);
       this.onChange(key, e.message);
     });
     child.on("exit", () => {
-      if (!this.running.has(key)) return; // already reaped by an error
+      if (this.running.get(key) !== child) return; // reaped, stopped, or replaced already
       this.running.delete(key);
       this.onChange(key);
     });
