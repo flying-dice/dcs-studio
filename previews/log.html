@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DCS Studio preview — DCS Log</title>
+<!-- Load order is load-bearing: harness -> fixture -> CSS -> mounts -> real
+     media/*.js. media/log.js posts {type:"ready"} synchronously at the
+     bottom of its IIFE, so the fixture's onPost handler (registered above)
+     must already be listening before that script tag runs. -->
+<script src="harness.js"></script>
+<script src="fixtures/log.js"></script>
+<link rel="stylesheet" href="theme.css" />
+<link rel="stylesheet" href="../media/log.css" />
+</head>
+<body>
+<div id="app"></div>
+<div id="toast"></div>
+<script src="../media/log.js"></script>
+</body>
+</html>

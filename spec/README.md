@@ -93,6 +93,7 @@ Feature: DCS Studio extension
 | [020](stories/020-debug-lua-breakpoints.story.md) | Debug Lua inside DCS: Breakpoints & Stepping |
 | [021](stories/021-debug-inspect-state.story.md) | Debug Lua inside DCS: Inspect & Modify State |
 | [022](stories/022-debug-resilience.story.md) | Debug Lua inside DCS: Errors & Sim Safety |
+| [024](stories/024-tail-dcs-log.story.md) | Tail dcs.log (DCS Log Viewer) |
 
 ### Epic 6 — AI-assisted development
 | Story | Title |
