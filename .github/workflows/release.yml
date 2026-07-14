@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write # OIDC federation for the marketplace publish (no stored secrets)
 
 jobs:
   release:
@@ -78,17 +79,32 @@ jobs:
           --title "DCS Studio ${{ github.ref_name }}"
           --generate-notes
 
-      - name: Publish to VS Code Marketplace
-        if: github.ref_type == 'tag'
+      # ── Marketplace publish via Entra ID workload identity federation ──
+      # No stored secrets (Azure DevOps PATs are retired Dec 1, 2026). One-time
+      # setup: create a Microsoft Entra identity (user-assigned managed identity
+      # or app registration), add a federated credential trusting GitHub Actions
+      # OIDC (issuer https://token.actions.githubusercontent.com, subject
+      # repo:flying-dice/dcs-studio:ref:refs/tags/<tag> — or use a wildcard-free
+      # environment), grant that identity Contributor membership on the
+      # "flying-dice" marketplace publisher, then set repo VARIABLES (not
+      # secrets — none of these are sensitive): AZURE_CLIENT_ID,
+      # AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID. Steps skip until they exist.
+      - name: Azure login (OIDC, no secrets)
+        if: github.ref_type == 'tag' && vars.AZURE_CLIENT_ID != ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Publish to VS Code Marketplace (Entra credential)
+        if: github.ref_type == 'tag' && vars.AZURE_CLIENT_ID != ''
         shell: pwsh
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        # Requires the VSCE_PAT repo secret (Azure DevOps PAT, Marketplace →
-        # Manage scope, all accessible orgs) and ownership of the "dcs-studio"
-        # publisher from package.json. Skips gracefully until the secret exists.
-        run: |
-          if (-not $env:VSCE_PAT) { Write-Host "VSCE_PAT secret not set - skipping marketplace publish"; exit 0 }
-          npx @vscode/vsce publish --packagePath (Get-Item *.vsix).FullName
+        run: npx @vscode/vsce publish --azure-credential --packagePath (Get-Item *.vsix).FullName
+
+      - name: Marketplace publish skipped (no Entra identity configured)
+        if: github.ref_type == 'tag' && vars.AZURE_CLIENT_ID == ''
+        run: echo "AZURE_CLIENT_ID repo variable not set - GitHub release only. See the comment above this step for the one-time Entra setup."
 
       - name: Upload .vsix artifact (manual runs)
         if: github.ref_type != 'tag'
