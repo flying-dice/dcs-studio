@@ -71,4 +71,16 @@ describe("classifyExistingDest", () => {
       classifyExistingDest({ srcIsDir: false, destIsDir: false, destIsSymlink: false, ownedByUs: false }),
     ).toBe("conflict");
   });
+
+  it("enters an existing real directory when the source is a file (file-into-folder rule)", () => {
+    expect(
+      classifyExistingDest({ srcIsDir: false, destIsDir: true, destIsSymlink: false, ownedByUs: false }),
+    ).toBe("enter");
+  });
+
+  it("does not enter a directory that is itself a link (junction) we do not own", () => {
+    expect(
+      classifyExistingDest({ srcIsDir: false, destIsDir: true, destIsSymlink: true, ownedByUs: false }),
+    ).toBe("conflict");
+  });
 });

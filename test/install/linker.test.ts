@@ -109,6 +109,47 @@ describe("Linker.enable", () => {
     expect(res.message).toBe(`Destination path already exists: ${dest}`);
   });
 
+  it("links a file INTO an existing real directory (issue #3, lua-hook template shape)", async () => {
+    // The 0.13.0 lua-hook template emits source = a file, dest = Scripts/Hooks
+    // (a directory that always exists once the bridge hook is deployed, with
+    // foreign files in it). The rule means "put the file in that folder".
+    writeSrcFile("Scripts/Hooks/mod-hook.lua");
+    const hooks = path.join(dcs, "Scripts", "Hooks");
+    fs.mkdirSync(hooks, { recursive: true });
+    fs.writeFileSync(path.join(hooks, "DcsStudio.lua"), "bridge hook");
+
+    const linker = new Linker();
+    const def = { id: "m:0", src: path.join(src, "Scripts", "Hooks", "mod-hook.lua"), dest: hooks };
+    const res = await linker.enable([def]);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const childDest = path.join(hooks, "mod-hook.lua");
+    expect(res.created).toEqual([{ id: "m:0", src: def.src, dest: childDest }]);
+    expect(fs.readFileSync(childDest, "utf8")).toBe("x");
+    expect(fs.readFileSync(path.join(hooks, "DcsStudio.lua"), "utf8")).toBe("bridge hook");
+
+    // Re-enable adopts the child link; a foreign same-name file conflicts by its exact path.
+    const again = await linker.enable([def]);
+    expect(again.ok).toBe(true);
+
+    fs.rmSync(childDest);
+    fs.writeFileSync(childDest, "foreign");
+    const conflict = await linker.enable([def]);
+    expect(conflict.ok).toBe(false);
+    if (conflict.ok) return;
+    expect(conflict.message).toBe(`Destination path already exists: ${childDest}`);
+
+    // Disable removes only the tracked child link, never the foreign files.
+    fs.rmSync(childDest);
+    const fresh = await linker.enable([def]);
+    expect(fresh.ok).toBe(true);
+    if (!fresh.ok) return;
+    const dis = linker.disable(fresh.created.map((l) => ({ id: l.id, installedPath: l.dest })));
+    expect(dis.failed).toEqual([]);
+    expect(fs.existsSync(childDest)).toBe(false);
+    expect(fs.existsSync(path.join(hooks, "DcsStudio.lua"))).toBe(true);
+  });
+
   it("re-enabling is idempotent: adopts links we already created (issue #3)", async () => {
     writeSrcFile("Hooks/mod-hook.lua");
     writeSrcFile("Hooks/nested/deep.lua");

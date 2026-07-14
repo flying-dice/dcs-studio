@@ -10,7 +10,7 @@ import {
   realpathSync,
   type Stats,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { platform } from "node:os";
 import { spawn } from "node:child_process";
 import type { LinkerPort } from "../../core/ports/linker";
@@ -195,6 +195,18 @@ export class Linker implements LinkerPort {
           created.push(...child.links);
         }
         return { ok: true, links: created };
+      }
+      if (disposition === "enter") {
+        // File rule aimed at an existing real directory: link the file INTO
+        // it. Recursing with the child path lets adopt (idempotent re-enable)
+        // and conflict (a foreign file of the same name, reported by its exact
+        // path) apply at the file level; the ledger records the child dest so
+        // disable removes only that link.
+        return this.createLink({
+          id: link.id,
+          src: link.src,
+          dest: join(link.dest, basename(link.src)),
+        });
       }
       if (disposition === "adopt") {
         // Re-enable with our link still present: no filesystem change, just
