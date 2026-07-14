@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DCS Studio preview — Manifest Form</title>
+<!-- media/manifest.js reads window.__BOOTSTRAP__ and self.DcsManifestCore
+     synchronously at load, so the fixture and manifest-core.js must both
+     load before it. -->
+<script src="harness.js"></script>
+<script src="fixtures/manifest.js"></script>
+<link rel="stylesheet" href="theme.css" />
+<link rel="stylesheet" href="../media/manifest.css" />
+</head>
+<body>
+<div id="app"></div>
+<div id="toast"></div>
+<script src="../media/manifest-core.js"></script>
+<script src="../media/manifest.js"></script>
+</body>
+</html>

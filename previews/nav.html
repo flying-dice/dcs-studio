@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DCS Studio preview — Sidebar Nav</title>
+<!-- media/nav.js reads window.__LOGO__ at load, so the fixture (which sets
+     it) must load before this script tag. Status/manifest/skills state is
+     host-pushed only — nothing to dispatch here; nav.spec.ts drives it via
+     hostSend(). -->
+<script src="harness.js"></script>
+<script src="fixtures/nav.js"></script>
+<link rel="stylesheet" href="theme.css" />
+<link rel="stylesheet" href="../media/nav.css" />
+<style>
+  /* The real webview fills its host panel; give the standalone preview a
+     sidebar-sized canvas instead of full-bleed body width. */
+  body { background: var(--vscode-editor-background); }
+  #app { width: 300px; min-height: 100vh; background: var(--vscode-sideBar-background, #252526); border-right: 1px solid var(--vscode-panel-border); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast"></div>
+<script src="../media/nav.js"></script>
+</body>
+</html>

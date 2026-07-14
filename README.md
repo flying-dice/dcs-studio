@@ -106,7 +106,34 @@ so it feels native in light and dark.
 ```
 src/extension.ts              activation, launcher view, commands, status bar
 src/marketplace/panel.ts      webview host: CSP shell, data bootstrap, host messages
-src/marketplace/mockData.ts   sample MarketListing / ProductDetail (real shapes)
 src/mission/missionPanel.ts   MissionScripting.lua stub (planned port)
 media/marketplace.{css,js}    storefront SPA (grid, product page, install sim)
 ```
+
+## Webview previews & tests
+
+`src/core/**` is unit-tested with Vitest (`npm test`, 100% per-file coverage —
+see `vitest.config.ts`). The webviews (`media/*.js`) are vanilla JS running in
+a VS Code webview with no host process, so they're covered separately with
+**Playwright against standalone browser harnesses** — no VS Code, Electron or
+Rust sidecar involved:
+
+```
+previews/<name>.html      loads the real media/<name>.js unmodified, stubs
+                           acquireVsCodeApi via previews/harness.js, and
+                           seeds fixture data from previews/fixtures/<name>.js
+tests/<name>.spec.ts      Playwright specs against those harnesses, driven by
+                           data-testid attributes (see the convention comment
+                           atop tests/helpers.ts)
+```
+
+```
+npm run preview      # serves previews/ at http://127.0.0.1:4173 for manual
+                      # click-through (toasts show every posted message)
+npm run test:e2e      # runs the full Playwright suite headless
+npm run test:ui       # Playwright's interactive UI mode, for debugging
+```
+
+`npm test` (Vitest) and `npm run test:e2e` (Playwright) are fully isolated —
+Vitest only looks under `test/**/*.test.ts`, Playwright only under
+`tests/**/*.spec.ts` — so neither run picks up the other's specs.

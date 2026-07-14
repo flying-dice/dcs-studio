@@ -1,0 +1,162 @@
+// Fixture for previews/marketplace.html. Ports the __PREVIEW__ data blob +
+// fake-host reply logic from the old preview.html, upgraded to simulate the
+// real install/uninstall lifecycle media/marketplace.js now drives
+// (installProgress -> installed / uninstalled), so marketplace.spec.ts can
+// exercise it without a live GitHub API or 7-Zip.
+//
+// Canonical shape: this data mirrors the {listings, product} messages the
+// real extension host sends (see src/marketplace's GitHub-backed producers) —
+// it is a hand-authored stand-in, not generated from source, so the two can
+// drift; keep it roughly in sync when the host's message shape changes.
+// avatar_urls point at ../media/icon.png (not github.com) so the suite runs
+// fully offline with no network 404s in the console.
+(function () {
+  const ICON = "../media/icon.png";
+
+  const listings = [
+    { repo: "viper-drivers/f16-weapons-expansion", name: "F-16C Weapons Expansion", author: "viper-drivers", description: "Adds JSOW-C1, GBU-53/B StormBreaker and an expanded HARM tables loadout to the Viper. Ships a rearm-menu integration script.", labels: ["script", "weapons", "aircraft"], repo_url: "https://github.com/viper-drivers/f16-weapons-expansion", avatar_url: ICON, stars: 342, is_library: false },
+    { repo: "syria-collective/syria-4k-textures", name: "Syria 4K Terrain Textures", author: "syria-collective", description: "High-resolution ground textures for the Syria map — reworked farmland, urban tiling and coastline detail. Big download, big payoff.", labels: ["texture", "terrain"], repo_url: "https://github.com/syria-collective/syria-4k-textures", avatar_url: ICON, stars: 512, is_library: false },
+    { repo: "hoggit-liveries/usaf-aggressors", name: "USAF Aggressor Liveries Pack", author: "hoggit-liveries", description: "16 accurate Aggressor schemes (Flanker, Splinter, Ghost) for the F-16C and F-15E, with roughmet maps.", labels: ["livery", "aircraft"], repo_url: "https://github.com/hoggit-liveries/usaf-aggressors", avatar_url: ICON, stars: 289, is_library: false },
+    { repo: "dcs-scripting/moose-lite", name: "MOOSE Lite", author: "dcs-scripting", description: "A trimmed MOOSE core for mission scripting — spawning, zones and scheduling without the full framework weight. Dependency-only.", labels: ["script", "framework"], repo_url: "https://github.com/dcs-scripting/moose-lite", avatar_url: ICON, stars: 1203, is_library: true },
+    { repo: "kneeboard-lab/dynamic-kneeboards", name: "Dynamic Kneeboards", author: "kneeboard-lab", description: "Generates per-flight kneeboard pages (comms ladder, bullseye, weather) at mission start from the briefing data.", labels: ["kneeboard", "script"], repo_url: "https://github.com/kneeboard-lab/dynamic-kneeboards", avatar_url: ICON, stars: 176, is_library: false },
+    { repo: "carrier-ops/supercarrier-plus", name: "Supercarrier Plus", author: "carrier-ops", description: "Deck crew callouts, case I/II/III recovery marshal automation and an LSO grade log for the Supercarrier module.", labels: ["mission", "script", "naval"], repo_url: "https://github.com/carrier-ops/supercarrier-plus", avatar_url: ICON, stars: 431, is_library: false },
+    { repo: "sound-mods/immersive-cockpit-audio", name: "Immersive Cockpit Audio", author: "sound-mods", description: "Re-sampled switch, relay and hydraulic sounds for the Hornet and Viper pits. Drop-in sound folder, no scripting.", labels: ["sound"], repo_url: "https://github.com/sound-mods/immersive-cockpit-audio", avatar_url: ICON, stars: 98, is_library: false },
+    { repo: "mission-makers/operation-eastern-storm", name: "Operation Eastern Storm", author: "mission-makers", description: "A 12-mission dynamic campaign over Syria for the F/A-18C. Persistent frontline, randomized threats and a branching storyline.", labels: ["campaign", "mission"], repo_url: "https://github.com/mission-makers/operation-eastern-storm", avatar_url: ICON, stars: 254, is_library: false },
+    { repo: "utils/dcs-lua-common", name: "dcs-lua-common", author: "utils", description: "Shared Lua helpers (vec math, table utils, logging) used by several DCS Studio mods. Add it as a dependency, not an install.", labels: ["script", "library"], repo_url: "https://github.com/utils/dcs-lua-common", avatar_url: ICON, stars: 67, is_library: true },
+    { repo: "weather-systems/real-weather-injector", name: "Real Weather Injector", author: "weather-systems", description: "Pulls live METAR at mission start and sets DCS weather, wind layers and QNH to match a chosen real-world airfield.", labels: ["weather", "script"], repo_url: "https://github.com/weather-systems/real-weather-injector", avatar_url: ICON, stars: 388, is_library: false },
+    { repo: "viper-drivers/hud-color-tweaks", name: "HUD Color Tweaks", author: "viper-drivers", description: "Adjustable HUD and MFD phosphor colors for the F-16C. Simple texture swap with a few presets.", labels: ["texture", "aircraft"], repo_url: "https://github.com/viper-drivers/hud-color-tweaks", avatar_url: ICON, stars: 143, is_library: false },
+    { repo: "training/bfm-trainer", name: "BFM Trainer", author: "training", description: "An adaptive dogfight trainer: the AI adversary scales its aggression to your last three engagements and logs your Ps.", labels: ["mission", "training", "script"], repo_url: "https://github.com/training/bfm-trainer", avatar_url: ICON, stars: 201, is_library: false },
+  ];
+
+  const products = {
+    "viper-drivers/f16-weapons-expansion": {
+      repo: "viper-drivers/f16-weapons-expansion", name: "F-16C Weapons Expansion", author: "viper-drivers",
+      description: "Adds JSOW-C1, GBU-53/B StormBreaker and an expanded HARM tables loadout to the Viper.",
+      repo_url: "https://github.com/viper-drivers/f16-weapons-expansion", avatar_url: ICON, stars: 342,
+      release_tag: "v2.3.1", release_url: "https://github.com/viper-drivers/f16-weapons-expansion/releases/tag/v2.3.1",
+      readme: "# F-16C Weapons Expansion\n\nExtra air-to-ground stores for the DCS **F-16C Viper**, wired into the rearm\nmenu so you can load them from the ground crew.\n\n## What you get\n\n- **AGM-154C JSOW-C1** — moving-target capable glide bomb\n- **GBU-53/B StormBreaker** — 40nm standoff, tri-mode seeker\n- Expanded **HARM** threat tables (updated emitter list)\n- A rearm-menu integration script (no mission editing required)\n",
+      assets: [{ name: "f16-weapons-expansion-v2.3.1.zip", size: 4404019.2 }, { name: "dcs-studio.toml", size: 1126.4 }],
+      download_size: 4404019.2, installable: true, is_library: false,
+      installs: [{ source: "Scripts/WeaponsExpansion", dest: "Saved Games/DCS/Scripts/WeaponsExpansion" }, { source: "Mods/tech/F16Weapons", dest: "Saved Games/DCS/Mods/tech/F16Weapons" }],
+      dependencies: [{ id: "utils/dcs-lua-common", name: "dcs-lua-common", version: "*", optional: false }],
+      requires: [{ id: "ed/f16c", name: "F-16C Viper", installed: true }],
+    },
+    "dcs-scripting/moose-lite": {
+      repo: "dcs-scripting/moose-lite", name: "MOOSE Lite", author: "dcs-scripting",
+      description: "A trimmed MOOSE core for mission scripting.",
+      repo_url: "https://github.com/dcs-scripting/moose-lite", avatar_url: ICON, stars: 1203,
+      release_tag: "v0.9.0", release_url: "https://github.com/dcs-scripting/moose-lite/releases/tag/v0.9.0",
+      readme: "# MOOSE Lite\n\nA dependency-only library. Add it to your project's `CargoLua.toml` and\n`require` the pieces you need — it does **not** install anything into DCS on its\nown.\n",
+      assets: [], download_size: 0, installable: false, is_library: true,
+      installs: [], dependencies: [], requires: [],
+    },
+    "mission-makers/operation-eastern-storm": {
+      repo: "mission-makers/operation-eastern-storm", name: "Operation Eastern Storm", author: "mission-makers",
+      description: "A 12-mission dynamic campaign over Syria for the F/A-18C.",
+      repo_url: "https://github.com/mission-makers/operation-eastern-storm", avatar_url: ICON, stars: 254,
+      release_tag: "1.4.0", release_url: "https://github.com/mission-makers/operation-eastern-storm/releases/tag/1.4.0",
+      readme: "# Operation Eastern Storm\n\nA branching 12-mission campaign for the **F/A-18C Hornet** over the Syria map.\n",
+      assets: [{ name: "operation-eastern-storm-1.4.0.zip", size: 134217728 }, { name: "dcs-studio.toml", size: 921.6 }],
+      download_size: 134217728, installable: true, is_library: false,
+      installs: [{ source: "Campaigns/EasternStorm", dest: "Saved Games/DCS/Missions/Campaigns/EasternStorm" }],
+      dependencies: [],
+      requires: [{ id: "ed/syria", name: "Syria Map", installed: false }, { id: "ed/fa18c", name: "F/A-18C Hornet", installed: true }],
+    },
+    "syria-collective/syria-4k-textures": {
+      repo: "syria-collective/syria-4k-textures", name: "Syria 4K Terrain Textures", author: "syria-collective",
+      description: "High-resolution ground textures for the Syria map.",
+      repo_url: "https://github.com/syria-collective/syria-4k-textures", avatar_url: ICON, stars: 512,
+      release_tag: "2026.02", release_url: "https://github.com/syria-collective/syria-4k-textures/releases/tag/2026.02",
+      readme: "# Syria 4K Terrain Textures\n\nReworked ground textures for the **Syria** map.\n\n> This is a large download (~1.8 GB unpacked). Make sure you have the Syria map\n> installed before applying.\n",
+      assets: [{ name: "syria-4k-2026.02.zip", size: 1932735283.2 }, { name: "dcs-studio.toml", size: 716.8 }],
+      download_size: 1932735283.2, installable: true, is_library: false,
+      installs: [{ source: "Textures/Syria4K", dest: "Saved Games/DCS/Mods/terrains/Syria/Textures" }],
+      dependencies: [],
+      requires: [{ id: "ed/syria", name: "Syria Map", installed: false }],
+    },
+  };
+
+  window.__FIXTURE__ = { listings, products };
+
+  function reply(msg, delay) {
+    setTimeout(() => window.__host.receive(msg), delay || 0);
+  }
+
+  function productFor(repo) {
+    if (products[repo]) return products[repo];
+    const l = listings.find((x) => x.repo === repo);
+    return {
+      repo: l.repo, name: l.name, author: l.author, description: l.description,
+      repo_url: l.repo_url, avatar_url: l.avatar_url, stars: l.stars,
+      readme: "# " + l.name + "\n\n" + l.description,
+      release_tag: l.is_library ? null : "v1.0.0", release_url: l.repo_url + "/releases",
+      assets: l.is_library ? [] : [{ name: l.name.replace(/\s+/g, "-").toLowerCase() + ".zip", size: 6291456 }, { name: "dcs-studio.toml", size: 900 }],
+      download_size: l.is_library ? 0 : 6292356,
+      installable: !l.is_library, is_library: l.is_library,
+      installs: [], dependencies: [], requires: [],
+    };
+  }
+
+  function planFor(p) {
+    return {
+      installs: (p.installs || []).map((r) => ({ source: r.source, dest: r.dest, resolved: r.dest })),
+      requires: (p.requires || []).map((r) => ({ id: r.id })),
+    };
+  }
+
+  // repos the fixture currently considers "installed" — drives the
+  // install/uninstall lifecycle across openProduct calls.
+  const installed = new Set();
+
+  window.__host.onPost((m) => {
+    if (!m) return;
+    switch (m.type) {
+      case "ready":
+        reply({ type: "auth", signedIn: false, browsing: false, topic: "dcs-studio" });
+        break;
+      case "signIn":
+        reply({ type: "auth", signedIn: true, browsing: false, login: "you (preview)", topic: "dcs-studio" });
+        reply({ type: "listings:busy" }, 10);
+        reply({ type: "listings", listings }, 500);
+        break;
+      case "browseAnon":
+        reply({ type: "auth", signedIn: false, browsing: true, topic: "dcs-studio" });
+        reply({ type: "listings:busy" }, 10);
+        reply({ type: "listings", listings }, 500);
+        break;
+      case "discover":
+        reply({ type: "listings:busy" });
+        reply({ type: "listings", listings }, 450);
+        break;
+      case "openProduct": {
+        const repo = m.repo;
+        reply({ type: "product:busy", repo });
+        const product = productFor(repo);
+        reply({ type: "product", product, plan: planFor(product), installed: installed.has(repo) }, 450);
+        break;
+      }
+      case "openExternal":
+        if (m.url) window.__toast("Opening " + m.url.replace(/^https?:\/\//, "") + " &hellip;");
+        break;
+      case "install": {
+        const repo = m.repo;
+        reply({ type: "installProgress", repo, phase: "download", label: "Downloading…", pct: 0.15 }, 50);
+        reply({ type: "installProgress", repo, phase: "download", label: "Downloading…", pct: 0.7 }, 100);
+        reply({ type: "installProgress", repo, phase: "link", label: "Linking into DCS…", pct: 1 }, 130);
+        setTimeout(() => {
+          installed.add(repo);
+          window.__host.receive({ type: "installed", repo });
+        }, 150);
+        break;
+      }
+      case "uninstall": {
+        const repo = m.repo;
+        setTimeout(() => {
+          installed.delete(repo);
+          window.__host.receive({ type: "uninstalled", repo });
+        }, 90);
+        break;
+      }
+    }
+  });
+})();

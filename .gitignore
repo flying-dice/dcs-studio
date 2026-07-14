@@ -8,3 +8,5 @@ native/target/
 target/
 coverage/
 .playwright-mcp/
+test-results/
+playwright-report/

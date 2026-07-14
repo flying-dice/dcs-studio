@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DCS Studio preview — Documentation</title>
+<script src="harness.js"></script>
+<!-- No fixtures/docs.js: content comes straight from the real
+     media/docs-content.js (window.__DOCS__) — only the initial page needs
+     setting before media/docs.js reads it. -->
+<script>
+  window.__INITIAL_PAGE__ = "";
+  window.__host.onPost((m) => {
+    if (m && m.type === "run") window.__toast("&rarr; runs command <b>" + m.command + "</b>");
+    if (m && m.type === "openExternal") window.__toast("&rarr; opens <b>" + m.url + "</b>");
+  });
+</script>
+<script src="../media/docs-content.js"></script>
+<link rel="stylesheet" href="theme.css" />
+<link rel="stylesheet" href="../media/docs.css" />
+</head>
+<body>
+<div id="app"></div>
+<div id="toast"></div>
+<script src="../media/docs.js"></script>
+</body>
+</html>

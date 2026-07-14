@@ -26,29 +26,37 @@
     return `installed v${esc(s.installedVersion)}`;
   }
 
+  // data-act -> data-testid, per the previews/ data-testid convention doc.
+  const ACT_TESTID = {
+    install: "install-btn",
+    open: "open-installed-btn",
+    remove: "remove-btn",
+    viewBundled: "view-bundled-btn",
+  };
+
   function buttons(s, hasWorkspace) {
     const b = [];
     if (s.status === "not-installed" && hasWorkspace)
-      b.push(`<button class="btn primary" data-act="install" data-id="${s.id}">Install into repo</button>`);
+      b.push(`<button class="btn primary" data-act="install" data-testid="${ACT_TESTID.install}" data-id="${s.id}">Install into repo</button>`);
     if (s.status === "outdated")
-      b.push(`<button class="btn primary" data-act="install" data-id="${s.id}">Update to v${esc(s.bundledVersion)}</button>`);
+      b.push(`<button class="btn primary" data-act="install" data-testid="${ACT_TESTID.install}" data-id="${s.id}">Update to v${esc(s.bundledVersion)}</button>`);
     if (s.status === "modified")
-      b.push(`<button class="btn" data-act="install" data-id="${s.id}">Reset to bundled</button>`);
+      b.push(`<button class="btn" data-act="install" data-testid="${ACT_TESTID.install}" data-id="${s.id}">Reset to bundled</button>`);
     if (s.installedVersion) {
-      b.push(`<button class="btn" data-act="open" data-id="${s.id}">Open installed</button>`);
-      b.push(`<button class="btn subtle" data-act="remove" data-id="${s.id}">Remove</button>`);
+      b.push(`<button class="btn" data-act="open" data-testid="${ACT_TESTID.open}" data-id="${s.id}">Open installed</button>`);
+      b.push(`<button class="btn subtle" data-act="remove" data-testid="${ACT_TESTID.remove}" data-id="${s.id}">Remove</button>`);
     }
-    b.push(`<button class="btn subtle" data-act="viewBundled" data-id="${s.id}">View bundled</button>`);
+    b.push(`<button class="btn subtle" data-act="viewBundled" data-testid="${ACT_TESTID.viewBundled}" data-id="${s.id}">View bundled</button>`);
     return b.join("");
   }
 
   function card(s, hasWorkspace) {
     const st = STATUS[s.status] || STATUS["not-installed"];
     return `
-      <div class="card">
+      <div class="card" data-testid="skill-card" data-id="${s.id}">
         <div class="card-head">
-          <span class="pill ${st.cls}">${st.label}</span>
-          <span class="ver">${versionLine(s)}</span>
+          <span class="pill ${st.cls}" data-testid="status-pill">${st.label}</span>
+          <span class="ver" data-testid="version-line">${versionLine(s)}</span>
         </div>
         <h2>${esc(s.name)}</h2>
         <p class="desc">${esc(s.description)}</p>
@@ -69,8 +77,8 @@
           contributor's agent picks it up. When the extension ships a newer
           version you'll see an update here.
         </p>
-        ${hasWorkspace ? "" : `<div class="note warn">Open a folder to install skills into a repo.</div>`}
-        ${skills.length ? skills.map((s) => card(s, hasWorkspace)).join("") : `<div class="note">No bundled skills found.</div>`}
+        ${hasWorkspace ? "" : `<div class="note warn" data-testid="no-workspace-note">Open a folder to install skills into a repo.</div>`}
+        ${skills.length ? skills.map((s) => card(s, hasWorkspace)).join("") : `<div class="note" data-testid="empty-note">No bundled skills found.</div>`}
       </div>`;
 
     app.querySelectorAll(".btn").forEach((el) => {
