@@ -16,7 +16,7 @@ window.__DOCS__ = {
 <ul>
   <li><strong>Browse Mods</strong> — the Marketplace. Discover and install community mods published on GitHub. <a data-page="finding-mods">Finding mods</a></li>
   <li><strong>My Mods</strong> — everything you have installed: enable, disable, update or uninstall. <a data-page="updating-uninstalling">Managing installed mods</a></li>
-  <li><strong>Create a Mod</strong> — start a project from a template, or edit the current project's manifest. Reads as <em>Edit Project</em> once your workspace has a <code>dcs-studio.toml</code>. <a data-page="creating-a-project">Creating a project</a></li>
+  <li><strong>Create a Mod</strong> — start a project from a template, or edit the current project's manifest. Reads as <em>Edit Project</em> once your workspace has a <code>dcs-studio.toml</code>. Just want to share a mission? Use the <strong>Share a Mission</strong> template. <a data-page="creating-a-project">Creating a project</a></li>
   <li><strong>Publish Mod</strong> — preflight checks, share to GitHub, create a release. Appears once the workspace has a manifest. <a data-page="publishing">Publishing</a></li>
   <li><strong>DCS Console</strong> — a live Lua REPL inside the running sim. <a data-page="dcs-console">DCS Console</a></li>
   <li><strong>MissionScripting</strong> — safely desanitize / re-sanitize DCS's Lua sandbox. <a data-page="mission-scripting">MissionScripting</a></li>
@@ -209,6 +209,7 @@ dest   = "{SavedGames}/Scripts/my-mod.lua"   # where it gets linked</code></pre>
   <tr><td><strong>Lua Mission Script</strong></td><td>A <code>Scripts/&lt;name&gt;.lua</code> using the mission environment (<code>env</code>, <code>timer</code>, <code>trigger</code>, <code>world</code>), a bundle + symlink pair targeting <code>{SavedGames}/Scripts</code>, and a README.</td></tr>
   <tr><td><strong>Lua GameGUI Hook</strong></td><td>A <code>Scripts/Hooks/&lt;name&gt;_hook.lua</code> using <code>DCS.setUserCallbacks</code>, bundled and linked into <code>{SavedGames}/Scripts/Hooks</code>.</td></tr>
   <tr><td><strong>Rust DLL Mod</strong></td><td>A complete <code>mlua</code> cdylib crate pre-configured to link against DCS's own <code>lua.dll</code>, a loader hook script, and bundle + symlink rules for both the built DLL (<code>{SavedGames}/Mods/tech/&lt;name&gt;/bin</code>) and the hook.</td></tr>
+  <tr><td><strong>Share a Mission</strong></td><td>A <code>Missions/</code> folder for your <code>.miz</code>, a bundle + symlink pair targeting <code>{SavedGames}/Missions/&lt;name&gt;.miz</code>, and a README — just save your mission into <code>Missions/</code> (or scaffold in place over a folder that already has one).</td></tr>
 </table>
 
 <h2>The manifest form</h2>
