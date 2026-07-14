@@ -171,6 +171,7 @@ export const PRODUCTS: Record<string, ProductDetail> = {
     stars: 342,
     release_tag: "v2.3.1",
     release_url: "https://github.com/viper-drivers/f16-weapons-expansion/releases/tag/v2.3.1",
+    release_date: "2026-06-01T00:00:00Z",
     readme: `# F-16C Weapons Expansion
 
 Extra air-to-ground stores for the DCS **F-16C Viper**, wired into the rearm
@@ -228,6 +229,7 @@ Multiplayer: all clients need the mod installed for the loadouts to sync.
     stars: 1203,
     release_tag: "v0.9.0",
     release_url: "https://github.com/dcs-scripting/moose-lite/releases/tag/v0.9.0",
+    release_date: "2026-06-01T00:00:00Z",
     readme: `# MOOSE Lite
 
 A trimmed MOOSE core for mission scripting — spawning, zones and scheduling
@@ -274,6 +276,7 @@ Spawn.new("Red CAP"):Schedule(300)
     stars: 254,
     release_tag: "1.4.0",
     release_url: "https://github.com/mission-makers/operation-eastern-storm/releases/tag/1.4.0",
+    release_date: "2026-06-01T00:00:00Z",
     readme: `# Operation Eastern Storm
 
 A branching 12-mission campaign for the **F/A-18C Hornet** over the Syria map.
@@ -316,6 +319,7 @@ Install, then find it under **Campaigns** in the DCS main menu.
     stars: 512,
     release_tag: "2026.02",
     release_url: "https://github.com/syria-collective/syria-4k-textures/releases/tag/2026.02",
+    release_date: "2026-06-01T00:00:00Z",
     readme: `# Syria 4K Terrain Textures
 
 Reworked ground textures for the **Syria** map. Sharper farmland tiling, richer
@@ -369,6 +373,7 @@ function synthesize(listing: MarketListing): ProductDetail {
     readme: `# ${listing.name}\n\n${listing.description}\n`,
     release_tag: null,
     release_url: null,
+    release_date: null,
     assets: [],
     download_size: 0,
     installable: false,

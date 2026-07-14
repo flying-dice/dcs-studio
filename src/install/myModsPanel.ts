@@ -7,6 +7,7 @@ import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { JsonLedgerStore } from "../adapters/node/jsonLedgerStore";
 import type { ProcessLauncher } from "../adapters/node/processLauncher";
 import { toModDto, isUpToDate } from "../core/domain/subscriptions";
+import { deriveInstallManifestView } from "../core/domain/installManifestView";
 import {
   entrypointConsentKey,
   entrypointRunKey,
@@ -75,7 +76,19 @@ export class MyModsPanel {
 
   private async pushInit(): Promise<void> {
     this.ledger.ensureUninstallBat(); // keep the script present so Reveal/Run always work
-    const mods = (await this.subs.list()).map(toModDto);
+    // Each mod carries its launch DTO plus the same install-manifest breakdown
+    // the product page shows, derived from the ledger snapshot (dests shown as
+    // declared tokens — My Mods does not resolve them). Read defensively so
+    // ledgers written before bundles/symlinks existed still render.
+    const mods = (await this.subs.list()).map((s) => ({
+      ...toModDto(s),
+      manifest: deriveInstallManifestView({
+        bundles: s.bundles ?? [],
+        symlinks: (s.symlinks ?? []).map((x) => ({ source: x.source, dest: x.dest, resolved: null })),
+        entrypoints: s.entrypoints ?? [],
+        missionScripts: s.missionScripts ?? [],
+      }),
+    }));
     // Running state keyed exactly as the webview looks it up (`<repo>::<id>`),
     // translated here to the launcher's (lowercased) tracking keys.
     const running: Record<string, boolean> = {};
@@ -93,7 +106,7 @@ export class MyModsPanel {
     });
   }
 
-  private async onMessage(msg: { type: string; repo?: string; url?: string; id?: string }): Promise<void> {
+  private async onMessage(msg: { type: string; repo?: string; url?: string; id?: string; page?: string }): Promise<void> {
     const repo = msg.repo;
     switch (msg.type) {
       case "refresh":
@@ -131,6 +144,9 @@ export class MyModsPanel {
         break;
       case "openExternal":
         if (msg.url) void vscode.env.openExternal(vscode.Uri.parse(msg.url));
+        break;
+      case "openDocs":
+        void vscode.commands.executeCommand("dcs.docs.open", msg.page ?? "sandbox");
         break;
       case "createShortcut":
         void vscode.commands.executeCommand("dcs.mymods.createShortcut");

@@ -4,6 +4,7 @@ import { DISCOVERY_TOPIC } from "../core/domain/githubMarketplace";
 import type { MarketplacePort } from "../core/ports/marketplace";
 import type { ProductDetail } from "../core/domain/types";
 import type { SubscriptionService } from "../core/app/subscriptionService";
+import { deriveInstallManifestView } from "../core/domain/installManifestView";
 import { showError } from "../errors";
 
 // The full-screen storefront, hosted as a webview panel. The webview owns all
@@ -80,7 +81,7 @@ export class MarketplacePanel {
     void this.panel.webview.postMessage(msg);
   }
 
-  private async onMessage(msg: { type: string; repo?: string; name?: string; force?: boolean; url?: string }): Promise<void> {
+  private async onMessage(msg: { type: string; repo?: string; name?: string; force?: boolean; url?: string; page?: string }): Promise<void> {
     switch (msg.type) {
       case "ready":
         await this.refreshAuth();
@@ -105,6 +106,11 @@ export class MarketplacePanel {
         break;
       case "openExternal":
         if (msg.url) void vscode.env.openExternal(vscode.Uri.parse(msg.url));
+        break;
+      case "openDocs":
+        // The "Learn more" link on the Script Execution Notice routes here; the
+        // host opens the Docs panel at the sandbox explainer page.
+        void vscode.commands.executeCommand("dcs.docs.open", msg.page ?? "sandbox");
         break;
       case "install":
         if (msg.repo) await this.runInstall(msg.repo);
@@ -173,9 +179,19 @@ export class MarketplacePanel {
       try {
         plan = await this.subs.fetchPlan(product.assets, this.token);
       } catch {
-        // A missing/unreadable manifest just means no plan preview.
+        // A missing/unreadable manifest just means no plan preview — surfaced as
+        // the explicit "install actions unknown" state, never a silent gap.
       }
-      this.post({ type: "product", product, plan, installed: await this.subs.isSubscribed(product.repo) });
+      // Derive the install-manifest view-model (unknown state when plan is null),
+      // and carry the required-modules list separately for its own card.
+      const manifest = deriveInstallManifestView(plan);
+      this.post({
+        type: "product",
+        product,
+        manifest,
+        requires: plan?.requires ?? [],
+        installed: await this.subs.isSubscribed(product.repo),
+      });
     } catch (e) {
       this.post({ type: "product:error", repo, message: e instanceof Error ? e.message : String(e) });
     }

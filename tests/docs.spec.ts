@@ -4,10 +4,18 @@ import { openPreview, expectSent, hostSend } from "./helpers";
 test.describe("docs preview", () => {
   test("renders the TOC from __DOCS__ and the first page by default", async ({ page }) => {
     await openPreview(page, "docs");
-    // media/docs-content.js currently defines 13 pages across 4 sections.
-    await expect(page.getByTestId("toc-link")).toHaveCount(13);
+    // media/docs-content.js currently defines 14 pages across 4 sections
+    // (includes the #12 "Scripting Sandbox & Trust" explainer).
+    await expect(page.getByTestId("toc-link")).toHaveCount(14);
     await expect(page.getByTestId("page-title")).toHaveText("Welcome to DCS Studio");
     await expect(page.getByTestId("page-body")).not.toBeEmpty();
+  });
+
+  test("the sandbox explainer page (#12) renders its content", async ({ page }) => {
+    await openPreview(page, "docs");
+    await page.locator('[data-testid="toc-link"][data-page="sandbox"]').click();
+    await expect(page.getByTestId("page-title")).toHaveText("Scripting Sandbox & Trust");
+    await expect(page.getByTestId("page-body")).toContainText("before-sanitize");
   });
 
   test("TOC navigation switches the active page", async ({ page }) => {

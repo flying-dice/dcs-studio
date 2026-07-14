@@ -51,6 +51,20 @@ export interface Subscription {
   enabled: boolean;
   links: ModLink[];
   /**
+   * Bundled content the mod ships (`[[bundle]]` paths), snapshotted from its
+   * manifest at subscribe time so My Mods can show the same install breakdown the
+   * product page shows without re-fetching. Absent on older ledgers — read
+   * defensively (`?? []`).
+   */
+  bundles: { path: string }[];
+  /**
+   * Symlink rules the mod declares (`[[symlink]]` source → dest), snapshotted at
+   * subscribe time for the My Mods install breakdown. Dests are the declared
+   * token paths (`{SavedGames}/…`); My Mods shows them unresolved. Absent on
+   * older ledgers — read defensively (`?? []`).
+   */
+  symlinks: { source: string; dest: string }[];
+  /**
    * Executable entrypoints the mod declares, snapshotted from its manifest at
    * subscribe time so My Mods can offer Launch/Stop without re-fetching. Absent
    * on ledgers written before this field existed — read defensively (`?? []`).
@@ -132,6 +146,12 @@ export interface ProductDetail {
   readme: string | null;
   release_tag: string | null;
   release_url: string | null;
+  /**
+   * ISO-8601 publish time of the latest release (GitHub's `published_at`), or
+   * null when there is no release. A trust signal (last-release recency) — it
+   * rides the same `releases/latest` payload, so surfacing it adds no API call.
+   */
+  release_date: string | null;
   assets: ProductAsset[];
   download_size: number;
   installable: boolean;

@@ -37,6 +37,8 @@ export interface RepoJson {
 export interface ReleaseJson {
   tag_name: string;
   html_url: string;
+  /** ISO-8601 publish time — a trust signal (recency) on the same payload. */
+  published_at?: string | null;
   assets: Array<{ name: string; size: number; browser_download_url: string }>;
 }
 
@@ -90,6 +92,7 @@ export function mapProduct(
     readme,
     release_tag: release?.tag_name ?? null,
     release_url: release?.html_url ?? null,
+    release_date: release?.published_at ?? null,
     assets,
     download_size: assets.reduce((s, a) => s + a.size, 0),
     installable: hasManifest,

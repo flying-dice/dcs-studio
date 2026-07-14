@@ -55,6 +55,25 @@ header { position: sticky; top: 0; z-index: 5; display: flex; align-items: cente
 .ep-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .ep-state { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--ok); }
 
+/* install-manifest breakdown (issue #12) */
+.mm-manifest { border: 1px solid var(--border); border-top: none; border-radius: 0 0 10px 10px; background: color-mix(in srgb, var(--card) 60%, transparent); padding: 10px 16px 12px; display: flex; flex-direction: column; gap: 10px; }
+.entrypoints + .mm-manifest { border-radius: 0; }
+.mm-risks { display: flex; flex-wrap: wrap; gap: 6px; }
+.mm-risk { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); border-radius: 5px; padding: 2px 7px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.mm-risk.warn { color: var(--vscode-editorWarning-foreground, #cca700); border-color: var(--vscode-editorWarning-foreground, #cca700); }
+.mm-alert { border: 1px solid var(--vscode-editorWarning-foreground, #cca700); border-radius: 8px; padding: 8px 10px; font-size: 11px; line-height: 1.5; background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 9%, transparent); }
+.mm-alert-head { display: flex; align-items: center; gap: 5px; font-weight: 600; color: var(--vscode-editorWarning-foreground, #cca700); margin-bottom: 3px; }
+.mm-link { background: none; border: none; padding: 4px 0 0; color: var(--vscode-textLink-foreground); font-size: 11px; cursor: pointer; }
+.mm-sec { display: flex; flex-direction: column; gap: 3px; }
+.mm-sec.warn { border: 1px solid var(--vscode-editorWarning-foreground, #cca700); border-radius: 8px; padding: 6px 10px; background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 6%, transparent); }
+.mm-sec-h { display: flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+.mm-sec-h.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
+.mm-count { border-radius: 8px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); padding: 0 6px; font-size: 10px; letter-spacing: 0; }
+.mm-count.warn, .mm-badge.warn { background: var(--vscode-editorWarning-foreground, #cca700); color: #1b1b00; }
+.mm-item { font-size: 11px; color: var(--vscode-foreground); padding: 2px 0; word-break: break-all; }
+.mm-item.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
+.mm-badge { border-radius: 4px; padding: 0 5px; font-size: 9px; text-transform: uppercase; }
+
 .empty { text-align: center; color: var(--muted); padding: 60px 20px; }
 .empty .big { font-size: 15px; font-weight: 600; color: var(--vscode-foreground); margin-bottom: 6px; }
 .spin { display: inline-block; animation: spin 0.9s linear infinite; }

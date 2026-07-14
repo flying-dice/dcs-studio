@@ -223,6 +223,8 @@ const seeded = (over: Partial<Subscription> = {}): Subscription => ({
   dir: MOD_DIR,
   enabled: false,
   links: [],
+  bundles: [],
+  symlinks: [],
   entrypoints: [],
   missionScripts: [],
   ...over,
@@ -286,9 +288,12 @@ describe("fetchPlan", () => {
 
     expect(w.downloader.calls).toEqual([{ url: "https://dl/dcs-studio.toml", dest: tmp, token: "tok" }]);
     expect(plan).toEqual({
-      installs: [
+      bundles: [{ path: "Scripts/X" }],
+      symlinks: [
         { source: "Scripts/X", dest: "{SavedGames}/Scripts/X", resolved: "C:\\SG\\DCS/Scripts/X" },
       ],
+      entrypoints: [],
+      missionScripts: [],
       requires: [{ id: "ed/f16c" }],
     });
     // tmp cleanup
@@ -305,7 +310,7 @@ describe("fetchPlan", () => {
       [{ name: "dcs-studio.toml", size: 1, url: "https://dl/dcs-studio.toml" }],
       undefined,
     );
-    expect(plan?.installs).toEqual([{ source: "Mods/X", dest: "{GameInstall}/Mods/X", resolved: null }]);
+    expect(plan?.symlinks).toEqual([{ source: "Mods/X", dest: "{GameInstall}/Mods/X", resolved: null }]);
   });
 });
 
@@ -356,6 +361,8 @@ describe("subscribe", () => {
       dir: MOD_DIR,
       enabled: false,
       links: [],
+      bundles: [],
+      symlinks: [],
       entrypoints: [],
       missionScripts: [],
     });
@@ -408,6 +415,9 @@ describe("subscribe", () => {
       { id: "srs", name: "SRS", exe: "Server/SR.exe", args: ["--min"], cwd: "Server" },
     ]);
     expect(w.ledger.store["owner/repo"].entrypoints).toEqual(sub.entrypoints);
+    // The same snapshot also captures bundles + symlinks for the My Mods breakdown.
+    expect(sub.bundles).toEqual([{ path: "Scripts/X" }]);
+    expect(sub.symlinks).toEqual([{ source: "Scripts/X", dest: "{SavedGames}/Scripts/X" }]);
   });
 
   it("snapshots no entrypoints when the payload has no manifest on disk", async () => {
