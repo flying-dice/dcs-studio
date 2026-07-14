@@ -354,7 +354,7 @@ dest = "{SavedGames}/Mods/tech/f16-weapons"</code></pre>
 <p>The console evaluates Lua inside a running DCS and prints the result. Pick the target environment at the top:</p>
 <ul>
   <li><strong>GUI / hooks</strong> — the GameGUI state where <code>DCS.*</code> and <code>net.*</code> live (the bridge's home).</li>
-  <li><strong>Mission</strong> — the mission scripting sandbox (<code>trigger.action</code>, <code>coalition</code>, <code>world</code>…). Needs a running mission and a <a data-page="mission-scripting">desanitized MissionScripting.lua</a>.</li>
+  <li><strong>Mission</strong> — the mission scripting sandbox (<code>trigger.action</code>, <code>coalition</code>, <code>world</code>…), served by the mission bridge. Needs a running mission and a <a data-page="mission-scripting">desanitized MissionScripting.lua</a>.</li>
 </ul>
 <p><code>print</code> output from any environment streams into the console. The <strong>Explorer</strong> tab lazily drills into live Lua tables and can export any table as JSON to a file of your choice.</p>
 <p>The console requires the <a data-page="bridge">bridge</a> to be injected and DCS running — the sidebar footer and status bar show the live connection state.</p>
@@ -411,12 +411,12 @@ dest = "{SavedGames}/Mods/tech/f16-weapons"</code></pre>
           title: "The Bridge (Inject / Launch)",
           lede: "The bridge is a small native DLL + hook script that lives in Saved Games and gives the extension its live link into DCS.",
           body: `
-<p>Everything live — the console, the debugger, the status indicators — talks to DCS through the bridge. It installs into your Saved Games write dir as <code>Mods\\tech\\DcsStudio\\bin\\dcs_studio.dll</code> plus <code>Scripts\\Hooks\\DcsStudio.lua</code>.</p>
+<p>Everything live — the console, the debugger, the status indicators — talks to DCS through the bridges. They install into your Saved Games write dir as <code>Mods\\tech\\DcsStudio\\bin\\dcs_studio_gui.dll</code> + <code>dcs_studio_mission.dll</code> plus <code>Scripts\\Hooks\\DcsStudio.lua</code>. The GUI bridge serves the hooks state (port 25569, up whenever DCS runs); the mission bridge serves the mission scripting state (port 25570) and is booted by the hook at each mission start — which needs a <a data-page="mission-scripting">desanitized MissionScripting.lua</a>.</p>
 <ul>
-  <li><strong>Inject Bridge</strong> — copies both files into place. If the DLL is locked, DCS is running — close it first.</li>
+  <li><strong>Inject Bridge</strong> — copies the files into place. If a DLL is locked, DCS is running — close it first.</li>
   <li><strong>Launch DCS (with bridge)</strong> — injects, then starts <code>DCS.exe --no-launcher</code> from your configured install; when DCS exits the bridge is automatically ejected.</li>
-  <li><strong>Eject Bridge</strong> — removes both files.</li>
-  <li><strong>Build Bridge</strong> — for contributors: rebuilds the native crate with cargo; inject prefers a freshly built DLL over the shipped one.</li>
+  <li><strong>Eject Bridge</strong> — removes the files.</li>
+  <li><strong>Build Bridge</strong> — for contributors: rebuilds the native workspace with cargo; inject prefers freshly built DLLs over the shipped ones.</li>
 </ul>
 <div class="cmd-row">
   <button class="cmd-btn" data-command="dcs.bridge.inject">Inject Bridge</button>

@@ -4,9 +4,10 @@ import * as fs from "fs";
 import { spawn } from "child_process";
 import { showError } from "../errors";
 
-// Build the ported bridge crate (native/) into dcs_studio.dll. Requires the
-// user's Rust toolchain + MSVC. The extension ships a prebuilt DLL too, so this
-// is only needed when the bridge source is changed.
+// Build the bridge workspace (native/) into dcs_studio_gui.dll +
+// dcs_studio_mission.dll (one `cargo build --release` produces both).
+// Requires the user's Rust toolchain + MSVC. The extension ships prebuilt
+// DLLs too, so this is only needed when the bridge source is changed.
 export async function buildBridge(ctx: vscode.ExtensionContext): Promise<void> {
   const nativeDir = path.join(ctx.extensionUri.fsPath, "native");
   if (!fs.existsSync(path.join(nativeDir, "Cargo.toml"))) {
@@ -37,7 +38,7 @@ export async function buildBridge(ctx: vscode.ExtensionContext): Promise<void> {
           out.appendLine(`\ncargo exited with code ${code}`);
           if (code === 0) {
             void vscode.window.showInformationMessage(
-              "Bridge built. Run DCS Studio: Inject, or Launch DCS, to use it.",
+              "Bridge built (dcs_studio_gui.dll + dcs_studio_mission.dll). Run DCS Studio: Inject, or Launch DCS, to use them.",
             );
           } else {
             void showError("Bridge build failed — see the 'DCS Studio Bridge Build' output.");

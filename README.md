@@ -68,18 +68,22 @@ with the crash frames inspectable (`pauseOnError: false` disables that).
 
 ### How it works
 
-The bridge DLL (`dcs_studio.dll`) holds the breakpoint registry and
-pause/resume flags as process-wide statics, and its WebSocket server keeps
-accepting editor requests on a background thread even while the sim thread is
-frozen at a breakpoint. The debug engine (embedded in
-`bridge/Scripts/Hooks/DcsStudio.lua`) runs your chunk under a scoped
-`debug.sethook` line hook; for mission sessions the GameGUI hook injects the
-engine into the mission state via `a_do_script`, where it pumps the RPC queue
-itself (`jsonrpc.process_queue`) while paused. The VS Code side is an inline
-Debug Adapter (`src/debug/adapter.ts`) that maps DAP onto the bridge's
-`debug_*` JSON-RPC and polls `debug_state` (250 ms) for stop/termination —
-a held breakpoint auto-continues after 30 s if the editor vanishes, so a
-crashed editor can never freeze the sim forever.
+Each environment is served by its own bridge DLL with its own JSON-RPC
+server: `dcs_studio_gui.dll` in the GameGUI hook state (port 25569) and
+`dcs_studio_mission.dll` in the mission scripting state (port 25570, booted
+into the mission by the GUI hook at mission start — which is why
+MissionScripting.lua must be desanitized). Each DLL holds its own breakpoint
+registry and pause/resume flags, and its WebSocket server keeps accepting
+editor requests on a background thread even while the sim thread is frozen at
+a breakpoint. The debug engine (Lua, embedded in the DLLs) runs your chunk
+under a scoped `debug.sethook` line hook and pumps its own RPC queue
+(`jsonrpc.process_queue`) while paused. The VS Code side is an inline Debug
+Adapter (`src/debug/adapter.ts`) that picks the bridge for the session's env,
+maps DAP onto its `debug_*` JSON-RPC and polls `debug_state` (250 ms) for
+stop/termination — a held breakpoint auto-continues after 30 s if the editor
+vanishes, so a crashed editor can never freeze the sim forever. Both servers
+also expose `POST /rpc` and `rpc.discover`, so scripts and LLM agents can
+drive the sim with plain HTTP (see `skills/dcs-studio/SKILL.md`).
 
 After changing the hook or DLL, re-run **DCS Studio: Inject Bridge into DCS**
 (or Launch, which injects) and restart DCS to pick it up.

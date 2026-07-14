@@ -1,0 +1,28 @@
+# Everything both bridge DLLs share: the debugger state + engine, the JSON-RPC
+# server/router/protocol, and the Lua surface modules. Plain rlib — its statics
+# are compiled into each cdylib separately (per-DLL state, by design).
+[package]
+name = "dcs-bridge-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "dcs_bridge_core"
+
+[features]
+# Gates src/luadef.rs's round-trip tests, which need dcs-studio's
+# dcs-lua-syntax parser crate (not ported into this repo).
+luadef-roundtrip = []
+
+[dependencies]
+mlua.workspace = true
+tokio.workspace = true
+actix-web.workspace = true
+actix-ws.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+rusqlite.workspace = true
+log.workspace = true
+log4rs.workspace = true

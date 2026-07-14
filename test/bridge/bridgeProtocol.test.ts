@@ -143,3 +143,136 @@ describe("dcsTimeFromPing", () => {
     expect(dcsTimeFromPing({ dcs_time: "12" as unknown as number })).toBeNull();
   });
 });
+
+// ── Two-bridge routing + combined status ──
+
+import {
+  DualBridgeStatus,
+  GUI_BRIDGE_PORT,
+  INITIAL_DUAL_STATUS,
+  MISSION_BRIDGE_PORT,
+  bridgeForEnv,
+  combinedState,
+  displayTime,
+  missionStartFailure,
+  statusBarView,
+} from "../../src/core/domain/bridgeProtocol";
+
+function dual(
+  gui: { connected: boolean; dcsTime: number | null },
+  mission: { connected: boolean; dcsTime: number | null },
+): DualBridgeStatus {
+  return { gui, mission };
+}
+
+const OFF = { connected: false, dcsTime: null };
+const MENU = { connected: true, dcsTime: 0 };
+const IN_MISSION = { connected: true, dcsTime: 87.5 };
+
+describe("two-bridge constants and routing", () => {
+  it("pins the well-known ports and the initial dual status", () => {
+    expect(GUI_BRIDGE_PORT).toBe(25569);
+    expect(MISSION_BRIDGE_PORT).toBe(25570);
+    expect(INITIAL_DUAL_STATUS).toEqual({ gui: OFF, mission: OFF });
+  });
+
+  it("routes mission to the mission bridge and every other env to the GUI bridge", () => {
+    expect(bridgeForEnv("mission")).toBe("mission");
+    for (const env of ["gui", "server", "config", "export"]) {
+      expect(bridgeForEnv(env)).toBe("gui");
+    }
+  });
+});
+
+describe("combinedState", () => {
+  it("is offline when neither bridge is connected", () => {
+    expect(combinedState(dual(OFF, OFF))).toBe("offline");
+  });
+
+  it("is menu when only the GUI bridge is up with no mission time", () => {
+    expect(combinedState(dual(MENU, OFF))).toBe("menu");
+    // before the first ping answers, dcsTime is still null
+    expect(combinedState(dual({ connected: true, dcsTime: null }, OFF))).toBe("menu");
+  });
+
+  it("is mission when the mission bridge is connected", () => {
+    expect(combinedState(dual(MENU, IN_MISSION))).toBe("mission");
+    // even if the gui side is down (transient)
+    expect(combinedState(dual(OFF, IN_MISSION))).toBe("mission");
+  });
+
+  it("is mission when the GUI bridge reports mission time (mission bridge not up)", () => {
+    expect(combinedState(dual(IN_MISSION, OFF))).toBe("mission");
+  });
+});
+
+describe("displayTime", () => {
+  it("prefers the mission bridge's own clock when connected", () => {
+    expect(displayTime(dual(MENU, IN_MISSION))).toBe(87.5);
+  });
+
+  it("falls back to the GUI mirror when the mission bridge is down or timeless", () => {
+    expect(displayTime(dual(IN_MISSION, OFF))).toBe(87.5);
+    expect(displayTime(dual(IN_MISSION, { connected: true, dcsTime: null }))).toBe(87.5);
+    expect(displayTime(dual(OFF, OFF))).toBeNull();
+  });
+});
+
+describe("statusBarView", () => {
+  it("offline when neither bridge is reachable", () => {
+    const v = statusBarView(dual(OFF, OFF));
+    expect(v.text).toBe("$(debug-disconnect) DCS: offline");
+    expect(v.tooltip).toContain("Launch DCS");
+  });
+
+  it("mission with sim time when the mission bridge is connected", () => {
+    const v = statusBarView(dual(MENU, IN_MISSION));
+    expect(v.text).toBe("$(rocket) DCS: mission 88s");
+    expect(v.tooltip).toContain("mission running");
+  });
+
+  it("mission without a time suffix when neither clock has ticked through yet", () => {
+    const v = statusBarView(dual(MENU, { connected: true, dcsTime: null }));
+    expect(v.text).toBe("$(rocket) DCS: mission");
+    // a zero clock (mission loading) also renders without the suffix
+    const zero = statusBarView(dual(MENU, { connected: true, dcsTime: 0 }));
+    expect(zero.text).toBe("$(rocket) DCS: mission");
+  });
+
+  it("menu when the GUI bridge is up but its first ping has not answered", () => {
+    const v = statusBarView(dual({ connected: true, dcsTime: null }, OFF));
+    expect(v.text).toBe("$(plug) DCS: at menu");
+  });
+
+  it("warns when a mission runs but the mission bridge is down", () => {
+    const v = statusBarView(dual(IN_MISSION, OFF));
+    expect(v.text).toBe("$(warning) DCS: mission (no mission bridge)");
+    expect(v.tooltip).toContain("Desanitize MissionScripting.lua");
+  });
+
+  it("menu when only the GUI bridge is up", () => {
+    const v = statusBarView(dual(MENU, OFF));
+    expect(v.text).toBe("$(plug) DCS: at menu");
+    expect(v.tooltip).toContain("mission bridge starts with a mission");
+  });
+});
+
+describe("missionStartFailure", () => {
+  it("is null when the mission bridge is connected", () => {
+    expect(missionStartFailure(dual(MENU, IN_MISSION))).toBeNull();
+  });
+
+  it("points at launching DCS when both bridges are down", () => {
+    expect(missionStartFailure(dual(OFF, OFF))).toContain("Launch DCS with the bridge");
+  });
+
+  it("points at desanitizing when MissionScripting.lua is sanitized", () => {
+    const msg = missionStartFailure(dual(IN_MISSION, OFF), true);
+    expect(msg).toContain("Desanitize MissionScripting.lua");
+  });
+
+  it("points at starting a mission otherwise (sanitize state false or unknown)", () => {
+    expect(missionStartFailure(dual(MENU, OFF), false)).toContain("start a mission");
+    expect(missionStartFailure(dual(MENU, OFF))).toContain("start a mission");
+  });
+});

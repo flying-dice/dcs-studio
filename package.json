@@ -67,8 +67,8 @@
                   "gui"
                 ],
                 "enumDescriptions": [
-                  "The mission scripting environment (trigger.action, coalition, world…). Needs a running mission and a desanitized MissionScripting.lua.",
-                  "The GameGUI hooks environment (DCS.*, net.*) the bridge runs in."
+                  "The mission scripting environment (trigger.action, coalition, world…). Served by the mission bridge — needs a running mission (and a desanitized MissionScripting.lua so the bridge can boot).",
+                  "The GameGUI hooks environment (DCS.*, net.*), served by the GUI bridge."
                 ],
                 "description": "Which DCS Lua environment runs the script.",
                 "default": "mission"
@@ -365,6 +365,16 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Path to the **7-Zip** executable (`7z.exe`) used to package and unpack mod payloads. Leave empty to auto-detect it on PATH or under `Program Files\\7-Zip`."
+        },
+        "dcsStudio.bridgeGuiPort": {
+          "type": "number",
+          "default": 25569,
+          "markdownDescription": "Port of the **GUI bridge** JSON-RPC server (`dcs_studio_gui.dll`, GameGUI hook state). Must match the port the injected hook configures — change only if 25569 clashes."
+        },
+        "dcsStudio.bridgeMissionPort": {
+          "type": "number",
+          "default": 25570,
+          "markdownDescription": "Port of the **mission bridge** JSON-RPC server (`dcs_studio_mission.dll`, mission scripting state; only up while a mission runs). Must match the port the injected DLL binds — change only if 25570 clashes."
         }
       }
     }

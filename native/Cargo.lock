@@ -444,8 +444,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dcs-bridge"
-version = "0.1.4"
+name = "dcs-bridge-core"
+version = "0.2.0"
 dependencies = [
  "actix-web",
  "actix-ws",
@@ -457,6 +457,22 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "dcs-bridge-gui"
+version = "0.2.0"
+dependencies = [
+ "dcs-bridge-core",
+ "mlua",
+]
+
+[[package]]
+name = "dcs-bridge-mission"
+version = "0.2.0"
+dependencies = [
+ "dcs-bridge-core",
+ "mlua",
 ]
 
 [[package]]

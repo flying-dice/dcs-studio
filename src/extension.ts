@@ -8,6 +8,12 @@ import {
   restoreMission,
 } from "./mission/missionPanel";
 import { BridgeClient } from "./bridge/client";
+import { BridgeClients } from "./bridge/clients";
+import {
+  GUI_BRIDGE_PORT,
+  MISSION_BRIDGE_PORT,
+  statusBarView,
+} from "./core/domain/bridgeProtocol";
 import { ConsolePanel } from "./bridge/consolePanel";
 import { injectCommand, ejectCommand } from "./bridge/deploy";
 import { launchDcs, launchCleanup } from "./bridge/launch";
@@ -59,7 +65,7 @@ const MANIFEST_FILE = "dcs-studio.toml";
 // hand-off (mirrors PENDING_OPEN_KEY for new projects).
 const PENDING_MYMODS_KEY = "dcs.pendingMyMods";
 
-let bridge: BridgeClient | undefined;
+let bridge: BridgeClients | undefined;
 
 function isManifest(doc: vscode.TextDocument): boolean {
   return doc.uri.scheme === "file" && doc.uri.path.endsWith(`/${MANIFEST_FILE}`);
@@ -69,10 +75,26 @@ export function activate(context: vscode.ExtensionContext): void {
   // Dev-host only: reload the window when out/ or media/ changes.
   setupDevReload(context);
 
-  // The live in-sim bridge (created early so the sidebar nav can show its status).
-  bridge = new BridgeClient();
-  const client = bridge;
-  context.subscriptions.push(new vscode.Disposable(() => client.dispose()));
+  // The live in-sim bridges (created early so the sidebar nav can show their
+  // status): the GUI bridge is up whenever DCS runs; the mission bridge only
+  // while a mission is loaded — its client just keeps retrying in between.
+  const bridgeCfg = vscode.workspace.getConfiguration("dcsStudio");
+  bridge = new BridgeClients(
+    new BridgeClient(
+      "127.0.0.1",
+      bridgeCfg.get<number>("bridgeGuiPort") ?? GUI_BRIDGE_PORT,
+      undefined,
+      "GUI bridge",
+    ),
+    new BridgeClient(
+      "127.0.0.1",
+      bridgeCfg.get<number>("bridgeMissionPort") ?? MISSION_BRIDGE_PORT,
+      undefined,
+      "Mission bridge",
+    ),
+  );
+  const clients = bridge;
+  context.subscriptions.push(new vscode.Disposable(() => clients.dispose()));
 
   // Agent skill files the extension ships, installable into the workspace repo
   // (created before the nav so its row can badge pending updates).
@@ -83,7 +105,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       NavViewProvider.viewId,
-      new NavViewProvider(context.extensionUri, client, skills),
+      new NavViewProvider(context.extensionUri, clients, skills),
     ),
   );
 
@@ -175,43 +197,37 @@ export function activate(context: vscode.ExtensionContext): void {
   status.show();
   context.subscriptions.push(status);
 
-  // ── Bridge: live in-sim link + Lua console (client created above) ──
-  // A status item reflecting the live bridge connection; click opens the console.
+  // ── Bridges: live in-sim links + Lua console (clients created above) ──
+  // A status item reflecting both bridges; click opens the console. The
+  // rendering rule is pure (statusBarView) and covered by domain tests.
   const bridgeStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
   bridgeStatus.command = "dcs.bridge.console";
   context.subscriptions.push(
     bridgeStatus,
-    client.onStatus((s) => {
-      if (!s.connected) {
-        bridgeStatus.text = "$(debug-disconnect) DCS: offline";
-        bridgeStatus.tooltip = "The in-sim bridge isn't reachable. Launch DCS (or Inject + restart it).";
-      } else if (s.dcsTime && s.dcsTime > 0) {
-        bridgeStatus.text = `$(rocket) DCS: mission ${s.dcsTime.toFixed(0)}s`;
-        bridgeStatus.tooltip = "Bridge connected — mission running. Click for the Lua console.";
-      } else {
-        bridgeStatus.text = "$(plug) DCS: at menu";
-        bridgeStatus.tooltip = "Bridge connected — at the menu. Click for the Lua console.";
-      }
+    clients.onStatus((s) => {
+      const view = statusBarView(s);
+      bridgeStatus.text = view.text;
+      bridgeStatus.tooltip = view.tooltip;
     }),
   );
   bridgeStatus.show();
-  client.start();
+  clients.start();
 
   context.subscriptions.push(
     vscode.commands.registerCommand("dcs.setup.open", () => SetupPanel.show(context, detect)),
-    vscode.commands.registerCommand("dcs.bridge.console", () => ConsolePanel.show(context, client)),
+    vscode.commands.registerCommand("dcs.bridge.console", () => ConsolePanel.show(context, clients)),
     vscode.commands.registerCommand("dcs.bridge.inject", () => injectCommand(context)),
     vscode.commands.registerCommand("dcs.bridge.eject", () => ejectCommand()),
     vscode.commands.registerCommand("dcs.bridge.launch", async () => {
       await launchDcs(context);
-      client.reconnect();
+      clients.reconnect();
     }),
     vscode.commands.registerCommand("dcs.bridge.build", () => buildBridge(context)),
   );
 
-  // ── Debugger: run/debug Lua inside DCS (mission + hooks envs) over the bridge ──
+  // ── Debugger: run/debug Lua inside DCS (mission + hooks envs) over the bridges ──
   context.subscriptions.push(
-    vscode.debug.registerDebugAdapterDescriptorFactory(DEBUG_TYPE, new DcsDebugAdapterFactory(client)),
+    vscode.debug.registerDebugAdapterDescriptorFactory(DEBUG_TYPE, new DcsDebugAdapterFactory(clients)),
     vscode.debug.registerDebugConfigurationProvider(DEBUG_TYPE, new DcsDebugConfigProvider()),
   );
   registerDebugCommands(context);

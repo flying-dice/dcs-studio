@@ -1,19 +1,21 @@
 import * as vscode from "vscode";
-import { BridgeClient, DebugEnv } from "../bridge/client";
+import { DebugEnv } from "../bridge/client";
+import { BridgeClients } from "../bridge/clients";
 import { DcsDebugAdapter } from "./adapter";
 import { showError } from "../errors";
 
 export const DEBUG_TYPE = "dcs-lua";
 
-/** Inline adapter: runs in the extension host and shares the one BridgeClient. */
+/** Inline adapter: runs in the extension host and shares the extension's two
+ * bridge clients (the adapter picks the one serving the session's env). */
 export class DcsDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory {
-  constructor(private readonly client: BridgeClient) {}
+  constructor(private readonly clients: BridgeClients) {}
 
   createDebugAdapterDescriptor(
     session: vscode.DebugSession,
   ): vscode.ProviderResult<vscode.DebugAdapterDescriptor> {
     return new vscode.DebugAdapterInlineImplementation(
-      new DcsDebugAdapter(this.client, session.configuration),
+      new DcsDebugAdapter(this.clients, session.configuration),
     );
   }
 }

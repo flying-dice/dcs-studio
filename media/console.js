@@ -1,6 +1,8 @@
 // @ts-nocheck
-// DCS Lua Console UI: two tabs over one bridge connection, with a target
+// DCS Lua Console UI: two tabs over the two bridge connections (GUI bridge on
+// 25569; mission bridge on 25570, only up during a mission), with a target
 // environment picker (GUI/hooks, mission scripting env, or another net state).
+// The host routes each call to the env's bridge.
 //  Console  — send Lua via `eval`; results render here, `print` output from any
 //             env streams in from the host's console_read poll.
 //  Explorer — inspect an expression and drill into the resulting Lua tables
@@ -11,7 +13,10 @@
   const persisted = vscode.getState() || {};
   const history = persisted.history || [];
   let histIdx = history.length;
-  let status = { connected: false, dcsTime: null };
+  let status = {
+    gui: { connected: false, dcsTime: null },
+    mission: { connected: false, dcsTime: null },
+  };
   let env = persisted.env || "gui";
   let activeTab = persisted.tab || "console";
 
@@ -252,27 +257,44 @@
     treeEl.innerHTML = "";
   });
 
-  // --- Status line ---
+  // --- Status line (two bridges: gui always up with DCS, mission only during a mission) ---
   function renderStatus() {
+    const gui = status.gui || { connected: false, dcsTime: null };
+    const mission = status.mission || { connected: false, dcsTime: null };
+    const simTime = mission.connected && mission.dcsTime != null ? mission.dcsTime : gui.dcsTime;
     let offline = false;
-    if (!status.connected) {
+    if (!gui.connected && !mission.connected) {
       dot.className = "dot off";
       statusLabel.textContent = "Bridge offline — start DCS (or Inject + restart it)";
       statusTime.textContent = "";
       offline = true;
-    } else if (status.dcsTime && status.dcsTime > 0) {
+    } else if (mission.connected) {
       dot.className = "dot mission";
       statusLabel.textContent = "Mission running";
-      statusTime.textContent = "sim t = " + status.dcsTime.toFixed(1) + "s";
+      statusTime.textContent = simTime > 0 ? "sim t = " + simTime.toFixed(1) + "s" : "";
+    } else if (gui.dcsTime > 0) {
+      dot.className = "dot menu";
+      statusLabel.textContent = "Mission running — mission bridge offline";
+      statusTime.textContent = "sim t = " + gui.dcsTime.toFixed(1) + "s";
     } else {
       dot.className = "dot menu";
       statusLabel.textContent = "Connected — at menu (no mission)";
       statusTime.textContent = "";
     }
-    envWarn.textContent =
-      status.connected && env === "mission" && !(status.dcsTime > 0) ? "needs a running mission" : "";
-    runBtn.disabled = offline;
-    inspectBtn.disabled = offline;
+    // The selected env's bridge drives the warning and the buttons.
+    let warn = "";
+    if (env === "mission" && !mission.connected) {
+      warn =
+        gui.dcsTime > 0
+          ? "mission bridge offline — desanitize MissionScripting.lua and restart the mission"
+          : "needs a running mission";
+    } else if (env !== "mission" && !gui.connected) {
+      warn = "GUI bridge offline";
+    }
+    envWarn.textContent = warn;
+    const envDown = env === "mission" ? !mission.connected : !gui.connected;
+    runBtn.disabled = offline || envDown;
+    inspectBtn.disabled = offline || envDown;
   }
   renderStatus();
   setTab(activeTab);

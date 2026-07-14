@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
-import { BridgeClient, BridgeStatus } from "../bridge/client";
+import { BridgeClients } from "../bridge/clients";
+import { DualBridgeStatus, displayTime } from "../core/domain/bridgeProtocol";
 import { SkillsManager } from "../skills/manager";
 
 // The sidebar as website-style page navigation: a WebviewView rendering a logo
@@ -17,7 +18,7 @@ export class NavViewProvider implements vscode.WebviewViewProvider {
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly client: BridgeClient,
+    private readonly clients: BridgeClients,
     private readonly skills: SkillsManager,
   ) {}
 
@@ -34,7 +35,7 @@ export class NavViewProvider implements vscode.WebviewViewProvider {
     });
 
     this.statusSub?.dispose();
-    this.statusSub = this.client.onStatus((s) => this.postStatus(s));
+    this.statusSub = this.clients.onStatus((s) => this.postStatus(s));
 
     // Badge the Agent Skills row when an installed skill file is outdated.
     this.skillsSub?.dispose();
@@ -55,8 +56,13 @@ export class NavViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private postStatus(s: BridgeStatus): void {
-    void this.view?.webview.postMessage({ type: "status", status: s });
+  private postStatus(s: DualBridgeStatus): void {
+    // The footer only needs the coarse single-status shape: connected when
+    // either bridge is up; dcsTime > 0 reads as "mission running".
+    void this.view?.webview.postMessage({
+      type: "status",
+      status: { connected: s.gui.connected || s.mission.connected, dcsTime: displayTime(s) },
+    });
   }
 
   private async postSkillsState(): Promise<void> {

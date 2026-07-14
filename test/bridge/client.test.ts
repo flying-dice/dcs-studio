@@ -237,37 +237,28 @@ describe("BridgeClient over a scripted transport", () => {
     expect(client.current.connected).toBe(true);
   });
 
-  it("replEval completes a forwarded mission job via repl_poll", async () => {
+  it("replEval answers synchronously for every env (no repl_poll machinery)", async () => {
     open();
     const p = client.replEval("mission", "return 1");
     const req = lastSent(transport);
     expect(req).toMatchObject({ method: "repl_eval", params: { env: "mission", code: "return 1" } });
-    // The bridge forwards mission work to the resident runtime and answers
-    // pending+token; the client must poll repl_poll until the result lands.
     transport.last.handlers.onMessage?.(
-      JSON.stringify({ id: req.id, result: { pending: true, token: 7 } }),
-    );
-    await vi.advanceTimersByTimeAsync(300);
-    const poll1 = lastSent(transport);
-    expect(poll1).toMatchObject({ method: "repl_poll", params: { token: 7 } });
-    transport.last.handlers.onMessage?.(JSON.stringify({ id: poll1.id, result: { pending: true } }));
-    await vi.advanceTimersByTimeAsync(300);
-    const poll2 = lastSent(transport);
-    expect(poll2).toMatchObject({ method: "repl_poll", params: { token: 7 } });
-    transport.last.handlers.onMessage?.(
-      JSON.stringify({ id: poll2.id, result: { ok: true, result: 1 } }),
+      JSON.stringify({ id: req.id, result: { ok: true, result: 1 } }),
     );
     await expect(p).resolves.toEqual({ ok: true, result: 1 });
+    expect(transport.last.sent.filter((s) => s.includes("repl_poll")).length).toBe(0);
   });
 
-  it("replEval returns a direct-env result without polling", async () => {
-    open();
-    const p = client.replEval("gui", "return 2");
-    const req = lastSent(transport);
-    transport.last.handlers.onMessage?.(
-      JSON.stringify({ id: req.id, result: { ok: true, result: 2 } }),
-    );
-    await expect(p).resolves.toEqual({ ok: true, result: 2 });
-    expect(transport.last.sent.filter((s) => s.includes("repl_poll")).length).toBe(0);
+  it("names the bridge via its label in error messages", async () => {
+    const t2 = new FakeTransport();
+    const mission = new BridgeClient("127.0.0.1", 25570, t2, "Mission bridge");
+    await expect(mission.call("ping")).rejects.toThrow("Mission bridge not connected");
+    mission.start();
+    t2.last.handlers.onOpen?.();
+    const p = mission.call("slow", {}, 5000);
+    p.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(5000);
+    await expect(p).rejects.toThrow("Mission bridge call 'slow' timed out");
+    mission.dispose();
   });
 });

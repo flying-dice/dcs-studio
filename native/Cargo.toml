@@ -1,28 +1,31 @@
-# The in-DCS bridge, ported self-contained into the extension repo (from
-# dcs-studio's crates/dcs-bridge). Produces dcs_studio.dll — an mlua cdylib +
-# actix WebSocket JSON-RPC server loaded by the GameGUI hook. The two former
-# path deps (dcs-bridge-client, dcs-studio-project) are vendored down to the
-# three modules actually used — src/protocol.rs, src/luadef.rs, src/path_guard.rs
-# — so nothing here pulls in the Lua language engine.
-[package]
-name = "dcs-bridge"
-version = "0.1.4"
+# The in-DCS bridge workspace. Two cdylibs share one core:
+#   crates/bridge-core    — rlib: debugger, JSON-RPC server/router, protocol,
+#                           Lua surface modules, embedded rt/debug-engine Lua.
+#   crates/bridge-gui     — dcs_studio_gui.dll, loaded by the GameGUI hook
+#                           (bridge/Scripts/Hooks/DcsStudio.lua), serves
+#                           JSON-RPC on 127.0.0.1:25569.
+#   crates/bridge-mission — dcs_studio_mission.dll, loaded into the mission
+#                           scripting state by the GUI hook's boot dispatch,
+#                           serves JSON-RPC on 127.0.0.1:25570.
+#
+# Each cdylib gets its OWN copy of every static in bridge-core — statics are
+# never shared across DLL images. That is by design: each DLL owns the
+# debugger/server state for exactly one Lua state.
+[workspace]
+resolver = "2"
+members = [
+    "crates/bridge-core",
+    "crates/bridge-gui",
+    "crates/bridge-mission",
+]
+
+[workspace.package]
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 
-# The package keeps the name `dcs-bridge`, but the cdylib is `dcs_studio.dll`:
-# mlua derives `luaopen_dcs_studio` from the lib name and `require("dcs_studio")`
-# resolves the DLL basename.
-[lib]
-name = "dcs_studio"
-crate-type = ["cdylib"]
-
-[features]
-# Gates src/luadef.rs's round-trip tests, which need dcs-studio's
-# dcs-lua-syntax parser crate (not ported into this repo).
-luadef-roundtrip = []
-
-[dependencies]
+[workspace.dependencies]
+dcs-bridge-core = { path = "crates/bridge-core" }
 mlua = { version = "0.10", features = ["lua51", "module", "serialize", "macros"] }
 tokio = { version = "1", features = ["full"] }
 actix-web = "4"

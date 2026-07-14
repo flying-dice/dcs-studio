@@ -2,14 +2,19 @@ import * as os from "os";
 import * as vscode from "vscode";
 import { exportFileBase, shouldOpenExport } from "../core/domain/bridgeConsole";
 import { fmtBytes } from "../core/domain/format";
-import { BridgeClient, BridgeStatus, LuaEnv } from "./client";
+import { DualBridgeStatus } from "../core/domain/bridgeProtocol";
+import { BridgeClient, LuaEnv } from "./client";
+import { BridgeClients } from "./clients";
 
-// The Lua console: a REPL against the live sim over the bridge, with a target
+// The Lua console: a REPL against the live sim over the bridges, with a target
 // environment picker (GUI/hooks, mission scripting env, or another net state).
-// Code runs via `repl_eval` and shows the return value; `print` output from any
-// env streams in via `console_read` polling. An Explorer tab drills into Lua
-// tables lazily (repl_inspect/repl_expand) and can export any table in full as
-// JSON: the sim writes the file, we copy it wherever the user picks.
+// Calls route to the bridge serving the chosen env: mission → the mission
+// bridge (port 25570), everything else → the GUI bridge. Code runs via
+// `repl_eval` and shows the return value; `print` output streams in via
+// `console_read` polling — each bridge has its OWN output ring, so both are
+// tailed. An Explorer tab drills into Lua tables lazily
+// (repl_inspect/repl_expand) and can export any table in full as JSON: the sim
+// writes the file, we copy it wherever the user picks.
 export class ConsolePanel {
   public static current: ConsolePanel | undefined;
   private static readonly viewType = "dcsStudio.console";
@@ -17,9 +22,11 @@ export class ConsolePanel {
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
   private pollTimer: ReturnType<typeof setInterval> | undefined;
-  private lastSeq = 0;
+  /** Per-bridge tail state. A reconnect means the server (and its ring)
+   * restarted — reset the cursor so the fresh ring is read from the start. */
+  private readonly tails = new Map<BridgeClient, { lastSeq: number; wasConnected: boolean }>();
 
-  static show(context: vscode.ExtensionContext, client: BridgeClient): void {
+  static show(context: vscode.ExtensionContext, clients: BridgeClients): void {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
     if (ConsolePanel.current) {
       ConsolePanel.current.panel.reveal(column);
@@ -30,23 +37,26 @@ export class ConsolePanel {
       retainContextWhenHidden: true,
       localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
     });
-    ConsolePanel.current = new ConsolePanel(panel, context, client);
+    ConsolePanel.current = new ConsolePanel(panel, context, clients);
   }
 
   private constructor(
     panel: vscode.WebviewPanel,
     context: vscode.ExtensionContext,
-    private readonly client: BridgeClient,
+    private readonly clients: BridgeClients,
   ) {
     this.panel = panel;
     this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html(context);
 
+    this.tails.set(clients.gui, { lastSeq: 0, wasConnected: false });
+    this.tails.set(clients.mission, { lastSeq: 0, wasConnected: false });
+
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
-    this.disposables.push(this.client.onStatus((s) => this.postStatus(s)));
+    this.disposables.push(this.clients.onStatus((s) => this.postStatus(s)));
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
 
-    // Stream sim `print` output while connected.
+    // Stream sim `print` output from BOTH bridges while connected.
     this.pollTimer = setInterval(() => void this.poll(), 1000);
   }
 
@@ -63,11 +73,12 @@ export class ConsolePanel {
     label?: string;
   }): Promise<void> {
     const env: LuaEnv = msg.env ?? "gui";
+    const client = this.clients.forEnv(env);
     switch (msg.type) {
       case "eval": {
         if (typeof msg.code !== "string") return;
         try {
-          const r = await this.client.replEval(env, msg.code);
+          const r = await client.replEval(env, msg.code);
           if (r.ok) this.post({ type: "result", value: r.result === undefined ? null : r.result });
           else this.post({ type: "error", message: r.err || "error" });
         } catch (e) {
@@ -78,7 +89,7 @@ export class ConsolePanel {
       case "inspect": {
         if (typeof msg.expr !== "string") return;
         try {
-          const r = await this.client.replInspect(env, msg.expr);
+          const r = await client.replInspect(env, msg.expr);
           this.post({ type: "inspectResult", id: msg.id, env, expr: msg.expr, ...r });
         } catch (e) {
           this.post({ type: "inspectResult", id: msg.id, env, expr: msg.expr, ok: false, err: errText(e) });
@@ -88,7 +99,7 @@ export class ConsolePanel {
       case "expand": {
         if (typeof msg.ref !== "number") return;
         try {
-          const r = await this.client.replExpand(env, msg.ref);
+          const r = await client.replExpand(env, msg.ref);
           this.post({ type: "expandResult", nodeId: msg.nodeId, ok: true, variables: r.variables ?? [] });
         } catch (e) {
           this.post({ type: "expandResult", nodeId: msg.nodeId, ok: false, err: errText(e) });
@@ -96,11 +107,12 @@ export class ConsolePanel {
         break;
       }
       case "clearExplorer": {
-        // Release sim-side refs in every env the tree touched; an env that is
-        // gone (mission ended) has nothing to release — ignore its error.
+        // Release sim-side refs in every env the tree touched (routed to the
+        // env's own bridge); an env that is gone (mission ended) has nothing
+        // to release — ignore its error.
         for (const e of msg.envs ?? []) {
           try {
-            await this.client.replClear(e);
+            await this.clients.forEnv(e).replClear(e);
           } catch {
             /* state gone; nothing held */
           }
@@ -125,7 +137,9 @@ export class ConsolePanel {
     msg: { ref?: number; expr?: string; label?: string; reqId?: number },
   ): Promise<void> {
     try {
-      const { path, bytes } = await this.client.replExport(env, { ref: msg.ref, expr: msg.expr });
+      const { path, bytes } = await this.clients
+        .forEnv(env)
+        .replExport(env, { ref: msg.ref, expr: msg.expr });
       const temp = vscode.Uri.file(path);
       const base = exportFileBase(msg.label);
       const folder = vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(os.homedir());
@@ -154,21 +168,37 @@ export class ConsolePanel {
   }
 
   private async poll(): Promise<void> {
-    if (!this.client.current.connected) return;
+    await Promise.all([this.pollOne(this.clients.gui), this.pollOne(this.clients.mission)]);
+  }
+
+  private async pollOne(client: BridgeClient): Promise<void> {
+    const tail = this.tails.get(client);
+    if (!tail) return;
+    const connected = client.current.connected;
+    if (!connected) {
+      tail.wasConnected = false;
+      return;
+    }
+    if (!tail.wasConnected) {
+      // Fresh connection = the server restarted with a fresh ring (both
+      // servers outlive missions and only restart with DCS) — read it from 0.
+      tail.wasConnected = true;
+      tail.lastSeq = 0;
+    }
     try {
-      const { lines, latest } = await this.client.consoleRead(this.lastSeq);
+      const { lines, latest } = await client.consoleRead(tail.lastSeq);
       if (lines.length) {
-        this.lastSeq = latest;
+        tail.lastSeq = latest;
         this.post({ type: "print", lines });
-      } else if (latest > this.lastSeq) {
-        this.lastSeq = latest;
+      } else if (latest > tail.lastSeq) {
+        tail.lastSeq = latest;
       }
     } catch {
       /* transient; next tick retries */
     }
   }
 
-  private postStatus(s: BridgeStatus): void {
+  private postStatus(s: DualBridgeStatus): void {
     this.post({ type: "status", status: s });
   }
 

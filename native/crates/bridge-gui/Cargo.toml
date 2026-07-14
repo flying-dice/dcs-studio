@@ -1,0 +1,16 @@
+# The GUI bridge: loaded by the GameGUI hook, serves 127.0.0.1:25569.
+[package]
+name = "dcs-bridge-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# mlua derives `luaopen_dcs_studio_gui` from the lib name and
+# require("dcs_studio_gui") resolves the DLL basename — the two must match.
+[lib]
+name = "dcs_studio_gui"
+crate-type = ["cdylib"]
+
+[dependencies]
+dcs-bridge-core.workspace = true
+mlua.workspace = true

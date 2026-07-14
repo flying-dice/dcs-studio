@@ -1,11 +1,13 @@
 import { describe, it, expect } from "vitest";
 import * as path from "node:path";
 import {
+  BIN_RELATIVE_DIR,
+  BRIDGE_DLLS,
   DCS_LAUNCH_ARGS,
-  DLL_RELATIVE_PATH,
   HOOK_RELATIVE_PATH,
   INJECT_LOCKED_MESSAGE,
   LAUNCH_LOCKED_MESSAGE,
+  LEGACY_RELATIVE_PATHS,
   builtDllPath,
   dcsBinDir,
   dcsExePath,
@@ -15,6 +17,7 @@ import {
   hookSourcePath,
   injectedMessage,
   isDllLockedError,
+  legacyInstallPaths,
   selectDll,
   shippedDllPath,
   shouldEjectOnShutdown,
@@ -24,27 +27,45 @@ const ROOT = path.join("C:", "ext");
 const WRITE = path.join("C:", "Users", "me", "Saved Games", "DCS");
 
 describe("install layout", () => {
-  it("uses the dcs-studio layout inside the write dir", () => {
-    expect(DLL_RELATIVE_PATH).toBe(path.join("Mods", "tech", "DcsStudio", "bin", "dcs_studio.dll"));
+  it("installs both bridge DLLs into the dcs-studio bin dir", () => {
+    expect([...BRIDGE_DLLS]).toEqual(["dcs_studio_gui.dll", "dcs_studio_mission.dll"]);
+    expect(BIN_RELATIVE_DIR).toBe(path.join("Mods", "tech", "DcsStudio", "bin"));
     expect(HOOK_RELATIVE_PATH).toBe(path.join("Scripts", "Hooks", "DcsStudio.lua"));
-    expect(dllInstallPath(WRITE)).toBe(path.join(WRITE, DLL_RELATIVE_PATH));
+    for (const name of BRIDGE_DLLS) {
+      expect(dllInstallPath(WRITE, name)).toBe(path.join(WRITE, BIN_RELATIVE_DIR, name));
+    }
     expect(hookInstallPath(WRITE)).toBe(path.join(WRITE, HOOK_RELATIVE_PATH));
+  });
+
+  it("targets the single-DLL-era artifacts for cleanup", () => {
+    expect(LEGACY_RELATIVE_PATHS).toEqual([
+      path.join(BIN_RELATIVE_DIR, "dcs_studio.dll"),
+      path.join(BIN_RELATIVE_DIR, "dcs_bridge.dll"),
+      path.join("Scripts", "DcsStudioMission.lua"),
+    ]);
+    expect(legacyInstallPaths(WRITE)).toEqual(
+      LEGACY_RELATIVE_PATHS.map((p) => path.join(WRITE, p)),
+    );
   });
 });
 
 describe("DLL selection (built vs shipped)", () => {
-  it("computes both candidate paths from the extension root", () => {
-    expect(builtDllPath(ROOT)).toBe(path.join(ROOT, "native", "target", "release", "dcs_studio.dll"));
-    expect(shippedDllPath(ROOT)).toBe(path.join(ROOT, "bridge", "dcs_studio.dll"));
+  it("computes both candidate paths from the extension root, per DLL", () => {
+    for (const name of BRIDGE_DLLS) {
+      expect(builtDllPath(ROOT, name)).toBe(path.join(ROOT, "native", "target", "release", name));
+      expect(shippedDllPath(ROOT, name)).toBe(path.join(ROOT, "bridge", name));
+    }
     expect(hookSourcePath(ROOT)).toBe(path.join(ROOT, "bridge", "Scripts", "Hooks", "DcsStudio.lua"));
   });
 
-  it("prefers the freshly built crate when it exists", () => {
-    expect(selectDll(ROOT, true)).toBe(builtDllPath(ROOT));
+  it("prefers the freshly built workspace artifact when it exists", () => {
+    expect(selectDll(ROOT, "dcs_studio_gui.dll", true)).toBe(builtDllPath(ROOT, "dcs_studio_gui.dll"));
   });
 
   it("falls back to the shipped DLL when there is no build", () => {
-    expect(selectDll(ROOT, false)).toBe(shippedDllPath(ROOT));
+    expect(selectDll(ROOT, "dcs_studio_mission.dll", false)).toBe(
+      shippedDllPath(ROOT, "dcs_studio_mission.dll"),
+    );
   });
 });
 
@@ -64,9 +85,9 @@ describe("locked-DLL classification", () => {
 
   it("carries the exact user-facing messages", () => {
     expect(INJECT_LOCKED_MESSAGE).toBe(
-      "Could not overwrite dcs_studio.dll — DCS appears to be running. Close DCS and inject again.",
+      "Could not overwrite the bridge DLLs — DCS appears to be running. Close DCS and inject again.",
     );
-    expect(LAUNCH_LOCKED_MESSAGE).toBe("Bridge DLL is locked — is DCS already running?");
+    expect(LAUNCH_LOCKED_MESSAGE).toBe("A bridge DLL is locked — is DCS already running?");
   });
 });
 

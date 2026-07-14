@@ -14,6 +14,99 @@ export interface BridgeStatus {
 /** The status before the first successful connect. */
 export const INITIAL_BRIDGE_STATUS: BridgeStatus = { connected: false, dcsTime: null };
 
+// ── Two bridges: GUI (GameGUI hook state) and mission (mission scripting state) ──
+// Each is its own DLL with its own JSON-RPC server; the mission bridge is only
+// reachable while a mission is running (its DLL is booted into the mission
+// state by the GUI hook at mission start, and needs a desanitized
+// MissionScripting.lua).
+
+export const GUI_BRIDGE_PORT = 25569;
+export const MISSION_BRIDGE_PORT = 25570;
+
+/** Which bridge serves a given Lua environment. */
+export type BridgeId = "gui" | "mission";
+
+/** Routing rule: the mission env is served by the mission bridge; everything
+ * else (gui, and the server/config/export net states reached via
+ * net.dostring_in from the GUI state) by the GUI bridge. */
+export function bridgeForEnv(env: string): BridgeId {
+  return env === "mission" ? "mission" : "gui";
+}
+
+/** Both bridges' live statuses, as one value for the UI. */
+export interface DualBridgeStatus {
+  gui: BridgeStatus;
+  mission: BridgeStatus;
+}
+
+export const INITIAL_DUAL_STATUS: DualBridgeStatus = {
+  gui: INITIAL_BRIDGE_STATUS,
+  mission: INITIAL_BRIDGE_STATUS,
+};
+
+/** Coarse combined state for footers/badges: mission-bridge connectivity (or a
+ * gui-reported mission time) means a mission is running. */
+export type CombinedState = "offline" | "menu" | "mission";
+
+export function combinedState(s: DualBridgeStatus): CombinedState {
+  if (s.mission.connected || (s.gui.connected && (s.gui.dcsTime ?? 0) > 0)) return "mission";
+  if (s.gui.connected) return "menu";
+  return "offline";
+}
+
+/** The sim time to display: the mission bridge's own clock when connected,
+ * else the GUI bridge's mirror of it. */
+export function displayTime(s: DualBridgeStatus): number | null {
+  if (s.mission.connected && s.mission.dcsTime !== null) return s.mission.dcsTime;
+  return s.gui.dcsTime;
+}
+
+/** Status-bar rendering for the dual status (pure, testable). */
+export function statusBarView(s: DualBridgeStatus): { text: string; tooltip: string } {
+  if (!s.gui.connected && !s.mission.connected) {
+    return {
+      text: "$(debug-disconnect) DCS: offline",
+      tooltip: "Neither bridge is reachable. Launch DCS (or Inject + restart it).",
+    };
+  }
+  const t = displayTime(s);
+  if (s.mission.connected) {
+    return {
+      text: `$(rocket) DCS: mission ${t && t > 0 ? t.toFixed(0) + "s" : ""}`.trimEnd(),
+      tooltip: "GUI and mission bridges connected — mission running. Click for the Lua console.",
+    };
+  }
+  if ((s.gui.dcsTime ?? 0) > 0) {
+    return {
+      text: "$(warning) DCS: mission (no mission bridge)",
+      tooltip:
+        "A mission is running but the mission bridge (port 25570) isn't reachable. " +
+        "MissionScripting.lua may be sanitized — run “DCS Studio: Desanitize MissionScripting.lua” and restart the mission.",
+    };
+  }
+  return {
+    text: "$(plug) DCS: at menu",
+    tooltip: "GUI bridge connected — at the menu. The mission bridge starts with a mission. Click for the Lua console.",
+  };
+}
+
+/**
+ * Why a mission-env action can't proceed right now, or null when the mission
+ * bridge is up. `sanitized` is the on-disk MissionScripting.lua scan (true =
+ * lockdown active → the mission bridge cannot boot); pass undefined when the
+ * file can't be read.
+ */
+export function missionStartFailure(s: DualBridgeStatus, sanitized?: boolean): string | null {
+  if (s.mission.connected) return null;
+  if (!s.gui.connected) {
+    return "The DCS bridge is not connected. Launch DCS with the bridge (command: “DCS Studio: Launch DCS (with bridge)”) and wait for the status bar to show DCS online.";
+  }
+  if (sanitized) {
+    return "The mission bridge is not connected: MissionScripting.lua is sanitized, so it cannot load. Run “DCS Studio: Desanitize MissionScripting.lua”, restart DCS, then start a mission.";
+  }
+  return "The mission bridge is not connected — start a mission in DCS (it boots automatically a moment after mission start and only runs while a mission is loaded).";
+}
+
 // Reconnect backoff: 1000ms, then ×1.6 each attempt, capped at 10000ms.
 export const BRIDGE_INITIAL_BACKOFF_MS = 1000;
 export const BRIDGE_MAX_BACKOFF_MS = 10000;
@@ -83,14 +176,15 @@ export function dcsTimeFromPing(r: { dcs_time?: number } | undefined): number | 
 
 // ── Bridge payload types (shared by the client shell and the DAP translation) ──
 
-/** Lua state a console call targets. "gui" is the hooks env the bridge runs in;
- * "mission" is the mission scripting env (needs a running mission); the rest
- * are DCS's other net states, reached via net.dostring_in. */
+/** Lua state a console call targets. "gui" is the hooks env the GUI bridge
+ * runs in; "mission" is the mission scripting env, served directly by the
+ * mission bridge (needs a running mission); the rest are DCS's other net
+ * states, reached via net.dostring_in from the GUI bridge. */
 export type LuaEnv = "gui" | "mission" | "server" | "config" | "export";
 
-/** Lua state a debug session runs in. The engine supports the hooks env it
- * lives in ("gui") and the mission scripting sandbox ("mission", dispatched
- * via a_do_script; needs a running mission + desanitized MissionScripting.lua). */
+/** Lua state a debug session runs in — each served by its own bridge: "gui"
+ * by the GUI bridge (port 25569), "mission" by the mission bridge (port
+ * 25570, alive only while a mission runs). */
 export type DebugEnv = "gui" | "mission";
 
 export interface ReplVariable {
@@ -146,4 +240,27 @@ export interface DebugValue {
   ref?: number;
   /** Set when the expression was a top-level `name = value` assignment. */
   assigned?: boolean;
+}
+
+// ── rpc.discover (agent-facing method catalog; every field tolerant) ──
+
+export interface DiscoverParam {
+  name: string;
+  type?: string;
+  required?: boolean;
+  description?: string;
+}
+
+export interface DiscoverMethod {
+  name: string;
+  description?: string;
+  params?: DiscoverParam[];
+}
+
+/** The result of calling `rpc.discover` on either bridge. */
+export interface DiscoverResult {
+  service?: string;
+  env?: string;
+  version?: string;
+  methods?: DiscoverMethod[];
 }

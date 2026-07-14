@@ -2,6 +2,10 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 import { BridgeClient, DebugEnv, DebugState } from "../bridge/client";
+import { BridgeClients } from "../bridge/clients";
+import { missionStartFailure } from "../core/domain/bridgeProtocol";
+import { scanItems } from "../core/domain/missionSanitize";
+import { missionScriptPath } from "../mission/missionPanel";
 import {
   INITIAL_TRACKING,
   SessionEvent,
@@ -27,10 +31,12 @@ import { showError } from "../errors";
 //
 // VS Code's debugger UI speaks DAP; the in-sim engine speaks the bridge's
 // JSON-RPC (debug_run / debug_state / debug_continue / debug_expand /
-// debug_eval / debug_set_breakpoints — see bridge/Scripts/Hooks/DcsStudio.lua).
-// This adapter is the stateful shell, run in-process via
-// DebugAdapterInlineImplementation so it can share the extension's single
-// BridgeClient connection. Every translation decision (chunkname↔path rules,
+// debug_eval / debug_set_breakpoints). Each session talks to the bridge that
+// owns its environment: env=gui → the GUI bridge (port 25569), env=mission →
+// the mission bridge (port 25570, alive only while a mission runs). This
+// adapter is the stateful shell, run in-process via
+// DebugAdapterInlineImplementation so it can share the extension's two
+// BridgeClient connections. Every translation decision (chunkname↔path rules,
 // stop-reason mapping, pause_id dedupe, snapshot→DAP shapes, the poll state
 // machine) is pure and lives in core/domain/dapTranslation.
 //
@@ -66,6 +72,8 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
   private seq = 1;
   private config: DcsLaunchConfig;
   private env: DebugEnv = "mission";
+  /** The client serving this session's env; re-selected when launch fixes the env. */
+  private client: BridgeClient;
 
   /** Full breakpoint state per file, keyed by lower-cased path (pushed whole per source). */
   private readonly breakpoints = new Map<string, { fsPath: string; bps: StoredBreakpoint[] }>();
@@ -82,10 +90,12 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
   private polling = false;
 
   constructor(
-    private readonly client: BridgeClient,
+    private readonly clients: BridgeClients,
     config: vscode.DebugConfiguration,
   ) {
     this.config = config as DcsLaunchConfig;
+    this.env = this.config.env === "gui" ? "gui" : "mission";
+    this.client = clients.forEnv(this.env);
   }
 
   handleMessage(message: vscode.DebugProtocolMessage): void {
@@ -146,6 +156,7 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
         case "launch":
           this.config = { ...this.config, ...(req.arguments as DcsLaunchConfig) };
           this.env = this.config.env === "gui" ? "gui" : "mission";
+          this.client = this.clients.forEnv(this.env);
           this.respond(req);
           break;
         case "setBreakpoints":
@@ -220,9 +231,14 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
     }
 
     if (!this.client.current.connected) {
-      this.abort(
-        "The DCS bridge is not connected. Launch DCS with the bridge (command: “DCS Studio: Launch DCS (with bridge)”) and wait for the status bar to show DCS online.",
-      );
+      // env=mission gets the precise reason (no mission running vs sanitized
+      // MissionScripting.lua vs DCS down); env=gui the generic launch nudge.
+      const message =
+        this.env === "mission"
+          ? (missionStartFailure(this.clients.current, missionSanitizedOnDisk()) ??
+            "The mission bridge is not connected.")
+          : "The DCS bridge is not connected. Launch DCS with the bridge (command: “DCS Studio: Launch DCS (with bridge)”) and wait for the status bar to show DCS online.";
+      this.abort(message);
       return;
     }
 
@@ -236,13 +252,6 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
     } catch (e) {
       this.abort(`Cannot read ${program}: ${e instanceof Error ? e.message : String(e)}`);
       return;
-    }
-
-    if (this.env === "mission" && !(this.client.current.dcsTime && this.client.current.dcsTime > 0)) {
-      this.output(
-        "Note: DCS reports no mission time — mission scripts need a running mission.",
-        "console",
-      );
     }
 
     // Output stream: start tailing AFTER the current ring position so a prior
@@ -480,4 +489,17 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
 /** Case-insensitive path equality (Windows drive letters, separators). */
 function samePath(a: string, b: string): boolean {
   return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+}
+
+/** Whether MissionScripting.lua on disk still has its lockdown active (the
+ * mission bridge can't boot then). undefined when the file can't be read. */
+function missionSanitizedOnDisk(): boolean | undefined {
+  const p = missionScriptPath();
+  if (!p) return undefined;
+  try {
+    const items = scanItems(fs.readFileSync(p, "utf8"));
+    return items.some((i) => i.present && i.sanitized);
+  } catch {
+    return undefined;
+  }
 }

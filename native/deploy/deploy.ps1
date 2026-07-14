@@ -1,7 +1,10 @@
 <#
 .SYNOPSIS
-Builds dcs_studio.dll and installs it + the DcsStudio.lua GameGUI hook into the
-DCS Saved Games write dir. Idempotent: safe to re-run after every rebuild.
+Builds both bridge DLLs (dcs_studio_gui.dll + dcs_studio_mission.dll) and
+installs them + the DcsStudio.lua GameGUI hook into the DCS Saved Games write
+dir. Idempotent: safe to re-run after every rebuild — but DCS must be CLOSED
+(it file-locks the DLLs once loaded; the mission DLL from the first mission
+until the process exits).
 
 .PARAMETER WriteDir
 Override the DCS write dir (e.g. a custom -w folder). When omitted, the script
@@ -17,22 +20,27 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# deploy.ps1 lives at <repo>\crates\dcs-bridge\deploy\ -> repo root is three up.
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
+# deploy.ps1 lives at <repo>\native\deploy\ -> repo root is two up; the cargo
+# workspace is <repo>\native (its .cargo/config.toml supplies LUA_LIB/LUA_LIB_NAME).
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$workspace = Join-Path $repoRoot "native"
 
-# 1. Build the DLL (root .cargo/config.toml supplies LUA_LIB/LUA_LIB_NAME).
-Write-Host "Building dcs-bridge (release) in $repoRoot ..."
-Push-Location $repoRoot
+# 1. Build both DLLs.
+Write-Host "Building the bridge workspace (release) in $workspace ..."
+Push-Location $workspace
 try {
-    cargo build -p dcs-bridge --release
-    if ($LASTEXITCODE -ne 0) { throw "cargo build -p dcs-bridge --release failed (exit $LASTEXITCODE)" }
+    cargo build --release -p dcs-bridge-gui -p dcs-bridge-mission
+    if ($LASTEXITCODE -ne 0) { throw "cargo build --release failed (exit $LASTEXITCODE)" }
 }
 finally {
     Pop-Location
 }
 
-$dll = Join-Path $repoRoot "target\release\dcs_studio.dll"
-if (-not (Test-Path $dll)) { throw "Build succeeded but '$dll' was not found" }
+$dlls = @("dcs_studio_gui.dll", "dcs_studio_mission.dll") | ForEach-Object {
+    $p = Join-Path $workspace "target\release\$_"
+    if (-not (Test-Path $p)) { throw "Build succeeded but '$p' was not found" }
+    $p
+}
 
 # 2. Locate the DCS write dir.
 if ($WriteDir) {
@@ -50,27 +58,48 @@ else {
 }
 Write-Host "Using DCS write dir: $WriteDir"
 
-# 3. Copy the DLL and the hook (creating directories as needed).
+# 3. Copy the DLLs and the hook (creating directories as needed). A locked DLL
+#    means DCS is running — surface that instead of a raw IO error.
 $binDir = Join-Path $WriteDir "Mods\tech\DcsStudio\bin"
 $hooksDir = Join-Path $WriteDir "Scripts\Hooks"
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 New-Item -ItemType Directory -Force -Path $hooksDir | Out-Null
 
-$dllTarget = Join-Path $binDir "dcs_studio.dll"
-$legacyDll = Join-Path $binDir "dcs_bridge.dll"
-$hookSource = Join-Path $PSScriptRoot "Scripts\Hooks\DcsStudio.lua"
-$hookTarget = Join-Path $hooksDir "DcsStudio.lua"
-
-Copy-Item -Path $dll -Destination $dllTarget -Force
-Write-Host "Copied $dll -> $dllTarget"
-
-# Drop a pre-rebrand dcs_bridge.dll so the hook can't load a stale module.
-if (Test-Path $legacyDll) {
-    Remove-Item -Path $legacyDll -Force
-    Write-Host "Removed legacy $legacyDll"
+foreach ($dll in $dlls) {
+    $target = Join-Path $binDir (Split-Path $dll -Leaf)
+    try {
+        Copy-Item -Path $dll -Destination $target -Force -ErrorAction Stop
+    }
+    catch {
+        throw "Cannot overwrite $target - DCS appears to be running (it locks the loaded DLLs). Close DCS and re-run. ($_)"
+    }
+    Write-Host "Copied $dll -> $target"
 }
 
+# Drop stale single-DLL-era artifacts: the old DLL names (they'd bind port
+# 25569 too) and the generated mission boot file the old hook wrote.
+$stale = @(
+    (Join-Path $binDir "dcs_studio.dll"),
+    (Join-Path $binDir "dcs_bridge.dll"),
+    (Join-Path $WriteDir "Scripts\DcsStudioMission.lua")
+)
+foreach ($p in $stale) {
+    if (Test-Path $p) {
+        Remove-Item -Path $p -Force
+        Write-Host "Removed stale $p"
+    }
+}
+
+# The canonical hook lives in bridge\Scripts\Hooks (what the extension ships).
+$hookSource = Join-Path $repoRoot "bridge\Scripts\Hooks\DcsStudio.lua"
+$hookTarget = Join-Path $hooksDir "DcsStudio.lua"
 Copy-Item -Path $hookSource -Destination $hookTarget -Force
 Write-Host "Copied $hookSource -> $hookTarget"
 
-Write-Host "Done. Restart DCS to (re)load the DCS Studio DLL; it listens on ws://127.0.0.1:25569/ws."
+# 4. Note the MissionScripting.lua prerequisite for the mission bridge.
+Write-Host ""
+Write-Host "Done. Restart DCS to (re)load the bridges:"
+Write-Host "  GUI bridge:     ws://127.0.0.1:25569/ws  (POST /rpc, GET /health) - up whenever DCS runs"
+Write-Host "  Mission bridge: ws://127.0.0.1:25570/ws  (POST /rpc, GET /health) - boots at mission start"
+Write-Host "The mission bridge needs a desanitized MissionScripting.lua (VS Code command:"
+Write-Host "'DCS Studio: Desanitize MissionScripting.lua'); otherwise its boot logs an error to dcs.log."

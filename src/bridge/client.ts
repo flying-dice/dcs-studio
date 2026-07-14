@@ -20,12 +20,14 @@ import {
 } from "../core/domain/bridgeProtocol";
 import { WsBridgeTransport } from "../adapters/node/wsTransport";
 
-// Editor-side WebSocket JSON-RPC client for the in-DCS bridge (dcs_studio.dll on
-// ws://127.0.0.1:25569/ws). Reconnects with backoff, pings for live status, and
-// matches responses to calls by string id (the bridge's serde rejects numeric
-// ids). Mirrors dcs-studio's dcs-bridge-client behaviour. This class is the
-// stateful shell — sockets via `BridgeTransportPort`, timers, the pending map —
-// over the pure protocol rules in core/domain/bridgeProtocol.
+// Editor-side WebSocket JSON-RPC client for one in-DCS bridge. Two instances
+// exist (see clients.ts): the GUI bridge (dcs_studio_gui.dll on
+// ws://127.0.0.1:25569/ws) and the mission bridge (dcs_studio_mission.dll on
+// ws://127.0.0.1:25570/ws, reachable only while a mission runs). Reconnects
+// with backoff, pings for live status, and matches responses to calls by
+// string id (the bridge's serde rejects numeric ids). This class is the
+// stateful shell — sockets via `BridgeTransportPort`, timers, the pending map
+// — over the pure protocol rules in core/domain/bridgeProtocol.
 export {
   BridgeStatus,
   LuaEnv,
@@ -60,6 +62,8 @@ export class BridgeClient {
     private readonly host = "127.0.0.1",
     private readonly port = 25569,
     transport?: BridgeTransportPort,
+    /** Names this bridge in user-facing error messages ("GUI bridge" / "Mission bridge"). */
+    private readonly label = "bridge",
   ) {
     this.transport = transport ?? new WsBridgeTransport();
   }
@@ -101,38 +105,20 @@ export class BridgeClient {
     }>;
   }
 
-  /** A repl_* call that transparently completes forwarded mission jobs. For
-   * the mission env the bridge answers `{ pending, token }` immediately (the
-   * resident mission runtime executes asynchronously — a_do_script cannot
-   * return values on DCS ≥ 2.9.27) and the result is collected via repl_poll
-   * once the sim ticks it through. Direct envs return their result as-is. */
-  private async replCall<T>(
+  /** A repl_* call. Every env answers synchronously now: mission calls go to
+   * the mission bridge directly (route via clients.forEnv), and the GUI
+   * bridge serves gui/server/config/export in-call. */
+  private replCall<T>(
     method: string,
     params: Record<string, unknown>,
     timeoutMs = 35000,
   ): Promise<T> {
-    const first = (await this.call(method, params, timeoutMs)) as
-      | T
-      | { pending?: boolean; token?: number };
-    const forwarded = first as { pending?: boolean; token?: number };
-    if (forwarded?.pending !== true || typeof forwarded.token !== "number") {
-      return first as T;
-    }
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 300));
-      const res = (await this.call("repl_poll", { token: forwarded.token }, 15000)) as
-        | T
-        | { pending?: boolean };
-      if ((res as { pending?: boolean })?.pending !== true) {
-        return res as T;
-      }
-    }
-    throw new Error("the mission did not answer in time — is the sim unpaused?");
+    return this.call(method, params, timeoutMs) as Promise<T>;
   }
 
   /** Run Lua in the chosen environment; { ok, result?, err? }. print() output
-   * lands in the console ring (streamed by consoleRead) for every env. */
+   * lands in this bridge's console ring (streamed by consoleRead). The mission
+   * bridge ignores `env` (it serves exactly one state). */
   replEval(env: LuaEnv, code: string): Promise<{ ok: boolean; result?: unknown; err?: string }> {
     return this.replCall("repl_eval", { env, code }, 35000);
   }
@@ -160,15 +146,14 @@ export class BridgeClient {
     return this.replCall("repl_export", params, 35000);
   }
 
-  // ── Debugger (drives the in-sim engine; see bridge/Scripts/Hooks/DcsStudio.lua) ──
+  // ── Debugger (drives this bridge's in-state engine) ──
 
   /** Start a debug session: run `code` (chunkname `source`) under the line
-   * hook in `env`. A gui run BLOCKS bridge-side for the whole session — never
-   * await the result as the end-of-session signal (the server drops responses
-   * after its 30s timeout); poll debugState instead. The resolved value is a
-   * fast-path result for short gui runs; a mission run resolves immediately
-   * with { dispatched: true } (the resident mission runtime executes it) and
-   * the poll loop owns the outcome entirely. */
+   * hook. The run BLOCKS bridge-side for the whole session — never await the
+   * result as the end-of-session signal (the server drops responses after its
+   * 30s timeout); poll debugState instead. The resolved value is a fast-path
+   * result for short runs. Route to the right bridge for `env` (the mission
+   * bridge rejects nothing; the GUI bridge rejects env ≠ gui). */
   debugRun(
     env: DebugEnv,
     source: string,
@@ -215,8 +200,9 @@ export class BridgeClient {
   }
 
   /** Replace one source's breakpoints (with optional per-line conditions).
-   * The registry is process-wide in the DLL: it works before and during a
-   * session, whichever Lua state is serving. Omit (don't null) absent conditions. */
+   * The registry lives in THIS bridge's DLL: send breakpoints to the bridge
+   * whose state runs the code. Works before and during a session (the paused
+   * state's own pump serves it). Omit (don't null) absent conditions. */
   debugSetBreakpoints(
     source: string,
     breakpoints: { line: number; condition?: string }[],
@@ -232,13 +218,13 @@ export class BridgeClient {
   call(method: string, params?: unknown, timeoutMs = 15000): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (!this.conn || !this.status.connected) {
-        reject(new Error("bridge not connected"));
+        reject(new Error(`${this.label} not connected`));
         return;
       }
       const id = formatRequestId(this.nextId++);
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`bridge call '${method}' timed out`));
+        reject(new Error(`${this.label} call '${method}' timed out`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.conn.send(JSON.stringify(buildRequest(method, id, params)));
@@ -273,7 +259,7 @@ export class BridgeClient {
 
   private onDisconnect(): void {
     this.stopPing();
-    this.failAll("bridge disconnected");
+    this.failAll(`${this.label} disconnected`);
     this.conn = undefined;
     this.emit({ connected: false, dcsTime: null });
     this.scheduleReconnect();

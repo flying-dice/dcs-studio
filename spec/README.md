@@ -112,8 +112,8 @@ Feature: DCS Studio extension
 | **Manifest** | `dcs-studio.toml` — project metadata, `[[install]]` rules, `[[dependencies]]`, `[[requires_module]]` |
 | **Named roots** | `{SavedGames}` and `{GameInstall}` — the two anchor points install destinations resolve against |
 | **Subscribe / enable** | Download+unpack into the data dir / link the unpacked files into DCS (junction, hard link or symlink) |
-| **Bridge** | The `dcs_studio.dll` + GameGUI hook pair serving JSON-RPC over a localhost WebSocket from inside DCS |
-| **Environments** | `mission` (sandboxed mission scripting) vs `gui` (GameGUI hooks, `DCS.*`/`net.*`) — plus server/config/export net states in the console |
+| **Bridge** | The in-DCS JSON-RPC servers: `dcs_studio_gui.dll` (GameGUI hook state, port 25569) + `dcs_studio_mission.dll` (mission scripting state, port 25570, booted by the hook at mission start), installed with the `DcsStudio.lua` hook |
+| **Environments** | `mission` (sandboxed mission scripting, served by the mission bridge) vs `gui` (GameGUI hooks, `DCS.*`/`net.*`, served by the GUI bridge) — plus server/config/export net states in the console (via the GUI bridge) |
 | **Sanitization** | DCS's stock lockdown of `os`/`io`/`lfs`/`require`/`loadlib`/`package` in the mission environment |
 | **Skill** | A committed `SKILL.md` teaching AI coding agents this toolchain |
 
