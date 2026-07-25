@@ -144,16 +144,21 @@ jobs:
       # user's flight sim.
       #
       # Lines and functions are held at 100. Regions are not, and the floor is
-      # honest rather than aspirational: 20 regions of 7357 are genuinely
-      # unreachable from a test, each measured rather than assumed —
-      # serde_json infallible on a struct of String/i32/Option<Value>;
-      # rusqlite's FromSql total over all five storage classes; and, the
-      # interesting one, allocations inside a Lua registration call, where Lua
-      # 5.1's luaD_throw finds no protected frame, calls the panic handler and
-      # exits the process, so a test reaching those would take the runner with
-      # it (see #62).
+      # honest rather than aspirational: 21 regions of 7590 are unreachable from
+      # a test, each measured rather than assumed — serde_json infallible on a
+      # struct of String/i32/Option<Value>, and rusqlite's FromSql total over
+      # all five storage classes.
       #
-      # 99.5 rather than the 99.73 measured, deliberately. This runner has
+      # An earlier version of this comment blamed the OOM-during-registration
+      # path (#62) and said a test reaching it would take the runner with it.
+      # That was wrong, and disproven rather than argued: sweeping the surface
+      # generator over ~15,000 memory ceilings never once killed the runner.
+      # mlua wraps the offending `lua_pushcfunction` in `relax_limit_with`, so
+      # an mlua-owned state cannot fail there at all. The failure is real in
+      # DCS — where the allocator is DCS's and that guard does nothing — and
+      # simply not reachable through `set_memory_limit` in this harness.
+      #
+      # 99.5 rather than the 99.72 measured, deliberately. This runner has
       # twice seen a couple more misses than a dev machine does, and a floor
       # with no headroom turns an infrastructure difference into a red build
       # that says "coverage regression". 99.5 still catches a ~15-region
