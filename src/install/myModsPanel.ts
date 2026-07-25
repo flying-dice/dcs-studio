@@ -14,7 +14,6 @@ import type { MarketplacePort } from "../core/ports/marketplace";
 import { showError } from "../errors";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
-import { dataDir } from "./dataDir";
 
 // The "My Mods" experience: manage subscribed mods — enable/disable the symlinks,
 // update to a newer release, or uninstall (unsubscribe). Everything the host
@@ -83,7 +82,7 @@ export class MyModsPanel {
         granted: (key) => !!context.globalState.get<boolean>(key),
         remember: async (key) => void (await context.globalState.update(key, true)),
       },
-      dataDir: () => dataDir(),
+      dataDir: () => roots.dataDir(),
       post: (msg) => void this.panel.webview.postMessage(msg),
       effect: (effect) => this.perform(effect),
       confirm: (request) => this.confirm(request),

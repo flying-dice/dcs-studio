@@ -40,7 +40,13 @@ added or removed by writing one adapter and changing one line in the composition
 The two motivating cases:
 - **Subscription ledger** — `SubscriptionLedgerStore` port; current adapter persists to
   `<dataDir>/subscriptions.json` (+ derived `uninstall-all.bat`). A future sidecar/DB
-  backend implements the same port.
+  backend implements the same port — **plus** the uninstall-script capability the My
+  Mods panel takes separately (`ensureUninstallBat`/`uninstallBatPath`), which is not
+  on the port and deliberately so: persisting subscriptions and emitting the
+  emergency `uninstall-all.bat` are different jobs, and a backend that is not a file
+  on disk may have no script to offer. The panel names that capability structurally
+  rather than through a port, because one implementation does not make a seam
+  (see the BOUNDARY rule under Conventions).
 - **Marketplace backend** — `MarketplacePort`; current adapter is GitHub REST discovery.
   A Rust sidecar over JSON-RPC implements the same port;
   `test/support/mockMarketplace.ts` is the second implementation that keeps the swap

@@ -23,8 +23,8 @@ import {
   partialInstallMessage,
   selectDll,
 } from "../core/domain/bridgeDeploy";
+import type { InstallRootsPort } from "../core/ports/installRoots";
 import { showError } from "../errors";
-import { savedGamesDir } from "./paths";
 
 // Inject / eject the bridge — the same install layout dcs-studio uses:
 //   <writeDir>\Mods\tech\DcsStudio\bin\dcs_studio_gui.dll
@@ -150,8 +150,12 @@ export async function eject(writeDir: string, io: BridgeFs): Promise<string[]> {
 }
 
 /** Command: inject into the resolved Saved Games dir, with friendly errors. */
-export async function injectCommand(ctx: vscode.ExtensionContext, io: BridgeFs): Promise<void> {
-  const writeDir = savedGamesDir();
+export async function injectCommand(
+  ctx: vscode.ExtensionContext,
+  io: BridgeFs,
+  roots: InstallRootsPort,
+): Promise<void> {
+  const writeDir = roots.savedGames();
   try {
     await inject(ctx, writeDir, io);
   } catch (e) {
@@ -170,8 +174,8 @@ export async function injectCommand(ctx: vscode.ExtensionContext, io: BridgeFs):
 }
 
 /** Command: eject the bridge from the resolved Saved Games dir. */
-export async function ejectCommand(io: BridgeFs): Promise<void> {
-  const writeDir = savedGamesDir();
+export async function ejectCommand(io: BridgeFs, roots: InstallRootsPort): Promise<void> {
+  const writeDir = roots.savedGames();
   const left = await eject(writeDir, io);
   if (left.length) {
     // A running DCS holds its DLLs open: claiming a clean uninstall would send

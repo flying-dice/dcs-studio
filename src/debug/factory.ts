@@ -3,6 +3,7 @@ import { nodeScheduler } from "../adapters/node/scheduler";
 import type { DebugEnv } from "../bridge/client";
 import type { BridgeClients } from "../bridge/clients";
 import { isMissionScriptingFile, MISSION_SCRIPT_REFUSAL } from "../core/domain/debugTarget";
+import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { SchedulerPort } from "../core/ports/scheduler";
 import { showError } from "../errors";
 import { DcsDebugAdapter } from "./adapter";
@@ -16,6 +17,7 @@ export const DEBUG_TYPE = "dcs-lua";
 export class DcsDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory {
   constructor(
     private readonly clients: BridgeClients,
+    private readonly roots: InstallRootsPort,
     private readonly scheduler: SchedulerPort = nodeScheduler,
   ) {}
 
@@ -23,7 +25,7 @@ export class DcsDebugAdapterFactory implements vscode.DebugAdapterDescriptorFact
     session: vscode.DebugSession,
   ): vscode.ProviderResult<vscode.DebugAdapterDescriptor> {
     return new vscode.DebugAdapterInlineImplementation(
-      new DcsDebugAdapter(this.clients, session.configuration, this.scheduler),
+      new DcsDebugAdapter(this.clients, session.configuration, this.scheduler, this.roots),
     );
   }
 }

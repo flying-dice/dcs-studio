@@ -25,6 +25,7 @@ import {
   toVariablesResponse,
 } from "../core/domain/dapTranslation";
 import { scanItems } from "../core/domain/missionSanitize";
+import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { SchedulerPort, TimerHandle } from "../core/ports/scheduler";
 import { showError } from "../errors";
 import { missionScriptPath } from "../mission/missionPanel";
@@ -116,6 +117,11 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
     private readonly clients: BridgeClients,
     config: vscode.DebugConfiguration,
     private readonly scheduler: SchedulerPort = nodeScheduler,
+    // Required, unlike `scheduler`: this decides whether the mission bridge's
+    // silence is explained by a sanitized MissionScripting.lua, and any default
+    // stub would resolve to a path that never exists and answer "not
+    // sanitized" for every user. The factory supplies it.
+    private readonly roots: InstallRootsPort,
   ) {
     this.config = config as DcsLaunchConfig;
     this.env = this.config.env === "gui" ? "gui" : "mission";
@@ -271,7 +277,7 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
       this.env === "mission"
         ? missionStartFailure(
             status,
-            status.mission.connected ? undefined : missionSanitizedOnDisk(),
+            status.mission.connected ? undefined : missionSanitizedOnDisk(this.roots),
           )
         : this.client.current.connected
           ? null
@@ -586,8 +592,8 @@ function samePath(a: string, b: string): boolean {
 
 /** Whether MissionScripting.lua on disk still has its lockdown active (the
  * mission bridge can't boot then). undefined when the file can't be read. */
-function missionSanitizedOnDisk(): boolean | undefined {
-  const p = missionScriptPath();
+function missionSanitizedOnDisk(roots: InstallRootsPort): boolean | undefined {
+  const p = missionScriptPath(roots);
   if (!p) return undefined;
   try {
     const items = scanItems(fs.readFileSync(p, "utf8"));

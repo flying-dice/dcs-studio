@@ -1,8 +1,8 @@
 import * as path from "path";
 import * as vscode from "vscode";
-import { savedGamesDir } from "../bridge/paths";
 import { LogBuffer, type LogEntry, type ModIdentity, modIdentity } from "../core/domain/dcsLog";
 import { MANIFEST_FILE } from "../core/domain/manifestFile";
+import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { ManifestPort } from "../core/ports/manifest";
 import { renderWebviewHtml } from "../webview/html";
 import { type FileState, LogTailer } from "./tailer";
@@ -28,7 +28,11 @@ export class LogPanel {
   private filePath = "";
   private disposed = false;
 
-  static show(context: vscode.ExtensionContext, manifestPort: ManifestPort): void {
+  static show(
+    context: vscode.ExtensionContext,
+    manifestPort: ManifestPort,
+    roots: InstallRootsPort,
+  ): void {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
     if (LogPanel.current) {
       LogPanel.current.panel.reveal(column);
@@ -39,13 +43,14 @@ export class LogPanel {
       retainContextWhenHidden: true,
       localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
     });
-    LogPanel.current = new LogPanel(panel, context, manifestPort);
+    LogPanel.current = new LogPanel(panel, context, manifestPort, roots);
   }
 
   private constructor(
     panel: vscode.WebviewPanel,
     context: vscode.ExtensionContext,
     private readonly manifestPort: ManifestPort,
+    private readonly roots: InstallRootsPort,
   ) {
     this.panel = panel;
     this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
@@ -90,7 +95,7 @@ export class LogPanel {
     this.tailer?.stop();
     this.buffer.clear();
     this.lastDropped = 0;
-    this.filePath = path.join(savedGamesDir(), "Logs", "dcs.log");
+    this.filePath = path.join(this.roots.savedGames(), "Logs", "dcs.log");
     this.tailer = new LogTailer({
       filePath: this.filePath,
       onLines: (lines) => this.handleLines(lines),

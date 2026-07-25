@@ -3,9 +3,9 @@
 import { win32 as path } from "node:path";
 import * as fs from "fs";
 import * as vscode from "vscode";
-import { gameInstallDir } from "../bridge/paths";
 import type { MissionSanitizeService } from "../core/app/missionSanitizeService";
 import { allItems, backupPath } from "../core/domain/missionSanitize";
+import type { InstallRootsPort } from "../core/ports/installRoots";
 import { showError } from "../errors";
 
 // MissionScripting.lua management against the real file under the configured DCS
@@ -15,13 +15,13 @@ import { showError } from "../errors";
 export const MISSION_FILE = "MissionScripting.lua";
 
 /** The MissionScripting.lua path from the configured install, or undefined. */
-export function missionScriptPath(): string | undefined {
-  const gi = gameInstallDir();
+export function missionScriptPath(roots: InstallRootsPort): string | undefined {
+  const gi = roots.gameInstall();
   return gi ? path.join(gi, "Scripts", MISSION_FILE) : undefined;
 }
 
-async function requireFile(): Promise<string | undefined> {
-  const p = missionScriptPath();
+async function requireFile(roots: InstallRootsPort): Promise<string | undefined> {
+  const p = missionScriptPath(roots);
   if (!p) {
     const choice = await vscode.window.showInformationMessage(
       "Set your DCS installation path to manage MissionScripting.lua.",
@@ -51,8 +51,8 @@ function samePath(a: string, b: string): boolean {
  * on a desanitize that silently re-locks the sandbox, on a restore it puts the
  * mangled file straight back.
  */
-async function requireSavedFile(): Promise<string | undefined> {
-  const p = await requireFile();
+async function requireSavedFile(roots: InstallRootsPort): Promise<string | undefined> {
+  const p = await requireFile(roots);
   if (!p) return undefined;
   const open = vscode.workspace.textDocuments.find((d) => samePath(d.uri.fsPath, p));
   if (open?.isDirty) {
@@ -65,8 +65,11 @@ async function requireSavedFile(): Promise<string | undefined> {
 }
 
 /** Open the real MissionScripting.lua in the editor. */
-export async function openMissionScripting(svc: MissionSanitizeService): Promise<void> {
-  const p = await requireFile();
+export async function openMissionScripting(
+  svc: MissionSanitizeService,
+  roots: InstallRootsPort,
+): Promise<void> {
+  const p = await requireFile(roots);
   if (!p) return;
   const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(p));
   await vscode.window.showTextDocument(doc, { preview: false });
@@ -104,8 +107,11 @@ async function refreshOpen(p: string): Promise<void> {
  * show; a failure is almost always the Program Files permission wall, so it is
  * reported with that hint rather than the raw errno.
  */
-async function mutate(edit: (p: string) => Promise<string>): Promise<void> {
-  const p = await requireSavedFile();
+async function mutate(
+  roots: InstallRootsPort,
+  edit: (p: string) => Promise<string>,
+): Promise<void> {
+  const p = await requireSavedFile(roots);
   if (!p) return;
   try {
     const message = await edit(p);
@@ -128,28 +134,37 @@ function backupSuffix(p: string, exists: boolean): string {
 
 function apply(
   svc: MissionSanitizeService,
+  roots: InstallRootsPort,
   desired: Record<string, boolean>,
   okMsg: string,
 ): Promise<void> {
-  return mutate(async (p) => {
+  return mutate(roots, async (p) => {
     const status = await svc.setItems(p, desired);
     return `${okMsg}${backupSuffix(p, status.backupExists)}`;
   });
 }
 
 /** Comment out the lockdown → full Lua env available in mission scripts. */
-export function desanitizeMission(svc: MissionSanitizeService): Promise<void> {
+export function desanitizeMission(
+  svc: MissionSanitizeService,
+  roots: InstallRootsPort,
+): Promise<void> {
   return apply(
     svc,
+    roots,
     allItems(false),
     "Desanitized MissionScripting.lua — os/io/lfs/require/package are available.",
   );
 }
 
 /** Uncomment the lockdown → DCS's default sanitized state. */
-export function sanitizeMission(svc: MissionSanitizeService): Promise<void> {
+export function sanitizeMission(
+  svc: MissionSanitizeService,
+  roots: InstallRootsPort,
+): Promise<void> {
   return apply(
     svc,
+    roots,
     allItems(true),
     "Re-sanitized MissionScripting.lua — DCS's default lockdown restored.",
   );
@@ -162,8 +177,11 @@ export function sanitizeMission(svc: MissionSanitizeService): Promise<void> {
  * that matters — restoring rewinds the user past that update. Confirm first
  * rather than doing it silently.
  */
-export function restoreMission(svc: MissionSanitizeService): Promise<void> {
-  return mutate(async (p) => {
+export function restoreMission(
+  svc: MissionSanitizeService,
+  roots: InstallRootsPort,
+): Promise<void> {
+  return mutate(roots, async (p) => {
     if (await svc.backupIsStale(p)) {
       const choice = await vscode.window.showWarningMessage(
         "MissionScripting.lua has changed since DCS Studio last wrote it — most likely a DCS update. The backup is older than that change, so restoring it will undo the update's version of this file.",
@@ -189,8 +207,11 @@ function summarizeTriggers(s: { before: string; after: string }): string {
  * nothing further. These are the MOD-script hooks; they are independent of the
  * bridge boot, which uses no MissionScripting.lua edits.
  */
-export function installMissionHooks(svc: MissionSanitizeService): Promise<void> {
-  return mutate(async (p) => {
+export function installMissionHooks(
+  svc: MissionSanitizeService,
+  roots: InstallRootsPort,
+): Promise<void> {
+  return mutate(roots, async (p) => {
     const status = await svc.installTriggers(p);
     const backup = (await svc.backupExists(p)) ? ` Backup: ${path.basename(backupPath(p))}.` : "";
     return `Mission-script hooks installed in MissionScripting.lua (${summarizeTriggers(status)}).${backup}`;
@@ -198,8 +219,11 @@ export function installMissionHooks(svc: MissionSanitizeService): Promise<void> 
 }
 
 /** Remove the managed mod-script trigger dofile lines from MissionScripting.lua. */
-export function removeMissionHooks(svc: MissionSanitizeService): Promise<void> {
-  return mutate(async (p) => {
+export function removeMissionHooks(
+  svc: MissionSanitizeService,
+  roots: InstallRootsPort,
+): Promise<void> {
+  return mutate(roots, async (p) => {
     await svc.removeTriggers(p);
     return "Mission-script hooks removed from MissionScripting.lua.";
   });

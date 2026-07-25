@@ -1,6 +1,6 @@
 import { win32 as path } from "node:path";
 import * as vscode from "vscode";
-import { gameInstallDir, savedGamesDir } from "../bridge/paths";
+import type { InstallRootsPort } from "../core/ports/installRoots";
 import { renderWebviewHtml } from "../webview/html";
 
 // The manifest authoring FORM as a companion webview opened beside the normal
@@ -17,7 +17,11 @@ export class ManifestFormPanel {
   private lastWritten: string | null = null;
 
   /** Open (or reveal) the form beside the editor showing `document`. */
-  static openBeside(context: vscode.ExtensionContext, document: vscode.TextDocument): void {
+  static openBeside(
+    context: vscode.ExtensionContext,
+    document: vscode.TextDocument,
+    roots: InstallRootsPort,
+  ): void {
     const key = document.uri.toString();
     const existing = ManifestFormPanel.panels.get(key);
     if (existing) {
@@ -34,13 +38,14 @@ export class ManifestFormPanel {
         localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
       },
     );
-    ManifestFormPanel.panels.set(key, new ManifestFormPanel(panel, context, document));
+    ManifestFormPanel.panels.set(key, new ManifestFormPanel(panel, context, document, roots));
   }
 
   private constructor(
     private readonly panel: vscode.WebviewPanel,
     private readonly context: vscode.ExtensionContext,
     private readonly document: vscode.TextDocument,
+    private readonly installRoots: InstallRootsPort,
   ) {
     this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html();
@@ -71,7 +76,10 @@ export class ManifestFormPanel {
   // this replaced skipped the Saved Games\DCS.openbeta fallback, so on an
   // OpenBeta-only machine it showed the author a folder nothing would use.
   private roots(): { savedGames: string; gameInstall: string } {
-    return { savedGames: savedGamesDir(), gameInstall: gameInstallDir() ?? "" };
+    return {
+      savedGames: this.installRoots.savedGames(),
+      gameInstall: this.installRoots.gameInstall() ?? "",
+    };
   }
 
   private async onMessage(msg: { type: string; text?: string }): Promise<void> {

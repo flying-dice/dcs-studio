@@ -11,9 +11,9 @@ import {
   partialInstallMessage,
   shouldEjectOnShutdown,
 } from "../core/domain/bridgeDeploy";
+import type { InstallRootsPort } from "../core/ports/installRoots";
 import { showError } from "../errors";
 import { type BridgeFs, builtDlls, eject, type InjectError, inject } from "./deploy";
-import { gameInstallDir, savedGamesDir } from "./paths";
 
 // Managed launch, mirroring dcs-studio's launcher: assert the bridge is injected,
 // spawn DCS.exe --no-launcher, and eject the bridge once DCS exits. Fails closed
@@ -42,6 +42,7 @@ export class DcsLauncher {
 
   constructor(
     private readonly io: BridgeFs,
+    private readonly roots: InstallRootsPort,
     private readonly spawnProcess: typeof spawn = spawn,
   ) {}
 
@@ -66,14 +67,14 @@ export class DcsLauncher {
 
   /** On extension shutdown, best-effort eject if DCS is no longer holding the DLL. */
   cleanup(): void {
-    const writeDir = savedGamesDir();
+    const writeDir = this.roots.savedGames();
     if (shouldEjectOnShutdown(!!this.child)) void eject(writeDir, this.io);
     // If DCS is still up, the DLL is locked and stays until DCS exits.
   }
 
   private async startDcs(ctx: vscode.ExtensionContext): Promise<void> {
     const io = this.io;
-    const gameInstall = gameInstallDir();
+    const gameInstall = this.roots.gameInstall();
     if (!gameInstall) {
       void showError("Set dcsStudio.gameInstallPath to your DCS install folder to launch DCS.");
       return;
@@ -84,7 +85,7 @@ export class DcsLauncher {
       void showError(`DCS.exe not found at ${exe}.`);
       return;
     }
-    const writeDir = savedGamesDir();
+    const writeDir = this.roots.savedGames();
 
     // Assert-inject first: a locked DLL means DCS is already running — abort.
     try {

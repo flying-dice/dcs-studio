@@ -14,7 +14,7 @@ import { RegExeRegistry } from "./adapters/node/registry";
 import { SevenZipArchive } from "./adapters/node/sevenZip";
 import { WsBridgeTransport } from "./adapters/node/wsTransport";
 import { VsCodeGitHubAuth } from "./adapters/vscode/auth";
-import { VsCodeInstallRoots } from "./adapters/vscode/installRoots";
+import { installRoots } from "./adapters/vscode/installRoots";
 import { VsCodeManifest } from "./adapters/vscode/manifest";
 import { buildBridge } from "./bridge/build";
 import { BridgeClient } from "./bridge/client";
@@ -44,7 +44,6 @@ import {
 } from "./debug/factory";
 import { setupDevReload } from "./devReload";
 import { DocsPanel } from "./docs/docsPanel";
-import { dataDir } from "./install/dataDir";
 import { MyModsPanel } from "./install/myModsPanel";
 import { createMyModsShortcut, MYMODS_URI_PATH } from "./install/shortcut";
 import { LogPanel } from "./log/logPanel";
@@ -78,7 +77,7 @@ let bridge: BridgeClients | undefined;
 // bridge a PREVIOUS session injected even if this activation threw before it got
 // here, and at that point the real filesystem is the only sensible guess.
 // `activate()` replaces it with one built from its injected dependencies.
-let dcsLauncher: DcsLauncher = new DcsLauncher(nodeBridgeFs);
+let dcsLauncher: DcsLauncher = new DcsLauncher(nodeBridgeFs, installRoots);
 
 function isManifest(doc: vscode.TextDocument): boolean {
   return doc.uri.scheme === "file" && doc.uri.path.endsWith(`/${MANIFEST_FILE}`);
@@ -104,7 +103,7 @@ export function activate(
 
   // Held in a module slot as well as locally, because `deactivate()` takes no
   // arguments and still has to eject the bridge.
-  const dcs = new DcsLauncher(deps.bridgeIo);
+  const dcs = new DcsLauncher(deps.bridgeIo, installRoots);
   dcsLauncher = dcs;
 
   // The live in-sim bridges (created early so the sidebar nav can show their
@@ -145,7 +144,7 @@ export function activate(
   // authoring form beside it (a split view). The document is the source of truth;
   // form and code editor are two-way bound.
   const openFormFor = (doc: vscode.TextDocument | undefined) => {
-    if (doc && isManifest(doc)) ManifestFormPanel.openBeside(context, doc);
+    if (doc && isManifest(doc)) ManifestFormPanel.openBeside(context, doc, installRoots);
   };
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument(openFormFor),
@@ -168,8 +167,8 @@ export function activate(
     vscode.workspace.getConfiguration("dcsStudio").get<string>("sevenZipPath"),
   );
   const manifestPort = new VsCodeManifest(context);
-  const ledger = new JsonLedgerStore(dataDir);
-  const installRoots = new VsCodeInstallRoots();
+  // One resolver for the three DCS roots, shared by everything that needs them.
+  const ledger = new JsonLedgerStore(() => installRoots.dataDir());
   // Tracks mod entrypoint processes launched from My Mods. A single shared
   // instance so running state survives closing/reopening the panel. On IDE exit
   // its children are deliberately left running (see deactivate()).
@@ -230,27 +229,27 @@ export function activate(
       MarketplacePanel.current?.refresh();
     }),
     vscode.commands.registerCommand("dcs.mission.open", () => {
-      void openMissionScripting(missionSanitize);
+      void openMissionScripting(missionSanitize, installRoots);
     }),
     vscode.commands.registerCommand(
       "dcs.mission.desanitize",
-      () => void desanitizeMission(missionSanitize),
+      () => void desanitizeMission(missionSanitize, installRoots),
     ),
     vscode.commands.registerCommand(
       "dcs.mission.sanitize",
-      () => void sanitizeMission(missionSanitize),
+      () => void sanitizeMission(missionSanitize, installRoots),
     ),
     vscode.commands.registerCommand(
       "dcs.mission.restore",
-      () => void restoreMission(missionSanitize),
+      () => void restoreMission(missionSanitize, installRoots),
     ),
     vscode.commands.registerCommand(
       "dcs.mission.hooks.install",
-      () => void installMissionHooks(missionSanitize),
+      () => void installMissionHooks(missionSanitize, installRoots),
     ),
     vscode.commands.registerCommand(
       "dcs.mission.hooks.remove",
-      () => void removeMissionHooks(missionSanitize),
+      () => void removeMissionHooks(missionSanitize, installRoots),
     ),
   );
 
@@ -287,7 +286,9 @@ export function activate(
     vscode.commands.registerCommand("dcs.bridge.console", () =>
       ConsolePanel.show(context, clients),
     ),
-    vscode.commands.registerCommand("dcs.log.open", () => LogPanel.show(context, manifestPort)),
+    vscode.commands.registerCommand("dcs.log.open", () =>
+      LogPanel.show(context, manifestPort, installRoots),
+    ),
     // The status bar item's click handler: not palette-contributed, it's only
     // reachable by clicking "DCS: offline"/"at menu"/"mission" in the footer.
     vscode.commands.registerCommand("dcs.bridge.statusBarClick", async () => {
@@ -309,9 +310,11 @@ export function activate(
       if (picked) void vscode.commands.executeCommand(picked.command);
     }),
     vscode.commands.registerCommand("dcs.bridge.inject", () =>
-      injectCommand(context, deps.bridgeIo),
+      injectCommand(context, deps.bridgeIo, installRoots),
     ),
-    vscode.commands.registerCommand("dcs.bridge.eject", () => ejectCommand(deps.bridgeIo)),
+    vscode.commands.registerCommand("dcs.bridge.eject", () =>
+      ejectCommand(deps.bridgeIo, installRoots),
+    ),
     vscode.commands.registerCommand("dcs.bridge.launch", async () => {
       await dcs.launch(context);
       clients.reconnect();
@@ -324,7 +327,7 @@ export function activate(
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterDescriptorFactory(
       DEBUG_TYPE,
-      new DcsDebugAdapterFactory(clients),
+      new DcsDebugAdapterFactory(clients, installRoots),
     ),
     vscode.debug.registerDebugConfigurationProvider(DEBUG_TYPE, new DcsDebugConfigProvider()),
   );
@@ -461,7 +464,7 @@ async function openManifest(context: vscode.ExtensionContext): Promise<void> {
     if (exists) {
       const doc = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
-      ManifestFormPanel.openBeside(context, doc);
+      ManifestFormPanel.openBeside(context, doc, installRoots);
       return;
     }
   }
