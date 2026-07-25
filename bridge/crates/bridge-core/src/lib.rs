@@ -18,6 +18,7 @@ mod jsonrpc;
 mod locks;
 mod logger;
 mod logging;
+mod lua_panic;
 mod lua_utils;
 mod luadef;
 mod module_config;
@@ -185,10 +186,16 @@ pub fn bootstrap(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<LuaTab
     let logging = logging::init(get_logger_file_path(lua, kind), logger_level);
     info!("{} logging init: {logging:?}", kind.service_name());
 
+    // Before the first allocation into the host's state: from here on, an
+    // error Lua raises with no protected frame ends the process, and this is
+    // what leaves a line behind saying so (see `lua_panic`, issue #62).
+    lua_panic::install(lua, kind)?;
+
     let exports = lua.create_table()?;
 
     // Register every binding through the facade and capture its `.d.lua` type
     // surface (name/version are set as constants inside `build`).
+    lua_panic::enter(lua_panic::Phase::Surface);
     let doc = surface::build(lua, &exports, kind, version)?;
 
     // `emit_dlua()` returns the generated EmmyLua definitions for this module,
@@ -210,10 +217,12 @@ pub fn bootstrap(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<LuaTab
     // Expose `register_methods(router, deps)` — the single source of truth for
     // this bridge's JSON-RPC method set, shared by the live hook/init and the
     // OpenRPC golden test. Recorded in the surface as a root function.
+    lua_panic::enter(lua_panic::Phase::Methods);
     exports.set("register_methods", load_register_methods(lua, kind)?)?;
 
     // Install the console/REPL runtime into this state (idempotent via its
     // version guard).
+    lua_panic::enter(lua_panic::Phase::Engine);
     lua.load(RT_SOURCE).set_name("=dcs_studio_rt").exec()?;
 
     // Install the debug engine into this state, handing it the exports table
@@ -227,6 +236,7 @@ pub fn bootstrap(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<LuaTab
         warn!("debug engine not installed: {e}");
     }
 
+    lua_panic::enter(lua_panic::Phase::Ready);
     Ok(exports)
 }
 
@@ -586,12 +596,17 @@ mod bootstrap_tests {
     /// so it allocates exactly as the module load does — same requirement, same
     /// squeeze: an exhausted state gets an error back, never a panic.
     ///
-    /// Its `OpenRPC` sibling is deliberately NOT squeezed here. Registering the
-    /// method set means calling into Lua with a userdata router, and Lua 5.1
-    /// answers an allocation failure inside an unprotected API call by calling
-    /// `exit(EXIT_FAILURE)` — the process simply vanishes, which is exactly what
-    /// it would do inside DCS and is not something this crate can catch. A test
-    /// that provoked it would take the test runner with it.
+    /// Its `OpenRPC` sibling is not squeezed here, and the reason is no longer
+    /// the one it used to be: a `set_memory_limit` squeeze cannot reach the
+    /// unprotected allocation at all. mlua relaxes its own limit around the
+    /// `lua_pushcfunction` that establishes protection, so every failure the
+    /// squeeze can produce comes back as an ordinary error — measured, by
+    /// sweeping 0..400 KB of headroom through `emit_openrpc_json` in 8-byte
+    /// steps, all of which errored and none of which took the runner down.
+    /// The unprotected call is still live inside DCS, where the allocator is
+    /// DCS's and nothing relaxes anything, and there Lua 5.1 answers it with
+    /// the panic handler and `exit(EXIT_FAILURE)`. Making that leave a line
+    /// behind is [`lua_panic`]'s job (#62), proved there in a child process.
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn rendering_the_type_surface_out_of_memory_errors_instead_of_panicking() {
