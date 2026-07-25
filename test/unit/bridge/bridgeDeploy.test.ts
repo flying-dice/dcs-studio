@@ -3,12 +3,15 @@ import { describe, expect, it } from "vitest";
 import {
   BIN_RELATIVE_DIR,
   BRIDGE_DLLS,
+  builtDllNote,
   builtDllPath,
   DCS_LAUNCH_ARGS,
   dcsBinDir,
   dcsExePath,
+  dcsExitNote,
   dllInstallPath,
   ejectedMessage,
+  ejectIncompleteMessage,
   HOOK_RELATIVE_PATH,
   hookInstallPath,
   hookSourcePath,
@@ -18,6 +21,7 @@ import {
   LAUNCH_LOCKED_MESSAGE,
   LEGACY_RELATIVE_PATHS,
   legacyInstallPaths,
+  partialInstallMessage,
   selectDll,
   shippedDllPath,
   shouldEjectOnShutdown,
@@ -99,6 +103,71 @@ describe("toasts", () => {
       `Bridge injected into ${WRITE}. Restart DCS (or run DCS Studio: Launch DCS) to load it.`,
     );
     expect(ejectedMessage(WRITE)).toBe(`Bridge ejected from ${WRITE}.`);
+  });
+
+  it("names the locally built DLLs a deploy is about to use", () => {
+    // Selection is on existence alone, so a stale bridge\\target\\release keeps
+    // winning over a newer shipped DLL: saying which binary is going in is what
+    // lets a user notice their cargo build failed hours ago.
+    expect(builtDllNote([])).toBe("");
+    expect(injectedMessage(WRITE, [...BRIDGE_DLLS])).toBe(
+      `Bridge injected into ${WRITE}. Restart DCS (or run DCS Studio: Launch DCS) to load it.` +
+        " Deploying the locally built dcs_studio_gui.dll and dcs_studio_mission.dll from" +
+        " bridge\\target\\release — delete that folder to go back to the DLLs shipped with the" +
+        " extension.",
+    );
+  });
+
+  it("says what an eject left behind rather than claiming a clean one", () => {
+    // "Bridge ejected" while a locked DLL is still there sends the user away
+    // believing the extension's code is out of their DCS.
+    expect(ejectIncompleteMessage(WRITE, [dllInstallPath(WRITE, BRIDGE_DLLS[0])])).toBe(
+      `Bridge only partly ejected from ${WRITE} — dcs_studio_gui.dll could not be removed.` +
+        " Close DCS and eject again.",
+    );
+  });
+});
+
+describe("a part-finished inject", () => {
+  it("says nothing when the failure came before anything was replaced", () => {
+    expect(partialInstallMessage([])).toBeUndefined();
+  });
+
+  it("names what was replaced when the failure came half way", () => {
+    // DCS loads the two DLLs and the hook as a set: a new GUI bridge beside
+    // yesterday's mission bridge is a version mismatch nobody was told about.
+    expect(partialInstallMessage([dllInstallPath(WRITE, BRIDGE_DLLS[0])])).toBe(
+      " The install is now mixed: dcs_studio_gui.dll was replaced and the rest were not —" +
+        " inject again once the problem is fixed, because DCS loads them as a set.",
+    );
+    expect(partialInstallMessage(BRIDGE_DLLS.map((n) => dllInstallPath(WRITE, n)))).toBe(
+      " The install is now mixed: dcs_studio_gui.dll and dcs_studio_mission.dll were replaced" +
+        " and the rest were not — inject again once the problem is fixed, because DCS loads" +
+        " them as a set.",
+    );
+  });
+});
+
+describe("how DCS ended", () => {
+  it("says nothing about a clean quit", () => {
+    expect(dcsExitNote(0, null)).toBe("");
+  });
+
+  it("reports a non-zero exit, because a sim that dies on startup looks like a quit", () => {
+    expect(dcsExitNote(1, null)).toBe(
+      "DCS exited with code 1 — it may have failed on startup. Check dcs.log (command:" +
+        " “DCS Studio: Open DCS Log Viewer”). The bridge has been ejected.",
+    );
+  });
+
+  it("names the signal when there was no exit code at all", () => {
+    expect(dcsExitNote(null, "SIGKILL")).toBe(
+      "DCS was terminated by SIGKILL before it exited on its own. The bridge has been ejected.",
+    );
+    // node reports no signal for a child it never managed to track.
+    expect(dcsExitNote(null, undefined)).toBe(
+      "DCS was terminated by a signal before it exited on its own. The bridge has been ejected.",
+    );
   });
 });
 

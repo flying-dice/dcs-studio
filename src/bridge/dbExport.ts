@@ -70,6 +70,10 @@ export async function dbExportCommand(clients: BridgeClients): Promise<void> {
     return;
   }
 
+  // Tracked outside the try so the tidy-up runs on EVERY path out of it: a copy
+  // the user's disk refuses would otherwise leave a tens-of-megabytes dump in
+  // the DCS write dir forever.
+  let temp: vscode.Uri | undefined;
   try {
     const what = await pickWhat(clients);
     if (!what) return;
@@ -82,7 +86,7 @@ export async function dbExportCommand(clients: BridgeClients): Promise<void> {
       () => clients.gui.dbExport(what),
     );
 
-    const temp = vscode.Uri.file(path);
+    temp = vscode.Uri.file(path);
     const folder = vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(os.homedir());
     const target = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.joinPath(folder, `${dbExportFileBase(what)}.json`),
@@ -100,13 +104,15 @@ export async function dbExportCommand(clients: BridgeClients): Promise<void> {
         );
       }
     }
-
-    try {
-      await vscode.workspace.fs.delete(temp);
-    } catch {
-      /* best-effort tidy of the sim-side temp file */
-    }
   } catch (e) {
     void showError(`DCS database export failed: ${e instanceof Error ? e.message : String(e)}`, e);
+  } finally {
+    if (temp) {
+      try {
+        await vscode.workspace.fs.delete(temp);
+      } catch {
+        /* best-effort tidy of the sim-side temp file */
+      }
+    }
   }
 }

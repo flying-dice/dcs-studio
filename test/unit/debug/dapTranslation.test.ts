@@ -88,7 +88,9 @@ describe("toBridgeBreakpoints", () => {
 });
 
 describe("toBreakpointsResponse", () => {
-  it("verifies every breakpoint at its requested line", () => {
+  it("verifies every breakpoint at its requested line when the file is unknown", () => {
+    // Nothing was read, so nothing is claimed: greying out breakpoints on a
+    // file that is very likely fine is its own lie.
     expect(toBreakpointsResponse([{ line: 2 }, { line: 9, condition: "c" }])).toEqual({
       breakpoints: [
         { verified: true, line: 2 },
@@ -99,6 +101,60 @@ describe("toBreakpointsResponse", () => {
 
   it("handles an empty set", () => {
     expect(toBreakpointsResponse([])).toEqual({ breakpoints: [] });
+  });
+
+  const SOURCE = ["local i = 0", "", "   ", "-- a comment", "\t--[[ block opens", "i = i + 1"].join(
+    "\n",
+  );
+
+  it.each([
+    [2, "Blank line — nothing here for the sim to execute."],
+    [3, "Blank line — nothing here for the sim to execute."],
+    [4, "Comment — nothing here for the sim to execute."],
+    [5, "Comment — nothing here for the sim to execute."],
+    [7, "Past the end of the file — nothing here for the sim to execute."],
+  ])("refuses to claim line %i is bound, and says why", (line, message) => {
+    // The engine's line hook only fires on lines the chunk executes, so these
+    // never stop anything — and a bound-looking breakpoint that never hits is
+    // read as the debugger being broken.
+    expect(toBreakpointsResponse([{ line }], SOURCE)).toEqual({
+      breakpoints: [{ verified: false, line, reason: "failed", message }],
+    });
+  });
+
+  it.each([1, 6])("verifies line %i, which has code on it", (line) => {
+    expect(toBreakpointsResponse([{ line }], SOURCE)).toEqual({
+      breakpoints: [{ verified: true, line }],
+    });
+  });
+
+  it("counts a trailing newline as the end of the last line, not a new one", () => {
+    expect(toBreakpointsResponse([{ line: 1 }, { line: 2 }], "print(1)\n")).toEqual({
+      breakpoints: [
+        { verified: true, line: 1 },
+        {
+          verified: false,
+          line: 2,
+          reason: "failed",
+          message: "Past the end of the file — nothing here for the sim to execute.",
+        },
+      ],
+    });
+  });
+
+  it("reads CRLF files as lines, not as one line ending in carriage returns", () => {
+    expect(toBreakpointsResponse([{ line: 2 }], "print(1)\r\nprint(2)\r\n")).toEqual({
+      breakpoints: [{ verified: true, line: 2 }],
+    });
+  });
+
+  it("still verifies a line inside a block comment", () => {
+    // Telling `--[[ … ]]` apart from a string containing "--[[" needs a Lua
+    // lexer; wrongly greying out a breakpoint on real code is the worse error,
+    // so the guess is not made at all.
+    expect(toBreakpointsResponse([{ line: 2 }], "--[[\nnot code\n]]\n")).toEqual({
+      breakpoints: [{ verified: true, line: 2 }],
+    });
   });
 });
 

@@ -60,16 +60,19 @@ class Dap {
   /** Send a request and settle it; returns the matching response. */
   async request(command: string, args?: unknown): Promise<Msg> {
     const seq = this.seq++;
+    const before = this.sent.length;
+    const responded = () => this.sent.some((m) => m.type === "response" && m.request_seq === seq);
     this.adapter.handleMessage({
       seq,
       type: "request",
       command,
       arguments: args,
     } as vscode.DebugProtocolMessage);
-    // Only configurationDone reaches the real filesystem (loading the program),
-    // and only that read needs the loop to actually wait; everything else is
-    // pure promise chaining that a single drain settles.
-    await (command === "configurationDone" ? settle() : flush());
+    // configurationDone is answered immediately and only THEN starts the
+    // session, so its response says nothing: what is being waited for is the
+    // session's first word — the "Debugging…" line, or the reason it refused.
+    // Everything else is done when it has answered.
+    await settle(command === "configurationDone" ? () => this.sent.length > before + 1 : responded);
     const res = this.sent.find((m) => m.type === "response" && m.request_seq === seq);
     if (!res) throw new Error(`no response to ${command}`);
     return res;
@@ -106,6 +109,8 @@ const SNAPSHOT: DebugSnapshot = {
 const PAUSED: DebugState = { paused: true, running: true, snapshot: JSON.stringify(SNAPSHOT) };
 const RUNNING: DebugState = { paused: false, running: true };
 const ENDED: DebugState = { paused: false, running: false };
+/** The engine with no session on it — what a starting session has to see. */
+const IDLE: DebugState = { paused: false, running: false };
 
 describe("DcsDebugAdapter", () => {
   let gui: FakeBridge;
@@ -147,8 +152,19 @@ describe("DcsDebugAdapter", () => {
     );
   }
 
-  /** A session past configurationDone, i.e. with the run fired and polling live. */
+  /**
+   * A session past configurationDone, i.e. with the run fired and polling live.
+   *
+   * The adapter asks debug_state once, before it touches the shared registry,
+   * to find out whether another session already holds the engine. That first
+   * answer is queued as idle here so a spec can script the POLL loop's
+   * `debugState` with a plain `mockResolvedValue(PAUSED)` and still start; a
+   * spec about the probe itself queues its own answer first, which is consumed
+   * ahead of this one.
+   */
   async function started(config: Record<string, unknown> = {}): Promise<Dap> {
+    gui.debugState.mockResolvedValueOnce(IDLE);
+    mission.debugState.mockResolvedValueOnce(IDLE);
     const dap = open(config);
     await dap.request("initialize");
     await dap.request("launch", { program, ...config });
@@ -290,6 +306,61 @@ describe("DcsDebugAdapter", () => {
     expect(mission.debugRun).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["running", RUNNING],
+    ["paused at a breakpoint", PAUSED],
+  ])("refuses to start while the engine is already %s", async (_label, engine) => {
+    // The breakpoint registry is process-wide DLL state and the engine runs one
+    // session at a time. Clearing the registry and only THEN having the run
+    // refused is how the session that is genuinely attached loses every
+    // breakpoint it set, silently.
+    mission.debugState.mockResolvedValueOnce(engine);
+    const dap = await started();
+
+    expect(dap.output("stderr")[0]).toContain("A debug session is already running in DCS");
+    expect(state.errors).toHaveLength(1);
+    expect(mission.debugClearBreakpoints).not.toHaveBeenCalled();
+    expect(mission.debugSetBreakpoints).not.toHaveBeenCalled();
+    expect(mission.debugRun).not.toHaveBeenCalled();
+    expect(dap.events("exited")[0].body).toEqual({ exitCode: 0 });
+  });
+
+  it("leaves the live session's breakpoints alone when the refused one is dismissed", async () => {
+    // The other half of the same bug: the second session cleared the registry
+    // again on its way out, so even a user who read the refusal lost the first
+    // session's breakpoints by closing the one that failed.
+    mission.debugState.mockResolvedValueOnce(RUNNING);
+    const dap = await started();
+
+    expect((await dap.request("disconnect")).success).toBe(true);
+    expect(mission.debugClearBreakpoints).not.toHaveBeenCalled();
+    expect(mission.debugStop).not.toHaveBeenCalled();
+  });
+
+  it("refuses to start rather than clear a registry it cannot ask about", async () => {
+    // A sim paused in DCS queues every call behind the model-time pump, which
+    // does not run — so the probe times out. Proceeding on no answer is exactly
+    // the case that clears somebody else's breakpoints.
+    mission.debugState.mockRejectedValueOnce(
+      new Error("Mission bridge call 'debug_state' timed out"),
+    );
+    const dap = await started();
+
+    expect(dap.output("stderr")[0]).toBe(
+      "Cannot start the debug session: Mission bridge call 'debug_state' timed out\n",
+    );
+    expect(mission.debugClearBreakpoints).not.toHaveBeenCalled();
+    expect(mission.debugRun).not.toHaveBeenCalled();
+  });
+
+  it("does not clear the registry when a run-without-debugging session ends", async () => {
+    // repl_eval never touched the registry; clearing it on the way out would
+    // drop the breakpoints of a debug session running alongside.
+    const dap = await started({ noDebug: true });
+    await dap.request("disconnect");
+    expect(mission.debugClearBreakpoints).not.toHaveBeenCalled();
+  });
+
   it("starts the run only once however many times configurationDone arrives", async () => {
     longRun(mission);
     const dap = await started();
@@ -382,6 +453,7 @@ describe("DcsDebugAdapter", () => {
   it("pushes the whole breakpoint set after clearing the registry", async () => {
     // The registry is DLL state that outlives a session: a stale breakpoint
     // from a previous run would stop the sim on a line the user removed.
+    fs.writeFileSync(program, Array.from({ length: 10 }, (_, i) => `x = ${i}`).join("\n"), "utf8");
     const dap = open();
     await dap.request("initialize");
     const res = await dap.request("setBreakpoints", {
@@ -403,6 +475,66 @@ describe("DcsDebugAdapter", () => {
       { line: 3 },
       { line: 9, condition: "i > 2" },
     ]);
+  });
+
+  it("answers a breakpoint that cannot bind as unverified, judged against the file", async () => {
+    // The line hook only fires on lines the chunk executes: a breakpoint on a
+    // comment or past the end of the file never stops anything. Drawing it as
+    // bound promises a stop the sim will never make.
+    fs.writeFileSync(program, "local i = 0\n\n-- count up\ni = i + 1\n", "utf8");
+    const dap = open();
+    const res = await dap.request("setBreakpoints", {
+      source: { path: program },
+      breakpoints: [{ line: 1 }, { line: 2 }, { line: 3 }, { line: 5 }],
+    });
+    expect(res.body.breakpoints).toEqual([
+      { verified: true, line: 1 },
+      {
+        verified: false,
+        line: 2,
+        reason: "failed",
+        message: "Blank line — nothing here for the sim to execute.",
+      },
+      {
+        verified: false,
+        line: 3,
+        reason: "failed",
+        message: "Comment — nothing here for the sim to execute.",
+      },
+      {
+        verified: false,
+        line: 5,
+        reason: "failed",
+        message: "Past the end of the file — nothing here for the sim to execute.",
+      },
+    ]);
+  });
+
+  it("judges the lines against the unsaved buffer, not the saved file", async () => {
+    // The user sets breakpoints on what the editor shows; verifying against
+    // disk would grey out breakpoints on lines they just typed.
+    state.textDocuments.push({
+      uri: { fsPath: program, scheme: "file" },
+      isDirty: true,
+      getText: () => "print(1)\nprint(2)\n",
+    });
+    const dap = open();
+    const res = await dap.request("setBreakpoints", {
+      source: { path: program },
+      breakpoints: [{ line: 2 }],
+    });
+    expect(res.body.breakpoints).toEqual([{ verified: true, line: 2 }]);
+  });
+
+  it("claims nothing about a file it cannot read", async () => {
+    // Breakpoints restored for a file that has since been moved: with no lines
+    // to judge against, greying them all out would be its own lie.
+    const dap = open();
+    const res = await dap.request("setBreakpoints", {
+      source: { path: path.join(dir, "gone.lua") },
+      breakpoints: [{ line: 4000 }],
+    });
+    expect(res.body.breakpoints).toEqual([{ verified: true, line: 4000 }]);
   });
 
   it("aborts when the breakpoint set cannot be installed", async () => {
@@ -551,18 +683,18 @@ describe("DcsDebugAdapter", () => {
     // suppresses the ping entirely, which is exactly why debugState carries a
     // 5s client-side timeout — well inside the sim's 30s idle window.
     let release: (v: DebugState) => void = () => {};
-    mission.debugState.mockImplementationOnce(() => new Promise((r) => (release = r)));
     longRun(mission);
-    await started();
+    await started(); // one debug_state already spent on the start-up probe
 
+    mission.debugState.mockImplementationOnce(() => new Promise((r) => (release = r)));
     await scheduler.advance(5_000);
-    expect(mission.debugState).toHaveBeenCalledTimes(1);
+    expect(mission.debugState).toHaveBeenCalledTimes(2);
 
     mission.debugState.mockResolvedValue(RUNNING);
     release(RUNNING);
     await flush();
     await scheduler.advance(250);
-    expect(mission.debugState).toHaveBeenCalledTimes(2);
+    expect(mission.debugState).toHaveBeenCalledTimes(3);
   });
 
   it("stops the heartbeat the moment the session ends", async () => {
@@ -597,9 +729,9 @@ describe("DcsDebugAdapter", () => {
     // A poll in flight when the user hits stop would otherwise re-open the
     // stopped UI on a session that no longer exists.
     let release: (v: DebugState) => void = () => {};
-    mission.debugState.mockImplementationOnce(() => new Promise((r) => (release = r)));
     longRun(mission);
     const dap = await started();
+    mission.debugState.mockImplementationOnce(() => new Promise((r) => (release = r)));
     await scheduler.advance(250);
 
     await dap.request("disconnect");
@@ -610,8 +742,8 @@ describe("DcsDebugAdapter", () => {
 
   it("retries after a lone poll failure but abandons the session when the bridge drops", async () => {
     longRun(mission);
-    mission.debugState.mockRejectedValueOnce(new Error("timed out"));
     const dap = await started();
+    mission.debugState.mockRejectedValueOnce(new Error("timed out"));
     await scheduler.advance(250);
     expect(dap.events("terminated")).toHaveLength(0);
 

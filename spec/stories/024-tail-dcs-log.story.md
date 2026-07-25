@@ -53,23 +53,39 @@ Feature: DCS Log viewer
         | a network share that dropped after the stat             |
 
     @chaos
-    Scenario: dcs.log reappears after a brief gap
-      Given the tail was reading dcs.log and one tick failed, flipping the state to "missing"
+    Scenario: A single read fails on an otherwise unchanged dcs.log
+      Given the tail was reading dcs.log and one tick's open or read failed
+        (the stat/open race, a share dropping for a moment)
+      Then that tick reports the file as "missing" but keeps its place in it
       When the very next tick stats and reads the same, unchanged file
-      Then the tail re-opens it as a fresh file and backfills the last 256 KiB again
-      And no "log restarted" divider appears — nothing was truncated
-      And lines already on screen can therefore appear a second time
-        # UNVERIFIED: deduced from the missing-file path resetting both the read
-        # offset and the backfilled flag with no reset event; no test covers it
+      Then it resumes from the same offset — the last 256 KiB is NOT read again
+      And no line already on screen appears a second time
+      And no "log restarted" divider appears, because nothing restarted
+      # "ok" is only announced once a read has actually worked, so a path that
+      # stats but can never be read reports missing steadily rather than
+      # flapping between the two states on every tick.
+
+    @chaos
+    Scenario: dcs.log disappears for a while
+      Given the tail was reading dcs.log and the file itself goes away
+      Then the read offset is discarded and the viewer is told the tail broke —
+        exactly once, however many ticks the gap lasts
+      When the file comes back
+      Then the last 256 KiB is backfilled from it under a "log restarted" divider,
+        replacing what the viewer had rather than piling up underneath it
 
     @chaos
     Scenario: The log is rotated rather than truncated
       Given DCS (or a housekeeping script) renames dcs.log away and starts a fresh one
-      When the next poll finds the new file smaller than the old read offset
-      Then it is indistinguishable from a truncation: "log restarted" and a re-backfill
-      But a rotate that regrows past the old offset between two polls is undetectable
-        and the next read starts mid-file — an accepted limitation, because Windows
-        gives no reliable rotation signal
+      Then the replacement is recognised by its identity, not by its size: a
+        different inode behind the same path is a restart
+      And that holds even when the new file is BIGGER than the old read offset,
+        which a size comparison alone cannot see
+      And "log restarted" is reported before its lines, so two files' contents
+        are never run together
+      But where the filesystem reports no usable inode (0 on some Windows
+        shares) the size comparison is the only signal left, and a rotate that
+        regrows past the old offset between two polls stays undetectable
 
     @chaos
     Scenario: A line split across a read boundary

@@ -394,6 +394,27 @@ describe("exporting a table", () => {
     expect(posted("exportDone")).toMatchObject({ saved: true });
   });
 
+  it("tidies the sim's temp file even when the copy to the workspace fails", async () => {
+    // The failure path leaked: a full disk or a read-only destination left a
+    // multi-megabyte dcs-studio-export-*.json in the DCS write dir, forever,
+    // with nothing in the UI to suggest it was there.
+    vi.spyOn(vscode.workspace.fs, "copy").mockRejectedValueOnce(
+      new Error("ENOSPC: no space left on device"),
+    );
+    state.saveDialogReplies = [TARGET];
+
+    await send({ type: "export", ref: 5, reqId: 2 });
+
+    expect(posted("exportDone")).toEqual({
+      type: "exportDone",
+      reqId: 2,
+      saved: false,
+      error: "ENOSPC: no space left on device",
+    });
+    expect(seededText(TEMP)).toBeUndefined();
+    expect(seededText(TARGET)).toBeUndefined();
+  });
+
   it("answers with the failure when the sim could not serialize the table", async () => {
     gui.answer("replExport", () => Promise.reject(new Error("cannot serialize userdata")));
 

@@ -1,7 +1,29 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// One failure mode here cannot be arranged against a real file: an open/read
+// that fails on a file whose stat just succeeded (the deletion race, a share
+// dropping for one tick). `openFailures` makes the next N opens fail and is
+// zero for every other spec, so the rest of the suite still runs on real I/O.
+const hooks = vi.hoisted(() => ({ openFailures: 0 }));
+
+vi.mock("fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs/promises")>();
+  return {
+    ...actual,
+    default: actual,
+    open: (...args: Parameters<typeof actual.open>) => {
+      if (hooks.openFailures <= 0) return actual.open(...args);
+      hooks.openFailures--;
+      const e = new Error("EBUSY: resource busy or locked") as NodeJS.ErrnoException;
+      e.code = "EBUSY";
+      return Promise.reject(e);
+    },
+  };
+});
+
 import { LogTailer, type LogTailerOptions } from "../../../src/log/tailer";
 
 // Short poll interval + real timers: the tailer is a thin fs-polling loop,
@@ -13,6 +35,7 @@ const tailers: LogTailer[] = [];
 
 afterEach(() => {
   for (const t of tailers.splice(0)) t.stop();
+  hooks.openFailures = 0;
   if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -91,6 +114,98 @@ describe("LogTailer", () => {
     expect(lines).toEqual(["before-restart", "after-restart"]);
   });
 
+  it("keeps its place in the file when a single read fails, rather than replaying it", async () => {
+    // THE duplication bug: one failed tick on an otherwise unchanged file used
+    // to discard the read offset, so the next tick re-backfilled the last
+    // 256 KiB — which the panel appends as new entries, with no divider and no
+    // dedupe. The stat/open race and a share that drops for one tick both land
+    // here.
+    const file = tmpFile();
+    fs.writeFileSync(file, "first\n");
+    const lines: string[] = [];
+    const states: string[] = [];
+    let resets = 0;
+    const tailer = makeTailer({
+      filePath: file,
+      pollMs: 20,
+      onLines: (l: string[]) => lines.push(...l),
+      onState: (s: string) => states.push(s),
+      onReset: () => resets++,
+    });
+    tailer.start();
+    await waitFor(() => lines.length >= 1);
+
+    hooks.openFailures = 1;
+    fs.appendFileSync(file, "second\n");
+    await waitFor(() => lines.length >= 2);
+
+    expect(lines).toEqual(["first", "second"]);
+    // Nothing was re-opened, so the viewer is told of no break in the tail.
+    expect(resets).toBe(0);
+    // The tick that could not read reports the file as missing and the next one
+    // takes it back, rather than claiming "ok" and then failing every time.
+    expect(states).toEqual(["ok", "missing", "ok"]);
+  });
+
+  it("announces the break when the file disappears, so the re-backfill is not a duplicate", async () => {
+    // A gap really does mean a fresh open of whatever comes back, and the
+    // viewer appends what it is given — without the reset the re-read tail
+    // lands underneath the very lines it repeats.
+    const file = tmpFile();
+    fs.writeFileSync(file, "before the gap\n");
+    const lines: string[] = [];
+    let resets = 0;
+    const tailer = makeTailer({
+      filePath: file,
+      pollMs: 20,
+      onLines: (l: string[]) => lines.push(...l),
+      onState: () => {},
+      onReset: () => resets++,
+    });
+    tailer.start();
+    await waitFor(() => lines.length >= 1);
+
+    fs.rmSync(file);
+    await waitFor(() => resets === 1);
+    // Several ticks with the file still gone must not break the tail again.
+    await new Promise((r) => setTimeout(r, 100));
+    fs.writeFileSync(file, "after the gap\n");
+    await waitFor(() => lines.length >= 2);
+
+    expect(resets).toBe(1);
+    expect(lines).toEqual(["before the gap", "after the gap"]);
+  });
+
+  it("treats a fresh file behind the same name as a restart, however big it is", async () => {
+    // A rotate that regrows past the old offset defeats a size comparison
+    // entirely: the next read would start mid-file, in the middle of a line of
+    // a file it has never seen. The identity of the file is what settles it.
+    const file = tmpFile();
+    fs.writeFileSync(file, "old log\n");
+    const lines: string[] = [];
+    let resets = 0;
+    const tailer = makeTailer({
+      filePath: file,
+      pollMs: 20,
+      onLines: (l: string[]) => lines.push(...l),
+      onState: () => {},
+      onReset: () => resets++,
+    });
+    tailer.start();
+    await waitFor(() => lines.length >= 1);
+
+    // Rotation as it really happens: the old file is renamed away and a new one
+    // — bigger than the old — takes its place.
+    const replacement = `${file}.new`;
+    fs.writeFileSync(replacement, "brand new log with much more in it\n");
+    fs.renameSync(file, `${file}.1`);
+    fs.renameSync(replacement, file);
+
+    await waitFor(() => resets === 1);
+    await waitFor(() => lines.length >= 2);
+    expect(lines).toEqual(["old log", "brand new log with much more in it"]);
+  });
+
   it("reports a missing file, then transitions to ok once it appears (with backfill)", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcslog-"));
     const file = path.join(tmpDir, "dcs.log");
@@ -132,16 +247,20 @@ describe("LogTailer", () => {
     const file = tmpFile();
     fs.writeFileSync(file, "");
     const lines: string[] = [];
+    const states: string[] = [];
     const tailer = makeTailer({
       filePath: file,
       pollMs: 15,
       sliceBytes: 40, // small cap: forces several ticks to drain the appended batch
       onLines: (l: string[]) => lines.push(...l),
-      onState: () => {},
+      onState: (s: string) => states.push(s),
       onReset: () => {},
     });
     tailer.start();
-    await waitFor(() => true); // let the initial (empty) backfill tick happen
+    // "ok" lands only once a tick has read successfully, so this is the initial
+    // (empty) backfill having happened — the batch below must not race it, or
+    // the first read is a growth read rather than a first fill.
+    await waitFor(() => states.length > 0);
     const batch = `${Array.from({ length: 20 }, (_, i) => `line-${i}`).join("\n")}\n`; // ~180 bytes
     fs.appendFileSync(file, batch);
     // Immediately after the first tick to observe growth, not everything can

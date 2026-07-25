@@ -278,7 +278,10 @@
         type: "export",
         env: node.env,
         ref: node.ref > 0 ? node.ref : undefined,
-        expr: node.ref > 0 ? undefined : node.path,
+        // No ref (the sim's ref ceiling, or the state was reset): fall back to
+        // naming the value, which means a real Lua expression — the tree path
+        // itself parses as arithmetic below the root.
+        expr: node.ref > 0 ? undefined : core.pathToExpr(node.path),
         label: node.path,
         reqId,
       });

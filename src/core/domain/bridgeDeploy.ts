@@ -81,14 +81,50 @@ export const INJECT_LOCKED_MESSAGE =
 
 export const LAUNCH_LOCKED_MESSAGE = "A bridge DLL is locked — is DCS already running?";
 
+/**
+ * What an inject left behind when it failed part-way through. DCS loads the
+ * two DLLs and the hook as a set, so a copy that fails after an earlier one
+ * succeeded leaves a mixed install — the user has to be told which half moved.
+ *
+ * Nothing is rolled back: the failure that dominates here is a DLL held open by
+ * a running DCS, and deleting the file DCS is currently executing would fail
+ * for the same reason while destroying a working install.
+ */
+export function partialInstallMessage(installed: readonly string[]): string | undefined {
+  if (!installed.length) return undefined;
+  return ` The install is now mixed: ${fileList(installed)} ${installed.length === 1 ? "was" : "were"} replaced and the rest were not — inject again once the problem is fixed, because DCS loads them as a set.`;
+}
+
+/** Basenames of a list of paths, as prose. */
+function fileList(paths: readonly string[]): string {
+  const names = paths.map((p) => path.basename(p));
+  if (names.length === 1) return names[0];
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** Which DLLs are being taken from the workspace build rather than the shipped
+ * set — the choice is made on existence alone, so a stale `bridge/target/release`
+ * outranks a newer shipped DLL until the user deletes it. */
+export function builtDllNote(built: readonly BridgeDllName[]): string {
+  if (!built.length) return "";
+  return ` Deploying the locally built ${fileList([...built])} from bridge\\target\\release — delete that folder to go back to the DLLs shipped with the extension.`;
+}
+
 /** Post-inject toast. */
-export function injectedMessage(writeDir: string): string {
-  return `Bridge injected into ${writeDir}. Restart DCS (or run DCS Studio: Launch DCS) to load it.`;
+export function injectedMessage(writeDir: string, built: readonly BridgeDllName[] = []): string {
+  return `Bridge injected into ${writeDir}. Restart DCS (or run DCS Studio: Launch DCS) to load it.${builtDllNote(built)}`;
 }
 
 /** Post-eject toast. */
 export function ejectedMessage(writeDir: string): string {
   return `Bridge ejected from ${writeDir}.`;
+}
+
+/** Post-eject report when some files could not be removed (a running DCS holds
+ * its DLLs open) — the plain toast would claim a clean uninstall that did not
+ * happen. */
+export function ejectIncompleteMessage(writeDir: string, left: readonly string[]): string {
+  return `Bridge only partly ejected from ${writeDir} — ${fileList(left)} could not be removed. Close DCS and eject again.`;
 }
 
 // ── Launch rules ──
@@ -112,4 +148,17 @@ export function dcsExePath(gameInstall: string): string {
  */
 export function shouldEjectOnShutdown(dcsLaunched: boolean): boolean {
   return !dcsLaunched;
+}
+
+/**
+ * What to say about how DCS ended. A clean quit says nothing; anything else
+ * gets reported, because a sim that dies on startup (a bad mod, a corrupt
+ * install, a DLL it cannot load) otherwise looks exactly like the user closing
+ * it — the bridge just never connects and the status bar stays offline.
+ */
+export function dcsExitNote(code: number | null, signal: string | null | undefined): string {
+  if (code === 0) return "";
+  if (code === null)
+    return `DCS was terminated by ${signal ?? "a signal"} before it exited on its own. The bridge has been ejected.`;
+  return `DCS exited with code ${code} — it may have failed on startup. Check dcs.log (command: “DCS Studio: Open DCS Log Viewer”). The bridge has been ejected.`;
 }

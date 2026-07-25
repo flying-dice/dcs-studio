@@ -25,7 +25,8 @@ Feature: Managed DCS launch
     When the user runs "Launch DCS (with bridge)"
     Then the bridge is injected first
     And "DCS.exe --no-launcher" starts detached from the editor
-    And a toast reads "Launching DCS with the DCS Studio bridge…"
+    And a toast reads "Launching DCS with the DCS Studio bridge…", naming any
+      locally built DLL it is deploying rather than the shipped one (story 014)
     And the extension immediately begins reconnect attempts
 
   Scenario Outline: Launch preconditions
@@ -44,6 +45,9 @@ Feature: Managed DCS launch
     Given injection fails for a reason other than a locked DLL
     Then the launch aborts with "Inject failed before launch: <message>"
     And DCS is not started
+    And when the failure came half way through the copies, the message goes on
+      to name what was already replaced (story 014) — the launch injects
+      through exactly the same code as the inject command
 
   Scenario: DCS exits
     Given DCS was launched by the extension
@@ -64,7 +68,14 @@ Feature: Managed DCS launch
   Scenario: The launch command is fired twice in quick succession
     Given no DCS has been launched yet
     When the user triggers "Launch DCS (with bridge)" twice before the first inject finishes
-    Then only one DCS.exe is spawned # UNVERIFIED: the tracked child is assigned only after the awaited inject, so two rapid invocations can both pass the "already launched" check — nothing currently serialises them
+    Then the launch is claimed synchronously, before the inject is awaited, so
+      the second invocation is refused with "DCS Studio is already starting DCS."
+    And only one DCS.exe is spawned
+    And a launch that aborts frees the claim again, so the next attempt is not
+      blocked by a failure
+    # The tracked child process only exists after the spawn, and the inject in
+    # front of it is awaited; the command is reachable from the palette, the
+    # status bar dispatcher and the console's inline button at the same time.
 
   @chaos
   Scenario: The already-launched guard outranks a broken configuration
@@ -84,12 +95,25 @@ Feature: Managed DCS launch
     And the injected bridge files are left in place — a failed spawn does not eject them
 
   @chaos
-  Scenario: DCS exits seconds after starting
+  Scenario Outline: DCS dies instead of quitting
     Given DCS was launched by the extension
-    When the process exits immediately with a non-zero code
+    When the process ends <how>
     Then the bridge files are ejected exactly as for a clean quit
-    And no error is surfaced — the exit code is not inspected
-    And the status bar simply stays "$(debug-disconnect) DCS: offline"
+    And a warning reads "<message>"
+    And the status bar goes to "$(debug-disconnect) DCS: offline" as it would
+      for any exit
+    # A sim that fails on startup — a bad mod, a DLL it cannot load — otherwise
+    # looks exactly like the user closing it: the bridge simply never connects.
+
+    Examples:
+      | how                              | message                                                                                                                                     |
+      | with a non-zero exit code        | DCS exited with code 1 — it may have failed on startup. Check dcs.log (command: “DCS Studio: Open DCS Log Viewer”). The bridge has been ejected. |
+      | killed by a signal, with no code | DCS was terminated by SIGKILL before it exited on its own. The bridge has been ejected.                                                      |
+
+  @chaos
+  Scenario: DCS quits cleanly
+    When the process exits with code 0
+    Then the bridge files are ejected and nothing at all is said about the exit
 
   @chaos
   Scenario: The user closes VS Code while DCS is still running

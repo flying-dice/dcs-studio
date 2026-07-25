@@ -65,7 +65,7 @@ describe("debug registration", () => {
         type: "request",
         command: "configurationDone",
       } as vscode.DebugProtocolMessage);
-      await settle();
+      await settle(() => gui.debugRun.mock.calls.length > 0);
       expect(gui.debugRun).toHaveBeenCalled();
       expect(scheduler.liveIntervals.sort()).toEqual([250, 500]);
     });

@@ -197,10 +197,13 @@ Feature: State explorer
     When copying to it fails (the disk is full, the path is read-only)
     Then a notice shows "export failed — <message>" and the button re-arms
     And no partial file is presented as a successful export
-    But the sim-side temp file is left behind, because the tidy-up step is skipped
-      on the failure path
-      # UNVERIFIED: no test covers a failing copy; deduced from the tidy-up
-      # `delete` sitting after the copy inside the same try block
+    And the sim-side temp file is deleted anyway — the tidy-up runs on every
+      way out of the export, not only the successful one
+    # It used to sit after the copy inside the same try block, so a rejected
+    # copy stranded a multi-megabyte dcs-studio-export-*.json in the DCS write
+    # dir permanently, with nothing in the UI to suggest it was there. The
+    # database export (story 017's db_export command) had the same shape and
+    # the same fix.
 
   @chaos
   Scenario: An export exactly at the open limit
@@ -219,11 +222,17 @@ Feature: State explorer
   Scenario: Exporting a node the sim holds no ref for
     Given a table row whose ref is 0 (the ref ceiling was reached, or the state was reset)
     When the user exports it
-    Then the request falls back to the node's tree path as a Lua expression
-    And a path like "_G/db/Units" is not the expression the user meant,
-      so the export fails with the sim's error and the button re-arms
-      # UNVERIFIED: exact message — "_G/db/Units" parses as arithmetic, so it
-      # fails at run time rather than at loadstring; no test covers this fallback
+    Then the request falls back to naming the value, converting the tree path
+      into a real Lua expression: "_G/db/Units" is sent as "_G.db.Units"
+    And keys that cannot be dotted are indexed instead — "_G/db/Units/A-10C II"
+      as `_G.db.Units["A-10C II"]`, an array index as `[3]`, a key spelled like
+      a Lua keyword as `["end"]`
+    And the sim evaluates the table the row actually names, so the export
+      succeeds where it used to fail
+    # The tree path is a display path, not an expression: sent verbatim,
+    # "_G/db/Units" parses as arithmetic and fails at run time. A key that
+    # itself contains "/" remains unrecoverable — the display path has already
+    # lost where the segment boundary was.
 
   Scenario: Refresh releases sim resources
     When the user clicks "Refresh"

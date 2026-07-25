@@ -208,6 +208,21 @@ describe("saving the dump", () => {
     expect(seededText(TARGET)).toBe("{}");
     expect(state.errors).toEqual([]);
   });
+
+  it("tidies the sim-side temp file even when the copy fails", async () => {
+    // The failure path leaked: a full disk left tens of megabytes of dump in
+    // the DCS write dir with nothing in the UI to suggest it was there.
+    vi.spyOn(vscode.workspace.fs, "copy").mockRejectedValueOnce(
+      new Error("ENOSPC: no space left on device"),
+    );
+    state.quickPickReplies = [scope("all")];
+    state.saveDialogReplies = [TARGET];
+
+    await dbExportCommand(clients);
+
+    expect(state.errors).toEqual(["DCS database export failed: ENOSPC: no space left on device"]);
+    expect(seededText(TEMP)).toBeUndefined();
+  });
 });
 
 describe("when the export fails", () => {

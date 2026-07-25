@@ -34,7 +34,7 @@ Feature: Starting a debug session
       | condition                       | message                                                        |
       | the active editor is not Lua    | Open a .lua file to debug it in DCS.                           |
       | the bridge is not connected     | The DCS bridge is not connected. Launch DCS with the bridge (command: "DCS Studio: Launch DCS (with bridge)") and wait for the status bar to show DCS online. |
-      | a session is already running    | a debug session is already running                             |
+      | a session is already running    | A debug session is already running in DCS — stop it (or let it finish) before starting another. The sim runs one at a time, and both would share the same breakpoints. |
 
   Scenario: Sanitized mission environment
     Given MissionScripting.lua has not been desanitized
@@ -92,11 +92,19 @@ Feature: Starting a debug session
 
   @chaos
   Scenario: A second session while one is already running
-    Given a debug session is running in DCS
+    Given a debug session is running (or sitting at a pause) in DCS
     When another dcs-lua session is started against the same environment
-    Then the engine refuses the run with "a debug session is already running"
-    And the second session ends immediately with exit code 1
-    And the first session keeps running, still holding its own pause  # UNVERIFIED: the second session clears the shared DLL breakpoint registry when it starts and again when it is dismissed, so today the first session silently loses its breakpoints
+    Then the second session asks the engine for its state before it touches
+      anything shared, and refuses on the answer
+    And it aborts with "A debug session is already running in DCS — stop it
+      (or let it finish) before starting another. The sim runs one at a time,
+      and both would share the same breakpoints."
+    And the same text is raised as an error notification
+    And the shared breakpoint registry is never cleared, never written to, and
+      debug_run is never sent
+    And dismissing the refused session does not clear the registry either
+    And the first session keeps running, still holding its own pause and every
+      breakpoint it set
 
   @chaos
   Scenario: The sim is paused in DCS when the session starts
@@ -105,7 +113,9 @@ Feature: Starting a debug session
     Then its setup calls queue behind the mission bridge's model-time pump,
       which does not run while the sim is paused
     And after the client-side timeout the session aborts with
-      "Failed to set breakpoints: Mission bridge call 'debug_clear_breakpoints' timed out"
+      "Cannot start the debug session: Mission bridge call 'debug_state' timed out"
+    And the registry is left alone, because an engine that cannot be asked
+      may well belong to a session that is still using it
     And debug_run is never sent
 
 Feature: Breakpoints
@@ -132,20 +142,31 @@ Feature: Breakpoints
     And "breakpoint condition error: <err>" is written to the Debug Console
 
   @chaos
-  Scenario Outline: Breakpoints that can never be hit are still reported verified
+  Scenario Outline: A breakpoint on a line the sim can never execute
     When the user sets a breakpoint <where>
-    Then it is answered verified at the line it was requested on
-    And it is pushed to the registry like any other
-    And it simply never stops, because the line hook only fires on executed
-      lines of the running chunk
-    And nothing tells the user the breakpoint cannot bind
+    Then the file is read back — the unsaved buffer if it is open, else disk —
+      and the breakpoint is answered unverified, with "<message>"
+    And VS Code draws it hollow, so nothing promises a stop that cannot happen
+    And it is still pushed to the registry like any other, because the editor's
+      view of the file is not what the sim executes
 
     Examples:
-      | where                                  |
-      | on a blank line                        |
-      | on a comment                           |
-      | past the last line of the file         |
-      | in a file this session is not running  |
+      | where                          | message                                                    |
+      | on a blank line                | Blank line — nothing here for the sim to execute.          |
+      | on a comment                   | Comment — nothing here for the sim to execute.             |
+      | past the last line of the file | Past the end of the file — nothing here for the sim to execute. |
+
+  @chaos
+  Scenario Outline: Breakpoints that are still reported verified, honestly
+    When the user sets a breakpoint <where>
+    Then it is answered verified at the line it was requested on
+    And <reason>
+
+    Examples:
+      | where                                 | reason                                                                                        |
+      | in a file this session is not running | the running chunk can dofile other sources, so the editor cannot tell that it will not be hit  |
+      | inside a --[[ ]] block comment        | telling one from a string containing "--[[" needs a Lua lexer, and a false unverified on real code reads worse than a missed one |
+      | in a file that cannot be read at all  | with no lines to judge against nothing is claimed either way                                   |
 
   @chaos
   Scenario: A hundred breakpoints at once

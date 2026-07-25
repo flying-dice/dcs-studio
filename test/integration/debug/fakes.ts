@@ -12,16 +12,24 @@ export function flush(): Promise<void> {
 }
 
 /**
- * Let everything in flight settle, including the real `fs.promises.readFile`
- * the adapter uses to load the program. That one completes on the threadpool
- * and is only picked up in a loop iteration that actually waits, so draining
- * immediates alone never sees it — hence the short real-timer rounds.
+ * Let everything in flight settle, including the real `fs.promises.readFile`s
+ * the adapter uses to load the program and to judge which lines can hold a
+ * breakpoint. Those complete on the threadpool and are only picked up in a loop
+ * iteration that actually waits, so draining immediates alone never sees them —
+ * hence the real-timer rounds.
+ *
+ * `done` says what the caller is waiting for, and ends the wait the moment it
+ * has happened. A fixed round count instead is a race the loser only ever loses
+ * under load: too small and a busy threadpool makes the spec flap, too large
+ * and every request in the suite pays for the worst case.
  */
-export async function settle(): Promise<void> {
-  for (let i = 0; i < 25; i++) {
+export async function settle(done: () => boolean = () => false, rounds = 300): Promise<void> {
+  for (let i = 0; i < rounds; i++) {
     await new Promise((resolve) => setTimeout(resolve, 0));
     await flush();
+    if (done()) break;
   }
+  await flush();
 }
 
 interface FakeTimer {
@@ -132,7 +140,9 @@ export class FakeBridge {
       _pauseOnError: boolean,
     ): Promise<{ ran?: boolean; error?: string | null; dispatched?: boolean }> => ({ ran: true }),
   );
-  debugState = vi.fn(async (): Promise<DebugState> => ({ paused: false, running: true }));
+  /** Idle by default — an engine with no session, which is what a starting
+   * session's "is anyone else running?" probe has to see to proceed. */
+  debugState = vi.fn(async (): Promise<DebugState> => ({ paused: false, running: false }));
   debugContinue = vi.fn(async (_mode: string): Promise<unknown> => undefined);
   debugPause = vi.fn(async (): Promise<unknown> => undefined);
   debugStop = vi.fn(async (): Promise<unknown> => undefined);

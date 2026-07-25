@@ -178,8 +178,8 @@ describe("eject", () => {
 
   it("is safe to run when nothing was ever injected", async () => {
     // Extension shutdown ejects unconditionally; a user who never injected must
-    // not see that fail.
-    await expect(eject(WRITE_DIR)).resolves.toBeUndefined();
+    // not see that fail — and nothing was left behind to report.
+    await expect(eject(WRITE_DIR)).resolves.toEqual([]);
   });
 
   it("keeps removing the rest when one file is locked", async () => {
@@ -191,7 +191,9 @@ describe("eject", () => {
       rm: (p, opts) => (p.endsWith(GUI_DLL) ? Promise.reject(lockedError()) : rm(p, opts)),
     });
 
-    await expect(eject(WRITE_DIR)).resolves.toBeUndefined();
+    // The survivor is reported rather than swallowed: the caller has to be able
+    // to tell the user the bridge is still installed.
+    await expect(eject(WRITE_DIR)).resolves.toEqual([dllInstallPath(WRITE_DIR, GUI_DLL)]);
 
     expect(io.exists(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe(true);
     expect(io.exists(hookInstallPath(WRITE_DIR))).toBe(false);
@@ -206,7 +208,7 @@ describe("eject", () => {
     const rm = io.rm;
     failWith({ rm: (p, opts) => (p === hook ? Promise.reject(lockedError()) : rm(p, opts)) });
 
-    await expect(eject(WRITE_DIR)).resolves.toBeUndefined();
+    await expect(eject(WRITE_DIR)).resolves.toEqual([hookInstallPath(WRITE_DIR)]);
 
     expect(io.exists(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe(false);
     expect(io.exists(dllInstallPath(WRITE_DIR, MISSION_DLL))).toBe(false);
@@ -230,6 +232,44 @@ describe("injectCommand", () => {
     expect(state.info).toEqual([]);
   });
 
+  it("says which files were replaced when the inject fails part-way", async () => {
+    // The scenario the layout makes possible: DCS holds the mission DLL, so the
+    // GUI DLL is replaced and the hook never is. Reporting only "close DCS"
+    // leaves the user with a mixed install they were never told about.
+    const copyFile = io.copyFile;
+    failWith({
+      copyFile: (src, dest) =>
+        dest.endsWith(MISSION_DLL) ? Promise.reject(lockedError()) : copyFile(src, dest),
+    });
+
+    await injectCommand(context());
+
+    expect(state.errors).toEqual([
+      "Could not overwrite the bridge DLLs — DCS appears to be running. Close DCS and inject again. The install is now mixed: dcs_studio_gui.dll was replaced and the rest were not — inject again once the problem is fixed, because DCS loads them as a set.",
+    ]);
+    // Nothing is rolled back: the DLL that will not copy is the one DCS is
+    // running, and deleting the other would fail for the same reason while
+    // destroying a working install.
+    expect(io.read(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe("shipped-gui");
+    expect(io.exists(hookInstallPath(WRITE_DIR))).toBe(false);
+    expect(state.info).toEqual([]);
+  });
+
+  it("names the DLLs it took from the workspace build", async () => {
+    // The choice is made on existence alone, so a stale bridge\\target\\release
+    // outranks a newer shipped DLL until someone deletes it — a failed cargo
+    // build otherwise keeps deploying yesterday's binary in silence.
+    io.seed(builtDllPath(EXT, GUI_DLL), "built-gui");
+
+    await injectCommand(context());
+
+    expect(state.info).toEqual([
+      expect.stringContaining(
+        "Deploying the locally built dcs_studio_gui.dll from bridge\\target\\release",
+      ),
+    ]);
+  });
+
   it("reports any other IO failure with the underlying reason", async () => {
     failWith({ mkdir: () => Promise.reject(new Error("ENOSPC: no space left on device")) });
     await injectCommand(context());
@@ -250,5 +290,23 @@ describe("ejectCommand", () => {
     await ejectCommand();
     expect(io.exists(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe(false);
     expect(state.info).toEqual([`Bridge ejected from ${WRITE_DIR}.`]);
+  });
+
+  it("reports the files a running DCS would not let go of", async () => {
+    // "Bridge ejected" while the GUI DLL is still there sends the user away
+    // believing the extension's code is out of their DCS, and the next start
+    // loads it again.
+    await inject(context(), WRITE_DIR);
+    const rm = io.rm;
+    failWith({
+      rm: (p, opts) => (p.endsWith(GUI_DLL) ? Promise.reject(lockedError()) : rm(p, opts)),
+    });
+
+    await ejectCommand();
+
+    expect(state.warnings).toEqual([
+      `Bridge only partly ejected from ${WRITE_DIR} — dcs_studio_gui.dll could not be removed. Close DCS and eject again.`,
+    ]);
+    expect(state.info).toEqual([]);
   });
 });

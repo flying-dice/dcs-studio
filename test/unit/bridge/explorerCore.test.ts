@@ -180,6 +180,30 @@ describe("childPath", () => {
   });
 });
 
+describe("pathToExpr — the export fallback for a node with no ref", () => {
+  it("turns the display path into the Lua expression that names the value", () => {
+    // The tree path is not an expression: "_G/db/Units" parses as arithmetic
+    // and fails at run time, so exporting a ref-less node used to be certain to
+    // fail with a message about none of it.
+    expect(core.pathToExpr("_G/db/Units")).toBe("_G.db.Units");
+    expect(core.pathToExpr("_G")).toBe("_G");
+  });
+
+  it("indexes keys that cannot be dotted", () => {
+    // DCS's own tables are full of them: unit types with dashes and spaces,
+    // array indices, and the occasional key spelled like a Lua keyword.
+    expect(core.pathToExpr("_G/db/Units/A-10C II")).toBe('_G.db.Units["A-10C II"]');
+    expect(core.pathToExpr("_G/coalition/1/units/2")).toBe("_G.coalition[1].units[2]");
+    expect(core.pathToExpr("_G/t/end")).toBe('_G.t["end"]');
+    expect(core.pathToExpr('_G/t/say "hi"')).toBe('_G.t["say \\"hi\\""]');
+    expect(core.pathToExpr("_G/t/two\nlines")).toBe('_G.t["two\\nlines"]');
+  });
+
+  it("answers an empty path with nothing to evaluate", () => {
+    expect(core.pathToExpr("")).toBe("");
+  });
+});
+
 describe("valueToJson / childrenToJson — copy serialization", () => {
   it("coerces scalar previews to JS values", () => {
     expect(core.valueToJson({ type: "number", value: "42" })).toBe(42);

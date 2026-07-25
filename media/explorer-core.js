@@ -132,6 +132,39 @@
     return parent ? `${parent}/${name}` : name;
   }
 
+  // Lua's reserved words — a key spelled like one has to be indexed, not dotted.
+  const LUA_KEYWORDS = new Set(
+    (
+      "and break do else elseif end false for function if in local nil not or " +
+      "repeat return then true until while"
+    ).split(" "),
+  );
+
+  // A tree path (`_G/db/Units`, the `/`-joined display path) → the Lua
+  // expression that names the same value (`_G.db.Units`). Used for the export
+  // of a node the sim holds no ref for: the path itself is NOT an expression —
+  // below the root it parses as arithmetic and fails at run time.
+  //
+  // Keys that are not plain identifiers are indexed instead: a numeric key as
+  // `[3]`, anything else as a quoted `["…"]` with backslashes, quotes and
+  // newlines escaped. A key containing "/" is unrecoverable — the display path
+  // has already lost where the segment boundary was.
+  function pathToExpr(path) {
+    const segs = splitSegs(path);
+    if (!segs.length) return "";
+    return segs.slice(1).reduce((expr, seg) => expr + indexSuffix(seg), segs[0]);
+  }
+
+  function indexSuffix(seg) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(seg) && !LUA_KEYWORDS.has(seg)) return `.${seg}`;
+    if (/^[0-9]+$/.test(seg)) return `[${seg}]`;
+    return `[${quoteLua(seg)}]`;
+  }
+
+  function quoteLua(s) {
+    return `"${s.replace(/[\\"]/g, "\\$&").replace(/\n/g, "\\n")}"`;
+  }
+
   function stripQuotes(s) {
     if (
       typeof s === "string" &&
@@ -198,6 +231,7 @@
     sweepMaxDepth,
     shouldSweepFetch,
     childPath,
+    pathToExpr,
     valueToJson,
     childrenToJson,
     signatureDisplay,

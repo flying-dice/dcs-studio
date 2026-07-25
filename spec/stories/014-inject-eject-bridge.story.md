@@ -54,15 +54,21 @@ Feature: Bridge injection
     # editor and leave every copy failing with ENOENT.
 
   @chaos
-  Scenario: A partly copied payload is left in place
+  Scenario: A partly copied payload is reported as one
     Given the GUI DLL copies successfully
     But the mission DLL cannot be overwritten because DCS holds it
     When the user runs "Inject Bridge into DCS"
     Then the inject stops at the failing copy — the hook is never copied
     And the already-copied GUI DLL is NOT rolled back
-    And an error reads
-      "Could not overwrite the bridge DLLs — DCS appears to be running. Close DCS and inject again."
+    And the error names both the cause and the state it left behind:
+      "Could not overwrite the bridge DLLs — DCS appears to be running. Close
+      DCS and inject again. The install is now mixed: dcs_studio_gui.dll was
+      replaced and the rest were not — inject again once the problem is fixed,
+      because DCS loads them as a set."
     And no success toast is shown
+    # Nothing is rolled back on purpose: the file that will not copy is the one
+    # a running DCS has loaded, so deleting its already-updated sibling would
+    # fail for the same reason while destroying a working install.
 
   @chaos
   Scenario Outline: Inject failures that are not a locked DLL
@@ -101,7 +107,16 @@ Feature: Bridge injection
     Given "bridge\target\release" contains only "dcs_studio_gui.dll"
     When the user runs "Inject Bridge into DCS"
     Then the built GUI DLL and the SHIPPED mission DLL are deployed side by side
-    And the mismatch is not detected or reported # UNVERIFIED: neither DLL nor the hook carries a version the other checks, and the extension compares nothing — the pair is chosen per file, on existence alone
+    And the toast names the odd one out: "Deploying the locally built
+      dcs_studio_gui.dll from bridge\target\release — delete that folder to go
+      back to the DLLs shipped with the extension."
+    And the same note rides the launch toast, since launching injects too
+    But the mismatch itself is not detected — neither DLL nor the hook carries
+      a version the other checks, and the pair is still chosen per file, on
+      existence alone
+    # Selection ignores which file is NEWER, so a cargo build that failed hours
+    # ago keeps deploying its last good binary. Saying which binary is going in
+    # is what lets the user notice; nothing here silently picks for them.
 
   @chaos
   Scenario: The DLL is present but DCS cannot load it
@@ -141,7 +156,8 @@ Feature: Bridge ejection
   Scenario: Ejecting
     When the user runs "Eject Bridge from DCS"
     Then the deployed files (both DLLs and the hook) are removed (best-effort)
-    And a toast confirms "Bridge ejected from <writeDir>."
+    And a toast confirms "Bridge ejected from <writeDir>." only when every one
+      of them actually went
 
   Scenario: Automatic cleanup on shutdown
     When the extension deactivates
@@ -162,9 +178,13 @@ Feature: Bridge ejection
     When the user runs "Eject Bridge from DCS"
     Then the hook script, the mission DLL and the legacy artifacts are still removed
     And the locked GUI DLL stays on disk
-    And the toast reads "Bridge ejected from <writeDir>." with no mention of what was left behind
+    And no success toast is shown; a warning names what survived:
+      "Bridge only partly ejected from <writeDir> — dcs_studio_gui.dll could
+      not be removed. Close DCS and eject again."
     # Each file is attempted independently so one that will not go does not
-    # strand the others — but the toast overstates what happened.
+    # strand the others — and the ones that would not go are reported, because
+    # "Bridge ejected" sends the user away believing the extension's code is
+    # out of their DCS when the next start would load it again.
 
   @chaos
   Scenario: The hook is removed while DCS is still running

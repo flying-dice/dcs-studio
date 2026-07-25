@@ -65,6 +65,10 @@ const CONSOLE_POLL_MS = 500;
 const BRIDGE_OFFLINE =
   "The DCS bridge is not connected. Launch DCS with the bridge (command: “DCS Studio: Launch DCS (with bridge)”) and wait for the status bar to show DCS online.";
 
+/** The engine runs one session at a time, and they would share one registry. */
+const SESSION_BUSY =
+  "A debug session is already running in DCS — stop it (or let it finish) before starting another. The sim runs one at a time, and both would share the same breakpoints.";
+
 interface DapRequest {
   seq: number;
   type: "request";
@@ -95,6 +99,10 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
 
   private started = false;
   private finished = false;
+  /** This session owns the engine — it cleared the shared breakpoint registry
+   * and is the one that must clear it again on the way out. False while another
+   * session holds the engine, and for run-without-debugging. */
+  private owns = false;
 
   /** Pure poll-machine state (pause dedupe, live snapshot, stop-reason bookkeeping). */
   private tracking: SessionTracking = { ...INITIAL_TRACKING };
@@ -275,11 +283,7 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
 
     let code: string;
     try {
-      // Prefer the live buffer (unsaved edits run as seen), else disk.
-      const open = vscode.workspace.textDocuments.find(
-        (d) => d.uri.scheme === "file" && samePath(d.uri.fsPath, program),
-      );
-      code = open ? open.getText() : await fs.promises.readFile(program, "utf8");
+      code = await this.readSource(program);
     } catch (e) {
       this.abort(`Cannot read ${program}: ${errText(e)}`);
       return;
@@ -299,6 +303,28 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
       await this.runWithoutDebugging(code, program);
       return;
     }
+
+    // Ask before touching anything shared. The breakpoint registry is
+    // process-wide DLL state and the engine runs one session at a time: a
+    // second session that cleared the registry and then had its run refused
+    // would leave the FIRST one attached with no breakpoints at all.
+    try {
+      const engine = await this.client.debugState();
+      if (engine.running || engine.paused) {
+        this.abort(SESSION_BUSY);
+        return;
+      }
+    } catch (e) {
+      // No answer means no way to know whether the engine is free — and the
+      // poll loop this session depends on speaks the same call. Refuse rather
+      // than clear a registry that may belong to somebody else.
+      this.abort(`Cannot start the debug session: ${errText(e)}`);
+      return;
+    }
+
+    // Past here the shared registry is ours: it has to be cleared again when
+    // this session ends, and nobody else may clear it meanwhile.
+    this.owns = true;
 
     // Fresh registry, then the full current breakpoint set.
     try {
@@ -453,7 +479,26 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
       }
     }
 
-    this.respond(req, toBreakpointsResponse(bps));
+    // Answer against the file itself: a breakpoint on a blank line, a comment
+    // or past the end of the file is reported unbound rather than drawn as a
+    // breakpoint that will never be hit. An unreadable file simply carries no
+    // information, and nothing is claimed.
+    let text: string | undefined;
+    try {
+      text = await this.readSource(fsPath);
+    } catch {
+      /* not on disk and not open — no lines to judge against */
+    }
+    this.respond(req, toBreakpointsResponse(bps, text));
+  }
+
+  /** The file's text as the user sees it: the live buffer (unsaved edits
+   * included) wins over what is on disk. Throws when it is neither. */
+  private async readSource(fsPath: string): Promise<string> {
+    const open = vscode.workspace.textDocuments.find(
+      (d) => d.uri.scheme === "file" && samePath(d.uri.fsPath, fsPath),
+    );
+    return open ? open.getText() : await fs.promises.readFile(fsPath, "utf8");
   }
 
   private pushSource(fsPath: string, bps: StoredBreakpoint[]): Promise<unknown> {
@@ -512,10 +557,15 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
         /* already gone */
       }
     }
-    try {
-      await this.client.debugClearBreakpoints();
-    } catch {
-      /* best effort — cleared again at next session start */
+    // Only the session that took the registry may drop it. A session that was
+    // refused (another one is live) or that never used it must leave the
+    // breakpoints of whoever does own it exactly where they are.
+    if (this.owns) {
+      try {
+        await this.client.debugClearBreakpoints();
+      } catch {
+        /* best effort — cleared again at next session start */
+      }
     }
     this.finish(undefined, /*quiet*/ true);
     this.respond(req);

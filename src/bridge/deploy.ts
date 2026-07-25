@@ -13,12 +13,14 @@ import {
   builtDllPath,
   dllInstallPath,
   ejectedMessage,
+  ejectIncompleteMessage,
   hookInstallPath,
   hookSourcePath,
   INJECT_LOCKED_MESSAGE,
   injectedMessage,
   isDllLockedError,
   legacyInstallPaths,
+  partialInstallMessage,
   selectDll,
 } from "../core/domain/bridgeDeploy";
 import { showError } from "../errors";
@@ -89,25 +91,70 @@ async function cleanupLegacy(writeDir: string): Promise<void> {
   }
 }
 
-/** Copy both DLLs + the hook into `writeDir`. Throws on IO error (incl. locked DLL). */
-export async function inject(ctx: vscode.ExtensionContext, writeDir: string): Promise<void> {
-  const hookDest = hookInstallPath(writeDir);
-  await io.mkdir(path.dirname(dllInstallPath(writeDir, BRIDGE_DLLS[0])), { recursive: true });
-  await io.mkdir(path.dirname(hookDest), { recursive: true });
-  for (const name of BRIDGE_DLLS) {
-    await io.copyFile(resolveDll(ctx, name), dllInstallPath(writeDir, name));
+/**
+ * An inject that failed part-way, carrying what had already landed so the
+ * caller can say so. The underlying failure's `code` is forwarded, so a locked
+ * DLL is still classified as one.
+ */
+export class InjectError extends Error {
+  readonly code: string | undefined;
+  constructor(
+    readonly reason: unknown,
+    /** Destinations that were successfully written before the failure. */
+    readonly installed: readonly string[],
+  ) {
+    super(reason instanceof Error ? reason.message : String(reason));
+    this.name = "InjectError";
+    this.code = (reason as { code?: string } | null | undefined)?.code;
   }
-  await io.copyFile(resolveHook(ctx), hookDest);
+}
+
+/** Copy both DLLs + the hook into `writeDir`. Throws an InjectError on any IO
+ * failure (incl. a locked DLL), naming what had already been replaced. */
+export async function inject(ctx: vscode.ExtensionContext, writeDir: string): Promise<void> {
+  const copies = [
+    ...BRIDGE_DLLS.map((name) => ({
+      src: resolveDll(ctx, name),
+      dest: dllInstallPath(writeDir, name),
+    })),
+    { src: resolveHook(ctx), dest: hookInstallPath(writeDir) },
+  ];
+  const installed: string[] = [];
+  try {
+    await io.mkdir(path.dirname(dllInstallPath(writeDir, BRIDGE_DLLS[0])), { recursive: true });
+    await io.mkdir(path.dirname(hookInstallPath(writeDir)), { recursive: true });
+    for (const { src, dest } of copies) {
+      await io.copyFile(src, dest);
+      installed.push(dest);
+    }
+  } catch (e) {
+    throw new InjectError(e, installed);
+  }
   await cleanupLegacy(writeDir);
 }
 
-/** Remove the DLLs + hook (and any legacy artifacts) from `writeDir` (best-effort). */
-export async function eject(writeDir: string): Promise<void> {
-  for (const name of BRIDGE_DLLS) {
-    await io.rm(dllInstallPath(writeDir, name), { force: true }).catch(() => undefined);
+/** The DLLs taken from the workspace build rather than the shipped set. */
+export function builtDlls(ctx: vscode.ExtensionContext): BridgeDllName[] {
+  const root = ctx.extensionUri.fsPath;
+  return BRIDGE_DLLS.filter((name) => resolveDll(ctx, name) === builtDllPath(root, name));
+}
+
+/**
+ * Remove the DLLs + hook (and any legacy artifacts) from `writeDir`. Every file
+ * is attempted independently, so one that will not go does not strand the
+ * others; the ones that survived are returned rather than swallowed.
+ */
+export async function eject(writeDir: string): Promise<string[]> {
+  const left: string[] = [];
+  const targets = [
+    ...BRIDGE_DLLS.map((name) => dllInstallPath(writeDir, name)),
+    hookInstallPath(writeDir),
+    ...legacyInstallPaths(writeDir),
+  ];
+  for (const p of targets) {
+    await io.rm(p, { force: true }).catch(() => left.push(p));
   }
-  await io.rm(hookInstallPath(writeDir), { force: true }).catch(() => undefined);
-  await cleanupLegacy(writeDir);
+  return left;
 }
 
 /** Command: inject into the resolved Saved Games dir, with friendly errors. */
@@ -116,19 +163,29 @@ export async function injectCommand(ctx: vscode.ExtensionContext): Promise<void>
   try {
     await inject(ctx, writeDir);
   } catch (e) {
+    // `inject` wraps everything it can throw, so this is always an InjectError:
+    // its message is the underlying failure's, and it names what had landed.
+    const failure = e as InjectError;
+    const note = partialInstallMessage(failure.installed) ?? "";
     if (isDllLockedError(e)) {
-      void showError(INJECT_LOCKED_MESSAGE);
+      void showError(`${INJECT_LOCKED_MESSAGE}${note}`);
       return;
     }
-    void showError(`Inject failed: ${e instanceof Error ? e.message : String(e)}`, e);
+    void showError(`Inject failed: ${failure.message}${note}`, e);
     return;
   }
-  void vscode.window.showInformationMessage(injectedMessage(writeDir));
+  void vscode.window.showInformationMessage(injectedMessage(writeDir, builtDlls(ctx)));
 }
 
 /** Command: eject the bridge from the resolved Saved Games dir. */
 export async function ejectCommand(): Promise<void> {
   const writeDir = savedGamesDir();
-  await eject(writeDir);
+  const left = await eject(writeDir);
+  if (left.length) {
+    // A running DCS holds its DLLs open: claiming a clean uninstall would send
+    // the user looking for a bridge that is still loaded on the next start.
+    void vscode.window.showWarningMessage(ejectIncompleteMessage(writeDir, left));
+    return;
+  }
   void vscode.window.showInformationMessage(ejectedMessage(writeDir));
 }

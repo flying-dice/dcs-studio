@@ -12,6 +12,7 @@ import * as vscode from "vscode";
 import { useBridgeFs } from "../../../src/bridge/deploy";
 import { launchCleanup, launchDcs } from "../../../src/bridge/launch";
 import {
+  builtDllPath,
   dllInstallPath,
   hookInstallPath,
   hookSourcePath,
@@ -103,6 +104,45 @@ describe("preconditions", () => {
     expect(harness.calls).toHaveLength(1);
     expect(state.info).toContain("DCS was already launched by DCS Studio.");
   });
+
+  it("refuses a second launch fired while the first is still injecting", async () => {
+    // The command is on the palette, the status bar dispatcher AND the console's
+    // inline button, and the inject in front of the spawn is awaited — so the
+    // tracked process does not exist yet when the second invocation checks for
+    // it. Nothing but a synchronous claim closes that window.
+    let releaseCopy: () => void = () => {};
+    const held = new Promise<void>((r) => {
+      releaseCopy = r;
+    });
+    const copyFile = io.copyFile;
+    restore();
+    io = mappedBridgeFs(root, {
+      copyFile: async (src, dest) => {
+        await held;
+        return copyFile(src, dest);
+      },
+    });
+    restore = useBridgeFs(io);
+    harness.plan(() => undefined);
+
+    const first = launchDcs(context(), fakeSpawn());
+    const second = launchDcs(context(), fakeSpawn());
+    releaseCopy();
+    await Promise.all([first, second]);
+
+    expect(harness.calls).toHaveLength(1);
+    expect(state.info).toContain("DCS Studio is already starting DCS.");
+  });
+
+  it("frees the claim when a launch fails, so the next one is not blocked", async () => {
+    state.config["dcsStudio.gameInstallPath"] = "";
+    await launchDcs(context(), fakeSpawn());
+    state.config["dcsStudio.gameInstallPath"] = GAME_INSTALL;
+
+    await launchLive();
+
+    expect(harness.calls).toHaveLength(1);
+  });
 });
 
 describe("injecting before launch", () => {
@@ -135,6 +175,26 @@ describe("injecting before launch", () => {
     await launchDcs(context(), fakeSpawn());
 
     expect(state.errors).toEqual(["Inject failed before launch: EACCES: denied"]);
+    expect(harness.calls).toEqual([]);
+  });
+
+  it("says which half of the bridge landed when the inject fails part-way", async () => {
+    // DCS loads the two DLLs and the hook as a set. A copy that fails after an
+    // earlier one succeeded leaves a mixed install, and "close DCS and try
+    // again" alone would not tell the user their bridge is now half-replaced.
+    const copyFile = io.copyFile;
+    restore();
+    io = mappedBridgeFs(root, {
+      copyFile: (src, dest) =>
+        dest.endsWith(MISSION_DLL) ? Promise.reject(lockedError()) : copyFile(src, dest),
+    });
+    restore = useBridgeFs(io);
+
+    await launchDcs(context(), fakeSpawn());
+
+    expect(state.errors).toEqual([
+      "A bridge DLL is locked — is DCS already running? The install is now mixed: dcs_studio_gui.dll was replaced and the rest were not — inject again once the problem is fixed, because DCS loads them as a set.",
+    ]);
     expect(harness.calls).toEqual([]);
   });
 
@@ -173,6 +233,37 @@ describe("the spawn", () => {
       expect(io.exists(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe(false);
       expect(io.exists(hookInstallPath(WRITE_DIR))).toBe(false);
     });
+  });
+
+  it("says so when DCS dies instead of quitting", async () => {
+    // A sim that fails on startup looks exactly like a clean quit otherwise:
+    // the bridge simply never connects and the status bar stays offline.
+    await launchLive();
+    harness.children[0].emit("exit", 1);
+    expect(state.warnings).toEqual([expect.stringContaining("DCS exited with code 1")]);
+    await vi.waitFor(() => expect(io.exists(hookInstallPath(WRITE_DIR))).toBe(false));
+  });
+
+  it("names the signal when DCS was killed rather than exiting", async () => {
+    await launchLive();
+    harness.children[0].emit("exit", null, "SIGKILL");
+    expect(state.warnings).toEqual([expect.stringContaining("terminated by SIGKILL")]);
+  });
+
+  it("says nothing about a clean quit", async () => {
+    await launchLive();
+    harness.children[0].emit("exit", 0);
+    expect(state.warnings).toEqual([]);
+  });
+
+  it("names the locally built DLLs it is about to deploy", async () => {
+    // Selection is on existence alone, so a stale bridge\\target\\release keeps
+    // winning over a newer shipped DLL — the least the toast can do is say
+    // which binary is going into the sim.
+    io.seed(builtDllPath(EXT, GUI_DLL), "built-gui");
+    await launchLive();
+    expect(state.info).toEqual([expect.stringContaining("Deploying the locally built")]);
+    expect(io.read(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe("built-gui");
   });
 
   it("allows a relaunch after DCS has exited", async () => {

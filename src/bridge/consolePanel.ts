@@ -205,11 +205,15 @@ export class ConsolePanel {
     env: LuaEnv,
     msg: { ref?: number; expr?: string; label?: string; reqId?: number },
   ): Promise<void> {
+    // Tracked outside the try so the tidy-up runs on EVERY path out of it: a
+    // copy the user's disk refuses would otherwise leave a multi-megabyte
+    // dcs-studio-export-*.json in the DCS write dir forever.
+    let temp: vscode.Uri | undefined;
     try {
       const { path, bytes } = await this.clients
         .forEnv(env)
         .replExport(env, { ref: msg.ref, expr: msg.expr });
-      const temp = vscode.Uri.file(path);
+      temp = vscode.Uri.file(path);
       const base = exportFileBase(msg.label);
       const folder = vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(os.homedir());
       const target = await vscode.window.showSaveDialog({
@@ -227,14 +231,17 @@ export class ConsolePanel {
           );
         }
       }
-      try {
-        await vscode.workspace.fs.delete(temp);
-      } catch {
-        /* best-effort tidy of the sim-side temp file */
-      }
       this.post({ type: "exportDone", reqId: msg.reqId, saved: !!target });
     } catch (e) {
       this.post({ type: "exportDone", reqId: msg.reqId, saved: false, error: errText(e) });
+    } finally {
+      if (temp) {
+        try {
+          await vscode.workspace.fs.delete(temp);
+        } catch {
+          /* best-effort tidy of the sim-side temp file */
+        }
+      }
     }
   }
 
