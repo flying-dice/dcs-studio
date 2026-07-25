@@ -35,7 +35,7 @@ finally {
     Pop-Location
 }
 
-# TODO: clean-code - 0.5 - BOUNDARY: every Test-Path / Copy-Item / Remove-Item
+# TODO: clean-code - 0.5 - BOUNDARY (#56): every Test-Path / Copy-Item / Remove-Item
 # here uses -Path, which treats [ ] and ? in a path as wildcards. -WriteDir
 # exists so a user can point at a non-default folder, and `D:\Games [SSD]\DCS`
 # is a legal Windows path — Test-Path returns $false and the script insists a

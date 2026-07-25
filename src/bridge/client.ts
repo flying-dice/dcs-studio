@@ -380,7 +380,7 @@ export class BridgeClient {
     this.pending.clear();
   }
 
-  // TODO: clean-code - 0.55 - PANIC: this loop runs from the socket's data,
+  // TODO: clean-code - 0.55 - PANIC (#42): this loop runs from the socket's data,
   // error and close handlers with no try/catch on the path, which makes it the
   // one place in the extension where a listener throw becomes an UNCAUGHT
   // EXCEPTION — the host, not a panel. No listener throws today; the ping path

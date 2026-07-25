@@ -24,13 +24,13 @@ import { dataDir } from "./dataDir";
 // projection and the version-skip rule are core domain functions. The subscription
 // service, ledger and marketplace backend are injected by the composition root
 // (extension.ts); the Update release lookup goes through the MarketplacePort.
-// TODO: clean-code - 0.75 - SRP: this panel still holds its decision logic, and
+// TODO: clean-code - 0.75 - SRP (#40): this panel still holds its decision logic, and
 // the cost is visible in the suite — 314 source lines needing a 776-line
 // integration test, where the panels that had their presenter extracted need
 // ~196 integration lines plus fast pure unit tests. Extract a MyModsPresenter
 // in core/app returning typed effects, the way marketplacePresenter.ts does.
 //
-// TODO: clean-code - 0.6 - BOUNDARY: `ledger` is typed as the concrete
+// TODO: clean-code - 0.6 - BOUNDARY (#40): `ledger` is typed as the concrete
 // JsonLedgerStore rather than the SubscriptionLedgerStore port, so the "swap the
 // ledger backend by writing one adapter" claim in ARCHITECTURE.md is not true
 // for this consumer — a sidecar/DB backend forces an edit here.

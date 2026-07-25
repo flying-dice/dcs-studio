@@ -9,7 +9,7 @@ import type { MarketplacePort } from "../../core/ports/marketplace";
 // mod-consumer experience runs with no DCS install and no network — and proves
 // the marketplace backend swaps behind the port with one composition-root line.
 //
-// TODO: clean-code - 0.55 - DEAD: this is the one module under src/ unreachable
+// TODO: clean-code - 0.55 - DEAD (#52): this is the one module under src/ unreachable
 // from the composition root, so tsc compiles it into out/ and every .vsix ships
 // 400 lines of sample catalog to users who can never reach it. It also has to be
 // covered, because the integration gate includes src/** at 100% per file — which

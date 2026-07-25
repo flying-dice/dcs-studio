@@ -42,7 +42,7 @@
     });
   }
 
-  // TODO: clean-code - 0.6 - SRP: this is manifest validation policy living in a
+  // TODO: clean-code - 0.6 - SRP (#54): this is manifest validation policy living in a
   // DOM script — it decides what a valid manifest is, formats the message, and
   // is reachable only by driving a browser. Both the SRP and DRY audits landed
   // here independently. The rules belong in manifest-core.js beside the parser

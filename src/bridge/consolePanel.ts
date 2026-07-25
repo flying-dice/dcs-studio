@@ -214,7 +214,7 @@ export class ConsolePanel {
         .forEnv(env)
         .replExport(env, { ref: msg.ref, expr: msg.expr });
       temp = vscode.Uri.file(path);
-      // TODO: clean-code - 0.6 - DRY: from here to the end of the try block is
+      // TODO: clean-code - 0.6 - DRY (#50): from here to the end of the try block is
       // the same twenty lines as src/bridge/dbExport.ts — default folder, save
       // dialog, copy, shouldOpenExport branch, temp cleanup — differing only in
       // the filename base. Extract one `saveExport(temp, baseName, bytes)`

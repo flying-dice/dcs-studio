@@ -428,7 +428,7 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
       end
       error("") -- abort before the body runs
     end
-    -- TODO: clean-code - 0.85 - PANIC: Lua 5.1 will not fire a hook from inside
+    -- TODO: clean-code - 0.85 - PANIC (#33): Lua 5.1 will not fire a hook from inside
     -- a hook, so whenever this is served while the debug engine holds the sim
     -- thread (hold_pause -> D.pump, or the throttled run-loop drain) the hook
     -- never fires and `pcall(fn)` RUNS THE TARGET FUNCTION with no arguments —

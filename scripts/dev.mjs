@@ -31,7 +31,7 @@ if (compile.status !== 0) {
 }
 
 console.log("› Launching Extension Development Host (this extension only)…");
-// TODO: clean-code - 0.5 - BOUNDARY: `shell: true` means this argv is re-parsed
+// TODO: clean-code - 0.5 - BOUNDARY (#57): `shell: true` means this argv is re-parsed
 // by the shell, and neither interpolated path is quoted. The shipping target is
 // Windows, where `C:\Users\First Last\…` and `…\OneDrive - Company\…` are
 // normal — `npm run dev` there opens the wrong folder or fails to launch, with

@@ -56,7 +56,7 @@ export const nodeBridgeFs: BridgeFs = {
   rm: fsp.rm,
 };
 
-// TODO: clean-code - 0.7 - COUPLING: module-level mutable state standing in for
+// TODO: clean-code - 0.7 - COUPLING (#41): module-level mutable state standing in for
 // injection. Every consumer of `bridgeFs()` shares one slot, so a test that
 // swaps it and does not restore leaks into the next, and two features cannot
 // hold different filesystems. The rest of the extension takes its ports as

@@ -489,7 +489,7 @@ fn success_response(id: String, result: serde_json::Value) -> JsonRpcResponse {
 /// can't represent — a cyclic table past the depth cap, a function, … — becomes
 /// a JSON-RPC error carrying the real cause, not a resultless response the
 /// editor can't interpret, and never a panic that would take the sim down.
-// TODO: clean-code - 0.55 - NAMING: named for the happy path but returns an
+// TODO: clean-code - 0.55 - NAMING (#47): named for the happy path but returns an
 // error envelope on the serialize failure, which is the branch the doc comment
 // above spends most of its words on. `response_for` or `encode_result` says what
 // it does; `ok_response` invites a reader to assume the error case is elsewhere.

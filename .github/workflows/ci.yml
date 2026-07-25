@@ -34,7 +34,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      # TODO: clean-code - 0.58 - BOUNDARY: `tsc -p ./` typechecks src/ only —
+      # TODO: clean-code - 0.58 - BOUNDARY (#58): `tsc -p ./` typechecks src/ only —
       # tsconfig.json's `include` is ["src"], and it is the repo's only
       # compilation unit. All of test/, tests/, the shared vscode double and the
       # config files are transpiled by esbuild without ever being typechecked,

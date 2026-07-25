@@ -5,7 +5,7 @@
    file only supplies the CSS custom properties those stylesheets read, plus
    the toast chrome shared by every fixture's human dev-loop log.
 
-   TODO: clean-code - 0.5 - DEAD: nothing in this repo ever sets data-theme, so
+   TODO: clean-code - 0.5 - DEAD (#55): nothing in this repo ever sets data-theme, so
    both [data-theme] selector sets are dead — and the dark token block is written
    out twice (once under the media query, once under [data-theme="dark"]), which
    is a drift trap no test can catch. Keep :root + the media query, drop the

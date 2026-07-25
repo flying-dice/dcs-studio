@@ -64,7 +64,7 @@ import { SetupPanel } from "./setup/panel";
 import { type SkillInfo, SkillsLibrary } from "./skills/library";
 import { SkillsPanel, showInstallFailed } from "./skills/skillsPanel";
 
-// TODO: clean-code - 0.55 - DRY: the manifest filename is declared three times
+// TODO: clean-code - 0.55 - DRY (#48): the manifest filename is declared three times
 // under three names (here, and in the publish and nav paths) plus eight bare
 // literals across src/. One exported constant in core/domain, imported
 // everywhere, is the whole fix.

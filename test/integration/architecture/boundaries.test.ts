@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 // Node I/O builtins, or `src/adapters` — is a boundary violation. Also: core is
 // TypeScript-only (no compiled `.js` leaking in).
 //
-// TODO: clean-code - 0.5 - BOUNDARY: this checks one direction only. The other
+// TODO: clean-code - 0.5 - BOUNDARY (#53): this checks one direction only. The other
 // half of the rule ARCHITECTURE.md states — that adapters reach core through
 // ports and domain types, not through each other's internals — is unchecked, so
 // a panel importing another feature's concrete class (see MyModsPanel taking

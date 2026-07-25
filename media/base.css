@@ -3,7 +3,7 @@
    by a panel: its stylesheet cascades after this one. Holds the design tokens,
    the reset, and the button / card / header / spinner primitives that were
    previously re-declared near-verbatim across ~11 media/*.css files. */
-/* TODO: clean-code - 0.6 - DRY: this claims to hold "the design tokens" but
+/* TODO: clean-code - 0.6 - DRY (#55): this claims to hold "the design tokens" but
    holds four. The status palette is re-declared per panel and has already
    drifted: --warn is --vscode-charts-yellow in nav/skills and
    --vscode-editorWarning-foreground in publish/setup; --accent is

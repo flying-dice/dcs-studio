@@ -15,7 +15,7 @@
 // loads as a UMD global and cannot import TypeScript); the unit layer asserts
 // that copy against this one so the pair cannot drift.
 //
-// TODO: clean-code - 0.55 - DRY: that anti-drift check covers two of the three
+// TODO: clean-code - 0.55 - DRY (#46): that anti-drift check covers two of the three
 // copies. The Rust one is held to a hand-retyped table in its own tests, so a
 // case added here and in the webview — but not retyped there — leaves the
 // bridge's guard quietly weaker than the extension's, in a security predicate.

@@ -3,7 +3,7 @@ import type { FileSystemPort } from "../../src/core/ports/filesystem";
 
 // The behavioural contract every FileSystemPort implementation must satisfy.
 //
-// TODO: clean-code - 0.6 - KISS: this is parameterised over `create` + a harness
+// TODO: clean-code - 0.6 - KISS (#49): this is parameterised over `create` + a harness
 // but has exactly one caller (NodeFileSystem), so the drift it exists to prevent
 // is not actually prevented — the four hand-written fakes in test/unit
 // (publishService, subscriptionService, missionSanitizeService, detectService)

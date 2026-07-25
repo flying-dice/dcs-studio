@@ -20,7 +20,7 @@ import { gameInstallDir, savedGamesDir } from "./paths";
 // — a locked DLL (DCS already running) aborts before spawning. The launch rules
 // (exe path, args, locked-DLL classification, eject-on-exit policy) are pure and
 // live in core/domain/bridgeDeploy.
-// TODO: clean-code - 0.65 - COUPLING: `child` and `launching` are module
+// TODO: clean-code - 0.65 - COUPLING (#41): `child` and `launching` are module
 // singletons, so "is DCS running" is process-global state that no caller can see
 // or inject. It works because exactly one window may launch DCS, but it makes
 // the launch policy untestable except through this module's own globals, and it

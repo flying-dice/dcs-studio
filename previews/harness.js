@@ -45,7 +45,7 @@
   const seed = new URLSearchParams(location.search).get("state");
   if (seed) state = JSON.parse(seed);
 
-  // TODO: clean-code - 0.7 - BOUNDARY: postMessage fans out to host handlers
+  // TODO: clean-code - 0.7 - BOUNDARY (#36): postMessage fans out to host handlers
   // SYNCHRONOUSLY, so a fixture's reply is delivered re-entrantly before
   // postMessage returns — a real host can only reply in a later task. Any panel
   // that mutates state after posting (a request-id counter, a busy flag, a
@@ -56,7 +56,7 @@
   // Fix: `for (const fn of postHandlers) setTimeout(() => fn(m), 0)` — sent[]
   // stays synchronous, so expectSent is unaffected.
   //
-  // TODO: clean-code - 0.6 - BOUNDARY: getState/setState store the caller's
+  // TODO: clean-code - 0.6 - BOUNDARY (#36): getState/setState store the caller's
   // object BY REFERENCE; the real pair serialises. console.js persists a live
   // `history` array it keeps mutating, so webviewState(page) reads it as it is
   // now rather than as it was persisted — a dropped or mis-ordered persist()

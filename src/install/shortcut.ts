@@ -103,7 +103,7 @@ function writeLnk(
  * media/icon.png in an ICO container (PNG-in-ICO, supported since Vista) and
  * park it in global storage where it survives extension updates in place.
  */
-// TODO: clean-code - 0.6 - PANIC: three unguarded fs calls in an async function
+// TODO: clean-code - 0.6 - PANIC (#43): three unguarded fs calls in an async function
 // the command registration invokes as `() => void createMyModsShortcut(...)`, so
 // the rejection reaches nobody. Read-only globalStorage, or an AV holding the
 // .ico, means the user picks folders, confirms, and nothing happens at all — no
