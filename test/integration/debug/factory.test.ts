@@ -221,5 +221,53 @@ describe("debug registration", () => {
       expect(state.errors).toEqual(["Open a .lua file to run it in DCS."]);
       expect(state.startedDebugSessions).toEqual([]);
     });
+
+    // MissionScripting.lua is the file that DEFINES the mission sandbox the
+    // bridge lives inside; evaluating it in that sandbox re-runs its own
+    // sanitization. The menu contributions hide these four commands for it, but
+    // a `when` clause only governs menus — the Command Palette, a keybinding
+    // and executeCommand all land on the handler, so that is where it has to be
+    // refused (issue #23).
+    it.each([
+      "dcs.debug.runMission",
+      "dcs.debug.debugMission",
+      "dcs.debug.runGui",
+      "dcs.debug.debugGui",
+    ])("refuses to send MissionScripting.lua to the sim via %s", async (command) => {
+      register();
+      await run(command, uri("C:\\DCS\\Scripts\\MissionScripting.lua"));
+      expect(state.errors).toEqual([
+        "MissionScripting.lua defines the mission sandbox — it cannot be run or debugged in DCS. " +
+          "Use “DCS Studio: Desanitize MissionScripting.lua” to edit what it allows.",
+      ]);
+      expect(state.startedDebugSessions).toEqual([]);
+    });
+
+    it.each([
+      [
+        "invoked from the palette with it as the active editor",
+        "C:\\DCS\\Scripts\\missionscripting.lua",
+      ],
+      ["reached through a posix path", "/opt/dcs/Scripts/MissionScripting.lua"],
+    ])("refuses it when %s", async (_case, fsPath) => {
+      // The refusal keys off the file NAME, so it holds however the path was
+      // spelled — the sim only ever sees the text, not where it came from.
+      (vscode.window as { activeTextEditor: unknown }).activeTextEditor = {
+        document: { uri: uri(fsPath) },
+      };
+      register();
+      await run("dcs.debug.runMission");
+      expect(state.startedDebugSessions).toEqual([]);
+      expect(state.errors).toHaveLength(1);
+    });
+
+    it("still runs a file that merely ends with the same name", async () => {
+      // A path-boundary check, not a suffix one: `my-MissionScripting.lua` is
+      // an ordinary script and must not be caught by the exclusion.
+      register();
+      await run("dcs.debug.runMission", uri("C:\\work\\my-MissionScripting.lua"));
+      expect(state.errors).toEqual([]);
+      expect(state.startedDebugSessions).toHaveLength(1);
+    });
   });
 });

@@ -323,6 +323,24 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "dcs.debug.debugMission",
+          "when": "resourceFilename != MissionScripting.lua"
+        },
+        {
+          "command": "dcs.debug.runMission",
+          "when": "resourceFilename != MissionScripting.lua"
+        },
+        {
+          "command": "dcs.debug.debugGui",
+          "when": "resourceFilename != MissionScripting.lua"
+        },
+        {
+          "command": "dcs.debug.runGui",
+          "when": "resourceFilename != MissionScripting.lua"
+        }
+      ],
       "editor/title/run": [
         {
           "command": "dcs.debug.debugMission",

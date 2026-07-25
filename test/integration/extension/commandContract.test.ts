@@ -70,6 +70,39 @@ describe("command contribution contract", () => {
     );
   });
 
+  it("excludes MissionScripting.lua from every menu that offers a run/debug command", () => {
+    // The handler refuses it outright (src/debug/factory.ts); these clauses are
+    // what keeps it from being offered in the first place. The palette is the
+    // one that was missed: a command with no commandPalette entry is listed
+    // unconditionally, so the exclusion has to be declared there too.
+    const menus = (pkg.contributes.menus ?? {}) as Record<
+      string,
+      { command?: string; when?: string }[]
+    >;
+    const runDebug = [
+      "dcs.debug.runMission",
+      "dcs.debug.debugMission",
+      "dcs.debug.runGui",
+      "dcs.debug.debugGui",
+    ];
+    const offered = Object.entries(menus).flatMap(([menu, entries]) =>
+      entries
+        .filter((e) => e.command && runDebug.includes(e.command))
+        .map((e) => ({ menu, command: e.command, when: e.when ?? "" })),
+    );
+    // Guards the guard: every menu the four appear in, and the palette among them.
+    expect([...new Set(offered.map((o) => o.menu))].sort()).toEqual([
+      "commandPalette",
+      "editor/context",
+      "editor/title/run",
+      "explorer/context",
+    ]);
+    const unguarded = offered.filter(
+      (o) => !o.when.includes("resourceFilename != MissionScripting.lua"),
+    );
+    expect(unguarded, `offered for MissionScripting.lua: ${JSON.stringify(unguarded)}`).toEqual([]);
+  });
+
   it("registers no command id twice", () => {
     // Two registrations of the same id throw at activation, which disables the
     // whole extension rather than just that command.

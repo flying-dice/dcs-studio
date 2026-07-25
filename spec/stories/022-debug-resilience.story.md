@@ -10,6 +10,7 @@
 
 - `pauseOnError` (launch configuration, default `true`) controls break-on-uncaught-error.
 - While paused, the in-sim engine pumps the RPC queue itself; the editor polls session state every 250 ms. A pause with no polling client auto-continues after 30 seconds.
+- Both sim-safety budgets — the 30 second idle release and the 2 second ceiling on one evaluation — are measured on the bridge DLL's own monotonic clock, never on a clock belonging to the debugged Lua state.
 
 ```gherkin
 Feature: Pause on error
@@ -106,20 +107,33 @@ Feature: The sim is never held hostage
       well inside the sim's 30 second idle window
 
   @chaos
-  Scenario: The idle release needs a real clock
-    Given the debugged Lua state has no os.clock, so the engine falls back
-      to DCS model time (or, failing that, to a constant)
+  Scenario: The idle release does not depend on the debugged state's clock
+    Given the mission state was desanitized only far enough for the bridge to
+      load, so it has no os.clock — and DCS's timer.getTime is model time,
+      which is frozen for as long as the paused chunk holds the sim thread
     When execution is held at a breakpoint and the editor stops polling
-    Then the idle countdown does not advance, because model time is frozen
-      while the paused chunk holds the sim thread
-    And the auto-continue never fires  # UNVERIFIED: read from the engine's clock fallback — nothing else releases a held pause, so the 30 s guarantee rests on os.clock surviving in the debugged state
+    Then the countdown still advances, because it is read from the bridge
+      DLL's monotonic clock rather than from anything in the Lua state
+    And the pause auto-continues and the chunk runs on to completion
 
   @chaos
   Scenario: An evaluation that never returns
     Given execution is paused
     When the user evaluates an expression that loops forever
-    Then it runs on the sim thread inside the pause's own RPC pump
-    And neither a resume nor the idle timer is observed until it returns  # UNVERIFIED: no timeout guards a debug_eval, so a runaway watch or condition defeats the 30 s auto-continue
+    Then it is cut off after 2 seconds and comes back as a failed evaluation
+      naming the timeout, rather than running on the sim thread until it ends
+    And an expression that yields instead of returning is refused likewise
+    And the pause is still there to inspect, evaluate again, step or resume
+    And the idle release can therefore never be starved by a watch expression
+
+  @chaos
+  Scenario: A breakpoint condition that never returns
+    Given a breakpoint carries a condition that loops forever
+    When its line is reached
+    Then the condition is cut off by the same 2 second ceiling — and it is
+      evaluated in the line hook, before any pause exists to time out
+    And the breakpoint fails open as any broken condition does: it stops, and
+      the snapshot carries the timeout as its condition error
 
 Feature: The sim changes under the session
 

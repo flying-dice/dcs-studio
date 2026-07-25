@@ -449,6 +449,36 @@ mod bootstrap_tests {
             .expect("RT installed");
     }
 
+    /// Without coroutines the engine declines to install at all, for the same
+    /// reason it declines without `debug`: it cannot do its job safely. Every
+    /// expression it evaluates — a watch, a hover, a breakpoint condition —
+    /// runs on its own coroutine under an instruction-count hook, because Lua
+    /// 5.1 will not fire a hook inside a hook and all of them run inside the
+    /// line hook. With no way to bound them, one `while true do end` in a watch
+    /// would hold the sim thread with no Stop able to reach it, which is worse
+    /// than having no debugger. Nothing DCS ships removes the library; this
+    /// pins the refusal rather than the scenario.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_state_without_coroutines_gets_no_debug_engine_either() {
+        // SAFETY: test-only state; `unsafe_new` loads the debug stdlib, so the
+        // engine gets past its debug-library guard and reaches this one.
+        let lua = unsafe { Lua::unsafe_new() };
+        lua.globals()
+            .set("coroutine", mlua::Value::Nil)
+            .expect("drop coroutine");
+
+        let exports = bootstrap(&lua, BridgeKind::Gui, "test").expect("bootstrap");
+        exports.get::<LuaTable>("json").expect("json survived");
+        assert!(
+            lua.globals()
+                .get::<mlua::Value>("__DCS_STUDIO_DBG")
+                .expect("dbg")
+                .is_nil(),
+            "an engine that cannot bound an evaluation must not install"
+        );
+    }
+
     /// The log file is per DLL and lives under the write root's `Logs`. The two
     /// bridges must never share one: each has its own log4rs instance, and a
     /// shared truncating appender would have them clobber each other's file.

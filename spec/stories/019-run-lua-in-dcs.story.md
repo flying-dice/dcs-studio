@@ -8,7 +8,7 @@
 
 ## Context
 
-- Entry points: **"Run Lua in DCS Mission"** (`dcs.debug.runMission`) and **"Run Lua in DCS GUI (Hooks)"** (`dcs.debug.runGui`) in the editor-title run (▷) dropdown for any `.lua` file except `MissionScripting.lua`, and the Command Palette.
+- Entry points: **"Run Lua in DCS Mission"** (`dcs.debug.runMission`) and **"Run Lua in DCS GUI (Hooks)"** (`dcs.debug.runGui`) in the editor-title run (▷) dropdown for any `.lua` file except `MissionScripting.lua`, and the Command Palette (which excludes it too).
 - "Run" is the debugger's `noDebug` path — breakpoints are ignored; the chunk is evaluated whole.
 
 ```gherkin
@@ -52,15 +52,19 @@ Feature: Run Lua in the sim
       | the target is a .md file                            |
 
   @chaos
-  Scenario: MissionScripting.lua from the Command Palette
+  Scenario: MissionScripting.lua, however the command is reached
     Given MissionScripting.lua is the active editor
-    Then the four run/debug entries are hidden from the editor-title, editor-context
-      and explorer-context menus
-    But the Command Palette still offers "DCS Studio: Run Lua in DCS Mission"
-    And invoking it there is not re-checked — the file is saved and evaluated
-      in the target environment
-      # UNVERIFIED: the menu `when` clause is the only exclusion; the command
-      # itself only checks the .lua suffix, and no test covers the palette path
+    Then the four run/debug entries are hidden from the editor-title,
+      editor-context, explorer-context and Command Palette menus
+    But a `when` clause governs menus only, so the command handler refuses it
+      as well — from the palette, a keybinding, or another extension
+    And it fails with "MissionScripting.lua defines the mission sandbox — it
+      cannot be run or debugged in DCS. Use “DCS Studio: Desanitize
+      MissionScripting.lua” to edit what it allows."
+    And no debug session is started, so the file that defines the mission
+      sandbox is never evaluated inside it
+    But a file merely named like it, such as my-MissionScripting.lua, runs
+      normally
 
   @chaos
   Scenario: The file cannot be read
@@ -81,11 +85,6 @@ Feature: Run Lua in the sim
     Given the bridge is not connected
     Then the run aborts with
       "The DCS bridge is not connected. Launch DCS with the bridge (command: \"DCS Studio: Launch DCS (with bridge)\") and wait for the status bar to show DCS online."
-
-  Scenario: Mission environment with no mission
-    Given the mission environment is targeted and no mission is running
-    Then a note appears:
-      "Note: DCS reports no mission time — mission scripts need a running mission."
 
   @chaos
   Scenario Outline: A mission run names the actual reason it cannot start

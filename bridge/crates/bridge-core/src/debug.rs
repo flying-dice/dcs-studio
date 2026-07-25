@@ -19,7 +19,8 @@ use mlua::prelude::LuaValue;
 use mlua::{IntoLuaMulti, Lua, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 /// Source path → set of 1-based breakpoint lines. Global so the line hook and
 /// the RPC handlers share one registry.
@@ -46,6 +47,26 @@ static PAUSE: Mutex<Option<String>> = Mutex::new(None);
 /// `"step_into"`, or `"step_out"` — set by the editor/MCP and consumed by the
 /// line hook's pump loop via `take_resume`. `None` means stay paused.
 static RESUME: Mutex<Option<String>> = Mutex::new(None);
+
+/// The instant the monotonic clock counts from — the first time anything asks,
+/// which is the DLL's load in practice.
+static CLOCK_ORIGIN: OnceLock<Instant> = OnceLock::new();
+
+/// Seconds elapsed on a monotonic wall clock.
+///
+/// The engine's two pause-safety budgets — the idle auto-continue and the
+/// evaluation timeout — are measured with this rather than with anything Lua
+/// offers, because neither Lua clock can carry the guarantee: `os` is one of
+/// the libraries `MissionScripting.lua` removes, and DCS's `timer.getTime` is
+/// model time, which stops advancing for exactly as long as a paused chunk
+/// holds the sim thread — the one interval the idle release has to measure.
+/// [`Instant`] is immune to both, and to a wall-clock change under the sim.
+pub(crate) fn monotonic() -> f64 {
+    CLOCK_ORIGIN
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_secs_f64()
+}
 
 fn with_registry<T>(f: impl FnOnce(&mut BTreeMap<String, BTreeSet<u32>>) -> T) -> T {
     crate::locks::with_lock(&REGISTRY, f)
@@ -276,6 +297,20 @@ pub fn register(sub: &mut Sub) -> Result<()> {
             }
             t.into_lua_multi(lua)
         },
+    )?;
+
+    sub.func(
+        "monotonic",
+        &[],
+        &[r_named("number", "seconds")],
+        "Seconds elapsed on the DLL's own monotonic wall clock. The debug \
+         engine measures its pause-safety budgets with this — the idle \
+         auto-continue that releases a pause no editor is polling, and the \
+         ceiling on one evaluation — because it is the only clock that both \
+         survives MissionScripting.lua's sanitization (which removes `os`) and \
+         keeps advancing while a paused chunk holds the sim thread (which \
+         freezes `timer.getTime`).",
+        |lua: &Lua, ()| monotonic().into_lua_multi(lua),
     )?;
 
     // --- pause control: driven by the sim's line hook (debug_run) and the
@@ -617,6 +652,20 @@ mod tests {
         assert!(paused_snapshot().is_none(), "stale snapshot");
     }
 
+    /// The clock the engine's idle release and evaluation timeout are measured
+    /// with. Only two properties matter, and both are load-bearing: it never
+    /// goes backwards (a countdown that can be un-wound never expires) and it
+    /// advances with real time even when nothing in the Lua state does.
+    #[test]
+    fn the_monotonic_clock_advances_and_never_rewinds() {
+        let first = monotonic();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let second = monotonic();
+        let slept = second - first;
+        assert!(slept >= 0.015, "20ms of sleep read as {slept}s");
+        assert!(monotonic() >= second, "the clock went backwards");
+    }
+
     /// The whole `debug.*` surface as the engine and the editor drive it, from
     /// Lua. `breakpoints()` is what the IDE reads back to render the gutter, so
     /// its shape (source → sorted array of 1-based lines) is part of the
@@ -663,6 +712,12 @@ mod tests {
             assert(dbg.take_pause() == false)
             dbg.request_stop();   assert(dbg.take_stop() == true)
             assert(dbg.take_stop() == false)
+
+            -- The engine reads its safety budgets off this clock, so it has to
+            -- be there under the same name the engine captures at install time.
+            local t = dbg.monotonic()
+            assert(type(t) == "number" and t >= 0, "monotonic seconds")
+            assert(dbg.monotonic() >= t, "never rewinds")
 
             dbg.request_pause()
             dbg.reset_session()

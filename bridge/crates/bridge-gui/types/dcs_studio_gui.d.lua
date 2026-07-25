@@ -152,6 +152,10 @@ function dcs_studio_gui_debug.clear_breakpoints() end
 ---@return table bySource
 function dcs_studio_gui_debug.breakpoints() end
 
+--- Seconds elapsed on the DLL's own monotonic wall clock. The debug engine measures its pause-safety budgets with this — the idle auto-continue that releases a pause no editor is polling, and the ceiling on one evaluation — because it is the only clock that both survives MissionScripting.lua's sanitization (which removes `os`) and keeps advancing while a paused chunk holds the sim thread (which freezes `timer.getTime`).
+---@return number seconds
+function dcs_studio_gui_debug.monotonic() end
+
 --- Record that execution is paused at a breakpoint, with a JSON snapshot of source/line/locals. Called by the line hook.
 ---@param snapshot string
 function dcs_studio_gui_debug.set_paused(snapshot) end

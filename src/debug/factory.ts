@@ -73,6 +73,14 @@ export class DcsDebugConfigProvider implements vscode.DebugConfigurationProvider
   }
 }
 
+/** The file that DEFINES the mission sandbox. Sending it into that sandbox to
+ * be evaluated re-runs the sanitization the bridge lives inside — at best a
+ * no-op, at worst it tears down the environment the session is talking to. The
+ * menu contributions hide the run/debug entries for it, but a `when` clause is
+ * only a menu: the Command Palette, a keybinding and `executeCommand` all reach
+ * the handler directly, so the refusal has to live here. */
+const MISSION_SCRIPT = "missionscripting.lua";
+
 /** Editor run/debug buttons: start a session for the given (or active) file. */
 async function startSession(
   uri: vscode.Uri | undefined,
@@ -82,6 +90,15 @@ async function startSession(
   const target = uri ?? vscode.window.activeTextEditor?.document.uri;
   if (target?.scheme !== "file" || !target.fsPath.toLowerCase().endsWith(".lua")) {
     void showError("Open a .lua file to run it in DCS.");
+    return;
+  }
+  // Split on both separators rather than path.basename: an fsPath carries
+  // Windows backslashes whatever the host's own separator is.
+  if (target.fsPath.toLowerCase().split(/[\\/]/).pop() === MISSION_SCRIPT) {
+    void showError(
+      "MissionScripting.lua defines the mission sandbox — it cannot be run or debugged in DCS. " +
+        "Use “DCS Studio: Desanitize MissionScripting.lua” to edit what it allows.",
+    );
     return;
   }
   const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === target.toString());
