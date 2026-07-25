@@ -144,7 +144,7 @@
     return `<label class="field"><span class="lbl">${esc(label)}${hint ? `<span class="hint">${esc(hint)}</span>` : ""}</span>${inner}</label>`;
   }
   function input(sec, idx, key, value, ph) {
-    return `<input class="in" data-testid="manifest-input" data-sec="${sec}" data-idx="${idx}" data-key="${key}" value="${esc(value)}" placeholder="${esc(ph || "")}" spellcheck="false" autocomplete="off" />`;
+    return `<input class="in" data-testid="manifest-input" data-sec="${sec}" data-idx="${idx}" data-key="${key}" value="${esc(value)}" placeholder="${esc(ph)}" spellcheck="false" autocomplete="off" />`;
   }
 
   // data-add -> data-testid, per the previews/ data-testid convention doc.
@@ -340,13 +340,6 @@
           pushEdit();
           return;
         } else state.model[sec][i][key] = el.value;
-        onFormChanged();
-      });
-    });
-    app.querySelectorAll('input[type="checkbox"]').forEach((el) => {
-      el.addEventListener("change", () => {
-        const { sec, idx, key } = el.dataset;
-        state.model[sec][parseInt(idx, 10)][key] = el.checked;
         onFormChanged();
       });
     });

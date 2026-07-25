@@ -30,7 +30,8 @@
   const { esc } = dcsUi;
 
   function previewPath() {
-    if (state.inPlace) return state.folder || "";
+    // inPlace is only ever set from an open folder, so folder is non-empty here.
+    if (state.inPlace) return state.folder;
     if (!state.location || !state.name.trim()) return "";
     const loc = state.location.replace(/[\\/]+$/, "");
     return `${loc}${state.sep}${state.name.trim()}`;

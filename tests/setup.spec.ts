@@ -139,17 +139,16 @@ test.describe("setup preview", () => {
     await expect(page.getByTestId("install-input")).toHaveValue("E:\\Games\\DCS World");
   });
 
-  test("known defect: a browsed 7z.exe lands in the DCS install field", async ({ page }) => {
-    // media/setup.js routes "browsed" with an if/else-if chain whose final else
-    // is the install path, so which:"sevenzip" is misrouted: the 7-Zip field is
-    // left empty and the DCS install path is clobbered with an .exe. Pinned
-    // here so the fix is visible when it lands — the two expectations below
-    // should swap fields.
+  test("a browsed 7z.exe lands in the 7-Zip field, not the install path", async ({ page }) => {
+    // "sevenzip" is the one role that picks a file rather than a folder, and
+    // the only one the routing chain used to miss — it fell through to the
+    // final else and overwrote the DCS installation path with an .exe.
     await openPreview(page, "setup");
+    const install = await page.getByTestId("install-input").inputValue();
     await hostSend(page, { type: "browsed", which: "sevenzip", path: "E:\\Tools\\7z.exe" });
 
-    await expect(page.getByTestId("sevenzip-input")).toHaveValue("");
-    await expect(page.getByTestId("install-input")).toHaveValue("E:\\Tools\\7z.exe");
+    await expect(page.getByTestId("sevenzip-input")).toHaveValue("E:\\Tools\\7z.exe");
+    await expect(page.getByTestId("install-input")).toHaveValue(install);
   });
 
   test("Re-detect re-asks the host to scan", async ({ page }) => {

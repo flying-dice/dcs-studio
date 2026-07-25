@@ -587,7 +587,11 @@
   });
 
   // ── Boot ──
+  // The repo to re-open has to be read before render(): nothing has been
+  // fetched yet, so renderProduct() finds no product and drops the view back
+  // to the list, erasing the very intent the persisted state carried.
+  const restoreRepo = state.view === "product" ? state.repo : null;
   render();
   post({ type: "ready" });
-  if (state.view === "product" && state.repo) openProduct(state.repo);
+  if (restoreRepo) openProduct(restoreRepo);
 })();

@@ -299,16 +299,19 @@ test.describe("marketplace preview", () => {
     await expect(page.getByTestId("list-loading")).toHaveCount(0);
   });
 
-  test("reopening on a stored product falls back to the grid", async ({ page }) => {
-    // The panel persists the product it was last on, but nothing re-fetches it
-    // on boot, so the restored view collapses back to the list. Pinned because
-    // the persisted repo is otherwise silently useless.
+  test("reopening on a stored product re-fetches that product", async ({ page }) => {
+    // Persisting the last product is only worth anything if boot re-fetches it;
+    // the panel is meant to come back where the user left it, not on the grid.
     await openPreview(page, "marketplace", {
       state: { view: "product", repo: "utils/dcs-lua-common" },
     });
+    await expectSent(page, { type: "openProduct", repo: "utils/dcs-lua-common" });
+    await expect(page.getByTestId("product-title")).toHaveText("dcs-lua-common");
+
+    // Back still lands on the list, which is unauthenticated on a fresh boot.
+    await page.getByTestId("back-btn").click();
     await page.getByTestId("browse-anon-btn").click();
     await expect(page.getByTestId("mod-card")).toHaveCount(12);
-    await expect(page.getByTestId("product-title")).toHaveCount(0);
   });
 });
 

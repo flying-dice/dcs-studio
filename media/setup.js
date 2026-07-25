@@ -167,6 +167,7 @@
     } else if (m.type === "browsed") {
       if (m.which === "saved") state.savedGames = m.path;
       else if (m.which === "data") state.dataDir = m.path;
+      else if (m.which === "sevenzip") state.sevenZip = m.path;
       else state.gameInstall = m.path;
       render();
     } else if (m.type === "saved") {
