@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import type { PublishService, ReleaseOpts, ShareOpts } from "../core/app/publishService";
 import { type Check, firstBlocker } from "../core/domain/publishChecks";
 import { parseRepoRemote } from "../core/domain/repoRemote";
+import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
 import { preflight, readManifest } from "./preflight";
 
@@ -116,7 +117,7 @@ export class PublishPanel {
         });
         break;
       case "openExternal":
-        if (msg.url) void vscode.env.openExternal(vscode.Uri.parse(msg.url));
+        if (msg.url) openExternal(msg.url);
         break;
     }
   }

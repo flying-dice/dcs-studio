@@ -14,6 +14,7 @@ import type { AuthPort } from "../core/ports/auth";
 import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { MarketplacePort } from "../core/ports/marketplace";
 import { showError } from "../errors";
+import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
 import { dataDir } from "./dataDir";
 
@@ -174,7 +175,7 @@ export class MyModsPanel {
         }
         break;
       case "openExternal":
-        if (msg.url) void vscode.env.openExternal(vscode.Uri.parse(msg.url));
+        if (msg.url) openExternal(msg.url);
         break;
       case "openDocs":
         void vscode.commands.executeCommand("dcs.docs.open", msg.page ?? "sandbox");

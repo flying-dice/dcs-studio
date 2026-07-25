@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
 
 // The Documentation experience: a webview panel with a table-of-contents
@@ -45,7 +46,7 @@ export class DocsPanel {
         if (msg.command) void vscode.commands.executeCommand(msg.command);
         break;
       case "openExternal":
-        if (msg.url) void vscode.env.openExternal(vscode.Uri.parse(msg.url));
+        if (msg.url) openExternal(msg.url);
         break;
     }
   }

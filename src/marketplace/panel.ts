@@ -9,6 +9,7 @@ import { DISCOVERY_TOPIC } from "../core/domain/githubMarketplace";
 import type { AuthPort } from "../core/ports/auth";
 import type { MarketplacePort } from "../core/ports/marketplace";
 import { showError } from "../errors";
+import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
 
 // The full-screen storefront, hosted as a webview panel. The webview owns all
@@ -96,7 +97,7 @@ export class MarketplacePanel {
   private perform(effect: MarketplaceEffect): void {
     switch (effect.kind) {
       case "openExternal":
-        void vscode.env.openExternal(vscode.Uri.parse(effect.url));
+        openExternal(effect.url);
         break;
       case "openDocs":
         void vscode.commands.executeCommand("dcs.docs.open", effect.page);

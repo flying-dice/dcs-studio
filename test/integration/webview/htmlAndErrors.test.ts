@@ -6,11 +6,13 @@ vi.mock("os", () => ({ platform: () => "win32", release: () => "10.0.22631" }));
 
 import * as vscode from "vscode";
 import { showError } from "../../../src/errors";
+import { openExternal } from "../../../src/external";
 import { mediaUri, renderWebviewHtml } from "../../../src/webview/html";
 
-// Two pieces of shared adapter plumbing every panel routes through: the webview
-// document scaffold (which is the extension's only XSS boundary — mod READMEs
-// are rendered inside it) and the error toast that carries Report Issue.
+// Three pieces of shared adapter plumbing every panel routes through: the
+// webview document scaffold (which is the extension's only XSS boundary — mod
+// READMEs are rendered inside it), the error toast that carries Report Issue,
+// and the guarded link opener those same READMEs post through.
 
 const EXTENSION_ID = "flying-dice.dcs-studio";
 
@@ -208,5 +210,27 @@ describe("showError", () => {
     await showError("Boom");
     // No packageJSON at all: no bugs url, so nothing opens.
     expect(state.openedExternal).toEqual([]);
+  });
+});
+
+describe("openExternal", () => {
+  it("opens a link whose scheme the browser or mail client handles", () => {
+    openExternal("https://github.com/owner/repo");
+    openExternal("mailto:someone@example.com");
+    expect(state.openedExternal).toEqual([
+      "https://github.com/owner/repo",
+      "mailto:someone@example.com",
+    ]);
+  });
+
+  it("refuses any other scheme, loudly", () => {
+    // A README rendered in the marketplace panel posts the url, so this is the
+    // one place that stops `command:` reaching the editor. Refusing silently
+    // would hide the attack — and our own bugs — equally well.
+    openExternal('command:workbench.action.terminal.sendSequence?["evil"]');
+    expect(state.openedExternal).toEqual([]);
+    expect(state.errors).toEqual([
+      'Refused to open a link that is not a web or mail address: command:workbench.action.terminal.sendSequence?["evil"]',
+    ]);
   });
 });

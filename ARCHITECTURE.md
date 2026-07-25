@@ -2,7 +2,7 @@
 
 This document is the authoritative spec for the extension's architecture. All code
 changes must respect the dependency rule below; it is enforced by an automated
-boundary test (`test/architecture/boundaries.test.ts`).
+boundary test (`test/integration/architecture/boundaries.test.ts`).
 
 ## Layers and the dependency rule
 
@@ -60,12 +60,11 @@ port files, when they carry behavior.
 | `downloader.ts` | `DownloadPort` | `download(url, dest, token?, onProgress?)` streaming (fetch) |
 | `linker.ts` | `LinkerPort` | `enable(defs) → LinkResult`, `disable(installed)` (junction/hardlink/symlink w/ rollback) |
 | `marketplace.ts` | `MarketplacePort` | `discover(topic)`, `loadProduct(repo)` (GitHub REST) |
-| `auth.ts` | `AuthPort` | `getToken(createIfNone)`, `onDidChangeSessions(cb)` (vscode github auth) |
+| `auth.ts` | `AuthPort` | `getToken(createIfNone)`, `currentSession()`, `signIn()`, `onDidChangeSessions(cb)` (vscode github auth) |
 | `manifest.ts` | `ManifestPort` | `parseToml`, `emitToml`, `resolveDest(dest, roots)` (media/manifest-core.js) |
 | `installRoots.ts` | `InstallRootsPort` | `savedGames()`, `gameInstall()`, `dataDir()` (vscode config + os probes) |
 | `git.ts` | `GitPort` | repo init/status/commit/remote ops used by publish (git CLI) |
-| `gh.ts` | `GhPort` | auth check, repo create, release create/delete/upload (gh CLI) |
-| `notifier.ts` | `NotifierPort` | `error(err, ctx)`, `info(msg)` (vscode toasts + Report Issue) |
+| `gh.ts` | `GhPort` | install/auth check + login, repo create + topic, release view/create/edit/delete, asset upload/list/delete (gh CLI) |
 | `bridgeTransport.ts` | `BridgeTransportPort` | connect/send/close + handler callbacks (raw-TCP WebSocket) |
 | `registry.ts` | `RegistryPort` | Windows registry value queries (reg.exe) |
 | `env.ts` | `EnvPort` | homedir/userProfile/programFiles candidates |
@@ -143,11 +142,13 @@ and a Windows job that re-runs the headless layers on the shipping OS.
 - Constructor injection (plain object of ports) for services; no DI framework.
 - Ports return domain types or throw `Error` with user-actionable messages; user-facing
   presentation happens in adapters. `errors.ts` (`showError`, the "Report Issue" toast)
-  IS the extension's notifier path today — every panel routes errors through it.
-  `NotifierPort` exists as the injectable seam for any future core service that must
-  surface messages itself; its `VsCodeNotifier` adapter simply wraps `showError`, and
-  stays unwired until a core service takes the port (wiring it now would be pure
-  indirection).
+  IS the extension's notifier path today — every panel routes errors through it, and it
+  is the whole of the story: there is no `NotifierPort` and no notifier adapter. Core
+  services surface nothing themselves; they throw, or return a value the adapter renders
+  (the marketplace presenter's `MarketplaceEffect` is the pattern — describe the effect,
+  let the panel perform it). Introduce a `NotifierPort` when a core service first has to
+  surface a message it cannot express as a return value; until then the port would be an
+  abstraction with no caller, and core must never import `errors.ts`.
 - Persisted formats are frozen: `subscriptions.json` shape (`Record<lowercased repo,
   Subscription>`) and `uninstall-all.bat` semantics must not change.
 - Webview HTML/CSP/nonce boilerplate is adapter code; keep message handlers thin —
