@@ -1,6 +1,6 @@
+import { win32 as path } from "node:path";
 import { spawn } from "child_process";
 import * as fs from "fs";
-import * as path from "path";
 import * as vscode from "vscode";
 import { buildIco, MYMODS_URI_PATH, myModsUri } from "../core/domain/shortcut";
 import { showError } from "../errors";
@@ -11,6 +11,12 @@ import { showError } from "../errors";
 // it to the panel. Windows-only, like DCS itself. The pure pieces — the deep-link
 // URI and the PNG-in-ICO byte assembly — live in core/domain/shortcut.ts; this
 // module owns the PowerShell + filesystem glue.
+//
+// Paths are joined with `path.win32` even though this writes to the real local
+// filesystem: every path here (the hosting Code.exe, global storage, the
+// extension dir) is a Windows path because the feature refuses to run anywhere
+// else, so win32 semantics are what production already gets — and pinning them
+// keeps the generated .lnk identical when the suite runs on a non-Windows host.
 
 export { MYMODS_URI_PATH };
 

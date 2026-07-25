@@ -27,6 +27,12 @@ export interface VscodeState {
   messageReplies: (string | undefined)[];
   /** Queued replies for showOpenDialog, in order — each an array of fsPaths. */
   openDialogReplies: (string[] | undefined)[];
+  /** Queued replies for showSaveDialog, in order — an fsPath, or undefined for
+   * a cancelled save. */
+  saveDialogReplies: (string | undefined)[];
+  /** Every showSaveDialog call's options, in order — the default file name a
+   * panel proposes is part of its contract. */
+  saveDialogOptions: unknown[];
   /** Queued replies for showQuickPick / showInputBox, in order. */
   quickPickReplies: unknown[];
   inputBoxReplies: (string | undefined)[];
@@ -54,6 +60,38 @@ export interface VscodeState {
   existingPaths: Set<string>;
   /** File-system watchers created via workspace.createFileSystemWatcher. */
   watchers: FakeFileSystemWatcher[];
+  /** In-memory file contents backing workspace.fs, keyed by fsPath. */
+  files: Map<string, Uint8Array>;
+  /** Directories workspace.fs knows about; ones implied by `files` count too. */
+  directories: Set<string>;
+  /** Every workspace.fs mutation, in order — the write/copy/delete audit trail. */
+  fsOps: FsOp[];
+  /** Documents workspace.textDocuments reports as open. */
+  textDocuments: FakeTextDocument[];
+  /** Editors window.visibleTextEditors reports. */
+  visibleTextEditors: { document: FakeTextDocument; viewColumn?: number }[];
+  /** Sessions started via debug.startDebugging, in order. */
+  startedDebugSessions: { folder: unknown; config: Record<string, unknown>; options: unknown }[];
+}
+
+/** One mutating workspace.fs call, as tests assert on it. */
+export interface FsOp {
+  op: "createDirectory" | "writeFile" | "copy" | "delete";
+  uri: string;
+  /** Destination for `copy`. */
+  to?: string;
+  /** Options as passed, e.g. `{ recursive, useTrash }` for delete. */
+  options?: unknown;
+}
+
+/** An open document, as `workspace.textDocuments` and editors expose it. */
+export interface FakeTextDocument {
+  uri: { fsPath: string; scheme?: string; toString?(): string };
+  isDirty: boolean;
+  fileName?: string;
+  getText?(): string;
+  /** Present when a caller may save the buffer before acting on the file. */
+  save?(): Thenable<boolean>;
 }
 
 export const state: VscodeState = blankState();
@@ -67,6 +105,8 @@ function blankState(): VscodeState {
     errors: [],
     messageReplies: [],
     openDialogReplies: [],
+    saveDialogReplies: [],
+    saveDialogOptions: [],
     quickPickReplies: [],
     inputBoxReplies: [],
     executedCommands: [],
@@ -84,7 +124,68 @@ function blankState(): VscodeState {
     appliedEdits: [],
     existingPaths: new Set(),
     watchers: [],
+    files: new Map(),
+    directories: new Set(),
+    fsOps: [],
+    textDocuments: [],
+    visibleTextEditors: [],
+    startedDebugSessions: [],
   };
+}
+
+/** Mirrors the exported `FileType` enum, for the workspace.fs implementation. */
+const FILE = 1;
+const DIRECTORY = 2;
+
+/**
+ * Collapse `.`/`..` and duplicate separators so the same file is one key
+ * whichever way a caller spelled it — `Uri.joinPath(x, "..")` is how the
+ * scaffolder asks for a parent directory, and it appends the segment literally.
+ */
+function normalizeFsPath(p: string): string {
+  const sep = p.includes("\\") ? "\\" : "/";
+  const out: string[] = [];
+  for (const part of p.split(/[\\/]/)) {
+    if (part === ".") continue;
+    if (part === ".." && out.length > 1) {
+      out.pop();
+      continue;
+    }
+    if (part === "" && out.length) continue;
+    out.push(part);
+  }
+  return out.join(sep);
+}
+
+/** The path of `full` relative to directory `dir`, or undefined if not under it. */
+function under(dir: string, full: string): string | undefined {
+  if (full.length <= dir.length || !full.startsWith(dir)) return undefined;
+  const rest = full.slice(dir.length);
+  return /^[\\/]/.test(rest) ? rest.replace(/^[\\/]/, "") : undefined;
+}
+
+function directoryExists(dir: string): boolean {
+  if (state.directories.has(dir)) return true;
+  for (const f of state.files.keys()) if (under(dir, f)) return true;
+  return false;
+}
+
+/** Seed a file (and the directories leading to it) into the workspace.fs double. */
+export function seedFile(fsPath: string, contents: string | Uint8Array): void {
+  const key = normalizeFsPath(fsPath);
+  state.files.set(
+    key,
+    typeof contents === "string" ? new TextEncoder().encode(contents) : contents,
+  );
+  const sep = key.includes("\\") ? "\\" : "/";
+  const parts = key.split(sep);
+  for (let i = 1; i < parts.length; i++) state.directories.add(parts.slice(0, i).join(sep));
+}
+
+/** Read a file back out of the workspace.fs double as text. */
+export function seededText(fsPath: string): string | undefined {
+  const bytes = state.files.get(normalizeFsPath(fsPath));
+  return bytes && new TextDecoder().decode(bytes);
 }
 
 /** Reset all recorded state; optionally seed settings and workspace folders. */
@@ -267,6 +368,9 @@ export class FakeFileSystemWatcher {
   fireDelete(): void {
     this.deleteEmitter.fire(undefined);
   }
+  fireChange(): void {
+    this.changeEmitter.fire(undefined);
+  }
   dispose(): void {
     this.disposed = true;
   }
@@ -336,9 +440,13 @@ class FakeUri {
     const scheme = value.includes(":") ? value.slice(0, value.indexOf(":")) : "file";
     return new FakeUri(value, scheme);
   }
+  // Real Uri.joinPath runs the segments through posix join, so a part that
+  // itself contains separators (".claude/skills") or navigates ("..") comes
+  // back as one normalised path — callers compare the results as strings.
   static joinPath(base: FakeUri, ...parts: string[]): FakeUri {
     const sep = base.fsPath.includes("\\") ? "\\" : "/";
-    return new FakeUri([base.fsPath.replace(/[\\/]+$/, ""), ...parts].join(sep), base.scheme);
+    const joined = [base.fsPath.replace(/[\\/]+$/, ""), ...parts].join(sep);
+    return new FakeUri(normalizeFsPath(joined), base.scheme);
   }
   with(): FakeUri {
     return this;
@@ -400,13 +508,78 @@ export function vscodeMock() {
         state.watchers.push(watcher);
         return watcher;
       },
+      get textDocuments() {
+        return state.textDocuments;
+      },
+      /** The seeded folder containing `uri`, or undefined — as the real API,
+       * which answers undefined for a file outside every workspace folder. */
+      getWorkspaceFolder: (uri: { fsPath: string }) =>
+        state.workspaceFolders?.find((f) => uri.fsPath.startsWith(f.uri.fsPath)),
+      // Backed by state.files / state.directories (seed them with seedFile), so
+      // a spec can scaffold into it and read back what was written. Every
+      // operation rejects for a path that isn't there, like the real API —
+      // callers use that rejection as their "does not exist" answer.
       fs: {
-        // Rejects for unknown paths, like the real API — callers use that
-        // rejection as their "file does not exist" answer.
-        stat: (uri: { fsPath: string }) =>
-          state.existingPaths.has(uri.fsPath)
-            ? Promise.resolve({ type: 1 })
-            : Promise.reject(new Error(`ENOENT: ${uri.fsPath}`)),
+        stat: (uri: { fsPath: string }) => {
+          const p = normalizeFsPath(uri.fsPath);
+          if (state.existingPaths.has(uri.fsPath)) return Promise.resolve({ type: FILE });
+          const bytes = state.files.get(p);
+          if (bytes) return Promise.resolve({ type: FILE, size: bytes.length });
+          if (directoryExists(p)) return Promise.resolve({ type: DIRECTORY });
+          return Promise.reject(new Error(`ENOENT: ${uri.fsPath}`));
+        },
+        readFile: (uri: { fsPath: string }) => {
+          const bytes = state.files.get(normalizeFsPath(uri.fsPath));
+          return bytes
+            ? Promise.resolve(bytes)
+            : Promise.reject(new Error(`ENOENT: ${uri.fsPath}`));
+        },
+        writeFile: (uri: { fsPath: string }, bytes: Uint8Array) => {
+          const p = normalizeFsPath(uri.fsPath);
+          state.files.set(p, bytes);
+          state.fsOps.push({ op: "writeFile", uri: p });
+          return Promise.resolve();
+        },
+        createDirectory: (uri: { fsPath: string }) => {
+          const p = normalizeFsPath(uri.fsPath);
+          state.directories.add(p);
+          state.fsOps.push({ op: "createDirectory", uri: p });
+          return Promise.resolve();
+        },
+        readDirectory: (uri: { fsPath: string }) => {
+          const dir = normalizeFsPath(uri.fsPath);
+          if (!directoryExists(dir)) return Promise.reject(new Error(`ENOENT: ${uri.fsPath}`));
+          const entries = new Map<string, number>();
+          const add = (full: string, leaf: number) => {
+            const rest = under(dir, full);
+            if (!rest) return;
+            const parts = rest.split(/[\\/]/);
+            entries.set(parts[0], parts.length > 1 ? DIRECTORY : leaf);
+          };
+          for (const f of state.files.keys()) add(f, FILE);
+          for (const d of state.directories) add(d, DIRECTORY);
+          return Promise.resolve([...entries]);
+        },
+        copy: (from: { fsPath: string }, to: { fsPath: string }, options?: unknown) => {
+          const src = normalizeFsPath(from.fsPath);
+          const bytes = state.files.get(src);
+          if (!bytes) return Promise.reject(new Error(`ENOENT: ${from.fsPath}`));
+          const dest = normalizeFsPath(to.fsPath);
+          state.files.set(dest, bytes);
+          state.fsOps.push({ op: "copy", uri: src, to: dest, options });
+          return Promise.resolve();
+        },
+        delete: (uri: { fsPath: string }, options?: unknown) => {
+          const p = normalizeFsPath(uri.fsPath);
+          for (const f of [...state.files.keys()]) {
+            if (f === p || under(p, f)) state.files.delete(f);
+          }
+          for (const d of [...state.directories]) {
+            if (d === p || under(p, d)) state.directories.delete(d);
+          }
+          state.fsOps.push({ op: "delete", uri: p, options });
+          return Promise.resolve();
+        },
       },
     },
 
@@ -427,6 +600,11 @@ export function vscodeMock() {
       showOpenDialog: () => {
         const reply = state.openDialogReplies.shift();
         return Promise.resolve(reply?.map((p) => FakeUri.file(p)));
+      },
+      showSaveDialog: (options?: unknown) => {
+        state.saveDialogOptions.push(options);
+        const reply = state.saveDialogReplies.shift();
+        return Promise.resolve(reply === undefined ? undefined : FakeUri.file(reply));
       },
       showQuickPick: () => Promise.resolve(state.quickPickReplies.shift()),
       showInputBox: () => Promise.resolve(state.inputBoxReplies.shift()),
@@ -472,6 +650,9 @@ export function vscodeMock() {
         return new FakeDisposable(() => {});
       },
       activeTextEditor: undefined as unknown,
+      get visibleTextEditors() {
+        return state.visibleTextEditors;
+      },
       onDidChangeActiveTextEditor: new FakeEventEmitter<unknown>().event,
     },
 
@@ -513,7 +694,10 @@ export function vscodeMock() {
     debug: {
       registerDebugAdapterDescriptorFactory: () => new FakeDisposable(() => {}),
       registerDebugConfigurationProvider: () => new FakeDisposable(() => {}),
-      startDebugging: () => Promise.resolve(true),
+      startDebugging: (folder: unknown, config: Record<string, unknown>, options: unknown) => {
+        state.startedDebugSessions.push({ folder, config, options });
+        return Promise.resolve(true);
+      },
       activeDebugSession: undefined,
     },
 
@@ -560,6 +744,11 @@ export function vscodeMock() {
         readonly base: unknown,
         readonly pattern: string,
       ) {}
+    },
+    // The descriptor an inline debug adapter is wrapped in; the real class just
+    // carries the implementation, so exposing it is enough for a factory spec.
+    DebugAdapterInlineImplementation: class {
+      constructor(readonly implementation: unknown) {}
     },
   };
 }

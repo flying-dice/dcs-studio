@@ -1,5 +1,7 @@
+// win32, not the host's flavour: every path here is a Windows DCS install path,
+// and the posix join/basename produce the wrong thing off Windows.
+import { win32 as path } from "node:path";
 import * as fs from "fs";
-import * as path from "path";
 import * as vscode from "vscode";
 import { gameInstallDir } from "../bridge/paths";
 import type { MissionSanitizeService } from "../core/app/missionSanitizeService";
@@ -37,6 +39,31 @@ async function requireFile(): Promise<string | undefined> {
   return p;
 }
 
+/** Windows paths are case-insensitive, so the editor's spelling may differ. */
+function samePath(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * The file path, or undefined once the reason the caller must stop has been
+ * reported. Editing it behind an unsaved buffer is the reason for the guard:
+ * VS Code would happily save that stale buffer afterwards and undo the change —
+ * on a desanitize that silently re-locks the sandbox, on a restore it puts the
+ * mangled file straight back.
+ */
+async function requireSavedFile(): Promise<string | undefined> {
+  const p = await requireFile();
+  if (!p) return undefined;
+  const open = vscode.workspace.textDocuments.find((d) => samePath(d.uri.fsPath, p));
+  if (open?.isDirty) {
+    void vscode.window.showWarningMessage(
+      "MissionScripting.lua has unsaved changes. Save or close it first, then try again.",
+    );
+    return undefined;
+  }
+  return p;
+}
+
 /** Open the real MissionScripting.lua in the editor. */
 export async function openMissionScripting(svc: MissionSanitizeService): Promise<void> {
   const p = await requireFile();
@@ -60,41 +87,44 @@ function permissionHint(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** Ensure the open editor for `p` reflects the on-disk change (revert if dirty-free). */
+/** Ensure the open editor for `p` reflects the on-disk change. */
 async function refreshOpen(p: string): Promise<void> {
-  const open = vscode.window.visibleTextEditors.find(
-    (ed) => ed.document.uri.fsPath.toLowerCase() === p.toLowerCase(),
-  );
-  if (open && !open.document.isDirty) {
-    // VS Code auto-reloads unmodified files, but revert makes it immediate.
-    await vscode.window.showTextDocument(open.document, open.viewColumn);
-    await vscode.commands.executeCommand("workbench.action.files.revert");
+  const open = vscode.window.visibleTextEditors.find((ed) => samePath(ed.document.uri.fsPath, p));
+  if (!open) return;
+  // Nothing gets here behind an unsaved buffer — requireSavedFile has already
+  // turned that away — so the editor is unmodified and reverting it cannot lose
+  // work. VS Code auto-reloads unmodified files; revert just makes it immediate.
+  await vscode.window.showTextDocument(open.document, open.viewColumn);
+  await vscode.commands.executeCommand("workbench.action.files.revert");
+}
+
+/**
+ * Run one edit against MissionScripting.lua: guard the file, apply, pull the
+ * open editor back in line with disk, and report. `edit` returns the toast to
+ * show; a failure is almost always the Program Files permission wall, so it is
+ * reported with that hint rather than the raw errno.
+ */
+async function mutate(edit: (p: string) => Promise<string>): Promise<void> {
+  const p = await requireSavedFile();
+  if (!p) return;
+  try {
+    const message = await edit(p);
+    await refreshOpen(p);
+    void vscode.window.showInformationMessage(message);
+  } catch (e) {
+    void showError(permissionHint(e), e);
   }
 }
 
-async function apply(
+function apply(
   svc: MissionSanitizeService,
   desired: Record<string, boolean>,
   okMsg: string,
 ): Promise<void> {
-  const p = await requireFile();
-  if (!p) return;
-  const open = vscode.workspace.textDocuments.find(
-    (d) => d.uri.fsPath.toLowerCase() === p.toLowerCase(),
-  );
-  if (open?.isDirty) {
-    void vscode.window.showWarningMessage(
-      "MissionScripting.lua has unsaved changes. Save or close it first, then try again.",
-    );
-    return;
-  }
-  try {
+  return mutate(async (p) => {
     await svc.setItems(p, desired);
-    await refreshOpen(p);
-    void vscode.window.showInformationMessage(`${okMsg} (backup: ${path.basename(backupPath(p))})`);
-  } catch (e) {
-    void showError(permissionHint(e), e);
-  }
+    return `${okMsg} (backup: ${path.basename(backupPath(p))})`;
+  });
 }
 
 /** Comment out the lockdown → full Lua env available in mission scripts. */
@@ -116,16 +146,11 @@ export function sanitizeMission(svc: MissionSanitizeService): Promise<void> {
 }
 
 /** Copy the pristine backup back over the live file. */
-export async function restoreMission(svc: MissionSanitizeService): Promise<void> {
-  const p = await requireFile();
-  if (!p) return;
-  try {
+export function restoreMission(svc: MissionSanitizeService): Promise<void> {
+  return mutate(async (p) => {
     await svc.restore(p);
-    await refreshOpen(p);
-    void vscode.window.showInformationMessage("Restored MissionScripting.lua from the backup.");
-  } catch (e) {
-    void showError(permissionHint(e), e);
-  }
+    return "Restored MissionScripting.lua from the backup.";
+  });
 }
 
 /** A human summary of the two trigger statuses, e.g. "before: valid, after: missing". */
@@ -139,49 +164,17 @@ function summarizeTriggers(s: { before: string; after: string }): string {
  * nothing further. These are the MOD-script hooks; they are independent of the
  * bridge boot, which uses no MissionScripting.lua edits.
  */
-export async function installMissionHooks(svc: MissionSanitizeService): Promise<void> {
-  const p = await requireFile();
-  if (!p) return;
-  const open = vscode.workspace.textDocuments.find(
-    (d) => d.uri.fsPath.toLowerCase() === p.toLowerCase(),
-  );
-  if (open?.isDirty) {
-    void vscode.window.showWarningMessage(
-      "MissionScripting.lua has unsaved changes. Save or close it first, then try again.",
-    );
-    return;
-  }
-  try {
+export function installMissionHooks(svc: MissionSanitizeService): Promise<void> {
+  return mutate(async (p) => {
     const status = await svc.installTriggers(p);
-    await refreshOpen(p);
-    void vscode.window.showInformationMessage(
-      `Mission-script hooks installed in MissionScripting.lua (${summarizeTriggers(status)}). Backup: ${path.basename(backupPath(p))}.`,
-    );
-  } catch (e) {
-    void showError(permissionHint(e), e);
-  }
+    return `Mission-script hooks installed in MissionScripting.lua (${summarizeTriggers(status)}). Backup: ${path.basename(backupPath(p))}.`;
+  });
 }
 
 /** Remove the managed mod-script trigger dofile lines from MissionScripting.lua. */
-export async function removeMissionHooks(svc: MissionSanitizeService): Promise<void> {
-  const p = await requireFile();
-  if (!p) return;
-  const open = vscode.workspace.textDocuments.find(
-    (d) => d.uri.fsPath.toLowerCase() === p.toLowerCase(),
-  );
-  if (open?.isDirty) {
-    void vscode.window.showWarningMessage(
-      "MissionScripting.lua has unsaved changes. Save or close it first, then try again.",
-    );
-    return;
-  }
-  try {
+export function removeMissionHooks(svc: MissionSanitizeService): Promise<void> {
+  return mutate(async (p) => {
     await svc.removeTriggers(p);
-    await refreshOpen(p);
-    void vscode.window.showInformationMessage(
-      "Mission-script hooks removed from MissionScripting.lua.",
-    );
-  } catch (e) {
-    void showError(permissionHint(e), e);
-  }
+    return "Mission-script hooks removed from MissionScripting.lua.";
+  });
 }

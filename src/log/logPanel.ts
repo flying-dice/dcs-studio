@@ -25,6 +25,7 @@ export class LogPanel {
   private lastDropped = 0;
   private fileState: FileState = "missing";
   private filePath = "";
+  private disposed = false;
 
   static show(context: vscode.ExtensionContext, manifestPort: ManifestPort): void {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
@@ -81,6 +82,10 @@ export class LogPanel {
   }
 
   private restartTailer(): void {
+    // The first start is queued behind the async manifest read, so the user can
+    // close the panel before it ever runs; without this the orphaned tailer
+    // would keep polling dcs.log for the rest of the session.
+    if (this.disposed) return;
     this.tailer?.stop();
     this.buffer.clear();
     this.lastDropped = 0;
@@ -146,6 +151,7 @@ export class LogPanel {
   }
 
   private dispose(): void {
+    this.disposed = true;
     LogPanel.current = undefined;
     this.tailer?.stop();
     this.panel.dispose();
