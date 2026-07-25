@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "child_process";
+import { gitArgs } from "../../core/domain/cliArgs";
 import type { GitPort } from "../../core/ports/git";
 
 // Node adapter for `GitPort`, driving the `git` CLI. Owns every git process
@@ -34,7 +35,7 @@ async function must(cmd: string, args: string[], cwd: string, label: string): Pr
 /** Whether git is available on PATH (sync, for the preflight panel). */
 export function hasGitSync(): boolean {
   try {
-    return !spawnSync("git", ["--version"], { windowsHide: true }).error;
+    return !spawnSync("git", gitArgs.version(), { windowsHide: true }).error;
   } catch {
     return false;
   }
@@ -43,7 +44,7 @@ export function hasGitSync(): boolean {
 /** Whether `root` is inside a git work tree (sync, for the preflight panel). */
 export function isGitRepoSync(root: string): boolean {
   try {
-    const r = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    const r = spawnSync("git", gitArgs.isRepo(), {
       cwd: root,
       windowsHide: true,
       encoding: "utf8",
@@ -65,49 +66,37 @@ export class GitCli implements GitPort {
   }
 
   async init(root: string): Promise<void> {
-    await must("git", ["init"], root, "git init");
-    await must("git", ["branch", "-M", "main"], root, "git branch");
+    await must("git", gitArgs.init(), root, "git init");
+    await must("git", gitArgs.branchMain(), root, "git branch");
   }
 
   async addAll(root: string): Promise<void> {
-    await must("git", ["add", "-A"], root, "git add");
+    await must("git", gitArgs.addAll(), root, "git add");
   }
 
   async hasChanges(root: string): Promise<boolean> {
-    const status = await run("git", ["status", "--porcelain"], root);
+    const status = await run("git", gitArgs.status(), root);
     return Boolean(status.stdout.trim());
   }
 
   // Best-effort by design: the original flow ignored a commit failure (e.g. an
   // empty tree) and let the subsequent push surface any real problem.
   async commit(root: string, message: string): Promise<void> {
-    await run(
-      "git",
-      [
-        "-c",
-        "user.email=noreply@dcs-studio",
-        "-c",
-        "user.name=DCS Studio",
-        "commit",
-        "-m",
-        message,
-      ],
-      root,
-    );
+    await run("git", gitArgs.commit(message), root);
   }
 
   async getRemoteUrl(root: string, remote = "origin"): Promise<string | null> {
-    const r = await run("git", ["remote", "get-url", remote], root);
+    const r = await run("git", gitArgs.getRemoteUrl(remote), root);
     return r.code === 0 ? r.stdout.trim() : null;
   }
 
   // Best-effort by design: `remote add` fails when the remote already exists,
   // which the original flow ignored (the existing remote is then pushed to).
   async setRemote(root: string, remote: string, url: string): Promise<void> {
-    await run("git", ["remote", "add", remote, url], root);
+    await run("git", gitArgs.remoteAdd(remote, url), root);
   }
 
   async push(root: string, remote: string, ref: string): Promise<void> {
-    await must("git", ["push", "-u", remote, ref], root, "git push");
+    await must("git", gitArgs.push(remote, ref), root, "git push");
   }
 }
