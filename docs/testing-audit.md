@@ -369,9 +369,11 @@ came out of asking what happens when a user acts at the wrong moment.
   if it regresses, a crashed editor freezes the user's sim.
 - **`core/domain/cliArgs.ts` (S3)** — the flags that create repos, delete tags and
   split release archives are now pure values under the unit gate.
-- **Port contract suites (S5)** — `FileSystemPort` and the marketplace product
-  invariants run against every implementation, so the fakes core is tested
-  against are checked claims rather than hopeful ones.
+- **Port contract suites (S5)** — the marketplace product invariants run against
+  both implementations. `FileSystemPort`'s suite ran against the real adapter
+  only until the clean-code round, when the four hand-written fakes were
+  replaced by one `MemFileSystem` put through the same contract; the claim above
+  was aspirational when first written, and is now true.
 - **The `vscode` test double** (`test/integration/support/vscode.ts`) — a small
   real implementation, not a bag of spies. Two of its own bugs were worth more
   than the tests that found them: it dropped VS Code's third `disposables`
@@ -385,8 +387,38 @@ came out of asking what happens when a user acts at the wrong moment.
   table would still be worth adding alongside a wider presenter rollout; deriving
   it by regex is not, because the webviews use several dispatch shapes and an
   inferred contract produces false failures.
-- **Presenter extraction beyond the marketplace pilot.** `myModsPanel` and
-  `consolePanel` carry enough decision logic to deserve it.
+- **Presenter extraction beyond the marketplace pilot.** `consolePanel` still
+  carries enough decision logic to deserve it (`myModsPanel` was done in the
+  clean-code round, issue #40).
 - **`console.js` history recall needs a double tap.** The obvious fix moves the
   problem to the down-arrow; fixing both directions needs a history-navigation
   mode flag that changes multi-line editing ergonomics. Documented in the spec.
+
+## Addendum: what the clean-code round changed about the gates themselves
+
+The pyramid work above was audited afterwards by ten parallel principle-specific
+reviews (issues #33–#61). Three findings are about the gates rather than about
+the code they measure, and belong in this record:
+
+- **The release workflow gated nothing.** It ran `vitest run --coverage`, which
+  resolves the root `projects` config — and vitest treats `coverage` as a
+  root-only option, so both layers' thresholds were ignored. Coverage was
+  computed and discarded. Worse, CI's triggers matched no tag push, so a release
+  ran neither lint, nor e2e, nor clippy. The DLLs it ships load inside a running
+  flight sim, where the panic-restriction lints are the whole defence.
+
+- **`coverage.all` is a no-op in vitest 4.** Both per-layer configs passed it.
+  The include globs alone still fail an unimported file at 0% — verified by
+  adding one and watching the gate reject it, with and without the flag — so the
+  gate was sound, but it was sound by accident.
+
+- **The e2e layer measures the previews, not the panels.** A script added to a
+  panel and not to its preview page is never executed, never measured, and the
+  100%-per-file gate still reports green. That is the one gap a coverage gate
+  cannot see: it is only ever as complete as the file list it was given. Now
+  asserted by `test/integration/webview/previewAssets.test.ts`.
+
+The same round found that `tsc` covered `src/` only — 113 test files, 16
+Playwright specs, the shared `vscode` double and every config were never
+typechecked, because vitest and Playwright transpile through esbuild and Biome
+does not typecheck. `tsconfig.test.json` closes that.
