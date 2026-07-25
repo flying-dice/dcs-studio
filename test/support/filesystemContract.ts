@@ -136,6 +136,40 @@ export function describeFileSystemPortContract(
       expect(await fs.exists(src)).toBe(true);
     });
 
+    it("moves a directory and everything under it, leaving nothing behind", async () => {
+      // The install swap: a staged payload is renamed onto the live mod dir, so
+      // a failed extraction can never have destroyed the working one.
+      const fs = create();
+      const base = await root();
+      const src = harness.join(base, "staging");
+      const dest = harness.join(base, "live");
+      await fs.writeText(harness.join(src, "Scripts", "mod.lua"), "payload");
+      await fs.move(src, dest);
+      expect(await fs.readText(harness.join(dest, "Scripts", "mod.lua"))).toBe("payload");
+      expect(await fs.exists(src)).toBe(false);
+    });
+
+    it("moves a file, creating missing parent directories", async () => {
+      const fs = create();
+      const base = await root();
+      const src = harness.join(base, "from.txt");
+      const dest = harness.join(base, "out", "nested", "to.txt");
+      await fs.writeText(src, "payload");
+      await fs.move(src, dest);
+      expect(await fs.readText(dest)).toBe("payload");
+      expect(await fs.exists(src)).toBe(false);
+    });
+
+    it("rejects a move of something that is not there", async () => {
+      // Callers stage into a known-empty path; a silent no-op would let a
+      // failed extraction look like a successful swap.
+      const fs = create();
+      const base = await root();
+      await expect(
+        fs.move(harness.join(base, "never-existed"), harness.join(base, "dest")),
+      ).rejects.toThrow();
+    });
+
     it("copy overwrites an existing destination", async () => {
       const fs = create();
       const base = await root();

@@ -50,6 +50,10 @@ class MemFs implements FileSystemPort {
     this.files.set(dest, await this.readText(src));
     this.copies.push([src, dest]);
   }
+  async move(src: string, dest: string): Promise<void> {
+    this.files.set(dest, await this.readText(src));
+    this.files.delete(src);
+  }
 }
 
 function setup(initial?: Record<string, string>) {

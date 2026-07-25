@@ -105,6 +105,15 @@ export class MyModsPanel {
         missionScripts: s.missionScripts ?? [],
       }),
     }));
+    // An unreadable ledger reads as empty, so the list below is about to claim
+    // nothing is installed while the links are still in the DCS folders. Say so,
+    // and point at the file that was preserved — it is the only record of them.
+    const corrupt = this.ledger.takeCorruptNotice();
+    if (corrupt) {
+      void vscode.window.showWarningMessage(
+        `Your DCS Studio mod list could not be read and was preserved as ${corrupt}. My Mods will look empty until it is restored; uninstall-all.bat was left as it was, so it still removes the links already in your DCS folders.`,
+      );
+    }
     // Running state keyed exactly as the webview looks it up (`<repo>::<id>`),
     // translated here to the launcher's (lowercased) tracking keys.
     const running: Record<string, boolean> = {};

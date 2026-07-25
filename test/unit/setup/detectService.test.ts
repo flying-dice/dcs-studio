@@ -35,6 +35,7 @@ class FakeFs implements FileSystemPort {
   async remove(): Promise<void> {}
   async mkdirp(): Promise<void> {}
   async copy(): Promise<void> {}
+  async move(): Promise<void> {}
 }
 
 class FakeRegistry implements RegistryPort {

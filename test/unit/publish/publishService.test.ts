@@ -148,6 +148,11 @@ class FakeFs implements FileSystemPort {
     this.calls.push(["copy", src, dest]);
     this.files.set(dest, this.files.get(src) ?? "");
   }
+  async move(src: string, dest: string): Promise<void> {
+    this.calls.push(["move", src, dest]);
+    this.files.set(dest, this.files.get(src) ?? "");
+    this.files.delete(src);
+  }
 }
 
 class FakeManifest implements ManifestPort {

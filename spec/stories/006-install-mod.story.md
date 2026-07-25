@@ -64,23 +64,31 @@ Feature: One-click mod install
         | 404    |
         | 500    |
 
-  Rule: Re-installing over a working mod is the dangerous case
+  Rule: Re-installing over a working mod never destroys the working copy
 
     @chaos
-    Scenario: Extraction fails after the previous payload was already cleared
+    Scenario: Extraction fails while re-installing over a working mod
       Given the mod is already installed and enabled
       When the user installs it again
       And extraction fails — a truncated volume, a full disk,
         or 7-Zip exiting non-zero
       Then the install fails with 7-Zip's exit code and its stderr
-      And the previously unpacked files are already gone: prior content is
-        cleared before extraction and nothing restores it
-      And the ledger still records the mod as installed and enabled at the
-        old tag, so its links now point at files that no longer exist
-      And the ".download" folder is left behind, because cleanup only runs
-        after a successful extraction
-      # UNVERIFIED: whether this half-state is intended. Only the LINKING step
-      # rolls back; the clear-then-extract step has no rollback and no guard.
+      And the previously unpacked files are untouched: extraction unpacks into
+        a staging folder beside the mod's data dir and that folder is only
+        renamed into place once 7-Zip has succeeded
+      And the staging folder is removed, so the failure leaves nothing behind
+        and a retry starts from a clean slate
+      And the ledger still records the mod as installed and enabled at the old
+        tag — which is the truth, because its links still point at the files
+        that are still there
+
+    @chaos
+    Scenario: The staged payload cannot be swapped into place
+      Given extraction succeeded into the staging folder
+      When renaming it over the mod's data dir fails
+      Then the install fails with the underlying rename error
+      And the staged copy is removed rather than left occupying the disk
+      And no ledger entry is written for the new tag
 
     @chaos
     Scenario: Installing over a subscription that is already enabled

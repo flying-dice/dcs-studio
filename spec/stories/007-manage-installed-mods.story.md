@@ -36,15 +36,25 @@ Feature: My Mods panel
 
     @chaos
     Scenario: The subscriptions ledger is corrupt or truncated
-      Given "<dataDir>\subscriptions.json" is not valid JSON
+      Given "<dataDir>\subscriptions.json" is not valid JSON, or holds JSON
+        that is not a ledger object at all
       When the user opens My Mods
-      Then the ledger reads as empty and the panel shows the "No mods installed yet"
-        empty state, as though nothing had ever been installed
-      And "uninstall-all.bat" is regenerated from that empty ledger on the same
-        pass, so it no longer removes any of the links still in the DCS folders
-      # UNVERIFIED: whether silently reading an unreadable ledger as empty is
-      # intended. The read is deliberately tolerant, but nothing warns the user
-      # and the escape hatch is rewritten with every link record dropped.
+      Then the unreadable file is preserved as "subscriptions.json.corrupt"
+      And a warning names that file, because it is the only remaining record
+        of the links still in the DCS folders
+      And "uninstall-all.bat" is NOT regenerated from the empty read, so it
+        still removes every link it listed before
+      And the panel shows the "No mods installed yet" empty state, which the
+        warning has already explained
+      And the warning is shown once, not on every redraw
+
+    @chaos
+    Scenario: The ledger file is simply not there yet
+      Given no mod has ever been installed
+      When the user opens My Mods
+      Then the empty state is shown with no warning — a missing ledger is the
+        normal first run, not a failure
+      And nothing is preserved as "subscriptions.json.corrupt"
 
     @chaos
     Scenario: A row acted on after the mod was removed elsewhere
@@ -74,12 +84,13 @@ Feature: My Mods panel
       Given DCS is running and holds one of the mod's links open
       When the user switches the toggle off
       Then every other link is still attempted — one failure does not stop the rest
-      And the link that survived is reported, so the user can deal with it
-      And the mod is not reported as cleanly disabled while a link remains
-      # UNVERIFIED: today the linker returns {removed, failed} but the caller
-      # discards it. The mod is marked disabled, its link list is cleared, a
-      # "Disabled <repo>." toast is shown, and the surviving link is no longer
-      # tracked by the ledger or by uninstall-all.bat.
+      And it fails with "Disabled failed: <n> of <m> link(s) could not be
+        removed — close DCS and try again. Still linked: <dest> (<reason>)"
+      And the surviving link stays in the ledger, and therefore in
+        "uninstall-all.bat", which is the escape hatch for exactly this case
+      And the mod stays enabled, because a link of its is still in place
+      And switching the toggle off again once DCS is closed removes what is
+        left and completes the disable
 
     @chaos
     Scenario: Enabling a mod whose unpacked files were deleted by hand
@@ -149,6 +160,16 @@ Feature: My Mods panel
       And "Update failed: <reason>" is shown with a "Report Issue" button
       And the list is redrawn so the row honestly shows "disabled"
         rather than the enabled state it had a moment earlier
+
+    @chaos
+    Scenario: The mod cannot be unlinked before the update
+      Given DCS is running and holds one of the mod's links open
+      When the user clicks "Update"
+      Then the update stops at the disable step, before anything is downloaded,
+        so files something else is still holding are never overwritten
+      And "Update failed: <n> of <m> link(s) could not be removed — close DCS
+        and try again. …" is shown with a "Report Issue" button
+      And the mod is still on its old tag
 
     @chaos
     Scenario: Updating a mod that was uninstalled in another window

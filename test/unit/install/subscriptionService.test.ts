@@ -6,7 +6,9 @@ import {
   BEFORE_SANITIZE_FILE,
   toPosix,
 } from "../../../src/core/domain/missionScriptAggregator";
+import { renderUninstallScript } from "../../../src/core/domain/subscriptions";
 import type {
+  DisableResult,
   InstallTarget,
   LinkResult,
   ManifestModel,
@@ -87,6 +89,25 @@ class FakeFs implements FileSystemPort {
   async copy(src: string, dest: string): Promise<void> {
     this.files.set(dest, this.files.get(src) ?? "");
   }
+  /** Set to make the next move fail, standing in for a locked/blocked rename. */
+  moveFails: string | undefined;
+  moves: { src: string; dest: string }[] = [];
+  async move(src: string, dest: string): Promise<void> {
+    if (this.moveFails) throw new Error(this.moveFails);
+    this.moves.push({ src, dest });
+    for (const [k, v] of [...this.files]) {
+      if (k === src || k.startsWith(src + SEP)) {
+        this.files.delete(k);
+        this.files.set(dest + k.slice(src.length), v);
+      }
+    }
+    for (const d of [...this.dirs]) {
+      if (d === src || d.startsWith(src + SEP)) {
+        this.dirs.delete(d);
+        this.dirs.add(dest + d.slice(src.length));
+      }
+    }
+  }
 }
 
 class FakeDownloader implements DownloadPort {
@@ -115,6 +136,8 @@ class FakeArchive implements ArchivePort {
   extracts: { archive: string; outDir: string }[] = [];
   /** Files (relative to outDir) the fake "unpacks" on extract. */
   unpacked = new Map<string, string>();
+  /** Set to make extract fail the way 7-Zip does on a truncated volume. */
+  extractFails: string | undefined;
 
   constructor(private readonly fs: FakeFs) {}
 
@@ -123,6 +146,7 @@ class FakeArchive implements ArchivePort {
   }
   async extract(archive: string, outDir: string): Promise<void> {
     this.extracts.push({ archive, outDir });
+    if (this.extractFails) throw new Error(this.extractFails);
     for (const [rel, content] of this.unpacked) this.fs.files.set(path.join(outDir, rel), content);
   }
   async packagePayload(): Promise<never> {
@@ -134,6 +158,8 @@ class FakeLinker implements LinkerPort {
   enables: { id: string; src: string; dest: string }[][] = [];
   disables: { id: string; installedPath: string }[][] = [];
   result: LinkResult | undefined;
+  /** Link ids the fake cannot remove, with the reason it reports for each. */
+  undeletable = new Map<string, string>();
 
   async enable(defs: { id: string; src: string; dest: string }[]): Promise<LinkResult> {
     this.enables.push(defs);
@@ -144,9 +170,16 @@ class FakeLinker implements LinkerPort {
       }
     );
   }
-  disable(installed: { id: string; installedPath: string }[]): { removed: string[]; failed: [] } {
+  disable(installed: { id: string; installedPath: string }[]): DisableResult {
     this.disables.push(installed);
-    return { removed: installed.map((l) => l.id), failed: [] };
+    const removed: string[] = [];
+    const failed: { id: string; message: string }[] = [];
+    for (const l of installed) {
+      const reason = this.undeletable.get(l.id);
+      if (reason === undefined) removed.push(l.id);
+      else failed.push({ id: l.id, message: reason });
+    }
+    return { removed, failed };
   }
 }
 
@@ -243,6 +276,8 @@ const target = (over: Partial<InstallTarget> = {}): InstallTarget => ({
 
 const MOD_DIR = path.join(DATA, "Owner__Repo");
 const DL_DIR = path.join(MOD_DIR, ".download");
+// Extraction lands here and is renamed onto MOD_DIR only once it succeeded.
+const STAGING = `${MOD_DIR}.unpacking`;
 // The managed aggregator files land under <savedGames>/Scripts (FakeRoots).
 const AGG_DIR = path.join("C:\\SG\\DCS", "Scripts");
 const BEFORE_AGG = path.join(AGG_DIR, BEFORE_SANITIZE_FILE);
@@ -393,9 +428,11 @@ describe("subscribe", () => {
       { url: "https://dl/big.7z.002", dest: path.join(DL_DIR, "big.7z.002"), token: "tok" },
     ]);
     // Extraction points at the first volume; the archiver finds its siblings.
+    // It unpacks into the staging sibling, which is then renamed into place.
     expect(w.archive.extracts).toEqual([
-      { archive: path.join(DL_DIR, "big.7z.001"), outDir: MOD_DIR },
+      { archive: path.join(DL_DIR, "big.7z.001"), outDir: STAGING },
     ]);
+    expect(w.fs.moves).toEqual([{ src: STAGING, dest: MOD_DIR }]);
     // The .download dir is cleaned up afterwards.
     expect(w.fs.removed).toContain(DL_DIR);
 
@@ -430,20 +467,69 @@ describe("subscribe", () => {
     expect(pcts).toEqual([0, 0.25, 1]);
   });
 
-  it("clears prior unpacked content but keeps .download until extraction is done", async () => {
+  it("replaces prior unpacked content with the staged payload once extraction succeeds", async () => {
     const w = makeWorld();
     w.fs.dirs.add(MOD_DIR);
     w.fs.files.set(path.join(MOD_DIR, "old-file.lua"), "stale");
     w.fs.dirs.add(path.join(MOD_DIR, "old-dir"));
+    w.archive.unpacked.set("new-file.lua", "fresh");
 
     await w.service.subscribe(target(), undefined, w.onProgress);
 
     expect(w.fs.files.has(path.join(MOD_DIR, "old-file.lua"))).toBe(false);
     expect(w.fs.dirs.has(path.join(MOD_DIR, "old-dir"))).toBe(false);
-    // .download was never cleared as part of the prior-content sweep — only
-    // removed once (pre-download reset) plus once after extraction.
-    const dlRemovals = w.fs.removed.filter((p) => p === DL_DIR);
-    expect(dlRemovals).toHaveLength(2);
+    expect(w.fs.files.get(path.join(MOD_DIR, "new-file.lua"))).toBe("fresh");
+    // Nothing is left at the staging path once it has been renamed into place.
+    expect(w.fs.files.has(path.join(STAGING, "new-file.lua"))).toBe(false);
+    expect(w.fs.dirs.has(STAGING)).toBe(false);
+  });
+
+  it("leaves the previous install and its ledger entry untouched when extraction fails", async () => {
+    // The dangerous case: re-installing over a mod that currently works. If the
+    // archive is truncated or the disk is full, the files that ARE working must
+    // still be there and the ledger must still describe them truthfully.
+    const w = makeWorld();
+    const links = [{ id: "Owner/Repo:0", dest: "C:\\SG\\DCS\\Scripts\\X" }];
+    w.ledger.store = { "owner/repo": seeded({ tag: "v1.0.0", enabled: true, links }) };
+    w.fs.dirs.add(MOD_DIR);
+    w.fs.files.set(path.join(MOD_DIR, "Scripts", "X"), "working payload");
+    w.archive.extractFails = "7-Zip exited 2: Unexpected end of archive";
+
+    await expect(
+      w.service.subscribe(target({ tag: "v2.0.0" }), undefined, w.onProgress),
+    ).rejects.toThrow("7-Zip exited 2: Unexpected end of archive");
+
+    expect(w.fs.files.get(path.join(MOD_DIR, "Scripts", "X"))).toBe("working payload");
+    expect(w.fs.moves).toEqual([]);
+    expect(w.fs.removed).toContain(STAGING); // the half-written staging copy
+    expect(w.fs.removed).not.toContain(MOD_DIR);
+    // Still recorded as installed and enabled at the tag whose files are on disk.
+    expect(w.ledger.saves).toEqual([]);
+    expect(w.ledger.store["owner/repo"]).toMatchObject({ tag: "v1.0.0", enabled: true, links });
+  });
+
+  it("bins the staged payload when the swap into place fails", async () => {
+    const w = makeWorld();
+    w.fs.moveFails = "EPERM: operation not permitted, rename";
+
+    await expect(w.service.subscribe(target(), undefined, w.onProgress)).rejects.toThrow(
+      "EPERM: operation not permitted, rename",
+    );
+
+    expect(w.fs.removed.filter((p) => p === STAGING)).toHaveLength(2); // before and after
+    expect(w.ledger.saves).toEqual([]);
+  });
+
+  it("clears a staging folder left behind by an interrupted install", async () => {
+    // A fixed staging name means the next attempt starts from a clean slate
+    // instead of extracting on top of a half-unpacked previous try.
+    const w = makeWorld();
+    w.fs.dirs.add(STAGING);
+    w.fs.files.set(path.join(STAGING, "half-written.lua"), "junk");
+
+    await w.service.subscribe(target(), undefined, w.onProgress);
+
+    expect(w.fs.files.has(path.join(MOD_DIR, "half-written.lua"))).toBe(false);
   });
 
   it("snapshots the unpacked manifest's entrypoints onto the ledger entry", async () => {
@@ -615,6 +701,48 @@ describe("disable", () => {
     ]);
     expect(w.ledger.store["owner/repo"]).toMatchObject({ enabled: false, links: [] });
   });
+
+  it("keeps a link it could not remove, stays enabled, and names what survived", async () => {
+    // DCS holding a link open is the everyday case. Reporting a clean disable
+    // would drop the surviving link from the ledger — and from the escape hatch
+    // that exists precisely for a link the extension cannot remove itself.
+    const w = makeWorld();
+    const links = [
+      { id: "Owner/Repo:0", dest: "C:\\SG\\DCS\\Scripts\\X" },
+      { id: "Owner/Repo:1", dest: "C:\\SG\\DCS\\Mods\\Y" },
+    ];
+    w.ledger.store = { "owner/repo": seeded({ enabled: true, links }) };
+    w.linker.undeletable.set("Owner/Repo:1", "EBUSY: resource busy or locked");
+
+    await expect(w.service.disable("Owner/Repo")).rejects.toThrow(
+      "1 of 2 link(s) could not be removed — close DCS and try again. " +
+        "Still linked: C:\\SG\\DCS\\Mods\\Y (EBUSY: resource busy or locked)",
+    );
+
+    const saved = w.ledger.store["owner/repo"];
+    expect(saved.enabled).toBe(true); // a link remains, so it is not disabled
+    expect(saved.links).toEqual([{ id: "Owner/Repo:1", dest: "C:\\SG\\DCS\\Mods\\Y" }]);
+    // The clean-uninstall script still removes what is still on disk.
+    expect(renderUninstallScript(w.ledger.store, DATA, "subs.json")).toContain(
+      "C:\\SG\\DCS\\Mods\\Y",
+    );
+  });
+
+  it("finishes the job on a retry once the link can be removed", async () => {
+    const w = makeWorld();
+    const links = [{ id: "Owner/Repo:0", dest: "C:\\SG\\DCS\\Scripts\\X" }];
+    w.ledger.store = { "owner/repo": seeded({ enabled: true, links }) };
+    w.linker.undeletable.set("Owner/Repo:0", "EBUSY: resource busy or locked");
+    await expect(w.service.disable("Owner/Repo")).rejects.toThrow("1 of 1 link(s)");
+
+    w.linker.undeletable.clear(); // DCS closed
+    await w.service.disable("Owner/Repo");
+
+    expect(w.ledger.store["owner/repo"]).toMatchObject({ enabled: false, links: [] });
+    expect(w.linker.disables[1]).toEqual([
+      { id: "Owner/Repo:0", installedPath: "C:\\SG\\DCS\\Scripts\\X" },
+    ]);
+  });
 });
 
 // ── aggregator regeneration ──────────────────────────────────────────────────
@@ -738,6 +866,23 @@ describe("update", () => {
     expect(saved.enabled).toBe(true);
     expect(w.progress.map((p) => p.label)).toContain("Re-linking updated files…");
     expect(w.progress.at(-1)).toEqual({ phase: "done", label: "Updated to v2.0.0." });
+  });
+
+  it("abandons the update when a link could not be removed first", async () => {
+    // Downloading over files something else is still holding open is how a
+    // working install becomes a broken one.
+    const w = makeWorld();
+    const links = [{ id: "Owner/Repo:0", dest: "C:\\SG\\DCS/Scripts/X" }];
+    w.ledger.store = { "owner/repo": seeded({ tag: "v1.0.0", enabled: true, links }) };
+    w.linker.undeletable.set("Owner/Repo:0", "EBUSY: resource busy or locked");
+
+    await expect(
+      w.service.update(target({ tag: "v2.0.0" }), undefined, w.onProgress),
+    ).rejects.toThrow("1 of 1 link(s) could not be removed");
+
+    expect(w.downloader.calls).toEqual([]);
+    expect(w.archive.extracts).toEqual([]);
+    expect(w.ledger.store["owner/repo"].tag).toBe("v1.0.0");
   });
 
   it("leaves a disabled subscription disabled (no re-link)", async () => {

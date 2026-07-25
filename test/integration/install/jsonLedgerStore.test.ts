@@ -37,18 +37,77 @@ const sub: Subscription = {
 };
 
 describe("load", () => {
-  it("returns {} when the file is missing", async () => {
+  it("returns {} when the file is missing, which is the normal first run", async () => {
     expect(await store.load()).toEqual({});
-  });
-
-  it("returns {} when the file is unparsable (tolerant read)", async () => {
-    fs.writeFileSync(store.subsFilePath(), "{not json");
-    expect(await store.load()).toEqual({});
+    expect(store.takeCorruptNotice()).toBeUndefined();
+    expect(fs.existsSync(store.corruptFilePath())).toBe(false);
   });
 
   it("round-trips a saved ledger", async () => {
     await store.save({ "owner/repo": sub });
     expect(await store.load()).toEqual({ "owner/repo": sub });
+  });
+});
+
+describe("an unreadable ledger", () => {
+  // Reading a corrupt ledger as empty is how every mod silently disappears from
+  // My Mods while its links stay in the DCS folders. The file is the only
+  // record of those links, so it is preserved and the user is told where.
+  it("reads as empty but preserves the file and raises a notice", async () => {
+    fs.writeFileSync(store.subsFilePath(), "{not json");
+
+    expect(await store.load()).toEqual({});
+
+    expect(fs.readFileSync(store.corruptFilePath(), "utf8")).toBe("{not json");
+    expect(fs.existsSync(store.subsFilePath())).toBe(false);
+    expect(store.takeCorruptNotice()).toBe(store.corruptFilePath());
+  });
+
+  it("treats valid JSON that is not a ledger object as unreadable", async () => {
+    // `[]` and `null` parse cleanly and would otherwise be handed on as a
+    // ledger, dropping every subscription just as quietly as a parse failure.
+    for (const raw of ["[]", "null", "42"]) {
+      fs.rmSync(store.corruptFilePath(), { force: true });
+      fs.writeFileSync(store.subsFilePath(), raw);
+      expect(await store.load()).toEqual({});
+      expect(fs.readFileSync(store.corruptFilePath(), "utf8")).toBe(raw);
+      expect(store.takeCorruptNotice()).toBe(store.corruptFilePath());
+    }
+  });
+
+  it("treats a ledger that cannot be read at all as unreadable, not as absent", async () => {
+    // A directory where the file should be reads as EISDIR, not ENOENT.
+    fs.mkdirSync(store.subsFilePath(), { recursive: true });
+
+    expect(await store.load()).toEqual({});
+
+    expect(store.takeCorruptNotice()).toBe(store.corruptFilePath());
+    expect(fs.statSync(store.corruptFilePath()).isDirectory()).toBe(true);
+  });
+
+  it("points at the ledger itself when it could not be preserved", async () => {
+    // Something already occupies the .corrupt path — the file stays put, so the
+    // notice has to name where it actually is.
+    fs.writeFileSync(store.subsFilePath(), "{not json");
+    fs.mkdirSync(store.corruptFilePath(), { recursive: true });
+    fs.writeFileSync(path.join(store.corruptFilePath(), "keep.txt"), "x");
+
+    expect(await store.load()).toEqual({});
+
+    expect(store.takeCorruptNotice()).toBe(store.subsFilePath());
+    expect(fs.readFileSync(store.subsFilePath(), "utf8")).toBe("{not json");
+  });
+
+  it("hands the notice out once, so the warning is not repeated on every refresh", async () => {
+    fs.writeFileSync(store.subsFilePath(), "{not json");
+    await store.load();
+
+    expect(store.takeCorruptNotice()).toBe(store.corruptFilePath());
+    expect(store.takeCorruptNotice()).toBeUndefined();
+    // The quarantined file is gone from its old path, so the next read is a
+    // clean "nothing installed yet" rather than a second warning.
+    expect(await store.load()).toEqual({});
+    expect(store.takeCorruptNotice()).toBeUndefined();
   });
 });
 
@@ -97,5 +156,20 @@ describe("ensureUninstallBat", () => {
     fs.rmSync(store.uninstallBatPath());
     const p = store.ensureUninstallBat();
     expect(fs.readFileSync(p, "utf8")).toContain('rmdir /s /q "D:\\data\\Owner__Repo"');
+  });
+
+  it("leaves the script alone when the ledger could not be read", async () => {
+    // Regenerating it from an empty read would rewrite the one thing that can
+    // still remove the links a corrupt ledger no longer accounts for.
+    await store.save({ "owner/repo": sub });
+    const before = fs.readFileSync(store.uninstallBatPath(), "utf8");
+    fs.writeFileSync(store.subsFilePath(), "{not json");
+
+    const p = store.ensureUninstallBat();
+
+    expect(p).toBe(store.uninstallBatPath());
+    expect(fs.readFileSync(p, "utf8")).toBe(before);
+    expect(before).toContain("C:\\SG\\DCS\\Scripts\\X");
+    expect(store.takeCorruptNotice()).toBe(store.corruptFilePath());
   });
 });

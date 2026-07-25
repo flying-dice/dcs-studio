@@ -18,4 +18,10 @@ export interface FileSystemPort {
   mkdirp(path: string): Promise<void>;
   /** Copy a single file from `src` to `dest`. */
   copy(src: string, dest: string): Promise<void>;
+  /**
+   * Move a file or directory to `dest`, which must not already exist. Same
+   * volume only — this is the "swap a staged directory into place" primitive,
+   * not a general relocation, so it stays a rename and never a deep copy.
+   */
+  move(src: string, dest: string): Promise<void>;
 }

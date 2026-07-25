@@ -81,12 +81,18 @@ const service = {
   },
 } as unknown as SubscriptionService;
 
+let corruptNotice: string | undefined;
 const ledger = {
   ensureUninstallBat: () => {
     calls.push("ensureUninstallBat");
     return UNINSTALL_BAT;
   },
   uninstallBatPath: () => UNINSTALL_BAT,
+  takeCorruptNotice: () => {
+    const notice = corruptNotice;
+    corruptNotice = undefined;
+    return notice;
+  },
 } as unknown as JsonLedgerStore;
 
 let productImpl: () => Promise<ProductDetail> = async () => product();
@@ -191,6 +197,7 @@ beforeEach(() => {
   running.clear();
   globalState.clear();
   onChange = undefined;
+  corruptNotice = undefined;
   MyModsPanel.current = undefined;
 });
 
@@ -214,6 +221,28 @@ describe("opening the panel", () => {
     // so it must exist before the user needs it, not after.
     await show();
     expect(calls).toContain("ensureUninstallBat");
+  });
+
+  it("says so when the mod list could not be read, instead of showing an empty panel", async () => {
+    // An unreadable ledger reads as empty, so the panel is about to claim
+    // nothing is installed while the links are still in the DCS folders. The
+    // preserved file is the only record of them, so the warning names it.
+    corruptNotice = `${DATA_DIR}\\subscriptions.json.corrupt`;
+    subs = [];
+    const panel = await show();
+
+    expect(state.warnings[0]).toContain(`${DATA_DIR}\\subscriptions.json.corrupt`);
+    expect(state.warnings[0]).toContain("uninstall-all.bat was left as it was");
+    expect(init(panel).mods).toEqual([]);
+  });
+
+  it("warns once per corruption, not on every redraw", async () => {
+    corruptNotice = `${DATA_DIR}\\subscriptions.json.corrupt`;
+    const panel = await show();
+    await panel.webview.receive({ type: "refresh" });
+    await flush();
+
+    expect(state.warnings).toHaveLength(1);
   });
 
   it("opens beside the active editor rather than always in column one", async () => {

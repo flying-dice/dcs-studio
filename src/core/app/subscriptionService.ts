@@ -122,7 +122,16 @@ export class SubscriptionService {
     };
   }
 
-  /** Download the payload volumes and unpack them into the mod's data dir. */
+  /**
+   * Download the payload volumes and unpack them into the mod's data dir.
+   *
+   * Extraction never writes into the live directory: it lands in a sibling
+   * staging dir which is swapped in with a single rename once 7-Zip has
+   * succeeded. A truncated download, a corrupt archive, a full disk or a
+   * missing archiver therefore leaves the previously unpacked payload — and the
+   * ledger entry describing it — exactly as they were, instead of clearing the
+   * files first and reporting a healthy install over a hole.
+   */
   private async downloadAndUnpack(
     target: InstallTarget,
     token: string | undefined,
@@ -147,13 +156,24 @@ export class SubscriptionService {
       );
     }
     onProgress({ phase: "extract", label: "Extracting payload…" });
-    // Clear prior unpacked content but keep the .download dir until extraction done.
-    const entries = (await this.ports.fs.exists(dir)) ? await this.ports.fs.readDir(dir) : [];
-    for (const entry of entries) {
-      if (entry !== ".download") await this.ports.fs.remove(path.join(dir, entry));
+    // A sibling of `dir` (same volume, so the swap is a rename) with a fixed
+    // name, so leftovers from an interrupted run are cleared by the next one.
+    const staging = `${dir}.unpacking`;
+    await this.ports.fs.remove(staging);
+    await this.ports.fs.mkdirp(staging);
+    try {
+      await this.ports.archive.extract(path.join(dl, volumes[0].name), staging);
+      // The payload is complete: the volumes have served their purpose and the
+      // previous unpacked content can now be replaced.
+      await this.ports.fs.remove(dl);
+      await this.ports.fs.remove(dir);
+      await this.ports.fs.move(staging, dir);
+    } catch (e) {
+      // Nothing extracted, or the swap itself failed: bin the staged copy so a
+      // retry starts clean, and let the caller report the underlying failure.
+      await this.ports.fs.remove(staging);
+      throw e;
     }
-    await this.ports.archive.extract(path.join(dl, volumes[0].name), dir);
-    await this.ports.fs.remove(dl);
     return dir;
   }
 
@@ -274,16 +294,36 @@ export class SubscriptionService {
     await this.regenerateAggregators();
   }
 
-  /** Disable: remove the links (keep the unpacked files). */
+  /**
+   * Disable: remove the links (keep the unpacked files).
+   *
+   * The linker attempts every link independently and reports which ones it
+   * could not remove — a link DCS is holding open is still on disk, so it stays
+   * in the ledger (and therefore in `uninstall-all.bat`, the escape hatch that
+   * exists for exactly this situation) and the mod stays enabled. Disabling
+   * again once DCS is closed finishes the job. Throws when anything survived,
+   * naming it, so the panel reports the truth rather than a clean disable.
+   */
   async disable(repo: string): Promise<void> {
     const subs = await this.ports.ledger.load();
     const sub = subs[ledgerKey(repo)];
     if (!sub?.enabled) return;
-    this.ports.linker.disable(sub.links.map((l) => ({ id: l.id, installedPath: l.dest })));
-    sub.enabled = false;
-    sub.links = [];
+    const total = sub.links.length;
+    const { failed } = this.ports.linker.disable(
+      sub.links.map((l) => ({ id: l.id, installedPath: l.dest })),
+    );
+    const reasons = new Map(failed.map((f) => [f.id, f.message]));
+    const survivors = sub.links.filter((l) => reasons.has(l.id));
+    sub.links = survivors;
+    sub.enabled = survivors.length > 0;
     await this.ports.ledger.save(subs);
     await this.regenerateAggregators();
+    if (survivors.length) {
+      const detail = survivors.map((l) => `${l.dest} (${reasons.get(l.id)})`).join("; ");
+      throw new Error(
+        `${survivors.length} of ${total} link(s) could not be removed — close DCS and try again. Still linked: ${detail}`,
+      );
+    }
   }
 
   /** One-click install: subscribe + enable (the Marketplace action). */

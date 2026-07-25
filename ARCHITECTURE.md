@@ -54,7 +54,7 @@ port files, when they carry behavior.
 
 | File | Interface | Responsibility (adapter today) |
 |---|---|---|
-| `filesystem.ts` | `FileSystemPort` | readText/writeText/exists/isDirectory/readDir/remove/mkdirp/copy (node fs) |
+| `filesystem.ts` | `FileSystemPort` | readText/writeText/exists/isDirectory/readDir/remove/mkdirp/copy/move (node fs) |
 | `ledger.ts` | `SubscriptionLedgerStore` | `load(): Promise<Record<string, Subscription>>`, `save(subs)` (JSON file + regenerates uninstall-all.bat) |
 | `archive.ts` | `ArchivePort` | `available()`, `extract(archive, outDir)`, `packagePayload(...)` (7-Zip CLI) |
 | `downloader.ts` | `DownloadPort` | `download(url, dest, token?, onProgress?)` streaming (fetch) |
