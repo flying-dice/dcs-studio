@@ -39,6 +39,7 @@ vi.mock("../../../src/log/tailer", () => ({
 }));
 
 import * as vscode from "vscode";
+import { installRoots } from "../../../src/adapters/vscode/installRoots";
 import type { ManifestPort } from "../../../src/core/ports/manifest";
 import { LogPanel } from "../../../src/log/logPanel";
 
@@ -70,7 +71,7 @@ const tailer = () => tailers[tailers.length - 1];
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 async function show() {
-  LogPanel.show(context(), manifestPort);
+  LogPanel.show(context(), manifestPort, installRoots);
   await flush();
   return state.panels[state.panels.length - 1];
 }
@@ -116,7 +117,7 @@ describe("opening the viewer", () => {
   it("reveals the open panel instead of starting a second tail of the same file", async () => {
     // Two tailers would double every line and double the poll cost.
     await show();
-    LogPanel.show(context(), manifestPort);
+    LogPanel.show(context(), manifestPort, installRoots);
     await flush();
 
     expect(state.panels).toHaveLength(1);
@@ -356,7 +357,7 @@ describe("closing the viewer", () => {
   it("does not start a tail for a panel closed before the manifest read finished", async () => {
     // The manifest read is async; closing the panel inside that window used to
     // leave an orphan tailer polling for a webview that no longer exists.
-    LogPanel.show(context(), manifestPort);
+    LogPanel.show(context(), manifestPort, installRoots);
     state.panels[state.panels.length - 1].dispose();
     await flush();
 

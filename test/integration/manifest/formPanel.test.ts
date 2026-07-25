@@ -17,6 +17,7 @@ let existing: string[] = [];
 vi.mock("fs", () => ({ existsSync: (p: string) => existing.includes(p) }));
 
 import * as vscode from "vscode";
+import { installRoots } from "../../../src/adapters/vscode/installRoots";
 import { ManifestFormPanel } from "../../../src/manifest/formPanel";
 
 // The manifest form is two-way bound to a real text document, which makes the
@@ -46,7 +47,7 @@ const context = () =>
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 function open(doc = document()) {
-  ManifestFormPanel.openBeside(context(), doc as unknown as vscode.TextDocument);
+  ManifestFormPanel.openBeside(context(), doc as unknown as vscode.TextDocument, installRoots);
   return { doc, panel: state.panels[state.panels.length - 1] };
 }
 

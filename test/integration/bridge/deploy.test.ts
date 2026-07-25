@@ -8,6 +8,7 @@ import { resetVscode, state, vscodeMock } from "../support/vscode";
 vi.mock("vscode", () => vscodeMock());
 
 import * as vscode from "vscode";
+import { installRoots } from "../../../src/adapters/vscode/installRoots";
 import {
   eject,
   ejectCommand,
@@ -203,7 +204,7 @@ describe("eject", () => {
 
 describe("injectCommand", () => {
   it("injects into the configured write dir and says where it landed", async () => {
-    await injectCommand(context(), io);
+    await injectCommand(context(), io, installRoots);
     expect(io.exists(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe(true);
     expect(state.info).toEqual([expect.stringContaining(WRITE_DIR)]);
     expect(state.errors).toEqual([]);
@@ -211,7 +212,7 @@ describe("injectCommand", () => {
 
   it("tells the user to close DCS when a DLL is locked", async () => {
     failWith({ copyFile: () => Promise.reject(lockedError()) });
-    await injectCommand(context(), io);
+    await injectCommand(context(), io, installRoots);
     // A generic IO message would send them hunting a disk problem instead.
     expect(state.errors).toEqual([expect.stringContaining("DCS appears to be running")]);
     // No success toast — nothing was installed.
@@ -228,7 +229,7 @@ describe("injectCommand", () => {
         dest.endsWith(MISSION_DLL) ? Promise.reject(lockedError()) : copyFile(src, dest),
     });
 
-    await injectCommand(context(), io);
+    await injectCommand(context(), io, installRoots);
 
     expect(state.errors).toEqual([
       "Could not overwrite the bridge DLLs — DCS appears to be running. Close DCS and inject again. The install is now mixed: dcs_studio_gui.dll was replaced and the rest were not — inject again once the problem is fixed, because DCS loads them as a set.",
@@ -247,7 +248,7 @@ describe("injectCommand", () => {
     // build otherwise keeps deploying yesterday's binary in silence.
     io.seed(builtDllPath(EXT, GUI_DLL), "built-gui");
 
-    await injectCommand(context(), io);
+    await injectCommand(context(), io, installRoots);
 
     expect(state.info).toEqual([
       expect.stringContaining(
@@ -258,14 +259,14 @@ describe("injectCommand", () => {
 
   it("reports any other IO failure with the underlying reason", async () => {
     failWith({ mkdir: () => Promise.reject(new Error("ENOSPC: no space left on device")) });
-    await injectCommand(context(), io);
+    await injectCommand(context(), io, installRoots);
     expect(state.errors).toEqual(["Inject failed: ENOSPC: no space left on device"]);
     expect(state.info).toEqual([]);
   });
 
   it("reports a non-Error rejection rather than swallowing it", async () => {
     failWith({ copyFile: () => Promise.reject("access denied") });
-    await injectCommand(context(), io);
+    await injectCommand(context(), io, installRoots);
     expect(state.errors).toEqual(["Inject failed: access denied"]);
   });
 });
@@ -273,7 +274,7 @@ describe("injectCommand", () => {
 describe("ejectCommand", () => {
   it("ejects from the configured write dir and confirms it", async () => {
     await inject(context(), WRITE_DIR, io);
-    await ejectCommand(io);
+    await ejectCommand(io, installRoots);
     expect(io.exists(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe(false);
     expect(state.info).toEqual([`Bridge ejected from ${WRITE_DIR}.`]);
   });
@@ -288,7 +289,7 @@ describe("ejectCommand", () => {
       rm: (p, opts) => (p.endsWith(GUI_DLL) ? Promise.reject(lockedError()) : rm(p, opts)),
     });
 
-    await ejectCommand(io);
+    await ejectCommand(io, installRoots);
 
     expect(state.warnings).toEqual([
       `Bridge only partly ejected from ${WRITE_DIR} — dcs_studio_gui.dll could not be removed. Close DCS and eject again.`,

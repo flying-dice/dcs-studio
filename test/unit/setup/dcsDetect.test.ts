@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   compareInstallNames,
   compareSavedNames,
+  defaultDataDir,
   installDetail,
   isDcsSavedName,
   parseRegistryQuery,
@@ -10,6 +11,7 @@ import {
   REGISTRY_INSTALL_KEYS,
   roleProbePath,
   savedGameDetail,
+  savedGamesCandidates,
 } from "../../../src/core/domain/dcsDetect";
 
 // Real `reg query "HKCU\Software\Eagle Dynamics" /s /v Path` shaped stdout (CRLF,
@@ -113,6 +115,34 @@ describe("savedGameDetail", () => {
       valid: false,
       detail: "no Config yet — run DCS once",
     });
+  });
+});
+
+describe("savedGamesCandidates", () => {
+  it("offers Saved Games\\DCS first, then the OpenBeta variant", () => {
+    // Order is the rule: the caller takes the first that exists, so a machine
+    // with both gets the stable install. Windows separators regardless of the
+    // host — these paths are handed to a real Windows fs.
+    expect(savedGamesCandidates("C:\\Users\\pilot")).toEqual([
+      "C:\\Users\\pilot\\Saved Games\\DCS",
+      "C:\\Users\\pilot\\Saved Games\\DCS.openbeta",
+    ]);
+  });
+
+  it("never returns an empty list, so an undetected machine still has a path", () => {
+    // The caller falls back to candidates[0] when nothing is on disk; an empty
+    // list there would resolve {SavedGames} to undefined mid-install.
+    expect(savedGamesCandidates("C:\\Users\\pilot").length).toBeGreaterThan(0);
+  });
+});
+
+describe("defaultDataDir", () => {
+  it("unpacks under the profile, outside DCS's own folders", () => {
+    // Not under Saved Games and not under the install: DCS scans both trees,
+    // and it must never see the raw unpacked payloads — only the links.
+    const dir = defaultDataDir("C:\\Users\\pilot");
+    expect(dir).toBe("C:\\Users\\pilot\\DCSStudio\\mods");
+    expect(dir).not.toContain("Saved Games");
   });
 });
 

@@ -6,6 +6,7 @@ vi.mock("vscode", () => vscodeMock());
 const onDisk = new Set<string>();
 vi.mock("fs", () => ({ existsSync: (p: string) => onDisk.has(p) }));
 
+import { installRoots } from "../../../src/adapters/vscode/installRoots";
 import type { MissionSanitizeService } from "../../../src/core/app/missionSanitizeService";
 import type { MissionItemState } from "../../../src/core/domain/missionSanitize";
 import {
@@ -97,18 +98,18 @@ describe("locating the file", () => {
   it("resolves Scripts\\MissionScripting.lua under the configured install", () => {
     // Windows separators regardless of the host: this path is handed to the
     // real fs and to DCS, and a posix join would find nothing.
-    expect(missionScriptPath()).toBe(LUA);
+    expect(missionScriptPath(installRoots)).toBe(LUA);
   });
 
   it("has no path until the install is configured", () => {
     resetVscode();
-    expect(missionScriptPath()).toBeUndefined();
+    expect(missionScriptPath(installRoots)).toBeUndefined();
   });
 
   it("offers to open Setup when no install path is configured", async () => {
     resetVscode();
     state.messageReplies.push("Set DCS Paths");
-    await desanitizeMission(service());
+    await desanitizeMission(service(), installRoots);
 
     expect(state.info[0]).toContain("Set your DCS installation path");
     expect(state.executedCommands.at(-1)?.command).toBe("dcs.setup.open");
@@ -118,7 +119,7 @@ describe("locating the file", () => {
   it("does nothing further when that offer is dismissed", async () => {
     resetVscode();
     state.messageReplies.push(undefined);
-    await desanitizeMission(service());
+    await desanitizeMission(service(), installRoots);
     expect(state.executedCommands).toEqual([]);
   });
 
@@ -126,7 +127,7 @@ describe("locating the file", () => {
     // Almost always a stale or mistyped install path, so the message names the
     // path it looked at and points at Settings rather than at DCS.
     onDisk.clear();
-    await desanitizeMission(service());
+    await desanitizeMission(service(), installRoots);
 
     expect(state.errors[0]).toContain(LUA);
     expect(state.errors[0]).toContain("Check your DCS install path");
@@ -137,7 +138,7 @@ describe("locating the file", () => {
 describe("opening it", () => {
   it("opens the real file and names the modules still locked", async () => {
     items = [item("os"), item("io", { sanitized: false }), item("lfs", { present: false })];
-    await openMissionScripting(service());
+    await openMissionScripting(service(), installRoots);
 
     expect(state.openedDocuments).toEqual([LUA]);
     expect(state.shownDocuments).toEqual([LUA]);
@@ -148,20 +149,20 @@ describe("opening it", () => {
 
   it("stays quiet when nothing is locked", async () => {
     items = [item("os", { sanitized: false })];
-    await openMissionScripting(service());
+    await openMissionScripting(service(), installRoots);
     expect(state.info).toEqual([]);
   });
 
   it("opens nothing when the file is missing", async () => {
     onDisk.clear();
-    await openMissionScripting(service());
+    await openMissionScripting(service(), installRoots);
     expect(state.openedDocuments).toEqual([]);
   });
 });
 
 describe("toggling the sandbox", () => {
   it("desanitize unlocks every item and names the backup file", async () => {
-    await desanitizeMission(service());
+    await desanitizeMission(service(), installRoots);
 
     expect(calls.setItems).toEqual([
       { os: false, io: false, lfs: false, require: false, loadlib: false, package: false },
@@ -173,7 +174,7 @@ describe("toggling the sandbox", () => {
   });
 
   it("re-sanitize locks every item back down", async () => {
-    await sanitizeMission(service());
+    await sanitizeMission(service(), installRoots);
 
     expect(calls.setItems).toEqual([
       { os: true, io: true, lfs: true, require: true, loadlib: true, package: true },
@@ -186,14 +187,14 @@ describe("toggling the sandbox", () => {
     // snapshot is taken. Naming one anyway promises the user a way back that
     // is not on disk.
     backupExists = false;
-    await desanitizeMission(service());
+    await desanitizeMission(service(), installRoots);
 
     expect(state.info[0]).toContain("os/io/lfs/require/package are available");
     expect(state.info[0]).not.toContain("backup:");
   });
 
   it("restores the pristine backup over the live file", async () => {
-    await restoreMission(service());
+    await restoreMission(service(), installRoots);
     expect(calls.restored).toEqual([LUA]);
     expect(state.info[0]).toContain("Restored MissionScripting.lua from the backup");
     expect(state.warnings).toEqual([]);
@@ -207,7 +208,7 @@ describe("restoring over a file that has moved on", () => {
   it("confirms before undoing a change made outside DCS Studio", async () => {
     staleBackup = true;
     state.messageReplies.push("Restore anyway");
-    await restoreMission(service());
+    await restoreMission(service(), installRoots);
 
     expect(state.warnings[0]).toContain("most likely a DCS update");
     expect(calls.restored).toEqual([LUA]);
@@ -217,7 +218,7 @@ describe("restoring over a file that has moved on", () => {
   it("leaves the file alone when that confirmation is dismissed", async () => {
     staleBackup = true;
     state.messageReplies.push(undefined);
-    await restoreMission(service());
+    await restoreMission(service(), installRoots);
 
     expect(calls.restored).toEqual([]);
     expect(state.info[0]).toContain("Restore cancelled");
@@ -240,7 +241,7 @@ describe("the unsaved-buffer guard", () => {
     // saves that stale buffer later and quietly reverses the change — a
     // desanitize re-locks the sandbox, a restore puts the mangled file back.
     openDirty(LUA);
-    await action(service());
+    await action(service(), installRoots);
 
     expect(state.warnings[0]).toContain("unsaved changes");
     expect(calls).toMatchObject({
@@ -255,13 +256,13 @@ describe("the unsaved-buffer guard", () => {
     // VS Code reports whatever casing the file was opened with; on Windows that
     // is the same file, and a case-sensitive compare would miss the guard.
     openDirty("d:\\dcs world\\scripts\\missionscripting.lua");
-    await desanitizeMission(service());
+    await desanitizeMission(service(), installRoots);
     expect(calls.setItems).toEqual([]);
   });
 
   it("proceeds when the open copy has been saved", async () => {
     state.textDocuments = [{ uri: { fsPath: LUA }, isDirty: false }];
-    await desanitizeMission(service());
+    await desanitizeMission(service(), installRoots);
     expect(calls.setItems).toHaveLength(1);
   });
 });
@@ -271,21 +272,21 @@ describe("keeping the editor in step", () => {
     const document = { uri: { fsPath: LUA }, isDirty: false };
     state.textDocuments = [document];
     state.visibleTextEditors = [{ document, viewColumn: 2 }];
-    await desanitizeMission(service());
+    await desanitizeMission(service(), installRoots);
 
     expect(state.shownDocuments).toEqual([LUA]);
     expect(state.executedCommands.at(-1)?.command).toBe("workbench.action.files.revert");
   });
 
   it("reverts nothing when the file is not on screen", async () => {
-    await desanitizeMission(service());
+    await desanitizeMission(service(), installRoots);
     expect(state.executedCommands).toEqual([]);
   });
 });
 
 describe("mod-script hooks", () => {
   it("installs the trigger lines and reports both of their states", async () => {
-    await installMissionHooks(service());
+    await installMissionHooks(service(), installRoots);
 
     expect(calls.installedTriggers).toEqual([LUA]);
     expect(state.info[0]).toContain("before-sanitize: valid, after-sanitize: missing");
@@ -294,14 +295,14 @@ describe("mod-script hooks", () => {
 
   it("names no backup when installing the hooks changed nothing", async () => {
     backupExists = false;
-    await installMissionHooks(service());
+    await installMissionHooks(service(), installRoots);
 
     expect(state.info[0]).toContain("before-sanitize: valid, after-sanitize: missing");
     expect(state.info[0]).not.toContain("Backup:");
   });
 
   it("removes the trigger lines", async () => {
-    await removeMissionHooks(service());
+    await removeMissionHooks(service(), installRoots);
     expect(calls.removedTriggers).toEqual([LUA]);
     expect(state.info[0]).toContain("hooks removed");
   });
@@ -313,7 +314,7 @@ describe("when the write fails", () => {
     // cannot write. "EPERM: operation not permitted" tells the user nothing;
     // "run as administrator" is the actual fix.
     failure = Object.assign(new Error("operation not permitted"), { code });
-    await desanitizeMission(service());
+    await desanitizeMission(service(), installRoots);
 
     expect(state.errors[0]).toContain("Run VS Code as administrator");
     expect(state.info).toEqual([]);
@@ -321,13 +322,13 @@ describe("when the write fails", () => {
 
   it("passes any other error through with its own message", async () => {
     failure = new Error("EBUSY: file is locked by DCS");
-    await restoreMission(service());
+    await restoreMission(service(), installRoots);
     expect(state.errors[0]).toBe("EBUSY: file is locked by DCS");
   });
 
   it("renders a non-Error failure", async () => {
     failure = "No backup found.";
-    await restoreMission(service());
+    await restoreMission(service(), installRoots);
     expect(state.errors[0]).toBe("No backup found.");
   });
 
@@ -336,7 +337,7 @@ describe("when the write fails", () => {
     state.textDocuments = [document];
     state.visibleTextEditors = [{ document }];
     failure = new Error("disk full");
-    await installMissionHooks(service());
+    await installMissionHooks(service(), installRoots);
 
     expect(state.executedCommands).toEqual([]);
     expect(state.errors[0]).toBe("disk full");

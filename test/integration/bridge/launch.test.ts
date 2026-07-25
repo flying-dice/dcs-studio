@@ -9,6 +9,7 @@ import { resetVscode, state, vscodeMock } from "../support/vscode";
 vi.mock("vscode", () => vscodeMock());
 
 import * as vscode from "vscode";
+import { installRoots } from "../../../src/adapters/vscode/installRoots";
 import { DcsLauncher } from "../../../src/bridge/launch";
 import {
   builtDllPath,
@@ -59,7 +60,7 @@ beforeEach(() => {
   root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "bridge-launch-"));
   io = mappedBridgeFs(root);
   harness = createSpawnHarness();
-  launcher = new DcsLauncher(io, fakeSpawn());
+  launcher = new DcsLauncher(io, installRoots, fakeSpawn());
   resetVscode({
     config: {
       "dcsStudio.savedGamesPath": WRITE_DIR,
@@ -121,7 +122,7 @@ describe("preconditions", () => {
         return copyFile(src, dest);
       },
     });
-    launcher = new DcsLauncher(io, fakeSpawn());
+    launcher = new DcsLauncher(io, installRoots, fakeSpawn());
     harness.plan(() => undefined);
 
     const first = launcher.launch(context());
@@ -156,7 +157,7 @@ describe("injecting before launch", () => {
 
   it("aborts when a DLL is locked, because DCS is already running", async () => {
     io = mappedBridgeFs(root, { copyFile: () => Promise.reject(lockedError()) });
-    launcher = new DcsLauncher(io, fakeSpawn());
+    launcher = new DcsLauncher(io, installRoots, fakeSpawn());
 
     await launcher.launch(context());
 
@@ -167,7 +168,7 @@ describe("injecting before launch", () => {
 
   it("reports any other inject failure and does not launch", async () => {
     io = mappedBridgeFs(root, { mkdir: () => Promise.reject(new Error("EACCES: denied")) });
-    launcher = new DcsLauncher(io, fakeSpawn());
+    launcher = new DcsLauncher(io, installRoots, fakeSpawn());
 
     await launcher.launch(context());
 
@@ -184,7 +185,7 @@ describe("injecting before launch", () => {
       copyFile: (src, dest) =>
         dest.endsWith(MISSION_DLL) ? Promise.reject(lockedError()) : copyFile(src, dest),
     });
-    launcher = new DcsLauncher(io, fakeSpawn());
+    launcher = new DcsLauncher(io, installRoots, fakeSpawn());
 
     await launcher.launch(context());
 
@@ -196,7 +197,7 @@ describe("injecting before launch", () => {
 
   it("reports a non-Error inject failure rather than launching regardless", async () => {
     io = mappedBridgeFs(root, { copyFile: () => Promise.reject("weird") });
-    launcher = new DcsLauncher(io, fakeSpawn());
+    launcher = new DcsLauncher(io, installRoots, fakeSpawn());
 
     await launcher.launch(context());
 
@@ -280,7 +281,7 @@ describe("the spawn", () => {
   it("uses the real child_process by default", async () => {
     // The seam is for these specs only; the shipped command has to reach the
     // OS. Here that means a genuine ENOENT for a Windows path on this host.
-    await new DcsLauncher(io).launch(context());
+    await new DcsLauncher(io, installRoots).launch(context());
     await vi.waitFor(() =>
       expect(state.errors).toEqual([expect.stringContaining("Failed to start DCS")]),
     );

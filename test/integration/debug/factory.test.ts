@@ -4,6 +4,7 @@ import { resetVscode, state, vscodeMock } from "../support/vscode";
 vi.mock("vscode", () => vscodeMock());
 
 import * as vscode from "vscode";
+import { installRoots } from "../../../src/adapters/vscode/installRoots";
 import type { BridgeClient } from "../../../src/bridge/client";
 import { BridgeClients } from "../../../src/bridge/clients";
 import { DcsDebugAdapter } from "../../../src/debug/adapter";
@@ -45,7 +46,7 @@ describe("debug registration", () => {
       // two live connections rather than opening its own. The scheduler has to
       // reach it too, or every session's poll loop runs on real timers.
       const scheduler = new FakeScheduler();
-      const factory = new DcsDebugAdapterFactory(clients, scheduler);
+      const factory = new DcsDebugAdapterFactory(clients, installRoots, scheduler);
       // A DebugSession is a live editor handle no test can build; the factory
       // reads nothing but `configuration`, so that is all the double declares.
       const session: Pick<vscode.DebugSession, "configuration"> = {

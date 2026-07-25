@@ -112,8 +112,6 @@ const COMPOSITION_ROOT = "extension.ts";
  */
 const KNOWN_CROSSINGS = new Set([
   "src/install/myModsPanel.ts -> src/adapters/node/processLauncher",
-  "src/adapters/vscode/installRoots.ts -> src/bridge/paths",
-  "src/adapters/vscode/installRoots.ts -> src/install/dataDir",
   "src/bridge/client.ts -> src/adapters/node/wsTransport",
   "src/debug/adapter.ts -> src/adapters/node/scheduler",
   "src/debug/adapter.ts -> src/bridge/client",
@@ -122,12 +120,6 @@ const KNOWN_CROSSINGS = new Set([
   "src/debug/factory.ts -> src/adapters/node/scheduler",
   "src/debug/factory.ts -> src/bridge/client",
   "src/debug/factory.ts -> src/bridge/clients",
-  // `bridge/paths` is imported by three unrelated features: it is a shared
-  // module wearing a feature's clothes, and the fix is to move it, not to widen
-  // the rule for it.
-  "src/log/logPanel.ts -> src/bridge/paths",
-  "src/manifest/formPanel.ts -> src/bridge/paths",
-  "src/mission/missionPanel.ts -> src/bridge/paths",
   "src/nav/navView.ts -> src/bridge/clients",
   "src/nav/navView.ts -> src/skills/library",
   "src/publish/preflight.ts -> src/adapters/vscode/manifest",

@@ -26,6 +26,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type * as vscode from "vscode";
+import { installRoots } from "../../../src/adapters/vscode/installRoots";
 import type { BridgeClient } from "../../../src/bridge/client";
 import { BridgeClients } from "../../../src/bridge/clients";
 import type { DebugSnapshot, DebugState } from "../../../src/core/domain/debugProtocol";
@@ -148,6 +149,7 @@ describe("DcsDebugAdapter", () => {
           ...config,
         } as vscode.DebugConfiguration,
         scheduler,
+        installRoots,
       ),
     );
   }
