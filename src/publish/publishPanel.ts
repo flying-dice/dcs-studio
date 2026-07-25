@@ -41,9 +41,10 @@ export class PublishPanel {
     void this.pushInit();
   }
 
-  private async detectRepo(): Promise<{ owner: string; name: string } | null> {
-    if (!this.root) return null;
-    const url = await this.publish.remoteUrl(this.root, "origin");
+  // Takes `root` rather than re-reading the field: the only caller has already
+  // established it, so a second null-guard here would be unreachable code.
+  private async detectRepo(root: string): Promise<{ owner: string; name: string } | null> {
+    const url = await this.publish.remoteUrl(root, "origin");
     return url ? parseRepoRemote(url) : null;
   }
 
@@ -54,7 +55,7 @@ export class PublishPanel {
     }
     const checks = await preflight(this.context, this.root, this.publish);
     const m = readManifest(this.context, this.root);
-    const repo = await this.detectRepo();
+    const repo = await this.detectRepo(this.root);
     this.post({
       type: "init",
       checks,

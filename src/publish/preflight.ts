@@ -1,5 +1,5 @@
+import { win32 as path } from "node:path";
 import * as fs from "fs";
-import * as path from "path";
 import type * as vscode from "vscode";
 import { manifestCore } from "../adapters/vscode/manifest";
 import type { PublishService } from "../core/app/publishService";
