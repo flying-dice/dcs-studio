@@ -1,32 +1,28 @@
 import * as vscode from "vscode";
+import {
+  type MarketplaceEffect,
+  type MarketplaceInbound,
+  MarketplacePresenter,
+} from "../core/app/marketplacePresenter";
 import type { SubscriptionService } from "../core/app/subscriptionService";
 import { DISCOVERY_TOPIC } from "../core/domain/githubMarketplace";
-import { deriveInstallManifestView } from "../core/domain/installManifestView";
-import type { ProductDetail } from "../core/domain/types";
 import type { AuthPort } from "../core/ports/auth";
 import type { MarketplacePort } from "../core/ports/marketplace";
 import { showError } from "../errors";
 import { renderWebviewHtml } from "../webview/html";
 
 // The full-screen storefront, hosted as a webview panel. The webview owns all
-// view state (grid, product page, search/tag/sort); the host owns the sign-in
-// state machine and answers the webview's messages; discovery/product loads go
-// through the injected `MarketplacePort` (backend chosen in extension.ts).
-// Sign-in gated like dcs-studio's /marketplace, with a
-// browse-without-signing-in fallback (rate-limited, public only). The panel's
-// cached token feeds the subscription flows (fetchPlan/install); the market
-// port sources its own token from AuthPort — same silent session either way.
+// view state (grid, product page, search/tag/sort); everything the host decides
+// — the sign-in state machine, the product cache, install guards, error
+// mapping — lives in MarketplacePresenter, which knows nothing about VS Code.
+// This class is the shell around it: it owns the panel, the URI plumbing, and
+// performs the effects the presenter describes.
 export class MarketplacePanel {
   public static current: MarketplacePanel | undefined;
   private static readonly viewType = "dcsStudio.marketplace";
 
-  private readonly panel: vscode.WebviewPanel;
-  private readonly context: vscode.ExtensionContext;
   private readonly disposables: vscode.Disposable[] = [];
-
-  private token: string | undefined;
-  private browsing = false; // chose to browse without signing in
-  private readonly products = new Map<string, ProductDetail>();
+  private readonly presenter: MarketplacePresenter;
 
   static show(
     context: vscode.ExtensionContext,
@@ -53,29 +49,40 @@ export class MarketplacePanel {
   }
 
   private constructor(
-    panel: vscode.WebviewPanel,
-    context: vscode.ExtensionContext,
-    private readonly subs: SubscriptionService,
-    private readonly market: MarketplacePort,
-    private readonly auth: AuthPort,
+    private readonly panel: vscode.WebviewPanel,
+    private readonly context: vscode.ExtensionContext,
+    subs: SubscriptionService,
+    market: MarketplacePort,
+    auth: AuthPort,
   ) {
-    this.panel = panel;
-    this.context = context;
+    this.presenter = new MarketplacePresenter({
+      subs,
+      market,
+      auth,
+      topic: () => this.topic(),
+      post: (msg) => void this.panel.webview.postMessage(msg),
+      effect: (effect) => this.perform(effect),
+    });
+
     this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html();
 
-    this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
+    this.panel.webview.onDidReceiveMessage(
+      (m: MarketplaceInbound) => void this.presenter.handle(m),
+      null,
+      this.disposables,
+    );
     // Re-run auth state if the user signs in/out of GitHub elsewhere in VS Code.
     this.disposables.push(
       vscode.authentication.onDidChangeSessions((e) => {
-        if (e.provider.id === "github") void this.refreshAuth();
+        if (e.provider.id === "github") void this.presenter.refreshAuth();
       }),
     );
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
   }
 
   refresh(): void {
-    void this.runDiscover(true);
+    void this.presenter.discover(true);
   }
 
   private topic(): string {
@@ -85,154 +92,21 @@ export class MarketplacePanel {
     );
   }
 
-  private post(msg: unknown): void {
-    void this.panel.webview.postMessage(msg);
-  }
-
-  private async onMessage(msg: {
-    type: string;
-    repo?: string;
-    name?: string;
-    force?: boolean;
-    url?: string;
-    page?: string;
-  }): Promise<void> {
-    switch (msg.type) {
-      case "ready":
-        await this.refreshAuth();
-        break;
-      case "signIn": {
-        const session = await this.auth.signIn();
-        this.token = session?.token;
-        this.browsing = false;
-        await this.refreshAuth();
-        break;
-      }
-      case "browseAnon":
-        this.browsing = true;
-        this.post({ type: "auth", signedIn: false, browsing: true, topic: this.topic() });
-        await this.runDiscover(false);
-        break;
-      case "discover":
-        await this.runDiscover(!!msg.force);
-        break;
-      case "openProduct":
-        if (msg.repo) await this.runProduct(msg.repo);
-        break;
+  /** Carry out one presenter-described effect. */
+  private perform(effect: MarketplaceEffect): void {
+    switch (effect.kind) {
       case "openExternal":
-        if (msg.url) void vscode.env.openExternal(vscode.Uri.parse(msg.url));
+        void vscode.env.openExternal(vscode.Uri.parse(effect.url));
         break;
       case "openDocs":
-        // The "Learn more" link on the Script Execution Notice routes here; the
-        // host opens the Docs panel at the sandbox explainer page.
-        void vscode.commands.executeCommand("dcs.docs.open", msg.page ?? "sandbox");
+        void vscode.commands.executeCommand("dcs.docs.open", effect.page);
         break;
-      case "install":
-        if (msg.repo) await this.runInstall(msg.repo);
+      case "info":
+        void vscode.window.showInformationMessage(effect.message);
         break;
-      case "uninstall":
-        if (msg.repo) {
-          try {
-            await this.subs.unsubscribe(msg.repo);
-            this.post({ type: "uninstalled", repo: msg.repo });
-            void vscode.window.showInformationMessage(`Uninstalled ${msg.repo}.`);
-          } catch (e) {
-            this.post({
-              type: "installError",
-              repo: msg.repo,
-              message: e instanceof Error ? e.message : String(e),
-            });
-          }
-        }
+      case "installFailed":
+        void showError(effect.message, effect.cause);
         break;
-    }
-  }
-
-  private async runInstall(repo: string): Promise<void> {
-    const product = this.products.get(repo.toLowerCase());
-    if (!product) return;
-    if (!product.release_tag) {
-      this.post({ type: "installError", repo, message: "This mod has no release to install." });
-      return;
-    }
-    this.post({ type: "installProgress", repo, phase: "download", label: "Starting…", pct: 0 });
-    try {
-      await this.subs.install(
-        {
-          repo: product.repo,
-          name: product.name,
-          tag: product.release_tag,
-          assets: product.assets,
-        },
-        this.token,
-        (p) =>
-          this.post({ type: "installProgress", repo, phase: p.phase, label: p.label, pct: p.pct }),
-      );
-      this.post({ type: "installed", repo });
-      void vscode.window.showInformationMessage(`Installed ${product.name} into your DCS folders.`);
-    } catch (e) {
-      this.post({
-        type: "installError",
-        repo,
-        message: e instanceof Error ? e.message : String(e),
-      });
-      void showError(`Install failed: ${e instanceof Error ? e.message : String(e)}`, e);
-    }
-  }
-
-  /** Push current auth state to the webview; auto-discover when we have access. */
-  private async refreshAuth(): Promise<void> {
-    const session = await this.auth.currentSession();
-    this.token = session?.token;
-    const signedIn = !!session;
-    this.post({
-      type: "auth",
-      signedIn,
-      browsing: this.browsing,
-      login: session?.accountLabel,
-      topic: this.topic(),
-    });
-    if (signedIn || this.browsing) await this.runDiscover(false);
-  }
-
-  private async runDiscover(force: boolean): Promise<void> {
-    this.post({ type: "listings:busy" });
-    try {
-      const listings = await this.market.discover(this.topic());
-      this.post({ type: "listings", listings, force });
-    } catch (e) {
-      this.post({ type: "listings:error", message: e instanceof Error ? e.message : String(e) });
-    }
-  }
-
-  private async runProduct(repo: string): Promise<void> {
-    this.post({ type: "product:busy", repo });
-    try {
-      const product = await this.market.loadProduct(repo);
-      this.products.set(product.repo.toLowerCase(), product);
-      let plan = null;
-      try {
-        plan = await this.subs.fetchPlan(product.assets, this.token);
-      } catch {
-        // A missing/unreadable manifest just means no plan preview — surfaced as
-        // the explicit "install actions unknown" state, never a silent gap.
-      }
-      // Derive the install-manifest view-model (unknown state when plan is null),
-      // and carry the required-modules list separately for its own card.
-      const manifest = deriveInstallManifestView(plan);
-      this.post({
-        type: "product",
-        product,
-        manifest,
-        requires: plan?.requires ?? [],
-        installed: await this.subs.isSubscribed(product.repo),
-      });
-    } catch (e) {
-      this.post({
-        type: "product:error",
-        repo,
-        message: e instanceof Error ? e.message : String(e),
-      });
     }
   }
 

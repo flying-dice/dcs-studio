@@ -123,7 +123,7 @@ export class FakeWebview {
   options: unknown = {};
   readonly cspSource = "vscode-webview://test";
   /** Every message the panel has posted to the webview, in order. */
-  readonly posted: unknown[] = [];
+  posted: unknown[] = [];
   private handler: ((msg: unknown) => unknown) | undefined;
 
   postMessage(msg: unknown): Promise<boolean> {
@@ -177,6 +177,9 @@ export class FakeWebviewPanel {
   }
 
   dispose(): void {
+    // Idempotent, like the real API: panels commonly respond to onDidDispose by
+    // calling dispose() on themselves, which would otherwise recurse forever.
+    if (this.disposed) return;
     this.disposed = true;
     this.disposeEmitter.fire();
   }
@@ -202,6 +205,18 @@ export class FakeStatusBarItem {
   dispose(): void {
     this.disposed = true;
   }
+}
+
+/**
+ * Session-change signal, exposed so a test can play "the user signed in to
+ * GitHub in another part of VS Code" — panels subscribe to this to re-run
+ * their auth state, and there is no other way to reach that listener.
+ */
+const authChangeEmitter = new FakeEventEmitter<{ provider: { id: string } }>();
+
+/** Fire `authentication.onDidChangeSessions` for one provider. */
+export function fireAuthSessionsChanged(providerId = "github"): void {
+  authChangeEmitter.fire({ provider: { id: providerId } });
 }
 
 class FakeUri {
@@ -360,7 +375,7 @@ export function vscodeMock() {
     // ── auth ──
     authentication: {
       getSession: vi.fn(() => Promise.resolve(undefined)),
-      onDidChangeSessions: new FakeEventEmitter<unknown>().event,
+      onDidChangeSessions: authChangeEmitter.event,
     },
 
     // ── debug ──
