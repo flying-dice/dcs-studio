@@ -1,5 +1,4 @@
 import { type ChildProcess, spawn } from "child_process";
-import * as fs from "fs";
 import * as vscode from "vscode";
 import {
   DCS_LAUNCH_ARGS,
@@ -10,7 +9,7 @@ import {
   shouldEjectOnShutdown,
 } from "../core/domain/bridgeDeploy";
 import { showError } from "../errors";
-import { eject, inject } from "./deploy";
+import { bridgeFs, eject, inject } from "./deploy";
 import { gameInstallDir, savedGamesDir } from "./paths";
 
 // Managed launch, mirroring dcs-studio's launcher: assert the bridge is injected,
@@ -20,7 +19,16 @@ import { gameInstallDir, savedGamesDir } from "./paths";
 // live in core/domain/bridgeDeploy.
 let child: ChildProcess | undefined;
 
-export async function launchDcs(ctx: vscode.ExtensionContext): Promise<void> {
+// `spawnProcess` is a seam: what matters here is what happens around a running
+// sim — the abort when a DLL is already locked, and the eject that restores the
+// user's DCS install once the process exits — and none of it is reachable
+// without launching DCS for real. The filesystem comes from deploy.ts's seam,
+// so a test drives both through one substitution.
+export async function launchDcs(
+  ctx: vscode.ExtensionContext,
+  spawnProcess: typeof spawn = spawn,
+): Promise<void> {
+  const io = bridgeFs();
   if (child) {
     void vscode.window.showInformationMessage("DCS was already launched by DCS Studio.");
     return;
@@ -32,7 +40,7 @@ export async function launchDcs(ctx: vscode.ExtensionContext): Promise<void> {
   }
   const binDir = dcsBinDir(gameInstall);
   const exe = dcsExePath(gameInstall);
-  if (!fs.existsSync(exe)) {
+  if (!io.existsSync(exe)) {
     void showError(`DCS.exe not found at ${exe}.`);
     return;
   }
@@ -51,7 +59,11 @@ export async function launchDcs(ctx: vscode.ExtensionContext): Promise<void> {
   }
 
   // `--no-launcher` is mandatory (skip the ED launcher). Detached, no IO.
-  const proc = spawn(exe, [...DCS_LAUNCH_ARGS], { cwd: binDir, detached: true, stdio: "ignore" });
+  const proc = spawnProcess(exe, [...DCS_LAUNCH_ARGS], {
+    cwd: binDir,
+    detached: true,
+    stdio: "ignore",
+  });
   child = proc;
   proc.on("error", (e) => {
     child = undefined;

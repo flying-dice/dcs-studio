@@ -46,6 +46,9 @@ export interface VscodeState {
   panels: FakeWebviewPanel[];
   statusBarItems: FakeStatusBarItem[];
   createdTerminals: { name: string; sent: string[] }[];
+  /** Output channels created via window.createOutputChannel, with what was
+   * written to them — the only record of an external command's output. */
+  outputChannels: { name: string; lines: string[]; shown: boolean; disposed: boolean }[];
   /** Documents opened via workspace.openTextDocument. */
   openedDocuments: string[];
   /** Documents revealed in an editor via window.showTextDocument. */
@@ -117,6 +120,7 @@ function blankState(): VscodeState {
     panels: [],
     statusBarItems: [],
     createdTerminals: [],
+    outputChannels: [],
     openedDocuments: [],
     shownDocuments: [],
     extensions: {},
@@ -626,13 +630,23 @@ export function vscodeMock() {
         state.statusBarItems.push(item);
         return item;
       },
-      createOutputChannel: (name: string) => ({
-        name,
-        appendLine: () => {},
-        append: () => {},
-        show: () => {},
-        dispose: () => {},
-      }),
+      createOutputChannel: (name: string) => {
+        // Recorded: for a long-running external command the channel is the only
+        // place its output goes, so "see the output" is part of the contract.
+        const channel = { name, lines: [] as string[], shown: false, disposed: false };
+        state.outputChannels.push(channel);
+        return {
+          name,
+          appendLine: (text: string) => channel.lines.push(text),
+          append: (text: string) => channel.lines.push(text),
+          show: () => {
+            channel.shown = true;
+          },
+          dispose: () => {
+            channel.disposed = true;
+          },
+        };
+      },
       createTerminal: (name: string) => {
         const terminal = { name, sent: [] as string[] };
         state.createdTerminals.push(terminal);
