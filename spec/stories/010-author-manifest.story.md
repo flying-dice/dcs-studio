@@ -180,11 +180,44 @@ Feature: Manifest form panel
         | description | 1.5     | 1.5   |
 
     @chaos
-    Scenario: An unmodeled [project] key keeps its TOML type
+    Scenario Outline: An array-section field written as a bare TOML value
+      Given the manifest carries <section> with <field> = 2024
+      Then the parser normalises it to the literal text "2024" too,
+        exactly as it does for the [project] scalars
+      And the form renders that row and validates it like any other —
+        no throw while the template is being built
+      Because the form assigns its model before rendering, so one
+        numeric row would otherwise leave the whole form blank and
+        every later message would re-throw on the same row
+
+      Examples:
+        | section            | field   |
+        | [[bundle]]         | path    |
+        | [[symlink]]        | dest    |
+        | [[entrypoint]]     | exe     |
+        | [[mission_script]] | path    |
+
+    @chaos
+    Scenario: An unmodeled key keeps its TOML type
       Given the manifest carries dcs_min_version = 2 under [project]
       When the form emits the document
       Then it is written back unquoted, as the integer it was —
-        only the four fields the form models are normalised to text
+        only the fields the form models are normalised to text
+
+    @chaos
+    Scenario: A symlink destination that reaches outside the DCS folders
+      Given a [[symlink]] whose dest is "{SavedGames}/../../evil.lua"
+      Then the resolved-path preview shows
+        "Reaches outside the DCS folders" instead of a path
+      And the issues box lists
+        "Symlink N: destination reaches outside the DCS folders."
+      Because a dest that escapes is refused at install time on every
+        machine — it is an authoring error, not a machine-local one,
+        so it is stated as such rather than as a settings problem
+      And the same verdict is reached for a drive-prefixed dest
+        such as "C:/Windows/System32/x.dll", an NTFS alternate stream,
+        and a dest using backslash separators — the rule is the
+        bridge's own path guard, mirrored here
 
     @chaos
     Scenario: Rows added but not filled in
