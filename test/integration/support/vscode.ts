@@ -44,6 +44,10 @@ export interface VscodeState {
   extensions: Record<string, { packageJSON: Record<string, unknown> }>;
   /** Transient status-bar messages set via window.setStatusBarMessage. */
   statusBarMessages: string[];
+  /** Paths workspace.fs.stat resolves for; anything else rejects. */
+  existingPaths: Set<string>;
+  /** File-system watchers created via workspace.createFileSystemWatcher. */
+  watchers: FakeFileSystemWatcher[];
 }
 
 export const state: VscodeState = blankState();
@@ -70,6 +74,8 @@ function blankState(): VscodeState {
     openedDocuments: [],
     extensions: {},
     statusBarMessages: [],
+    existingPaths: new Set(),
+    watchers: [],
   };
 }
 
@@ -79,11 +85,18 @@ export function resetVscode(
     config?: Record<string, unknown>;
     workspaceFolders?: string[];
     extensions?: Record<string, { packageJSON: Record<string, unknown> }>;
+    existingPaths?: string[];
   } = {},
 ): void {
   Object.assign(state, blankState());
+  // Module-level signals outlive a single spec's objects, so their listeners
+  // have to be dropped here too — otherwise every previously-resolved view
+  // still reacts and one fire() looks like N.
+  workspaceFoldersEmitter.dispose();
+  authChangeEmitter.dispose();
   if (seed.config) state.config = { ...seed.config };
   if (seed.extensions) state.extensions = { ...seed.extensions };
+  if (seed.existingPaths) state.existingPaths = new Set(seed.existingPaths);
   if (seed.workspaceFolders) {
     state.workspaceFolders = seed.workspaceFolders.map((fsPath, index) => ({
       uri: { fsPath },
@@ -102,12 +115,22 @@ class FakeDisposable {
 
 class FakeEventEmitter<T> {
   private readonly listeners: ((e: T) => void)[] = [];
-  readonly event = (listener: (e: T) => void): FakeDisposable => {
+  // The real signature is (listener, thisArg?, disposables?) and it PUSHES the
+  // subscription into `disposables`. Honouring that matters: panels rely on it
+  // to collect their subscriptions, and a double that drops the array leaves
+  // every teardown loop unreachable — the exact code that stops listener leaks.
+  readonly event = (
+    listener: (e: T) => void,
+    _thisArg?: unknown,
+    disposables?: { push(d: FakeDisposable): void },
+  ): FakeDisposable => {
     this.listeners.push(listener);
-    return new FakeDisposable(() => {
+    const sub = new FakeDisposable(() => {
       const i = this.listeners.indexOf(listener);
       if (i >= 0) this.listeners.splice(i, 1);
     });
+    disposables?.push(sub);
+    return sub;
   };
   fire(e: T): void {
     for (const listener of [...this.listeners]) listener(e);
@@ -131,11 +154,17 @@ export class FakeWebview {
     return Promise.resolve(true);
   }
 
-  onDidReceiveMessage(handler: (msg: unknown) => unknown): FakeDisposable {
+  onDidReceiveMessage(
+    handler: (msg: unknown) => unknown,
+    _thisArg?: unknown,
+    disposables?: { push(d: FakeDisposable): void },
+  ): FakeDisposable {
     this.handler = handler;
-    return new FakeDisposable(() => {
+    const sub = new FakeDisposable(() => {
       this.handler = undefined;
     });
+    disposables?.push(sub);
+    return sub;
   }
 
   asWebviewUri(uri: { fsPath: string; toString(): string }): { toString(): string } {
@@ -207,6 +236,51 @@ export class FakeStatusBarItem {
   }
 }
 
+/** A watcher a test can fire, standing in for a real file-system watcher. */
+export class FakeFileSystemWatcher {
+  private readonly createEmitter = new FakeEventEmitter<unknown>();
+  private readonly deleteEmitter = new FakeEventEmitter<unknown>();
+  private readonly changeEmitter = new FakeEventEmitter<unknown>();
+  readonly onDidCreate = this.createEmitter.event;
+  readonly onDidDelete = this.deleteEmitter.event;
+  readonly onDidChange = this.changeEmitter.event;
+  disposed = false;
+
+  constructor(readonly pattern: unknown) {}
+
+  fireCreate(): void {
+    this.createEmitter.fire(undefined);
+  }
+  fireDelete(): void {
+    this.deleteEmitter.fire(undefined);
+  }
+  dispose(): void {
+    this.disposed = true;
+  }
+}
+
+/** A sidebar view host, as `WebviewViewProvider.resolveWebviewView` receives. */
+export class FakeWebviewView {
+  readonly webview = new FakeWebview();
+  visible = true;
+  private readonly disposeEmitter = new FakeEventEmitter<void>();
+  readonly onDidDispose = this.disposeEmitter.event;
+  disposed = false;
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.disposeEmitter.fire();
+  }
+}
+
+const workspaceFoldersEmitter = new FakeEventEmitter<unknown>();
+
+/** Fire `workspace.onDidChangeWorkspaceFolders`. */
+export function fireWorkspaceFoldersChanged(): void {
+  workspaceFoldersEmitter.fire(undefined);
+}
+
 /**
  * Session-change signal, exposed so a test can play "the user signed in to
  * GitHub in another part of VS Code" — panels subscribe to this to re-run
@@ -276,8 +350,19 @@ export function vscodeMock() {
       },
       onDidChangeConfiguration: new FakeEventEmitter<unknown>().event,
       onDidSaveTextDocument: new FakeEventEmitter<unknown>().event,
+      onDidChangeWorkspaceFolders: workspaceFoldersEmitter.event,
+      createFileSystemWatcher: (pattern: unknown) => {
+        const watcher = new FakeFileSystemWatcher(pattern);
+        state.watchers.push(watcher);
+        return watcher;
+      },
       fs: {
-        stat: () => Promise.resolve({ type: 1 }),
+        // Rejects for unknown paths, like the real API — callers use that
+        // rejection as their "file does not exist" answer.
+        stat: (uri: { fsPath: string }) =>
+          state.existingPaths.has(uri.fsPath)
+            ? Promise.resolve({ type: 1 })
+            : Promise.reject(new Error(`ENOENT: ${uri.fsPath}`)),
       },
     },
 
@@ -410,5 +495,11 @@ export function vscodeMock() {
     FileType: { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 },
     UIKind: { Desktop: 1, Web: 2 },
     ExtensionMode: { Production: 1, Development: 2, Test: 3 },
+    RelativePattern: class {
+      constructor(
+        readonly base: unknown,
+        readonly pattern: string,
+      ) {}
+    },
   };
 }
