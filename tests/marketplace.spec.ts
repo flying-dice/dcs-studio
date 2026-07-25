@@ -1,5 +1,5 @@
 import { expect, test } from "./fixtures";
-import { expectSent, hostSend, openPreview } from "./helpers";
+import { expectSent, hostSend, openPreview, sentMessages } from "./helpers";
 
 test.describe("marketplace preview", () => {
   test("boots by posting ready and shows the sign-in wall", async ({ page }) => {
@@ -116,6 +116,199 @@ test.describe("marketplace preview", () => {
     await expect(page.getByTestId("install-error")).toContainText(
       "Download failed: network error.",
     );
+  });
+
+  test("a card's tag chip filters the grid without opening the product", async ({ page }) => {
+    await openPreview(page, "marketplace");
+    await page.getByTestId("browse-anon-btn").click();
+    await expect(page.getByTestId("mod-card")).toHaveCount(12);
+
+    await page
+      .locator('[data-testid="mod-card"][data-repo="carrier-ops/supercarrier-plus"]')
+      .locator('[data-testid="card-tag"][data-tag="naval"]')
+      .click();
+
+    await expect(page.getByTestId("mod-card")).toHaveCount(1);
+    // The chip sits inside a card that also opens the product on click, so it
+    // has to stop the event reaching that handler.
+    await expect(page.getByTestId("product-title")).toHaveCount(0);
+  });
+
+  test("a card's GitHub link opens externally without opening the product", async ({ page }) => {
+    await openPreview(page, "marketplace");
+    await page.getByTestId("browse-anon-btn").click();
+    await page
+      .locator('[data-testid="mod-card"][data-repo="utils/dcs-lua-common"]')
+      .getByTestId("card-github-link")
+      .click();
+
+    await expectSent(page, {
+      type: "openExternal",
+      url: "https://github.com/utils/dcs-lua-common",
+    });
+    await expect(page.getByTestId("product-title")).toHaveCount(0);
+  });
+
+  test("Details opens the product and Back returns to the grid", async ({ page }) => {
+    await openPreview(page, "marketplace");
+    await page.getByTestId("browse-anon-btn").click();
+    await page
+      .locator('[data-testid="mod-card"][data-repo="utils/dcs-lua-common"]')
+      .getByTestId("card-details-btn")
+      .click();
+    await expect(page.getByTestId("product-title")).toHaveText("dcs-lua-common");
+
+    await page.getByTestId("back-btn").click();
+    await expect(page.getByTestId("mod-card")).toHaveCount(12);
+  });
+
+  test("View on GitHub from the product page posts the repo url", async ({ page }) => {
+    await openProduct(page, "utils/dcs-lua-common");
+    await page.getByTestId("view-github-btn").click();
+    await expectSent(page, {
+      type: "openExternal",
+      url: "https://github.com/utils/dcs-lua-common",
+    });
+  });
+
+  test("a product that fails to load offers a retry that reloads it", async ({ page }) => {
+    await openPreview(page, "marketplace");
+    await page.getByTestId("browse-anon-btn").click();
+    await page
+      .locator('[data-testid="mod-card"][data-repo="hoggit-liveries/usaf-aggressors"]')
+      .getByTestId("card-title")
+      .click();
+
+    await expect(page.getByTestId("product-error")).toContainText("502 Bad Gateway");
+    await page.getByTestId("retry-btn").click();
+    await expect
+      .poll(async () => (await sentMessages(page)).filter((m) => m.type === "openProduct").length)
+      .toBe(2);
+    // Back out of a failed product too — the error page is not a dead end.
+    await page.getByTestId("back-btn").click();
+    await expect(page.getByTestId("mod-card")).toHaveCount(12);
+  });
+
+  test("a mod with no installable release says why instead of offering Install", async ({
+    page,
+  }) => {
+    // A repo tagged for discovery whose latest release ships no manifest can't
+    // be installed; offering the button anyway would fail at download time.
+    await openProduct(page, "training/bfm-trainer");
+    await expect(page.getByTestId("not-installable-note")).toContainText("Not installable");
+    await expect(page.getByTestId("not-installable-note")).not.toContainText("no release yet");
+    await expect(page.getByTestId("install-btn")).toHaveCount(0);
+
+    // No release at all is a distinct, more common case and is named as such.
+    await openProduct(page, "weather-systems/real-weather-injector");
+    await expect(page.getByTestId("not-installable-note")).toContainText("(no release yet)");
+  });
+
+  test("a long-dormant release is dated rather than counted in months", async ({ page }) => {
+    // Recency is a trust signal; "released 13 months ago" is less useful than
+    // the date once a mod is over a year old.
+    await openProduct(page, "utils/dcs-lua-common");
+    await expect(page.getByTestId("release-recency")).toContainText(/released \d{4}-\d{2}-\d{2}/);
+  });
+
+  test("a README's markdown is rendered, not shown raw", async ({ page }) => {
+    await openProduct(page, "utils/dcs-lua-common");
+    const readme = page.getByTestId("readme");
+
+    await expect(readme.locator("h1")).toHaveText("dcs-lua-common");
+    await expect(readme.locator("h2")).toHaveText("Straight into a heading");
+    await expect(readme.locator("ul")).toHaveCount(2);
+    await expect(readme.locator("pre code")).toContainText('local vec = require("vec")');
+    await expect(readme.locator("blockquote")).toContainText("Pure Lua");
+    await expect(readme.locator("strong")).toHaveText("bold");
+    await expect(readme.locator("em")).toHaveText("italic");
+    await expect(readme.locator("code").first()).toHaveText("inline code");
+    await expect(readme.locator('a[href="https://example.com/docs"]')).toHaveText("link");
+  });
+
+  test("an avatar that will not load falls back to generated initials", async ({ page }) => {
+    // Author avatars come from GitHub; a dead or blocked URL must not leave a
+    // broken-image glyph on every card.
+    await openProduct(page, "utils/dcs-lua-common");
+    const avatar = page.locator("img.avatar.lg");
+    await expect(avatar).toHaveAttribute("src", /^data:image\/svg\+xml;base64,/, {
+      timeout: 5000,
+    });
+  });
+
+  test("signed in without a login name still labels the session", async ({ page }) => {
+    await openPreview(page, "marketplace");
+    await page.getByTestId("browse-anon-btn").click();
+    await expect(page.getByTestId("who")).toHaveText("browsing as guest");
+
+    await hostSend(page, { type: "auth", signedIn: true, browsing: false });
+    await expect(page.getByTestId("who")).toHaveText("signed in");
+  });
+
+  test("an auth push with no topic keeps the one already known", async ({ page }) => {
+    // The empty-grid copy names the discovery topic; losing it would leave the
+    // instructions telling users to tag their repo with nothing.
+    await openPreview(page, "marketplace");
+    await page.getByTestId("browse-anon-btn").click();
+    await expect(page.getByTestId("mod-card")).toHaveCount(12);
+
+    await hostSend(page, { type: "auth", signedIn: false, browsing: true });
+    await hostSend(page, { type: "listings" });
+
+    await expect(page.getByTestId("list-empty")).toContainText("dcs-studio");
+    await expect(page.getByTestId("mod-card")).toHaveCount(0);
+  });
+
+  test("a product push with no manifest or requirements renders the unknown state", async ({
+    page,
+  }) => {
+    await openProduct(page, "utils/dcs-lua-common");
+    await hostSend(page, {
+      type: "product",
+      product: {
+        repo: "utils/dcs-lua-common",
+        name: "dcs-lua-common",
+        author: "utils",
+        repo_url: "https://github.com/utils/dcs-lua-common",
+        avatar_url: "../media/icon.png",
+        stars: 1,
+        assets: [],
+        installable: true,
+      },
+      installed: false,
+    });
+
+    await expect(page.getByTestId("manifest-unknown")).toBeVisible();
+    await expect(page.getByTestId("requires-card")).toHaveCount(0);
+    await expect(page.getByTestId("readme")).toContainText("no README");
+  });
+
+  test("a refresh re-asks the host to discover", async ({ page }) => {
+    await openPreview(page, "marketplace");
+    await page.getByTestId("browse-anon-btn").click();
+    await expect(page.getByTestId("mod-card")).toHaveCount(12);
+    await page.getByTestId("refresh-btn").click();
+    await expectSent(page, { type: "discover", force: true });
+    await expect(page.getByTestId("mod-card")).toHaveCount(12);
+
+    // A refresh keeps the results you were already looking at and just latches
+    // the button; only a first load with nothing to show gets the spinner.
+    await hostSend(page, { type: "listings:busy" });
+    await expect(page.getByTestId("refresh-btn")).toBeDisabled();
+    await expect(page.getByTestId("mod-card")).toHaveCount(12);
+    await expect(page.getByTestId("list-loading")).toHaveCount(0);
+  });
+
+  test("reopening on a stored product falls back to the grid", async ({ page }) => {
+    // The panel persists the product it was last on, but nothing re-fetches it
+    // on boot, so the restored view collapses back to the list. Pinned because
+    // the persisted repo is otherwise silently useless.
+    await openPreview(page, "marketplace", {
+      state: { view: "product", repo: "utils/dcs-lua-common" },
+    });
+    await page.getByTestId("browse-anon-btn").click();
+    await expect(page.getByTestId("mod-card")).toHaveCount(12);
+    await expect(page.getByTestId("product-title")).toHaveCount(0);
   });
 });
 

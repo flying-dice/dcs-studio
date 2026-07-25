@@ -44,7 +44,7 @@
   function tileHtml(t) {
     const sel = t.id === state.templateId ? " selected" : "";
     return `
-      <button class="tile${sel}" data-template="${esc(t.id)}">
+      <button class="tile${sel}" data-testid="template-tile" data-template="${esc(t.id)}">
         <span class="tichip">${ICONS[t.id] || ICONS.blank}</span>
         <span class="ttxt">
           <span class="tlabel">${esc(t.label)}</span>
@@ -58,14 +58,14 @@
       ? `
       <div class="modes">
         <label class="mode">
-          <input type="radio" name="mode" value="inplace" ${state.inPlace ? "checked" : ""} />
+          <input type="radio" name="mode" value="inplace" data-testid="mode-radio" data-mode="inplace" ${state.inPlace ? "checked" : ""} />
           <span class="mtxt">
             <span class="mlabel">Use the open folder</span>
             <span class="mdesc mono" title="${esc(state.folder)}">${esc(state.folder)}</span>
           </span>
         </label>
         <label class="mode">
-          <input type="radio" name="mode" value="newfolder" ${state.inPlace ? "" : "checked"} />
+          <input type="radio" name="mode" value="newfolder" data-testid="mode-radio" data-mode="newfolder" ${state.inPlace ? "" : "checked"} />
           <span class="mtxt">
             <span class="mlabel">Create a new folder</span>
             <span class="mdesc">A fresh folder under a location you pick, opened when ready.</span>
@@ -79,17 +79,17 @@
       <div class="field">
         <label class="lbl" for="locBtn">Location</label>
         <div class="pathrow">
-          <button id="locBtn" class="loc" title="${esc(state.location)}">
-            <span class="locpath ${state.location ? "" : "placeholder"}">${esc(state.location || "Choose where to create the project…")}</span>
+          <button id="locBtn" class="loc" data-testid="location-btn" title="${esc(state.location)}">
+            <span class="locpath ${state.location ? "" : "placeholder"}" data-testid="location-path">${esc(state.location || "Choose where to create the project…")}</span>
           </button>
-          <button id="browse" class="btn secondary">Browse…</button>
+          <button id="browse" class="btn secondary" data-testid="browse-btn">Browse…</button>
         </div>
       </div>`;
     return `${modes}
       <div class="grid2">
         <div class="field">
           <label class="lbl" for="name">Name</label>
-          <input id="name" class="in" value="${esc(state.name)}" placeholder="my-script-mod" spellcheck="false" autocomplete="off" />
+          <input id="name" class="in" data-testid="name-input" value="${esc(state.name)}" placeholder="my-script-mod" spellcheck="false" autocomplete="off" />
         </div>
         ${locationField}
       </div>`;
@@ -117,12 +117,12 @@
 
         <section class="card">
           <h2>Destination</h2>
-          <p class="sub">${state.inPlace ? "The template is bootstrapped into the open folder; files you already have are kept." : "The project is created as a new folder and opened in this window."}</p>
+          <p class="sub" data-testid="dest-hint">${state.inPlace ? "The template is bootstrapped into the open folder; files you already have are kept." : "The project is created as a new folder and opened in this window."}</p>
           ${destinationHtml()}
-          <div class="preview mono ${preview ? "" : "empty"}">${preview ? `&rarr; ${esc(preview)}` : "&nbsp;"}</div>
-          ${state.error ? `<div class="error">${esc(state.error)}</div>` : ""}
+          <div class="preview mono ${preview ? "" : "empty"}" data-testid="path-preview">${preview ? `&rarr; ${esc(preview)}` : "&nbsp;"}</div>
+          ${state.error ? `<div class="error" data-testid="error-note">${esc(state.error)}</div>` : ""}
           <div class="actions">
-            <button id="create" class="btn" ${canCreate() ? "" : "disabled"}>
+            <button id="create" class="btn" data-testid="create-btn" ${canCreate() ? "" : "disabled"}>
               ${state.creating ? `<span class="spin">◌</span> Creating…` : "Create Project"}
             </button>
           </div>

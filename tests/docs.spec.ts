@@ -67,4 +67,77 @@ test.describe("docs preview", () => {
     await hostSend(page, { type: "goto", page: "publishing" });
     await expect(page.getByTestId("page-title")).toHaveText("Publishing Your Mod");
   });
+
+  test("a deep link from the host opens on that page", async ({ page }) => {
+    // Commands like "explain the sandbox" open the panel already on the right
+    // page; landing on Welcome instead would make the link useless.
+    await openPreview(page, "docs", { query: { page: "sandbox" } });
+    await expect(page.getByTestId("page-title")).toHaveText("Scripting Sandbox & Trust");
+  });
+
+  test("a deep link to a page that no longer exists falls back to the first page", async ({
+    page,
+  }) => {
+    await openPreview(page, "docs", { query: { page: "renamed-away" } });
+    await expect(page.getByTestId("page-title")).toHaveText("Welcome to DCS Studio");
+  });
+
+  test("a reopened panel resumes on the page it was left on", async ({ page }) => {
+    await openPreview(page, "docs", { state: { page: "publishing" } });
+    await expect(page.getByTestId("page-title")).toHaveText("Publishing Your Mod");
+  });
+
+  test("a stored page that no longer exists falls back to the first page", async ({ page }) => {
+    await openPreview(page, "docs", { state: { page: "deleted-page" } });
+    await expect(page.getByTestId("page-title")).toHaveText("Welcome to DCS Studio");
+  });
+
+  test("an unknown goto target falls back to the first page rather than blanking", async ({
+    page,
+  }) => {
+    await openPreview(page, "docs");
+    await hostSend(page, { type: "goto", page: "no-such-page" });
+    await expect(page.getByTestId("page-title")).toHaveText("Welcome to DCS Studio");
+  });
+
+  test("the last page offers Previous but no Next", async ({ page }) => {
+    await openPreview(page, "docs");
+    const links = page.getByTestId("toc-link");
+    await links.nth((await links.count()) - 1).click();
+
+    await expect(page.getByTestId("pager-prev")).toBeVisible();
+    await expect(page.getByTestId("pager-next")).toHaveCount(0);
+  });
+
+  test("a single-page manual shows no pager at all", async ({ page }) => {
+    await openPreview(page, "docs", { query: { docs: "single" } });
+    await expect(page.getByTestId("page-title")).toHaveText("Only Page");
+    await expect(page.locator(".pager")).toHaveCount(0);
+  });
+
+  test("no content at all renders an empty shell instead of throwing", async ({ page }) => {
+    // docs-content.js is a separate script tag; if it fails to load, the panel
+    // has to come up empty rather than take the webview down with it.
+    const errors = await openPreview(page, "docs", { query: { docs: "empty" } });
+    await expect(page.getByTestId("toc")).toBeVisible();
+    await expect(page.getByTestId("toc-link")).toHaveCount(0);
+    await expect(page.getByTestId("page-title")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
+  test("a page whose section cannot be found still renders", async ({ page }) => {
+    // The section kicker is looked up from the content rather than stored on
+    // the page, so malformed content must degrade to a missing kicker, not a
+    // crashed panel.
+    const errors = await openPreview(page, "docs", { query: { docs: "orphan" } });
+    await expect(page.getByTestId("page-title")).toHaveText("Page A");
+    await expect(page.locator(".page-inner > .kicker")).toHaveText("");
+    await expect(page.locator(".lede")).toHaveText("With a lede.");
+
+    // Page B has no lede at all — the paragraph must be omitted, not empty.
+    await page.getByTestId("pager-next").click();
+    await expect(page.getByTestId("page-title")).toHaveText("Page B");
+    await expect(page.locator(".lede")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
 });

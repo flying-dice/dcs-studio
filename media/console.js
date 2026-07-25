@@ -41,24 +41,24 @@
   const app = document.getElementById("app");
   app.innerHTML = `
     <div class="status">
-      <span class="dot off" id="dot"></span>
-      <span class="label" id="statusLabel">Connecting…</span>
-      <button class="btn launch" id="launchBtn" style="display:none">Launch DCS (with bridge)</button>
-      <span class="warn" id="envWarn"></span>
-      <select id="envSel" title="Environment Lua runs in"></select>
-      <span class="time" id="statusTime"></span>
+      <span class="dot off" id="dot" data-testid="bridge-dot"></span>
+      <span class="label" id="statusLabel" data-testid="status-label">Connecting…</span>
+      <button class="btn launch" id="launchBtn" data-testid="launch-btn" style="display:none">Launch DCS (with bridge)</button>
+      <span class="warn" id="envWarn" data-testid="env-warn"></span>
+      <select id="envSel" data-testid="env-select" title="Environment Lua runs in"></select>
+      <span class="time" id="statusTime" data-testid="status-time"></span>
     </div>
     <div class="tabs">
-      <button class="tab" data-tab="console">Console</button>
-      <button class="tab" data-tab="explorer">Explorer</button>
+      <button class="tab" data-testid="tab-btn" data-tab="console">Console</button>
+      <button class="tab" data-testid="tab-btn" data-tab="explorer">Explorer</button>
     </div>
     <div class="view" id="view-console">
-      <div class="log" id="log">
+      <div class="log" id="log" data-testid="console-log">
         <div class="entry hint">Runs in the environment picked above — GUI (hooks; full DCS.*/net.*) or the mission scripting env (coalition/world/trigger; needs a running mission). Try <code>return DCS.getVersion()</code> (GUI) or <code>return #world.getAirbases()</code> (Mission). Ctrl/⌘+Enter to run.</div>
       </div>
       <div class="input-row">
-        <textarea id="code" placeholder="Lua…  (Ctrl/⌘+Enter to run, ↑/↓ history)" spellcheck="false" autocomplete="off"></textarea>
-        <button class="btn" id="run">Run<span class="kbd">⌘⏎</span></button>
+        <textarea id="code" data-testid="code-input" placeholder="Lua…  (Ctrl/⌘+Enter to run, ↑/↓ history)" spellcheck="false" autocomplete="off"></textarea>
+        <button class="btn" id="run" data-testid="run-btn">Run<span class="kbd">⌘⏎</span></button>
       </div>
     </div>
     <div class="view" id="view-explorer">
@@ -160,6 +160,8 @@
   function append(cls, text) {
     const div = document.createElement("div");
     div.className = `entry ${cls}`;
+    div.setAttribute("data-testid", "log-entry");
+    div.setAttribute("data-kind", cls);
     div.textContent = text;
     logEl.appendChild(div);
     logEl.scrollTop = logEl.scrollHeight;

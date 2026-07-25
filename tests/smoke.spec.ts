@@ -1,7 +1,19 @@
 import { expect, test } from "./fixtures";
 import { openPreview } from "./helpers";
 
-const PREVIEWS = ["skills", "nav", "docs", "manifest", "marketplace", "log", "console", "mymods"];
+const PREVIEWS = [
+  "skills",
+  "nav",
+  "docs",
+  "manifest",
+  "marketplace",
+  "log",
+  "console",
+  "mymods",
+  "publish",
+  "setup",
+  "newproject",
+];
 
 for (const name of PREVIEWS) {
   test.describe(`smoke: ${name}`, () => {

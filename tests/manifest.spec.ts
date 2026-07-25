@@ -226,3 +226,105 @@ test.describe("manifest preview", () => {
     await expect(page.getByTestId("symlink-row")).toHaveCount(0);
   });
 });
+
+test.describe("manifest — validation and host pushes", () => {
+  // A manifest that trips every validation rule the form owns, plus one
+  // unmodeled section and a symlink under the unconfigured {GameInstall} root.
+  const EDGE_TOML = [
+    "[project]",
+    'name = "edge-case"',
+    'version = "1.0.0"',
+    "",
+    "[[bundle]]",
+    'path = "Mods/x"',
+    "",
+    "[[symlink]]",
+    'source = "Mods/x/entry.lua"',
+    'dest = "{GameInstall}/Mods/x/entry.lua"',
+    "",
+    "[[entrypoint]]",
+    'id = "dup"',
+    'exe = "Mods/x/a.exe"',
+    "",
+    "[[entrypoint]]",
+    'id = "dup"',
+    'exe = "Mods/x/b.exe"',
+    "",
+    "[[requires_module]]",
+    'id = ""',
+    "",
+    "[[dependencies]]",
+    'id = "utils/dcs-lua-common"',
+    "",
+  ].join("\n");
+
+  test("names every problem it finds rather than just refusing to save", async ({ page }) => {
+    await openPreview(page, "manifest");
+    await hostSend(page, { type: "external", rawText: EDGE_TOML });
+
+    const issues = page.getByTestId("validation-issues");
+    // A blank module id would emit an entry that matches no DCS module.
+    await expect(issues).toContainText("Required module 1: id is empty.");
+    // Two entrypoints sharing an id collide in My Mods' running-process map.
+    await expect(issues).toContainText('Executable 2: duplicate id "dup".');
+    await expect(issues).toContainText("{GameInstall} is not configured");
+  });
+
+  test("a symlink under an unconfigured root is flagged as soon as the form draws", async ({
+    page,
+  }) => {
+    // The warning must survive a re-render, not only appear when the root
+    // dropdown is changed by hand.
+    await openPreview(page, "manifest");
+    await hostSend(page, { type: "external", rawText: EDGE_TOML });
+    await expect(
+      page.getByTestId("symlink-row").first().getByTestId("unresolved-warning"),
+    ).toBeVisible();
+  });
+
+  test("the preserved-sections note counts a single section in the singular", async ({ page }) => {
+    await openPreview(page, "manifest");
+    // The bootstrap has two unmodeled sections.
+    await expect(page.locator(".muted-card")).toContainText("2 sections");
+
+    await hostSend(page, { type: "external", rawText: EDGE_TOML });
+    await expect(page.locator(".muted-card")).toContainText("1 section the form");
+  });
+
+  test("configuring the roots clears the unresolved warning without a reload", async ({ page }) => {
+    // Setup writes dcsStudio.gameInstallPath while this form is open; the host
+    // pushes the new roots so the form stops warning about a path that is now
+    // configured.
+    await openPreview(page, "manifest");
+    await hostSend(page, { type: "external", rawText: EDGE_TOML });
+    await expect(page.getByTestId("unresolved-warning")).toBeVisible();
+
+    await hostSend(page, {
+      type: "roots",
+      roots: { savedGames: "C:\\SG\\DCS", gameInstall: "C:\\DCS World" },
+    });
+    await expect(page.getByTestId("unresolved-warning")).toHaveCount(0);
+    await expect(page.getByTestId("resolved-dest")).toContainText(
+      "C:\\DCS World\\Mods\\x\\entry.lua",
+    );
+    await expect(page.getByTestId("validation-issues")).not.toContainText(
+      "{GameInstall} is not configured",
+    );
+  });
+
+  test("a document with no file on disk is titled by the default manifest name", async ({
+    page,
+  }) => {
+    const errors = await openPreview(page, "manifest", { query: { target: "unsaved" } });
+    await expect(page.locator("header .title")).toContainText("dcs-studio.toml");
+    await expect(page.locator(".preview-head .target")).toHaveText("dcs-studio.toml");
+    expect(errors).toEqual([]);
+  });
+
+  test("ignores an empty host message", async ({ page }) => {
+    const errors = await openPreview(page, "manifest");
+    await hostSend(page, null);
+    await expect(page.getByTestId("bundle-row")).toHaveCount(1);
+    expect(errors).toEqual([]);
+  });
+});

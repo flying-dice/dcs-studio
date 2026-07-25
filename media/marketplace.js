@@ -218,7 +218,7 @@
         <span class="brand-kicker">DCS&nbsp;Studio</span>
         <span class="brand-title">Marketplace</span>
         <span class="spacer"></span>
-        <span class="who mono">${state.signedIn ? esc(state.login || "signed in") : "browsing as guest"}</span>
+        <span class="who mono" data-testid="who">${state.signedIn ? esc(state.login || "signed in") : "browsing as guest"}</span>
       </header>
       <div class="toolbar">
         <div class="search">
@@ -233,7 +233,7 @@
           <option value="stars" ${state.sort === "stars" ? "selected" : ""}>Most stars</option>
           <option value="name" ${state.sort === "name" ? "selected" : ""}>Name</option>
         </select>
-        <button class="btn secondary" id="refresh" ${state.listBusy ? "disabled" : ""}>${state.listBusy ? `<span class="spin">${I.refresh}</span>` : I.refresh} Refresh</button>
+        <button class="btn secondary" id="refresh" data-testid="refresh-btn" ${state.listBusy ? "disabled" : ""}>${state.listBusy ? `<span class="spin">${I.refresh}</span>` : I.refresh} Refresh</button>
       </div>
       ${state.listError ? `<div class="market-error" data-testid="list-error">${I.warn} ${esc(state.listError)}</div>` : ""}
       <div id="gridwrap">${grid}</div>
@@ -321,13 +321,16 @@
           m.labels.length
             ? `<div class="tags">${m.labels
                 .slice(0, 6)
-                .map((l) => `<button class="tag" data-tag="${esc(l)}">${I.tag}${esc(l)}</button>`)
+                .map(
+                  (l) =>
+                    `<button class="tag" data-testid="card-tag" data-tag="${esc(l)}">${I.tag}${esc(l)}</button>`,
+                )
                 .join("")}</div>`
             : ""
         }
         <div class="card-foot">
-          <button class="link" data-open="${esc(m.repo)}">Details</button>
-          <button class="link muted" data-github="${esc(m.repo_url)}">GitHub ${I.ext}</button>
+          <button class="link" data-testid="card-details-btn" data-open="${esc(m.repo)}">Details</button>
+          <button class="link muted" data-testid="card-github-link" data-github="${esc(m.repo_url)}">GitHub ${I.ext}</button>
         </div>
       </div>`;
   }
@@ -381,7 +384,7 @@
     }
     if (state.productError) {
       app.innerHTML = productShell(
-        `<div class="empty"><p class="market-error" style="border:none;background:none">${I.warn} ${esc(state.productError)}</p><button class="btn secondary" id="retry">Try again</button></div>`,
+        `<div class="empty"><p class="market-error" data-testid="product-error" style="border:none;background:none">${I.warn} ${esc(state.productError)}</p><button class="btn secondary" id="retry" data-testid="retry-btn">Try again</button></div>`,
       );
       wireBack();
       const r = document.getElementById("retry");
@@ -396,7 +399,7 @@
 
     let action = "";
     if (!p.installable) {
-      action = `<p class="note warn">${I.warn} Not installable — the latest release ships no <span class="mono">dcs-studio.toml</span>${p.release_tag ? "" : " (no release yet)"}.</p>`;
+      action = `<p class="note warn" data-testid="not-installable-note">${I.warn} Not installable — the latest release ships no <span class="mono">dcs-studio.toml</span>${p.release_tag ? "" : " (no release yet)"}.</p>`;
     } else if (state.installed) {
       action = `<div class="installed-row" data-testid="installed-row">${I.check} Installed</div>
         <button class="btn secondary block" id="uninstall" data-testid="uninstall-btn" style="margin-top:10px">${I.trash} Uninstall</button>
@@ -455,7 +458,7 @@
                 : `<p class="note">No release assets.</p>`
             }
           </div>
-          <button class="btn secondary block" id="viewgh" style="margin-top:14px">View on GitHub ${I.ext}</button>
+          <button class="btn secondary block" id="viewgh" data-testid="view-github-btn" style="margin-top:14px">View on GitHub ${I.ext}</button>
         </aside>
       </div>`;
 

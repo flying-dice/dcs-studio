@@ -76,6 +76,34 @@ test.describe("skills preview", () => {
     await expect(page.getByTestId("empty-note")).toHaveCount(0);
   });
 
+  test("a status the panel does not know falls back to 'Not installed'", async ({ page }) => {
+    // The status string comes from the host's on-disk comparison; a value this
+    // build has no pill for must still render an actionable card rather than
+    // an "undefined" pill with no Install button.
+    const errors = await openPreview(page, "skills");
+    await hostSend(page, {
+      type: "skills",
+      installDir: ".claude/skills",
+      hasWorkspace: true,
+      skills: [
+        {
+          id: "s1",
+          name: "s1",
+          description: "d",
+          bundledVersion: "1.0.0",
+          status: "who-knows",
+        },
+      ],
+    });
+    await expect(page.getByTestId("status-pill")).toHaveText("Not installed");
+    // The pill falls back but the action buttons key off the raw status, so
+    // the card is left read-only: safer than offering an Install whose effect
+    // on an unknown state nobody has reasoned about.
+    await expect(page.getByTestId("install-btn")).toHaveCount(0);
+    await expect(page.getByTestId("view-bundled-btn")).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
   test("empty skills list shows empty-note", async ({ page }) => {
     await openPreview(page, "skills");
     await hostSend(page, {

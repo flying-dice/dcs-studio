@@ -32,9 +32,18 @@
   };
 
   // Per-page-load state store (mirrors vscode.getState()/setState() — a
-  // fresh object every navigation, which is what gives tests isolation for
+  // fresh value every navigation, which is what gives tests isolation for
   // free without needing to clear anything between specs).
-  let state = {};
+  //
+  // Starts *undefined*, like a real webview that has never called setState:
+  // every panel guards with `vscode.getState() || {}` precisely because of
+  // that first load, and a harness that handed back `{}` would never exercise
+  // it. `?state=<url-encoded JSON>` seeds a restored session instead — that's
+  // the reload path where a panel re-opens on the page/tab/history it left
+  // off at. See tests/helpers.ts#openPreview({ state }).
+  let state;
+  const seed = new URLSearchParams(location.search).get("state");
+  if (seed) state = JSON.parse(seed);
 
   window.acquireVsCodeApi = function () {
     return {

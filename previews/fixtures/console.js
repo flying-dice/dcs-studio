@@ -42,8 +42,23 @@
       title: { t: "string", v: '"mission"' },
       flag: { t: "boolean", v: "true" },
       many: { t: "table", children: many },
+      // Failure/edge nodes. The host's answer depends on the node, not on a
+      // global switch, so one preview page can show every outcome the tree has
+      // to survive: an empty table, a value of a type the icon map doesn't
+      // know, a table whose expand fails, a function whose signature can't be
+      // resolved, and a table the host refuses to export.
+      empty: { t: "table", children: {} },
+      nothing: { t: "nil", v: "nil" },
+      broken: { t: "table", children: { x: { t: "number", v: "1" } }, failExpand: true },
+      brokenFn: { t: "function", arity: "function (1 args)", failSignature: true },
+      noexport: { t: "table", children: { y: { t: "number", v: "2" } } },
     },
   };
+
+  // `?scenario=inspect-fail` fails the one round trip that has no per-node
+  // handle: reading `_G` itself, which is what a desanitized-but-dead mission
+  // bridge does.
+  const scenario = new URLSearchParams(location.search).get("scenario") || "";
 
   let nextRef = 1;
   const refMap = {}; // ref -> node descriptor
@@ -79,9 +94,29 @@
           type: "status",
           status: { gui: { connected: true, dcsTime: 0 }, mission: { connected: false, dcsTime: null } },
         });
-        reply({ type: "config", wildcardDepth: 1 });
+        reply({ type: "explorerConfig", wildcardDepth: 1 });
+        return;
+      case "eval":
+        // A scripted REPL so the Console tab is drivable in the dev preview
+        // too. The code decides the reply shape: anything mentioning "error"
+        // fails, "print" streams sim output, everything else returns a value.
+        if (/error/.test(m.code)) reply({ type: "error", message: "[string \"chunk\"]: " + m.code });
+        else if (/print/.test(m.code))
+          reply({ type: "print", lines: [{ text: "printed: " + m.code }] });
+        else reply({ type: "result", value: { echo: m.code, env: m.env } });
         return;
       case "inspect": {
+        if (scenario === "inspect-fail") {
+          reply({
+            type: "inspectResult",
+            id: m.id,
+            env: m.env,
+            expr: m.expr,
+            ok: false,
+            err: "attempt to index a nil value",
+          });
+          return;
+        }
         // The `_G` root itself gets a ref.
         const ref = nextRef++;
         refMap[ref] = ROOT;
@@ -99,6 +134,10 @@
       }
       case "expand": {
         const desc = refMap[m.ref];
+        if (desc && desc.failExpand) {
+          reply({ type: "expandResult", nodeId: m.nodeId, ok: false, err: "ref no longer valid" });
+          return;
+        }
         const variables = [];
         if (desc && desc.t === "table") {
           for (const name of Object.keys(desc.children || {})) variables.push(toVar(name, desc.children[name]));
@@ -108,7 +147,7 @@
       }
       case "signature": {
         const desc = refMap[m.ref];
-        if (desc && desc.t === "function") {
+        if (desc && desc.t === "function" && !desc.failSignature) {
           reply({ type: "signatureResult", reqId: m.reqId, ok: true, params: desc.params || "", native: !!desc.native });
         } else {
           reply({ type: "signatureResult", reqId: m.reqId, ok: false, err: "stale ref" });
@@ -116,7 +155,11 @@
         return;
       }
       case "export":
-        reply({ type: "exportDone", reqId: m.reqId, saved: true });
+        reply(
+          /noexport/.test(m.label)
+            ? { type: "exportDone", reqId: m.reqId, error: "EACCES: permission denied" }
+            : { type: "exportDone", reqId: m.reqId, saved: true },
+        );
         return;
       case "clearExplorer":
         return; // refs released host-side; nothing to echo

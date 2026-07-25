@@ -4,10 +4,11 @@ import { expectSent, hostSend, openPreview } from "./helpers";
 test.describe("My Mods — entrypoints", () => {
   test("shows entrypoint rows only for enabled mods that declare them", async ({ page }) => {
     const errors = await openPreview(page, "mymods");
-    // Only the enabled DCS-SRS mod (2 entrypoints) renders an entrypoints block;
-    // the disabled mod's entrypoint and the plain enabled mod are excluded.
-    await expect(page.getByTestId("entrypoints")).toHaveCount(1);
-    await expect(page.getByTestId("entrypoint-row")).toHaveCount(2);
+    // Only enabled mods that declare entrypoints render a Launch/Stop block:
+    // DCS-SRS (2 rows) and Risky Mod (1). The disabled mod's entrypoint, the
+    // mod with no entrypoints key and the plain enabled mod are all excluded.
+    await expect(page.getByTestId("entrypoints")).toHaveCount(2);
+    await expect(page.getByTestId("entrypoint-row")).toHaveCount(3);
 
     const srs = page.locator('[data-ep="Owner/DCS-SRS::srs-server"]');
     await expect(srs.locator(".ep-name")).toHaveText("SRS Server");
@@ -121,9 +122,12 @@ test.describe("My Mods — install manifest breakdown (#12)", () => {
     const disabled = page.locator('[data-testid="mod-manifest"][data-repo="Owner/Disabled-Mod"]');
     await expect(disabled).toBeVisible();
     await expect(disabled.getByTestId("mod-executables")).toBeVisible();
-    // Disabled mod shows no Launch/Stop entrypoint rows, but still its breakdown:
-    // only the enabled DCS-SRS mod renders an entrypoints (Launch/Stop) block.
-    await expect(page.getByTestId("entrypoints")).toHaveCount(1);
+    // Disabled mod shows no Launch/Stop entrypoint rows, but still its
+    // breakdown: only the two enabled mods with entrypoints render a block.
+    await expect(page.getByTestId("entrypoints")).toHaveCount(2);
+    await expect(
+      page.locator('[data-testid="entrypoints"][data-repo="Owner/Disabled-Mod"]'),
+    ).toHaveCount(0);
   });
 
   test("a benign mod shows only the links-files risk and no notice", async ({ page }) => {
@@ -134,5 +138,137 @@ test.describe("My Mods — install manifest breakdown (#12)", () => {
       plain.locator('[data-testid="mod-risk-badge"][data-risk="links-files"]'),
     ).toBeVisible();
     await expect(plain.getByTestId("mod-sanitize-notice")).toHaveCount(0);
+  });
+});
+
+test.describe("My Mods — mod actions", () => {
+  const row = (page: import("@playwright/test").Page, repo: string) =>
+    page.locator(`[data-testid="mod-row"][data-repo="${repo}"]`);
+
+  test("the enable switch posts enable or disable for that mod", async ({ page }) => {
+    await openPreview(page, "mymods");
+    const disabled = row(page, "Owner/Disabled-Mod");
+    await expect(disabled.getByTestId("links-pill")).toHaveText("disabled");
+
+    // The checkbox itself is visually replaced by the slider, so drive it the
+    // way a user does — through the label.
+    await disabled.locator(".switch").click();
+    await expectSent(page, { type: "enable", repo: "Owner/Disabled-Mod" });
+
+    await row(page, "Owner/Plain-Mod").locator(".switch").click();
+    await expectSent(page, { type: "disable", repo: "Owner/Plain-Mod" });
+  });
+
+  test("Update latches the row busy and shows what it is doing", async ({ page }) => {
+    // Update replaces files under DCS; firing it twice, or toggling a mod
+    // mid-update, is how you end up with half-linked installs.
+    await openPreview(page, "mymods");
+    const srs = row(page, "Owner/DCS-SRS");
+    await srs.getByTestId("update-btn").click();
+
+    await expectSent(page, { type: "update", repo: "Owner/DCS-SRS" });
+    await expect(srs.getByTestId("mod-progress")).toHaveText("Updating…");
+    await expect(srs.getByTestId("update-btn")).toBeDisabled();
+    await expect(srs.getByTestId("uninstall-btn")).toBeDisabled();
+    await expect(srs.getByTestId("enable-toggle")).toBeDisabled();
+    // Other mods stay usable — busy is per repo, not global.
+    await expect(row(page, "Owner/Plain-Mod").getByTestId("update-btn")).toBeEnabled();
+  });
+
+  test("the host's progress and busy pushes drive the row's state", async ({ page }) => {
+    await openPreview(page, "mymods");
+    const srs = row(page, "Owner/DCS-SRS");
+
+    await hostSend(page, { type: "busy", repo: "Owner/DCS-SRS", busy: true });
+    await expect(srs.getByTestId("update-btn")).toBeDisabled();
+
+    await hostSend(page, { type: "progress", repo: "Owner/DCS-SRS", label: "Downloading v2…" });
+    await expect(srs.getByTestId("mod-progress")).toHaveText("Downloading v2…");
+
+    // Once the host says it's done the row has to become usable again.
+    await hostSend(page, { type: "busy", repo: "Owner/DCS-SRS", busy: false });
+    await expect(srs.getByTestId("update-btn")).toBeEnabled();
+  });
+
+  test("Uninstall posts for that repo and latches the row", async ({ page }) => {
+    await openPreview(page, "mymods");
+    const srs = row(page, "Owner/DCS-SRS");
+    await srs.getByTestId("uninstall-btn").click();
+
+    await expectSent(page, { type: "uninstall", repo: "Owner/DCS-SRS" });
+    // Unlike Update, Uninstall marks the row busy without re-rendering, so the
+    // controls only latch once the host's own busy push arrives.
+    await expect(srs.getByTestId("uninstall-btn")).toBeEnabled();
+    await hostSend(page, { type: "busy", repo: "Owner/DCS-SRS", busy: true });
+    await expect(srs.getByTestId("uninstall-btn")).toBeDisabled();
+  });
+
+  test("the per-mod folder and GitHub buttons address their own mod", async ({ page }) => {
+    await openPreview(page, "mymods");
+    await row(page, "Owner/Plain-Mod").getByTestId("open-dir-btn").click();
+    await expectSent(page, { type: "openDir", repo: "Owner/Plain-Mod" });
+
+    await row(page, "Owner/Plain-Mod").getByTestId("github-btn").click();
+    await expectSent(page, {
+      type: "openExternal",
+      url: "https://github.com/Owner/Plain-Mod",
+    });
+  });
+
+  test("the panel-level buttons post their commands", async ({ page }) => {
+    await openPreview(page, "mymods");
+    await page.getByTestId("shortcut-btn").click();
+    await expectSent(page, { type: "createShortcut" });
+    await page.getByTestId("reveal-bat-btn").click();
+    await expectSent(page, { type: "revealBat" });
+    await page.getByTestId("clean-uninstall-btn").click();
+    await expectSent(page, { type: "cleanUninstall" });
+    await page.getByTestId("refresh-btn").click();
+    await expectSent(page, { type: "refresh" });
+  });
+
+  test("a mod whose manifest describes nothing renders no breakdown", async ({ page }) => {
+    // A readable manifest with no bundles, links, executables or scripts has
+    // nothing to disclose; an empty breakdown box would imply otherwise.
+    await openPreview(page, "mymods");
+    await expect(row(page, "Owner/Inert-Mod")).toBeVisible();
+    await expect(
+      page.locator('[data-testid="mod-manifest"][data-repo="Owner/Inert-Mod"]'),
+    ).toHaveCount(0);
+    await expect(
+      page.locator('[data-testid="entrypoints"][data-repo="Owner/Inert-Mod"]'),
+    ).toHaveCount(0);
+  });
+
+  test("more than one pre-sanitize script is counted in the plural", async ({ page }) => {
+    await openPreview(page, "mymods");
+    const risky = page.locator('[data-testid="mod-manifest"][data-repo="Owner/Risky-Mod"]');
+    await expect(risky.getByTestId("mod-sanitize-notice")).toContainText("2 scripts that run");
+    await expect(risky.getByTestId("mod-before-sanitize-badge")).toContainText("2 before-sanitize");
+  });
+
+  test("an entrypoint with no display name is labelled by its id", async ({ page }) => {
+    await openPreview(page, "mymods");
+    await expect(page.locator('[data-ep="Owner/Risky-Mod::nameless-tool"] .ep-name')).toHaveText(
+      "nameless-tool",
+    );
+  });
+
+  test("an empty ledger explains itself instead of showing a bare page", async ({ page }) => {
+    const errors = await openPreview(page, "mymods");
+    // A first-run panel: no mods, no clean-uninstall script generated yet.
+    await hostSend(page, { type: "init", dataDir: "D:\\d", mods: [] });
+
+    await expect(page.getByTestId("mods-empty")).toBeVisible();
+    await expect(page.getByTestId("mod-row")).toHaveCount(0);
+    await expect(page.getByTestId("uninstall-bat-path")).toHaveText("");
+    expect(errors).toEqual([]);
+  });
+
+  test("ignores an empty host message", async ({ page }) => {
+    const errors = await openPreview(page, "mymods");
+    await hostSend(page, null);
+    await expect(page.getByTestId("mod-row")).toHaveCount(5);
+    expect(errors).toEqual([]);
   });
 });

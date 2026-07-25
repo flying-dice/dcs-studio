@@ -73,6 +73,38 @@
           }),
         },
         {
+          // No entrypoints key at all, and an install manifest that was read
+          // but describes nothing — the panel must skip the breakdown block
+          // rather than render an empty shell.
+          repo: "Owner/Inert-Mod",
+          name: "Inert Mod",
+          tag: "v1.2.3",
+          enabled: true,
+          dir: "D:\\DCS Studio\\data\\Owner__Inert-Mod",
+          links: 1,
+          manifest: deriveManifest({}),
+        },
+        {
+          // Two before-sanitize scripts: the notice has to pluralise.
+          repo: "Owner/Risky-Mod",
+          name: "Risky Mod",
+          tag: "v2.0.0",
+          enabled: true,
+          dir: "D:\\DCS Studio\\data\\Owner__Risky-Mod",
+          links: 3,
+          // An entrypoint with no display name falls back to its id.
+          entrypoints: [{ id: "nameless-tool", exe: "tools/run.exe" }],
+          manifest: deriveManifest({
+            bundles: [{ path: "Scripts/Risky" }],
+            symlinks: [],
+            entrypoints: [{ id: "nameless-tool", exe: "tools/run.exe" }],
+            missionScripts: [
+              { name: "Patch A", path: "Scripts/Risky/a.lua", run_on: "before-sanitize" },
+              { name: "Patch B", path: "Scripts/Risky/b.lua", run_on: "before-sanitize" },
+            ],
+          }),
+        },
+        {
           repo: "Owner/Plain-Mod",
           name: "Plain Mod",
           tag: "v3.0.0",

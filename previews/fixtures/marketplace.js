@@ -86,6 +86,57 @@
       installs: [{ source: "Campaigns/EasternStorm", dest: "Saved Games/DCS/Missions/Campaigns/EasternStorm" }],
       requires: [{ id: "ed/syria", name: "Syria Map", installed: false }, { id: "ed/fa18c", name: "F/A-18C Hornet", installed: true }],
     },
+    // Long-dormant, rich-README mod. Its avatar_url is deliberately undecodable
+    // so the <img> error handler has to fall back to the generated initials
+    // avatar, and its README exercises every markdown construct the shared
+    // renderer supports (fenced code, a list running straight into a heading,
+    // a list running straight into a fence, a blockquote, inline marks).
+    "utils/dcs-lua-common": {
+      repo: "utils/dcs-lua-common", name: "dcs-lua-common", author: "utils",
+      description: "Shared Lua helpers for mission scripting.",
+      repo_url: "https://github.com/utils/dcs-lua-common", avatar_url: "data:image/png;base64,AAAA", stars: 67,
+      release_tag: "v0.4.0", release_url: "https://github.com/utils/dcs-lua-common/releases/tag/v0.4.0",
+      release_date: new Date(Date.now() - 400 * 86400000).toISOString(),
+      readme: [
+        "# dcs-lua-common",
+        "",
+        "Helpers with `inline code`, **bold**, *italic* and a [link](https://example.com/docs).",
+        "",
+        "- vec math",
+        "- table utils",
+        "## Straight into a heading",
+        "",
+        "- logging",
+        "```lua",
+        "local vec = require(\"vec\")",
+        "return vec.add(a, b)",
+        "```",
+        "",
+        "> Pure Lua — no DLLs, no executables.",
+        "",
+      ].join("\n"),
+      assets: [{ name: "dcs-lua-common-v0.4.0.zip", size: 51200 }],
+      download_size: 51200, installable: true,
+      installs: [], requires: [],
+    },
+    // Has a release, but the release ships no manifest.
+    "training/bfm-trainer": {
+      repo: "training/bfm-trainer", name: "BFM Trainer", author: "training",
+      description: "An adaptive dogfight trainer.",
+      repo_url: "https://github.com/training/bfm-trainer", avatar_url: ICON, stars: 201,
+      release_tag: "v3.0.0", release_url: "https://github.com/training/bfm-trainer/releases/tag/v3.0.0",
+      release_date: new Date(Date.now() - 3 * 86400000).toISOString(),
+      readme: "", assets: [], download_size: 0, installable: false,
+      installs: [], requires: [],
+    },
+    // Tagged for discovery but has never cut a release at all.
+    "weather-systems/real-weather-injector": {
+      repo: "weather-systems/real-weather-injector", name: "Real Weather Injector", author: "weather-systems",
+      description: "Pulls live METAR at mission start.",
+      repo_url: "https://github.com/weather-systems/real-weather-injector", avatar_url: ICON, stars: 388,
+      readme: "", assets: [], download_size: 0, installable: false,
+      installs: [], requires: [],
+    },
     "syria-collective/syria-4k-textures": {
       repo: "syria-collective/syria-4k-textures", name: "Syria 4K Terrain Textures", author: "syria-collective",
       description: "High-resolution ground textures for the Syria map.",
@@ -183,6 +234,12 @@
       case "openProduct": {
         const repo = m.repo;
         reply({ type: "product:busy", repo });
+        // One repo always fails to load, so the product page's error + retry
+        // path is reachable from the preview without hand-pushing messages.
+        if (repo === "hoggit-liveries/usaf-aggressors") {
+          reply({ type: "product:error", repo, message: "GitHub API error: 502 Bad Gateway" }, 200);
+          break;
+        }
         const product = productFor(repo);
         reply({ type: "product", product, manifest: manifestFor(product), requires: requiresFor(product), installed: installed.has(repo) }, 450);
         break;

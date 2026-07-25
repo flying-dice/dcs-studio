@@ -21,7 +21,11 @@ import { type ConsoleMessage, expect, type Page } from "@playwright/test";
  * `errors.length === 0` after driving the page to catch anything the real
  * media/*.js script throws once it's running against fixture data.
  */
-export async function openPreview(page: Page, name: string): Promise<string[]> {
+export async function openPreview(
+  page: Page,
+  name: string,
+  opts: OpenPreviewOptions = {},
+): Promise<string[]> {
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(String(err)));
   page.on("console", (msg) => {
@@ -31,8 +35,18 @@ export async function openPreview(page: Page, name: string): Promise<string[]> {
     // suite gives the same verdict whichever binary Playwright launches.
     if (msg.type() === "error" && !isBrowserNoise(msg)) errors.push(msg.text());
   });
-  await page.goto(`/previews/${name}.html`);
+  const query = new URLSearchParams(opts.query);
+  if (opts.state !== undefined) query.set("state", JSON.stringify(opts.state));
+  const search = query.toString();
+  await page.goto(`/previews/${name}.html${search ? `?${search}` : ""}`);
   return errors;
+}
+
+export interface OpenPreviewOptions {
+  /** Seed vscode.getState() — the reload path. Omit for a first-ever load. */
+  state?: unknown;
+  /** Extra query params a fixture reads to vary its scripted host. */
+  query?: Record<string, string>;
 }
 
 /**
@@ -65,6 +79,15 @@ export async function expectSent(page: Page, partial: Record<string, unknown>): 
       { message: `expected a sent message matching ${JSON.stringify(partial)}` },
     )
     .toBe(true);
+}
+
+/**
+ * The webview's persisted session (what vscode.setState() last stored, which
+ * a reopened panel gets back from getState()). Read it to assert on state the
+ * DOM only shows indirectly — e.g. the console's capped command history.
+ */
+export async function webviewState(page: Page): Promise<any> {
+  return page.evaluate(() => (window as any).acquireVsCodeApi().getState());
 }
 
 /** Inject a host -> webview message (dispatches the "message" event the real extension host would send). */
