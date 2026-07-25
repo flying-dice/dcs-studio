@@ -553,10 +553,18 @@ mod tests {
         lua.load(
             r#"
             DB = assert(sqlite.open(":memory:"))
-            assert(DB:exec("CREATE TABLE t(txt TEXT, blob BLOB, n INTEGER)"))
-            assert(DB:exec("INSERT INTO t VALUES (?, x'0102', 1)", { "hello" }) == 1)
-            assert(DB:exec("INSERT INTO t VALUES (?, x'0304', 2)", { "world" }) == 1)
-            RUN = function() return DB:query("SELECT txt, blob, n FROM t ORDER BY n") end
+            assert(DB:exec("CREATE TABLE t(a TEXT, b TEXT, c TEXT, d BLOB, n INTEGER)"))
+            -- The cell values are generated INSIDE SQLite, long and random:
+            -- a value that came from Lua is already interned in this state, so
+            -- handing it back would need no allocation at all and the squeeze
+            -- would never reach the cell conversions it is here to exercise.
+            for i = 1, 20 do
+              assert(DB:exec(
+                "INSERT INTO t VALUES (hex(randomblob(60)), hex(randomblob(60)), "
+                  .. "hex(randomblob(60)), randomblob(60), " .. i .. ")"
+              ) == 0)
+            end
+            RUN = function() return DB:query("SELECT a, b, c, d, n FROM t ORDER BY n") end
             "#,
         )
         .exec()
@@ -573,9 +581,13 @@ mod tests {
                     // Lift the ceiling before touching the result, so reading it
                     // back cannot itself run out.
                     lua.set_memory_limit(0).expect("lift the ceiling");
-                    assert_eq!(rows.len().expect("len"), 2);
+                    assert_eq!(rows.len().expect("len"), 20);
                     let first: mlua::Table = rows.get(1).expect("first row");
-                    assert_eq!(first.get::<String>("txt").expect("txt"), "hello");
+                    assert_eq!(first.get::<String>("a").expect("a").len(), 120);
+                    assert_eq!(
+                        first.get::<mlua::String>("d").expect("d").as_bytes().len(),
+                        60
+                    );
                     relaxed_enough_to_answer = true;
                     break;
                 }
@@ -592,6 +604,7 @@ mod tests {
             relaxed_enough_to_answer,
             "the squeeze never relaxed enough to answer — the test proves nothing"
         );
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -340,10 +340,7 @@ pub(crate) fn get_lfs_writedir(lua: &Lua) -> LuaResult<String> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod bootstrap_tests {
-    use super::{
-        bootstrap, emit_openrpc_json, emit_surface_dlua, get_lfs_writedir, get_logger_file_path,
-        BridgeKind,
-    };
+    use super::{bootstrap, emit_surface_dlua, get_lfs_writedir, get_logger_file_path, BridgeKind};
     use mlua::prelude::{LuaFunction, LuaTable};
     use mlua::Lua;
 
@@ -582,33 +579,28 @@ mod bootstrap_tests {
         );
     }
 
-    /// The golden generators build their whole surface — and, for `OpenRPC`,
-    /// run the real registration chunk — inside a Lua state, so they allocate
-    /// exactly like the module load does. Same requirement, same squeeze: an
-    /// exhausted state gets an error, never a panic.
+    /// `emit_surface_dlua` builds the whole binding surface inside a Lua state,
+    /// so it allocates exactly as the module load does — same requirement, same
+    /// squeeze: an exhausted state gets an error back, never a panic.
+    ///
+    /// Its `OpenRPC` sibling is deliberately NOT squeezed here. Registering the
+    /// method set means calling into Lua with a userdata router, and Lua 5.1
+    /// answers an allocation failure inside an unprotected API call by calling
+    /// `exit(EXIT_FAILURE)` — the process simply vanishes, which is exactly what
+    /// it would do inside DCS and is not something this crate can catch. A test
+    /// that provoked it would take the test runner with it.
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
-    fn the_golden_generators_report_an_exhausted_state_rather_than_panicking() {
-        for headroom in (0..2_000_000).step_by(256) {
-            let lua = Lua::new();
-            let ceiling = lua.used_memory() + headroom;
-            lua.set_memory_limit(ceiling)
-                .expect("mlua owns this state's allocator");
-            if let Ok(dlua) = emit_surface_dlua(&lua, BridgeKind::Gui, "test") {
-                assert!(dlua.contains("---@meta dcs_studio_gui"), "{dlua}");
-                break;
-            }
-        }
-
+    fn rendering_the_type_surface_out_of_memory_errors_instead_of_panicking() {
         let mut relaxed_enough_to_render = false;
         for headroom in (0..2_000_000).step_by(256) {
             let lua = Lua::new();
             let ceiling = lua.used_memory() + headroom;
             lua.set_memory_limit(ceiling)
                 .expect("mlua owns this state's allocator");
-            match emit_openrpc_json(&lua, BridgeKind::Gui, "test") {
-                Ok(doc) => {
-                    assert!(doc.contains("\"openrpc\""), "{doc}");
+            match emit_surface_dlua(&lua, BridgeKind::Gui, "test") {
+                Ok(dlua) => {
+                    assert!(dlua.contains("---@meta dcs_studio_gui"), "{dlua}");
                     relaxed_enough_to_render = true;
                     break;
                 }

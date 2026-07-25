@@ -56,11 +56,13 @@ mod tests {
     );
 
     fn live() -> String {
-        emit_surface_dlua(&Lua::new(), BridgeKind::Mission, env!("CARGO_PKG_VERSION")).expect("surface")
+        emit_surface_dlua(&Lua::new(), BridgeKind::Mission, env!("CARGO_PKG_VERSION"))
+            .expect("surface")
     }
 
     fn live_openrpc() -> String {
-        emit_openrpc_json(&Lua::new(), BridgeKind::Mission, env!("CARGO_PKG_VERSION")).expect("openrpc")
+        emit_openrpc_json(&Lua::new(), BridgeKind::Mission, env!("CARGO_PKG_VERSION"))
+            .expect("openrpc")
     }
 
     /// The checked-in golden matches the live surface — the `.d.lua` facade

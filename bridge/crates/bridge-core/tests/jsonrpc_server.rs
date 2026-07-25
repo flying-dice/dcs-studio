@@ -456,6 +456,49 @@ fn a_ping_is_ponged_and_a_close_ends_the_session() {
     bridge.shutdown(Some(false));
 }
 
+/// An editor that closes the socket while a request is still queued is
+/// ordinary: the user hit Disconnect, or reloaded the window, mid-`debug_run`.
+/// The sim still answers the request a frame later and finds the session gone —
+/// which must be one logged dead request, not a dropped bridge. The next
+/// connection has to work.
+#[test]
+#[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+fn a_client_that_closes_mid_request_costs_only_that_request() {
+    let _serial = serially();
+    let bridge = Bridge::start(30);
+
+    let mut ws = connect_ws(bridge.port);
+    // Queue the request, then close BEFORE the sim drains it: the server echoes
+    // the close and ends the session while the answer is still owed.
+    ws.send(&rpc("orphaned", "echo", "{}")).expect("send");
+    ws.close().expect("close");
+    let echoed = ws.read_raw(Duration::from_secs(5));
+    assert_eq!(
+        echoed.first().map(|b| b & 0x0f),
+        Some(0x8),
+        "the server must echo the close first: {echoed:?}"
+    );
+
+    // Now answer it. The write has nowhere to go, and that is the whole test:
+    // the drain must not care.
+    bridge.pump();
+    bridge.pump();
+
+    let mut fresh = connect_ws(bridge.port);
+    fresh.send(&rpc("next", "echo", "{}")).expect("send");
+    assert!(
+        bridge
+            .pump_until(
+                || fresh.await_id("next", Duration::from_millis(50)),
+                Duration::from_secs(10)
+            )
+            .is_some(),
+        "the bridge must still serve the next connection"
+    );
+
+    bridge.shutdown(Some(false));
+}
+
 /// `jsonrpc.serve` is what the mission DLL's init calls on EVERY mission load.
 /// The first call binds; later ones reuse the running server — even when the
 /// requested port differs — and swap-drop whatever was stranded in the queue

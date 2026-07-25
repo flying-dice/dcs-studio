@@ -965,6 +965,50 @@ mod tests {
         );
     }
 
+    /// A request's params cross into Lua as a fresh table, which is an
+    /// allocation in a state DCS shares with the whole mission and can genuinely
+    /// have exhausted. The drain must come back with an error for that one
+    /// request — `respond` logs it and moves to the next — rather than panicking
+    /// on the sim thread.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn params_that_cannot_be_allocated_fail_one_request_not_the_drain() {
+        let lua = Lua::new();
+        let router = router(&lua);
+        let service = ServiceInfo::default();
+        let params =
+            serde_json::json!({ "a": [1, 2, 3], "b": "some text long enough to allocate" });
+
+        let mut relaxed_enough_to_answer = false;
+        for headroom in (0..64_000).step_by(8) {
+            let ceiling = lua.used_memory() + headroom;
+            lua.set_memory_limit(ceiling)
+                .expect("mlua owns this state's allocator");
+            let outcome = process_request(
+                &lua,
+                &router,
+                request(Some("p"), "echo", Some(params.clone())),
+                &service,
+            );
+            lua.set_memory_limit(0).expect("lift the ceiling");
+            match outcome {
+                Ok(response) => {
+                    assert_eq!(response.expect("a request is answered").id, "p");
+                    relaxed_enough_to_answer = true;
+                    break;
+                }
+                Err(e) => assert!(
+                    e.to_string().contains("memory"),
+                    "the request must fail on the squeeze, and say so: {e}"
+                ),
+            }
+        }
+        assert!(
+            relaxed_enough_to_answer,
+            "the squeeze never relaxed enough to answer — the test proves nothing"
+        );
+    }
+
     /// An error envelope carries code, message and optional data, and omits
     /// `result` entirely — the wire shape the editor client parses.
     #[test]

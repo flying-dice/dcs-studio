@@ -138,15 +138,27 @@ jobs:
       - name: Install Lua 5.1 (test-time link target)
         run: sudo apt-get update && sudo apt-get install -y liblua5.1-0-dev
       - uses: taiki-e/install-action@cargo-llvm-cov
-      # Regions is llvm-cov's branch-equivalent metric, and it is the one that
-      # matters most here: a `?` early return or an unexercised match arm can sit
-      # at 100% line coverage, and an unexercised error path in this workspace
-      # panics the user's flight sim. The three TypeScript layers all gate
-      # branches at 100; this is the same promise.
+      # Regions is llvm-cov's branch-equivalent metric, and the one that matters
+      # most here: a `?` early return or an unexercised match arm can sit at 100%
+      # line coverage, and an unexercised error path in this workspace panics the
+      # user's flight sim.
+      #
+      # 99.7, not 100, and the number is honest rather than aspirational. 17-19
+      # regions of 7297 are genuinely unreachable from a test, and each was
+      # measured rather than assumed: serde_json infallible on a struct of
+      # String/i32/Option<Value>; rusqlite's FromSql total over all five storage
+      # classes; and — the interesting one — allocations inside a Lua
+      # registration call, where Lua 5.1's luaD_throw finds no protected frame,
+      # calls the panic handler and exits the process. A test reaching those
+      # would take the runner with it (see #62). The ±1 is an llvm-cov
+      # instantiation artifact: a generic compiled into both cdylibs' test
+      # binaries, with the uncovered copy attributed here.
+      #
+      # Raise this floor when the number rises. Do not lower it.
       - name: Rust tests + coverage gate
         run: >-
           cargo llvm-cov --workspace
-          --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
+          --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 99.7
         working-directory: bridge
 
   windows:

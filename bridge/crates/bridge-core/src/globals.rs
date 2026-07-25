@@ -80,8 +80,13 @@ fn walk_table(
     visited: &mut HashSet<*const c_void>,
 ) -> Vec<GlobalNode> {
     let mut members: Vec<GlobalNode> = Vec::new();
-    for pair in table.pairs::<LuaValue, LuaValue>() {
-        let Ok((key, value)) = pair else { continue };
+    // Iterating as `LuaValue`/`LuaValue` makes both conversions the identity, so
+    // a pair can never fail to materialise; taking the ones that do keeps the
+    // walk total, the same way `lua_utils::serialize_lua_table_to_json` does.
+    for (key, value) in table
+        .pairs::<LuaValue, LuaValue>()
+        .filter_map(std::result::Result::ok)
+    {
         let LuaValue::String(key) = key else { continue };
         let Ok(name) = key.to_str() else { continue };
         let name = name.to_owned();
