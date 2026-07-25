@@ -549,6 +549,11 @@
         }
         break;
       case "product":
+        // Read the payload BEFORE touching state: every sibling case guards on
+        // the repo first, and a {product} that ever arrived without one would
+        // otherwise leave the page un-busy with a null product — a permanent
+        // blank card rather than the error the host meant to send.
+        if (!m.product) break;
         state.productBusy = false;
         state.product = m.product;
         state.repo = m.product.repo;

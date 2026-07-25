@@ -680,7 +680,7 @@ mod tests {
         reset_session();
 
         let lua = mlua::Lua::new();
-        let dbg = crate::facade::sub_table(&lua, "debug", register).expect("debug sub");
+        let dbg = crate::facade::sub_table(&lua, "debug", register);
         lua.globals().set("dbg", dbg).expect("set dbg");
 
         lua.load(

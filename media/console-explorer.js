@@ -253,10 +253,16 @@
 
     function copyNode(node) {
       const text = JSON.stringify(core.childrenToJson(node), null, 2);
+      // Two distinct clipboard failures, and only one of them is a throw: a
+      // locked-down host can block the API outright, but the routine case is
+      // writeText REJECTING with NotAllowedError because the webview is not the
+      // focused document. A bare try/catch misses that one entirely and leaves
+      // an unhandled rejection in the console. The check icon confirms the
+      // attempt either way — nothing here can recover the copy.
       try {
-        if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text);
+        navigator.clipboard?.writeText(text)?.catch(() => {});
       } catch {
-        /* clipboard may be unavailable; the check icon still confirms the attempt */
+        /* API blocked outright */
       }
       const btn = node.el.copy;
       btn.innerHTML = svg("check");

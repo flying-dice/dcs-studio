@@ -1,0 +1,26 @@
+{
+  // Typecheck-only compilation unit for everything tsconfig.json's `include`
+  // leaves out. Vitest and Playwright transpile via esbuild and Biome does not
+  // typecheck, so without this the `vscode` test double and the ports it stands
+  // in for could drift apart with nothing to notice.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // The base pins rootDir to src/ for the out/ layout; this unit spans the
+    // repo and emits nothing, so the constraint has no meaning here.
+    "rootDir": ".",
+    // The Playwright specs' `page.evaluate` callbacks are authored against the
+    // browser realm and need the DOM lib to typecheck at all. This only widens
+    // the globals visible to this unit — `npm run compile` still holds src/ to
+    // the base's ES2020-only lib.
+    "lib": ["ES2020", "DOM"],
+    // Model the loaders that actually run these files rather than the base's
+    // CommonJS, which the extension bundle needs but no test file is: `import.meta`
+    // is legal here, and `bundler` reads the same package `exports` maps esbuild
+    // does — under classic node resolution vitest's config types resolve to a
+    // different entry that accepts options the installed vitest has dropped.
+    "module": "ES2022",
+    "moduleResolution": "bundler"
+  },
+  "include": ["src", "test", "tests", "*.config.ts"]
+}

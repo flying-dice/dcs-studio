@@ -26,7 +26,18 @@ test/**
 spec/**
 target/**
 .github/**
+# All three vitest configs — only the root one was listed here when the config
+# was split into per-layer files, so the other two have been shipping since.
 vitest.config.ts
+vitest.unit.config.ts
+vitest.integration.config.ts
+tsconfig.test.json
+.vscodeignore
 goals/**
 biome.json
 screenshots/**
+ARCHITECTURE.md
+# The repo's own sample manifest — a mod project's dcs-studio.toml, not the
+# extension's; shipping it puts a stray one inside the installed extension.
+dcs-studio.toml
+docs/testing-audit.md

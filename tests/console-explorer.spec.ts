@@ -117,6 +117,31 @@ test.describe("Lua Console — Explorer failure paths", () => {
     expect(errors).toEqual([]);
   });
 
+  test("copy still confirms when the clipboard write is REJECTED", async ({ page }) => {
+    // The routine failure, not the exotic one: writeText resolves to a rejected
+    // promise (NotAllowedError) whenever the webview is not the focused
+    // document. A try/catch around the call never sees it, so it used to land
+    // in the console as an unhandled rejection.
+    const errors = await openExplorer(page);
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: () =>
+            Promise.reject(new DOMException("Document is not focused.", "NotAllowedError")),
+        },
+      });
+    });
+
+    const copy = page.locator(`${sel("_G")} > .row > [data-testid="node-copy"]`);
+    await page.locator(`${sel("_G")} > .row`).hover();
+    await copy.click();
+    await expect(copy).toHaveAttribute("data-state", "copied");
+    // Give the rejection a turn to surface before asserting nothing did.
+    await page.waitForTimeout(50);
+    expect(errors).toEqual([]);
+  });
+
   test("Refresh drops the sim-side refs and re-reads the tree", async ({ page }) => {
     await openExplorer(page);
     await expect(page.locator(sel("_G/db"))).toBeVisible();

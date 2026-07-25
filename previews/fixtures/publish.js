@@ -15,7 +15,7 @@
 // busy off) exactly as PublishPanel#guard sequences them, so clicking through
 // the preview shows the real result panes. Tests that need to hold the page in
 // a mid-flight state push {type:"busy"} themselves via hostSend().
-(function () {
+(() => {
   const scenario = new URLSearchParams(location.search).get("scenario") || "";
 
   const OK_CHECKS = [

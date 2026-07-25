@@ -122,6 +122,13 @@ mod tests {
             log = { write = function() end, ERROR = 4 }
             -- A non-emittable key (not a Lua identifier) is skipped.
             log["bad-key"] = function() end
+            -- Keys that are not emittable NAMES at all: DCS's own tables carry
+            -- array parts (log[1]) and, in the mission state, keys built from
+            -- raw bytes that are not valid UTF-8. Both are skipped rather than
+            -- turned into a broken statement — or, worse, raising mid-dump and
+            -- costing the editor its whole type surface.
+            log[1] = function() end
+            log["\255\254"] = function() end
             -- Every scalar type DCS actually exposes on these roots, plus a
             -- coroutine: not indexable, so it types as an opaque handle rather
             -- than being walked (a walk would raise on it).
@@ -162,6 +169,12 @@ mod tests {
 
         // A non-identifier key is filtered, not emitted into a broken statement.
         assert!(!out.contains("bad-key"), "{out}");
+        // ... and so are the keys that are not names: an array slot and a
+        // non-UTF-8 byte string. The dump still carries everything else on the
+        // same root, which is the point of skipping rather than failing.
+        assert!(!out.contains("log[1]") && !out.contains("log.1"), "{out}");
+        assert!(out.is_ascii(), "a raw byte key leaked into the dump:\n{out}");
+        assert!(out.contains("function log.write() end"), "{out}");
 
         // An absent curated root (no `net`/`Export`/`lfs` here) is skipped.
         assert!(!out.contains("net"), "{out}");

@@ -1,7 +1,5 @@
-import * as os from "os";
 import * as vscode from "vscode";
-import { dbExportFileBase, shouldOpenExport } from "../core/domain/bridgeConsole";
-import { fmtBytes } from "../core/domain/format";
+import { dbExportFileBase } from "../core/domain/bridgeConsole";
 import { showError } from "../errors";
 import type { BridgeClients } from "./clients";
 import type { DbExportWhat } from "./dbTypes";

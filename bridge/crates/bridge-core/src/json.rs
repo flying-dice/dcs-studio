@@ -67,7 +67,7 @@ mod tests {
     /// PUC liblua5.1 so Linux CI runs these as ordinary tests (issue #28).
     fn state() -> Lua {
         let lua = Lua::new();
-        let json = sub_table(&lua, "json", super::register).expect("json sub");
+        let json = sub_table(&lua, "json", super::register);
         lua.globals().set("json", json).expect("set json");
         lua
     }

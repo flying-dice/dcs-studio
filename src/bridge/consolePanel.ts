@@ -1,8 +1,6 @@
-import * as os from "os";
 import * as vscode from "vscode";
-import { exportFileBase, shouldOpenExport } from "../core/domain/bridgeConsole";
+import { exportFileBase } from "../core/domain/bridgeConsole";
 import type { DualBridgeStatus } from "../core/domain/bridgeProtocol";
-import { fmtBytes } from "../core/domain/format";
 import { renderWebviewHtml } from "../webview/html";
 import type { BridgeClient, LuaEnv } from "./client";
 import type { BridgeClients } from "./clients";

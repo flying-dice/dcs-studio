@@ -326,16 +326,23 @@ pub fn r_named(ty: &str, name: &str) -> Ret {
 /// Register one sub-namespace on a throwaway [`Surface`] and hand back its live
 /// Lua table, so each module's tests can drive the bindings it actually
 /// registers without standing up the whole bridge surface.
+///
+/// Infallible on purpose: every caller registers a real manifest on a plain
+/// table, where the only failure left is a Lua allocation error. Returning a
+/// `Result` no caller can see would be an error path with no behaviour to test.
 #[cfg(test)]
+#[allow(clippy::expect_used)] // test scaffolding
 pub(crate) fn sub_table(
     lua: &Lua,
     name: &str,
     build: impl FnOnce(&mut Sub) -> Result<()>,
-) -> Result<LuaTable> {
-    let exports = lua.create_table()?;
+) -> LuaTable {
+    let exports = lua.create_table().expect("exports table");
     let mut surface = Surface::new(lua, &exports, "test", "");
-    surface.submodule(name, "", build)?;
-    exports.get(name)
+    surface
+        .submodule(name, "", build)
+        .expect("register the sub-namespace");
+    exports.get(name).expect("the registered sub-namespace")
 }
 
 /// A table that raises when `refuse` is assigned to it and behaves normally
@@ -346,9 +353,10 @@ pub(crate) fn sub_table(
 /// path, and it reaches it for a chosen key so a manifest can be checked
 /// binding by binding.
 #[cfg(test)]
-pub(crate) fn table_refusing(lua: &Lua, refuse: &str) -> Result<LuaTable> {
-    let table = lua.create_table()?;
-    let meta = lua.create_table()?;
+#[allow(clippy::expect_used)] // test scaffolding
+pub(crate) fn table_refusing(lua: &Lua, refuse: &str) -> LuaTable {
+    let table = lua.create_table().expect("table");
+    let meta = lua.create_table().expect("metatable");
     let refuse = refuse.to_string();
     let guard = move |_: &Lua, (t, key, value): (LuaTable, String, LuaValue)| {
         if key == refuse {
@@ -356,23 +364,23 @@ pub(crate) fn table_refusing(lua: &Lua, refuse: &str) -> Result<LuaTable> {
         }
         t.raw_set(key, value)
     };
-    let newindex = lua.create_function(guard)?;
-    meta.set("__newindex", newindex)?;
+    let newindex = lua.create_function(guard).expect("__newindex guard");
+    meta.set("__newindex", newindex).expect("set __newindex");
     table.set_metatable(Some(meta));
-    Ok(table)
+    table
 }
 
 /// A [`Sub`] backed by a table that refuses the key `refuse` — see
 /// [`table_refusing`].
 #[cfg(test)]
-pub(crate) fn sub_refusing<'l>(lua: &'l Lua, name: &str, refuse: &str) -> Result<Sub<'l>> {
-    Ok(Sub {
+pub(crate) fn sub_refusing<'l>(lua: &'l Lua, name: &str, refuse: &str) -> Sub<'l> {
+    Sub {
         lua,
-        table: table_refusing(lua, refuse)?,
+        table: table_refusing(lua, refuse),
         class: ClassDoc::new(name),
         full_name: name.to_string(),
         nested: Vec::new(),
-    })
+    }
 }
 
 #[cfg(test)]

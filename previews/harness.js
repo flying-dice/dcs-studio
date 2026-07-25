@@ -17,7 +17,7 @@
 //   inject host pushes directly.
 // - window.__toast(html): tiny visual log for the human dev-loop preview;
 //   a no-op if the page has no #toast element.
-(function () {
+(() => {
   const sent = [];
   window.__sentMessages = sent;
 
@@ -35,47 +35,39 @@
   // fresh value every navigation, which is what gives tests isolation for
   // free without needing to clear anything between specs).
   //
+  // Held as JSON *text*, because the real pair serialises across the webview
+  // boundary: a panel that persists a live array it keeps mutating (console.js
+  // does exactly that with `history`) must not see later mutations in what it
+  // stored, or a dropped/mis-ordered persist() is invisible to the suite and a
+  // non-cloneable value passes here and throws in VS Code.
+  //
   // Starts *undefined*, like a real webview that has never called setState:
   // every panel guards with `vscode.getState() || {}` precisely because of
   // that first load, and a harness that handed back `{}` would never exercise
   // it. `?state=<url-encoded JSON>` seeds a restored session instead — that's
   // the reload path where a panel re-opens on the page/tab/history it left
-  // off at. See tests/helpers.ts#openPreview({ state }).
-  let state;
-  const seed = new URLSearchParams(location.search).get("state");
-  if (seed) state = JSON.parse(seed);
+  // off at, and it arrives already serialised. See
+  // tests/helpers.ts#openPreview({ state }).
+  let state = new URLSearchParams(location.search).get("state") || undefined;
 
-  // TODO: clean-code - 0.7 - BOUNDARY (#36): postMessage fans out to host handlers
-  // SYNCHRONOUSLY, so a fixture's reply is delivered re-entrantly before
-  // postMessage returns — a real host can only reply in a later task. Any panel
-  // that mutates state after posting (a request-id counter, a busy flag, a
-  // pending-map insert) is asserted against pre-mutation state here and
-  // post-mutation state in VS Code, so a reply-correlation bug passes green.
-  // console.js and marketplace.js already defer their replies by hand, which
-  // shows the divergence was found once and patched locally instead of here.
-  // Fix: `for (const fn of postHandlers) setTimeout(() => fn(m), 0)` — sent[]
-  // stays synchronous, so expectSent is unaffected.
-  //
-  // TODO: clean-code - 0.6 - BOUNDARY (#36): getState/setState store the caller's
-  // object BY REFERENCE; the real pair serialises. console.js persists a live
-  // `history` array it keeps mutating, so webviewState(page) reads it as it is
-  // now rather than as it was persisted — a dropped or mis-ordered persist()
-  // is invisible, and a non-cloneable value survives here and throws in VS
-  // Code. Round-trip through JSON on both ends.
-  window.acquireVsCodeApi = function () {
-    return {
-      getState: () => state,
-      setState: (v) => {
-        state = v;
-      },
-      postMessage: (m) => {
-        sent.push(m);
-        for (const fn of postHandlers) fn(m);
-      },
-    };
-  };
+  window.acquireVsCodeApi = () => ({
+    getState: () => (state === undefined ? undefined : JSON.parse(state)),
+    setState: (v) => {
+      state = JSON.stringify(v);
+    },
+    postMessage: (m) => {
+      sent.push(m);
+      // Fan out in a LATER task. A real host cannot reply re-entrantly — the
+      // reply crosses the webview boundary — so a panel that mutates state
+      // after posting (a request-id counter, a busy flag, a pending-map
+      // insert) must be observed post-mutation here too, or a
+      // reply-correlation bug passes green in the suite and fails in VS Code.
+      // sent[] stays synchronous, so expectSent is unaffected.
+      for (const fn of postHandlers) setTimeout(() => fn(m), 0);
+    },
+  });
 
-  window.__toast = function (html) {
+  window.__toast = (html) => {
     const wrap = document.getElementById("toast");
     if (!wrap) return;
     const el = document.createElement("div");

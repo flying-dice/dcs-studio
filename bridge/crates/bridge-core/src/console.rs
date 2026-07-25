@@ -180,7 +180,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let lua = Lua::new();
-        let console = crate::facade::sub_table(&lua, "console", register).expect("console sub");
+        let console = crate::facade::sub_table(&lua, "console", register);
         lua.globals().set("console", console).expect("set console");
 
         clear();
@@ -200,6 +200,51 @@ mod tests {
         clear();
     }
 
+    /// `print` stringifies through the STATE's `tostring`, so a state that has
+    /// lost it — `tostring = nil` typed into the very console this serves, or a
+    /// mod that replaced it with something that returns a table — must come
+    /// back as an ordinary Lua error the caller can see, never a panic (which
+    /// would take the sim down) and never a half-formed line in the panel.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn print_reports_a_state_whose_tostring_is_gone_or_lying() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let lua = Lua::new();
+        let console = crate::facade::sub_table(&lua, "console", register);
+        lua.globals().set("console", console).expect("set console");
+        clear();
+
+        lua.load("tostring = nil").exec().expect("drop tostring");
+        let gone = lua
+            .load(r#"console.print("x")"#)
+            .exec()
+            .expect_err("a state with no tostring cannot print");
+        assert!(
+            gone.to_string().contains("function"),
+            "the error names what was missing: {gone}"
+        );
+
+        lua.load("tostring = function() return {} end")
+            .exec()
+            .expect("install a lying tostring");
+        let lying = lua
+            .load(r#"console.print("x")"#)
+            .exec()
+            .expect_err("a tostring that returns a table cannot print");
+        assert!(
+            lying.to_string().contains("string"),
+            "the error names the conversion that failed: {lying}"
+        );
+
+        assert!(
+            read_after(0).0.is_empty(),
+            "neither attempt left a line in the panel"
+        );
+        clear();
+    }
+
     /// The IDE's Console panel tails with `read(after)` and clears with
     /// `clear()`. `read` must hand back `{ lines = { { seq, text }, … }, latest }`
     /// with `latest` usable as the next `after`, or the panel either loses lines
@@ -211,7 +256,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let lua = Lua::new();
-        let console = crate::facade::sub_table(&lua, "console", register).expect("console sub");
+        let console = crate::facade::sub_table(&lua, "console", register);
         lua.globals().set("console", console).expect("set console");
 
         clear();

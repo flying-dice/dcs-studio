@@ -313,6 +313,48 @@ test.describe("marketplace preview", () => {
     await page.getByTestId("browse-anon-btn").click();
     await expect(page.getByTestId("mod-card")).toHaveCount(12);
   });
+
+  test("a {product} with no product leaves the page busy rather than blank", async ({ page }) => {
+    // Every other case guards on the payload before touching state. This one
+    // used to clear productBusy and null out state.product before dereferencing
+    // m.product.repo — so a malformed push would throw halfway through and
+    // strand the page on a product card with nothing in it.
+    const errors = await openPreview(page, "marketplace");
+    await page.getByTestId("browse-anon-btn").click();
+    await page
+      .locator('[data-testid="mod-card"][data-repo="dcs-scripting/moose-lite"]')
+      .getByTestId("card-title")
+      .click();
+    await expect(page.getByTestId("product-title")).toHaveText("MOOSE Lite");
+
+    await hostSend(page, { type: "product" });
+    // The last good product is still on screen; nothing was half-applied.
+    await expect(page.getByTestId("product-title")).toHaveText("MOOSE Lite");
+    expect(errors).toEqual([]);
+  });
+
+  test("the fallback avatar survives a non-Latin-1 mod name", async ({ page }) => {
+    // Names come from GitHub, so they can be in any script. btoa() is a Latin-1
+    // encoder and threw InvalidCharacterError on the first Cyrillic/CJK code
+    // point — from inside an <img> error listener, i.e. exactly when the
+    // fallback was needed.
+    await openPreview(page, "marketplace");
+    const src = await page.evaluate(() =>
+      (window as unknown as { dcsUi: { initialsAvatar(n: string): string } }).dcsUi.initialsAvatar(
+        "Восток Ми-8",
+      ),
+    );
+    expect(src).toMatch(/^data:image\/svg\+xml;base64,/);
+    // Decoded back through UTF-8 the initials are intact, not mojibake.
+    const svg = await page.evaluate(
+      (s) =>
+        new TextDecoder().decode(
+          Uint8Array.from(atob(s.split(",")[1]), (c: string) => c.charCodeAt(0)),
+        ),
+      src,
+    );
+    expect(svg).toContain(">ВМ<");
+  });
 });
 
 // Open a product by repo id after browsing anon (shared setup for the #12 tests).

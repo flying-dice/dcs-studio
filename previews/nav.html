@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- No viewport meta: src/nav/navView.ts renders the sidebar with
+     `viewport: false`, so the shipped document has none either. -->
 <title>DCS Studio preview — Sidebar Nav</title>
 <!-- media/nav.js reads window.__LOGO__ at load, so the fixture (which sets
      it) must load before this script tag. Status/manifest/skills state is

@@ -7,6 +7,12 @@ import { defineConfig, devices } from "@playwright/test";
 //
 // Chromium-only: webviews ship inside Electron's Chromium; firefox/webkit
 // would test engines the code never runs in.
+// One source for the preview server's address: baseURL, the readiness probe and
+// the command that starts it all have to agree, and a mismatch shows up as the
+// whole suite timing out rather than as a wrong port.
+const PORT = 4173;
+const ORIGIN = `http://127.0.0.1:${PORT}`;
+
 export default defineConfig({
   testDir: "tests",
   fullyParallel: true,
@@ -14,7 +20,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: "list",
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL: ORIGIN,
     trace: "on-first-retry",
   },
   projects: [
@@ -31,8 +37,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "node scripts/serve.mjs 4173",
-    url: "http://127.0.0.1:4173/previews/skills.html",
+    command: `node scripts/serve.mjs ${PORT}`,
+    url: `${ORIGIN}/previews/skills.html`,
     reuseExistingServer: !process.env.CI,
   },
 });

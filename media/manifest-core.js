@@ -293,6 +293,65 @@
     return winJoin(roots.savedGames, rest);
   }
 
+  /** A path is covered when it equals or nests inside one of the bundle paths. */
+  function coveredByBundle(source, bundlePaths) {
+    const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+    const s = norm(source);
+    return bundlePaths.some((p) => {
+      const b = norm(p);
+      return b === "" || b === "." || s === b || s.startsWith(`${b}/`);
+    });
+  }
+
+  /**
+   * Every authoring problem in a parsed manifest, as ready-to-show sentences in
+   * document order. This is the policy — what makes a dcs-studio.toml valid —
+   * and it lives here rather than in the form because the form is a DOM script
+   * only a browser can reach, while the same judgements are also made by
+   * publish preflight and (a third time) by the Rust parser in
+   * dcs-studio-project. `roots` is consulted for one message only: an
+   * unconfigured {GameInstall} is about THIS machine's settings, not the file,
+   * which is why it is reported separately from an escaping dest (refused on
+   * every machine).
+   */
+  function issues(m, roots) {
+    const out = [];
+    if (!m.project.name.trim()) out.push("Project name is required.");
+    const bundlePaths = m.bundle.map((b) => b.path);
+    m.bundle.forEach((r, i) => {
+      if (!r.path.trim()) out.push(`Bundle ${i + 1}: path is empty.`);
+    });
+    m.symlink.forEach((r, i) => {
+      if (!r.source.trim()) out.push(`Symlink ${i + 1}: source is empty.`);
+      else if (!coveredByBundle(r.source, bundlePaths))
+        out.push(`Symlink ${i + 1}: source is not inside any bundled path.`);
+      if (!destStaysUnder(r.dest))
+        out.push(`Symlink ${i + 1}: destination reaches outside the DCS folders.`);
+      else if (splitDest(r.dest).root === "{GameInstall}" && !roots.gameInstall)
+        out.push(
+          `Symlink ${i + 1}: {GameInstall} is not configured (set dcsStudio.gameInstallPath).`,
+        );
+    });
+    m.requires_module.forEach((r, i) => {
+      if (!r.id.trim()) out.push(`Required module ${i + 1}: id is empty.`);
+    });
+    const epIds = m.entrypoint.map((e) => e.id);
+    m.entrypoint.forEach((r, i) => {
+      if (!r.id.trim()) out.push(`Executable ${i + 1}: id is empty.`);
+      else if (epIds.indexOf(r.id) !== i) out.push(`Executable ${i + 1}: duplicate id "${r.id}".`);
+      if (!r.exe.trim()) out.push(`Executable ${i + 1}: exe is empty.`);
+      else if (!coveredByBundle(r.exe, bundlePaths))
+        out.push(`Executable ${i + 1}: exe is not inside any bundled path.`);
+    });
+    m.mission_script.forEach((r, i) => {
+      if (!r.name.trim()) out.push(`Mission script ${i + 1}: name is empty.`);
+      if (!r.path.trim()) out.push(`Mission script ${i + 1}: path is empty.`);
+      else if (!coveredByBundle(r.path, bundlePaths))
+        out.push(`Mission script ${i + 1}: path is not inside any bundled path.`);
+    });
+    return out;
+  }
+
   return {
     ROOT_TOKENS,
     MISSION_SCRIPT_RUN_ON,
@@ -306,5 +365,6 @@
     staysUnder,
     destStaysUnder,
     resolveDest,
+    issues,
   };
 });

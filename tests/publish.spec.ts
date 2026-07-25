@@ -243,6 +243,28 @@ test.describe("publish preview", () => {
     expect(errors).toEqual([]);
   });
 
+  test("late log and result pushes after nofolder are no-ops, not crashes", async ({ page }) => {
+    // Same race as the busy push above, on the other three message flows: a
+    // share or release already running when the folder closes keeps streaming
+    // its log line and its result into a panel that no longer has a log pane or
+    // a result slot. Only "busy" used to guard.
+    const errors = await openPreview(page, "publish", { query: { scenario: "nofolder" } });
+    await expect(page.getByTestId("no-folder-note")).toBeVisible();
+
+    await hostSend(page, { type: "log", line: "→ still packaging" });
+    await hostSend(page, {
+      type: "shareDone",
+      result: { owner: "me", name: "my-mod" },
+    });
+    await hostSend(page, {
+      type: "releaseDone",
+      result: { url: "https://github.com/me/my-mod/releases/tag/v1.0.0", assets: ["mod.zip"] },
+    });
+
+    await expect(page.getByTestId("no-folder-note")).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
   test("ignores an empty host message", async ({ page }) => {
     const errors = await openPreview(page, "publish");
     await hostSend(page, null);

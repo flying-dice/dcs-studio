@@ -11,6 +11,9 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src"],
-  "exclude": ["node_modules", ".vscode-test", "test", "vitest.config.ts"]
+  // No `exclude`: `include` already narrows this unit to src/, and the default
+  // exclude covers node_modules and outDir. An explicit list here was dead and,
+  // being inherited through `extends`, silently subtracted test/ from
+  // tsconfig.test.json.
+  "include": ["src"]
 }

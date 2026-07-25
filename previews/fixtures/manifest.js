@@ -27,15 +27,12 @@ window.__BOOTSTRAP__ = {
   rawText: new URLSearchParams(location.search).get("project") === "numeric" ? NUMERIC : FULL,
   // `?target=unsaved` drops the path entirely — the shape the form gets when
   // the document it's bound to has no file on disk yet.
-  targetPath: new URLSearchParams(location.search).get("target") === "unsaved"
-    ? ""
-    : "E:\\projects\\f16-weapons-expansion\\dcs-studio.toml",
+  targetPath:
+    new URLSearchParams(location.search).get("target") === "unsaved"
+      ? ""
+      : "E:\\projects\\f16-weapons-expansion\\dcs-studio.toml",
   roots: { savedGames: "C:\\Users\\jonat\\Saved Games\\DCS", gameInstall: "" },
 };
 
-window.__host.onPost((m) => {
-  if (!m) return;
-  if (m.type === "openExternal" && m.url) window.__toast(`Opening ${m.url} &hellip;`);
-  // m.type === "edit": the real host applies this as a WorkspaceEdit to the
-  // open document. Nothing to simulate here — the form is its own preview.
-});
+// The form posts only {edit}, which the real host applies as a WorkspaceEdit to
+// the open document. Nothing to simulate here — the form is its own preview.

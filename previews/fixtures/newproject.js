@@ -12,7 +12,7 @@
 // real EEXIST does, "done" succeeds — because the interesting default is the
 // one where the host has NOT replied yet: scaffolding takes long enough that
 // the panel's Creating… latch is what stops a second submit.
-(function () {
+(() => {
   const scenario = new URLSearchParams(location.search).get("scenario") || "";
 
   // Mirrors src/core/domain/projectTemplates.ts#TEMPLATES. "mission" is kept

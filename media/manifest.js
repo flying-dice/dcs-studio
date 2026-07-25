@@ -9,8 +9,15 @@
   const boot = window.__BOOTSTRAP__;
   const app = document.getElementById("app");
 
-  const { ROOT_TOKENS, MISSION_SCRIPT_RUN_ON, parseToml, emitToml, splitDest, destStaysUnder } =
-    self.DcsManifestCore;
+  const {
+    ROOT_TOKENS,
+    MISSION_SCRIPT_RUN_ON,
+    parseToml,
+    emitToml,
+    splitDest,
+    destStaysUnder,
+    issues,
+  } = self.DcsManifestCore;
   let roots = boot.roots;
   const resolveDest = (dest) => self.DcsManifestCore.resolveDest(dest, roots);
 
@@ -29,64 +36,6 @@
   function onFormChanged() {
     renderPreview();
     pushEdit();
-  }
-
-  // ── Validation ──
-  /** A symlink source is covered when it equals or nests inside a bundle path. */
-  function coveredByBundle(source, bundlePaths) {
-    const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
-    const s = norm(source);
-    return bundlePaths.some((p) => {
-      const b = norm(p);
-      return b === "" || b === "." || s === b || s.startsWith(`${b}/`);
-    });
-  }
-
-  // TODO: clean-code - 0.6 - SRP (#54): this is manifest validation policy living in a
-  // DOM script — it decides what a valid manifest is, formats the message, and
-  // is reachable only by driving a browser. Both the SRP and DRY audits landed
-  // here independently. The rules belong in manifest-core.js beside the parser
-  // (where the unit layer can reach them) with this file rendering the result;
-  // the Rust parser in dcs-studio-project makes the same judgements a third time.
-  function issues(m) {
-    const out = [];
-    if (!m.project.name.trim()) out.push("Project name is required.");
-    const bundlePaths = m.bundle.map((b) => b.path);
-    m.bundle.forEach((r, i) => {
-      if (!r.path.trim()) out.push(`Bundle ${i + 1}: path is empty.`);
-    });
-    m.symlink.forEach((r, i) => {
-      if (!r.source.trim()) out.push(`Symlink ${i + 1}: source is empty.`);
-      else if (!coveredByBundle(r.source, bundlePaths))
-        out.push(`Symlink ${i + 1}: source is not inside any bundled path.`);
-      // An escaping dest is a hard authoring error, not a machine-local one: it
-      // would be refused at install time on every machine, so say that instead
-      // of the {GameInstall} note (which is about THIS machine's settings).
-      if (!destStaysUnder(r.dest))
-        out.push(`Symlink ${i + 1}: destination reaches outside the DCS folders.`);
-      else if (splitDest(r.dest).root === "{GameInstall}" && !roots.gameInstall)
-        out.push(
-          `Symlink ${i + 1}: {GameInstall} is not configured (set dcsStudio.gameInstallPath).`,
-        );
-    });
-    m.requires_module.forEach((r, i) => {
-      if (!r.id.trim()) out.push(`Required module ${i + 1}: id is empty.`);
-    });
-    const epIds = m.entrypoint.map((e) => e.id);
-    m.entrypoint.forEach((r, i) => {
-      if (!r.id.trim()) out.push(`Executable ${i + 1}: id is empty.`);
-      else if (epIds.indexOf(r.id) !== i) out.push(`Executable ${i + 1}: duplicate id "${r.id}".`);
-      if (!r.exe.trim()) out.push(`Executable ${i + 1}: exe is empty.`);
-      else if (!coveredByBundle(r.exe, bundlePaths))
-        out.push(`Executable ${i + 1}: exe is not inside any bundled path.`);
-    });
-    m.mission_script.forEach((r, i) => {
-      if (!r.name.trim()) out.push(`Mission script ${i + 1}: name is empty.`);
-      if (!r.path.trim()) out.push(`Mission script ${i + 1}: path is empty.`);
-      else if (!coveredByBundle(r.path, bundlePaths))
-        out.push(`Mission script ${i + 1}: path is not inside any bundled path.`);
-    });
-    return out;
   }
 
   // ── Icons ──
@@ -406,7 +355,7 @@
 
   function renderPreview() {
     document.getElementById("toml").textContent = emitToml(state.model);
-    const probs = issues(state.model);
+    const probs = issues(state.model, roots);
     const box = document.getElementById("issues");
     box.innerHTML = probs.length
       ? `<ul class="issues" data-testid="validation-issues">${probs.map((p) => `<li>${I.warn}${esc(p)}</li>`).join("")}</ul>`

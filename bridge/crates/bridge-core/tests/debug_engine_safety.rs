@@ -95,6 +95,12 @@ fn an_abandoned_pause_is_released_in_a_state_with_no_lua_clock() {
         assert(outcome.ran == true, "the run finished cleanly")
         assert(held, "the breakpoint really did hold a pause")
         assert(pumps > 0, "the pause pumped RPC while it held")
+        -- ... and it pumped on the run loop's 0.05s drain interval rather than
+        -- as fast as the CPU allows. A spinning hold pegs a core and takes the
+        -- bridge's process-wide queue/resume mutexes millions of times a
+        -- second, contending with the actix worker that has to enqueue the
+        -- debug_continue that would end the pause.
+        assert(pumps <= (elapsed / 0.05) + 5, "the held pause spun instead of draining: " .. pumps)
         assert(reached_the_end == true, "the chunk ran on past the released pause")
         assert(elapsed >= 0.1, "the countdown measured real elapsed time: " .. elapsed)
         assert(elapsed < 10, "and released as soon as it expired: " .. elapsed)
@@ -154,6 +160,64 @@ fn a_runaway_evaluation_is_cut_off_and_the_pause_survives_it() {
     )
     .exec()
     .expect("bounded evaluation suite");
+}
+
+/// A session that cannot start must still leave the engine able to start the
+/// next one. `D.running` is the flag every `debug_run` checks, and it is claimed
+/// before the run is set up — the setup reads a global out of a state shared
+/// with every other mod (and with the console this bridge serves) and calls into
+/// the DLL. A raise in there used to leave the flag true, and then every later
+/// `debug_run` answered "a debug session is already running" until DCS was
+/// restarted: the debugger was gone for the rest of the session.
+#[test]
+#[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+fn a_session_that_cannot_start_leaves_the_engine_ready_for_the_next_one() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let lua = engine_state(false);
+
+    lua.load(
+        r#"
+        local DBG = assert(__DCS_STUDIO_DBG, "the engine installed")
+        local real_print = _G.print
+        bridge.debug.clear_breakpoints()
+
+        -- The console runtime the engine borrows its print shim from is a
+        -- global: `__DCS_STUDIO_RT = nil` in the REPL this bridge serves is
+        -- enough to take it away.
+        local RT = __DCS_STUDIO_RT
+        __DCS_STUDIO_RT = nil
+        local refused = DBG.run("ran_without_rt = true\n", "=nort.lua", false)
+        __DCS_STUDIO_RT = RT
+        assert(refused.ran == false, "the run was refused")
+        assert(string.find(refused.error, "__DCS_STUDIO_RT", 1, true), refused.error)
+        assert(ran_without_rt == nil, "and the chunk never ran")
+
+        -- A raise from the DLL-side session setup lands in the same place.
+        local real_reset = bridge.debug.reset_session
+        bridge.debug.reset_session = function() error("reset exploded", 0) end
+        local failed = DBG.run("ran_after_reset = true\n", "=boom.lua", false)
+        bridge.debug.reset_session = real_reset
+        assert(failed.ran == false, "the run reported the failure")
+        assert(string.find(failed.error, "reset exploded", 1, true), failed.error)
+        assert(ran_after_reset == nil, "and the chunk never ran")
+
+        -- Nothing is left stuck: not the flag, not the scoped line hook (which
+        -- would otherwise keep firing over DCS's own code), not print.
+        assert(DBG.running == false, "the session flag was released")
+        assert(DBG.state().running == false, "and debug_state agrees")
+        assert(debug.gethook() == nil, "the scoped hook came off")
+        assert(_G.print == real_print, "print was restored")
+
+        -- Which is the whole point: the next session runs.
+        local outcome = DBG.run("recovered = true\n", "=after.lua", false)
+        assert(outcome.ran == true, "the engine still runs a session: " .. tostring(outcome.error))
+        assert(recovered == true, "the chunk ran")
+        "#,
+    )
+    .exec()
+    .expect("session-claim suite");
 }
 
 /// A breakpoint condition is evaluated in the line hook itself, before any

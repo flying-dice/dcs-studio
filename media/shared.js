@@ -42,6 +42,18 @@
     return `released ${new Date(then).toISOString().slice(0, 10)}`;
   }
 
+  // btoa() is a LATIN-1 encoder: it throws InvalidCharacterError on any code
+  // point above U+00FF. The strings that reach it are mod and author names
+  // straight from GitHub, so a CJK or Cyrillic name whose avatar 404s would
+  // break the very fallback meant to rescue it — from inside an <img> error
+  // listener, where the throw is an unhandled page error. Base64 the UTF-8
+  // BYTES rather than the code units.
+  function base64Utf8(s) {
+    let bin = "";
+    for (const byte of new TextEncoder().encode(s)) bin += String.fromCharCode(byte);
+    return btoa(bin);
+  }
+
   // A deterministic initials avatar (data: URI) for when a real avatar 404s.
   function initialsAvatar(name) {
     const initials = name
@@ -51,7 +63,7 @@
       .join("")
       .toUpperCase();
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="48" height="48" rx="8" fill="#3a3d41"/><text x="50%" y="54%" font-size="18" fill="#c8c8c8" font-family="sans-serif" text-anchor="middle" dominant-baseline="middle">${initials}</text></svg>`;
-    return `data:image/svg+xml;base64,${btoa(svg)}`;
+    return `data:image/svg+xml;base64,${base64Utf8(svg)}`;
   }
 
   // Tiny markdown → HTML renderer (headings, lists, code fences, inline code /

@@ -4,7 +4,12 @@
 // sweep planning/budget math, and the copy-as-JSON serializer. No DOM, no
 // vscode. UMD so the exact same code runs in the webview (as the global
 // `DcsExplorerCore`) and in a Node/vitest test (via require) — the
-// `manifest-core.js` precedent.
+// `manifest-core.js` precedent, including its proof: under Node `module` is
+// always defined, so the browser half of the preamble is unreachable from the
+// unit layer that owns this file's coverage. It is not untested —
+// explorerCore.test.ts evaluates this source in a module-less vm context and
+// asserts the API lands on the global, which is exactly what a webview
+// <script> tag does.
 //
 // Glob subset (deliberately small — no npm deps): `/`-segmented paths;
 // `*` and `?` within a segment; `**` spans zero or more whole segments.
@@ -236,5 +241,4 @@
     childrenToJson,
     signatureDisplay,
   };
-  /* v8 ignore next */
 });

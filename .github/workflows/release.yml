@@ -18,6 +18,74 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The bridge guard below diffs this tag against the previous one.
+          fetch-depth: 0
+
+      # Both guards run first, before npm ci, the compile, two coverage gates, a
+      # Rust release build and the payload staging. Everything they check is
+      # knowable from the checkout alone, so a mismatch costs seconds of Windows
+      # runner time here instead of ~15 minutes further down.
+      - name: Guard - tag matches package.json version
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $pkg = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          if ($pkg -ne $tag) { throw "package.json version ($pkg) != tag ($tag)" }
+
+      # package.json's version says nothing about the bridge: bridge/Cargo.toml
+      # carries its own [workspace.package] version, and that is what both DLLs
+      # and both openrpc.json goldens embed. The release step attaches the DLLs
+      # separately precisely so a bridge-only deploy can take them, so two
+      # releases handing out dcs_studio_gui.dll reporting the same bridge
+      # version with different JSON-RPC surfaces is a reachable outcome.
+      - name: Guard - bridge version bumped when bridge/crates changed
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          # git writes progress and "no names found" to stderr; under pwsh 7.3+
+          # a non-zero native exit would otherwise abort the step before the
+          # explicit $LASTEXITCODE checks below can decide what it means.
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          function Get-BridgeVersion([string]$Toml) {
+            # Only [workspace.package]'s version — every crate's [package] has a
+            # version key too, and they inherit rather than set it.
+            $section = [regex]::Match($Toml, '(?ms)^\[workspace\.package\][^\[]*')
+            if (-not $section.Success) { throw "bridge/Cargo.toml has no [workspace.package] section" }
+            $found = [regex]::Match($section.Value, '(?m)^\s*version\s*=\s*"([^"]+)"')
+            if (-not $found.Success) { throw "bridge/Cargo.toml [workspace.package] has no version" }
+            return $found.Groups[1].Value
+          }
+
+          $prev = git describe --tags --abbrev=0 HEAD^
+          if ($LASTEXITCODE -ne 0 -or -not $prev) {
+            Write-Host "No earlier tag to compare against - skipping."
+            exit 0
+          }
+
+          $changed = git diff --name-only $prev HEAD -- bridge/crates
+          if ($LASTEXITCODE -ne 0) { throw "could not diff bridge/crates against $prev" }
+          if (-not $changed) {
+            Write-Host "bridge/crates unchanged since $prev - bridge version may stay put."
+            exit 0
+          }
+
+          $priorToml = (git show "${prev}:bridge/Cargo.toml" | Out-String)
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "$prev predates bridge/Cargo.toml - nothing to compare."
+            exit 0
+          }
+
+          $was = Get-BridgeVersion $priorToml
+          $now = Get-BridgeVersion (Get-Content bridge/Cargo.toml -Raw)
+          if ($was -eq $now) {
+            throw "bridge/crates changed since $prev but bridge/Cargo.toml [workspace.package] version is still $now. The DLLs and both openrpc.json goldens embed it, and this release attaches the DLLs on their own - bump it."
+          }
+          Write-Host "bridge version $was -> $now"
+          exit 0
 
       - uses: actions/setup-node@v4
         with:
@@ -55,36 +123,13 @@ jobs:
           Copy-Item bridge/target/release/dcs_studio_mission.dll bridge/prebuilt/
           Copy-Item bridge/lua5.1/lua.lib bridge/prebuilt/
 
-      # TODO: clean-code - 0.52 - DRY (#60): this guards package.json's version, but
-      # the bridge workspace carries its own independent version (currently
-      # 0.3.0) and that is what the DLLs and both openrpc.json goldens embed.
-      # Nothing gates that it was bumped when bridge/crates/** changed, so two
-      # releases can hand out dcs_studio_gui.dll reporting the same bridge
-      # version with different JSON-RPC surfaces — and the step below attaches
-      # the DLLs separately precisely so a bridge-only deploy can take them.
-      - name: Guard - tag matches package.json version
-        if: github.ref_type == 'tag'
-        shell: pwsh
-        run: |
-          $pkg = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $tag = "${{ github.ref_name }}".TrimStart("v")
-          if ($pkg -ne $tag) { throw "package.json version ($pkg) != tag ($tag)" }
-
-      # TODO: clean-code - 0.6 - BOUNDARY (#59): @vscode/vsce is neither a
-      # devDependency nor pinned here, so the tool that builds the artefact a
-      # user installs is resolved from the registry at release time. A vsce
-      # major changes packaging defaults with no change on this side, and the
-      # failure surfaces to users as a broken .vsix.
-      #
-      # TODO: clean-code - 0.55 - BOUNDARY (#59): `vscode:prepublish` is just
-      # `npm run compile`. Nothing asserts bridge/prebuilt/ holds the two DLLs
-      # and lua.lib — that staging exists only in the steps above, and the
-      # directory is gitignored. `npx vsce package` run by hand therefore
-      # produces a .vsix that installs and activates cleanly and then fails at
-      # the point of use. A two-line existence check that exits non-zero makes
-      # a mis-staged package fail loudly instead of shipping.
+      # `npm run package` runs the vsce pinned in devDependencies and installed
+      # by `npm ci` above — not whatever the registry serves at release time.
+      # A vsce major changes packaging defaults with no change on this side, and
+      # the failure surfaces to users as a broken .vsix. `vscode:prepublish`
+      # fires here and asserts the payload staged above is actually present.
       - name: Package .vsix
-        run: npx @vscode/vsce package
+        run: npm run package
 
       - name: Create GitHub release with .vsix + bridge DLLs
         if: github.ref_type == 'tag'

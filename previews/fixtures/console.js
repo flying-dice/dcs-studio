@@ -8,14 +8,14 @@
 // inspect/expand/signature/export messages, which we answer over the fake tree
 // below. Refs are handed out per table/function (like the real RT) and re-minted
 // on every expand, so a collapse+reopen naturally gets fresh refs.
-(function () {
+(() => {
   // Declarative fake tree. `t` = Lua type; tables carry `children`; functions
   // carry `params` (+ optional `native`); scalars carry `v` (the preview text).
   // `many` is a wide table of table children, enough to blow the 200 sweep
   // budget so the cap notice can be asserted.
   const many = {};
   for (let i = 0; i < 220; i++) {
-    const id = "c" + String(i).padStart(3, "0");
+    const id = `c${String(i).padStart(3, "0")}`;
     many[id] = { t: "table", children: { leaf: { t: "number", v: "0" } } };
   }
 
@@ -36,7 +36,11 @@
         },
       },
       net: { t: "table", children: { host: { t: "string", v: '"local"' } } },
-      outText: { t: "function", arity: "function (3 args)", params: "text, displayTime, clearView" },
+      outText: {
+        t: "function",
+        arity: "function (3 args)",
+        params: "text, displayTime, clearView",
+      },
       now: { t: "function", native: true },
       count: { t: "number", v: "42" },
       title: { t: "string", v: '"mission"' },
@@ -64,8 +68,9 @@
   const refMap = {}; // ref -> node descriptor
 
   function value(desc) {
-    if (desc.t === "table") return "table (" + Object.keys(desc.children || {}).length + ")";
-    if (desc.t === "function") return desc.arity || (desc.native ? "function (native)" : "function");
+    if (desc.t === "table") return `table (${Object.keys(desc.children || {}).length})`;
+    if (desc.t === "function")
+      return desc.arity || (desc.native ? "function (native)" : "function");
     return desc.v;
   }
 
@@ -79,35 +84,32 @@
     return { name: name, type: desc.t, value: value(desc), ref: ref };
   }
 
-  // Reply on a fresh tick — like the real host's async round trips, and it
-  // keeps the sweep drain (concurrency 1, up to 200 fetches) off one deep
-  // synchronous call stack.
-  function reply(msg) {
-    setTimeout(() => window.__host.receive(msg), 0);
-  }
-
   window.__host.onPost((m) => {
     if (!m) return;
     switch (m.type) {
       case "ready":
-        reply({
+        window.__host.receive({
           type: "status",
-          status: { gui: { connected: true, dcsTime: 0 }, mission: { connected: false, dcsTime: null } },
+          status: {
+            gui: { connected: true, dcsTime: 0 },
+            mission: { connected: false, dcsTime: null },
+          },
         });
-        reply({ type: "explorerConfig", wildcardDepth: 1 });
+        window.__host.receive({ type: "explorerConfig", wildcardDepth: 1 });
         return;
       case "eval":
         // A scripted REPL so the Console tab is drivable in the dev preview
         // too. The code decides the reply shape: anything mentioning "error"
         // fails, "print" streams sim output, everything else returns a value.
-        if (/error/.test(m.code)) reply({ type: "error", message: "[string \"chunk\"]: " + m.code });
+        if (/error/.test(m.code))
+          window.__host.receive({ type: "error", message: `[string "chunk"]: ${m.code}` });
         else if (/print/.test(m.code))
-          reply({ type: "print", lines: [{ text: "printed: " + m.code }] });
-        else reply({ type: "result", value: { echo: m.code, env: m.env } });
+          window.__host.receive({ type: "print", lines: [{ text: `printed: ${m.code}` }] });
+        else window.__host.receive({ type: "result", value: { echo: m.code, env: m.env } });
         return;
       case "inspect": {
         if (scenario === "inspect-fail") {
-          reply({
+          window.__host.receive({
             type: "inspectResult",
             id: m.id,
             env: m.env,
@@ -120,7 +122,7 @@
         // The `_G` root itself gets a ref.
         const ref = nextRef++;
         refMap[ref] = ROOT;
-        reply({
+        window.__host.receive({
           type: "inspectResult",
           id: m.id,
           env: m.env,
@@ -134,28 +136,50 @@
       }
       case "expand": {
         const desc = refMap[m.ref];
-        if (desc && desc.failExpand) {
-          reply({ type: "expandResult", nodeId: m.nodeId, ok: false, err: "ref no longer valid" });
+        if (desc?.failExpand) {
+          window.__host.receive({
+            type: "expandResult",
+            nodeId: m.nodeId,
+            ok: false,
+            err: "ref no longer valid",
+          });
           return;
         }
         const variables = [];
         if (desc && desc.t === "table") {
-          for (const name of Object.keys(desc.children || {})) variables.push(toVar(name, desc.children[name]));
+          for (const name of Object.keys(desc.children || {}))
+            variables.push(toVar(name, desc.children[name]));
         }
-        reply({ type: "expandResult", nodeId: m.nodeId, ok: true, variables: variables });
+        window.__host.receive({
+          type: "expandResult",
+          nodeId: m.nodeId,
+          ok: true,
+          variables: variables,
+        });
         return;
       }
       case "signature": {
         const desc = refMap[m.ref];
         if (desc && desc.t === "function" && !desc.failSignature) {
-          reply({ type: "signatureResult", reqId: m.reqId, ok: true, params: desc.params || "", native: !!desc.native });
+          window.__host.receive({
+            type: "signatureResult",
+            reqId: m.reqId,
+            ok: true,
+            params: desc.params || "",
+            native: !!desc.native,
+          });
         } else {
-          reply({ type: "signatureResult", reqId: m.reqId, ok: false, err: "stale ref" });
+          window.__host.receive({
+            type: "signatureResult",
+            reqId: m.reqId,
+            ok: false,
+            err: "stale ref",
+          });
         }
         return;
       }
       case "export":
-        reply(
+        window.__host.receive(
           /noexport/.test(m.label)
             ? { type: "exportDone", reqId: m.reqId, error: "EACCES: permission denied" }
             : { type: "exportDone", reqId: m.reqId, saved: true },

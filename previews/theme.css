@@ -5,19 +5,13 @@
    file only supplies the CSS custom properties those stylesheets read, plus
    the toast chrome shared by every fixture's human dev-loop log.
 
-   TODO: clean-code - 0.5 - DEAD (#55): nothing in this repo ever sets data-theme, so
-   both [data-theme] selector sets are dead — and the dark token block is written
-   out twice (once under the media query, once under [data-theme="dark"]), which
-   is a drift trap no test can catch. Keep :root + the media query, drop the
-   forced-theme selectors, and name page.emulateMedia as the one mechanism.
-
-   Three ways a preview can be themed, all supported:
-   - default (no override): follows the OS via prefers-color-scheme
-   - :root[data-theme="light"|"dark"]: forced, for screenshot/test control
-     (Playwright: page.emulateMedia({ colorScheme }) also works via the
-     prefers-color-scheme block below). */
-:root,
-:root[data-theme="light"] {
+   Light is the :root default and dark comes from prefers-color-scheme, so
+   there is exactly ONE way to theme a preview: the browser's colour scheme.
+   Playwright drives it with page.emulateMedia({ colorScheme }); a human just
+   flips their OS. There is deliberately no forced-theme selector — the dark
+   set written out a second time under one was pure drift risk that no test
+   could catch. */
+:root {
   --vscode-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Variable", system-ui, sans-serif;
   --vscode-editor-font-family: "Cascadia Code", Consolas, "Courier New", monospace;
   --vscode-editor-background: #ffffff;
@@ -46,6 +40,7 @@
   --vscode-progressBar-background: #005fb8;
   --vscode-textCodeBlock-background: rgba(0, 0, 0, 0.05);
   --vscode-inputValidation-errorBackground: rgba(190, 70, 70, 0.12);
+  --vscode-inputValidation-warningBackground: rgba(255, 204, 0, 0.12);
   --vscode-charts-yellow: #bf8803;
   --vscode-charts-blue: #005fb8;
   --vscode-charts-green: #388a34;
@@ -89,6 +84,7 @@
     --vscode-progressBar-background: #0078d4;
     --vscode-textCodeBlock-background: rgba(255, 255, 255, 0.06);
     --vscode-inputValidation-errorBackground: rgba(190, 70, 70, 0.2);
+    --vscode-inputValidation-warningBackground: rgba(255, 204, 0, 0.2);
     --vscode-charts-yellow: #cca700;
     --vscode-charts-blue: #4daafc;
     --vscode-charts-green: #89d185;
@@ -105,49 +101,6 @@
     --vscode-symbolIcon-variableForeground: #75beff;
   }
 }
-:root[data-theme="dark"] {
-  --vscode-editor-background: #1f1f1f;
-  --vscode-foreground: #cccccc;
-  --vscode-editorWidget-background: #252526;
-  --vscode-panel-border: #2b2b2b;
-  --vscode-descriptionForeground: #9d9d9d;
-  --vscode-textLink-foreground: #4daafc;
-  --vscode-toolbar-hoverBackground: rgba(90, 93, 94, 0.31);
-  --vscode-input-background: #313131;
-  --vscode-input-foreground: #cccccc;
-  --vscode-input-border: #3c3c3c;
-  --vscode-focusBorder: #0078d4;
-  --vscode-button-background: #0078d4;
-  --vscode-button-foreground: #ffffff;
-  --vscode-button-hoverBackground: #026ec1;
-  --vscode-button-secondaryBackground: #313131;
-  --vscode-button-secondaryForeground: #cccccc;
-  --vscode-button-secondaryHoverBackground: #3c3c3c;
-  --vscode-badge-background: #616161;
-  --vscode-badge-foreground: #f8f8f8;
-  --vscode-editor-inactiveSelectionBackground: #3a3d41;
-  --vscode-editorWarning-foreground: #cca700;
-  --vscode-errorForeground: #f48771;
-  --vscode-testing-iconPassed: #73c991;
-  --vscode-progressBar-background: #0078d4;
-  --vscode-textCodeBlock-background: rgba(255, 255, 255, 0.06);
-  --vscode-inputValidation-errorBackground: rgba(190, 70, 70, 0.2);
-  --vscode-charts-yellow: #cca700;
-  --vscode-charts-blue: #4daafc;
-  --vscode-charts-green: #89d185;
-  --vscode-charts-orange: #d18616;
-  --vscode-list-hoverBackground: rgba(90, 93, 94, 0.31);
-  --vscode-list-activeSelectionBackground: #04395e;
-  --vscode-list-activeSelectionForeground: #ffffff;
-  --vscode-activityBarBadge-background: #0078d4;
-  --vscode-activityBarBadge-foreground: #ffffff;
-  --vscode-sideBar-background: #252526;
-  --vscode-dropdown-background: #313131;
-  --vscode-dropdown-border: #3c3c3c;
-  --vscode-dropdown-foreground: #cccccc;
-  --vscode-symbolIcon-variableForeground: #75beff;
-}
-
 html,
 body {
   height: 100%;

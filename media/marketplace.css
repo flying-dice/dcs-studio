@@ -1,9 +1,5 @@
 /* Base tokens, reset, .mono, the .btn family and .spin live in media/base.css
    (linked first). Only the marketplace's extra tokens + components are here. */
-:root {
-  --brand: color-mix(in srgb, var(--vscode-textLink-foreground) 90%, transparent);
-  --radius: 10px;
-}
 
 button {
   font-family: inherit;
@@ -267,8 +263,8 @@ select {
   gap: 6px;
   padding: 8px 16px;
   font-size: 12px;
-  color: var(--vscode-editorWarning-foreground, #cca700);
-  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 10%, transparent);
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
   border-bottom: 1px solid var(--border);
 }
 
@@ -385,7 +381,7 @@ select {
   margin-top: 6px;
 }
 .note.warn {
-  color: var(--vscode-editorWarning-foreground, #cca700);
+  color: var(--warn);
 }
 .note.ok {
   color: var(--vscode-testing-iconPassed, #3fb950);
@@ -413,7 +409,7 @@ select {
 
 /* A plan row whose declared path reaches outside its root. */
 .plan-item[data-escapes="true"] {
-  color: var(--vscode-editorError-foreground, #f14c4c);
+  color: var(--err);
 }
 
 .plan-item {
@@ -554,8 +550,8 @@ select {
   letter-spacing: 0.06em;
 }
 .risk-badge.warn {
-  color: var(--vscode-editorWarning-foreground, #cca700);
-  border-color: var(--vscode-editorWarning-foreground, #cca700);
+  color: var(--warn);
+  border-color: var(--warn);
 }
 .risk-badge .codicon-inline {
   width: 12px;
@@ -569,16 +565,16 @@ select {
   margin-bottom: 6px;
 }
 .manifest-section.warn-section {
-  border: 1px solid var(--vscode-editorWarning-foreground, #cca700);
+  border: 1px solid var(--warn);
   border-radius: var(--radius);
   padding: 4px 12px 10px;
-  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 7%, transparent);
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
 }
 .section-label.warn {
-  color: var(--vscode-editorWarning-foreground, #cca700);
+  color: var(--warn);
 }
 .plan-item.warn-item strong {
-  color: var(--vscode-editorWarning-foreground, #cca700);
+  color: var(--warn);
 }
 
 .count-badge {
@@ -590,13 +586,16 @@ select {
   font-weight: 600;
   letter-spacing: 0;
 }
+/* Text ON the warning colour — see mymods.css: the editor background is the
+   theme's own counterpart to it, so it stays legible on a high-contrast theme
+   whose warning yellow is dark. */
 .count-badge.warn {
-  background: var(--vscode-editorWarning-foreground, #cca700);
-  color: #1b1b00;
+  background: var(--warn);
+  color: var(--vscode-editor-background);
 }
 .badge.warn {
-  background: var(--vscode-editorWarning-foreground, #cca700);
-  color: #1b1b00;
+  background: var(--warn);
+  color: var(--vscode-editor-background);
 }
 
 .alert {
@@ -608,15 +607,15 @@ select {
   line-height: 1.5;
 }
 .alert.warn {
-  border-color: var(--vscode-editorWarning-foreground, #cca700);
-  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 9%, transparent);
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
 }
 .alert-head {
   display: flex;
   align-items: center;
   gap: 6px;
   font-weight: 600;
-  color: var(--vscode-editorWarning-foreground, #cca700);
+  color: var(--warn);
   margin-bottom: 4px;
 }
 .alert p {

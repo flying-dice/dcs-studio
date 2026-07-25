@@ -55,7 +55,7 @@ mod tests {
     /// PUC liblua5.1 so Linux CI runs these as ordinary tests (issue #28).
     fn state() -> Lua {
         let lua = Lua::new();
-        let toml = sub_table(&lua, "toml", super::register).expect("toml sub");
+        let toml = sub_table(&lua, "toml", super::register);
         lua.globals().set("toml", toml).expect("set toml");
         lua
     }

@@ -379,18 +379,32 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
   end
 
   -- Resolve a function's real parameter names WITHOUT running its body — the
-  -- fiddle "GET_ARGS" trick, hardened. Install a call hook, then pcall the
-  -- function: the hook fires the instant the body is entered (arguments already
-  -- bound as the first locals), reads their names via debug.getlocal, and
-  -- error()s out so the body never executes. { ok, params } | { ok, native } |
-  -- { ok = false, err }.
+  -- fiddle "GET_ARGS" trick, hardened. The probe runs on a FRESH COROUTINE
+  -- carrying a call hook: the hook fires the instant the body is entered
+  -- (arguments already bound as the first locals), reads their names via
+  -- debug.getlocal, and error()s out so the body never executes. { ok, params }
+  -- | { ok, native } | { ok = false, err }.
+  --
+  -- The coroutine is the safety property, not a nicety — the same Lua 5.1 rule
+  -- debug_engine.lua's call_bounded is built on: a hook never fires from inside
+  -- a running hook. Probing on the CURRENT thread while the debug engine holds
+  -- it (a pause pumps RPC from its line hook, and so does the run-loop drain)
+  -- would skip the hook entirely and RUN the target function with no arguments
+  -- — arbitrary DCS/mission side effects on the sim thread, reported back as
+  -- "takes no parameters". A fresh coroutine has its own hook slot and starts
+  -- with hooks enabled, so the probe is safe whoever is asking.
   function RT.signature_json(ref)
     local fn = RT.refs[ref or 0]
     if type(fn) ~= "function" then
       return RT.encode({ ok = false, err = "stale ref (state was reset?) - inspect again and retry" })
     end
-    if not dbg or type(dbg.getinfo) ~= "function" or type(dbg.sethook) ~= "function" or type(dbg.getlocal) ~= "function" then
+    if not dbg or type(dbg.getinfo) ~= "function" or type(dbg.sethook) ~= "function"
+      or type(dbg.gethook) ~= "function" or type(dbg.getlocal) ~= "function" then
       return RT.encode({ ok = false, err = "signature unavailable - debug library not present" })
+    end
+    if type(coroutine) ~= "table" or type(coroutine.create) ~= "function"
+      or type(coroutine.resume) ~= "function" then
+      return RT.encode({ ok = false, err = "signature unavailable - coroutine library not present" })
     end
     -- C functions FIRST: debug.getlocal on a C frame never terminates the
     -- capture loop, so bail before hooking anything.
@@ -399,20 +413,10 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
       return RT.encode({ ok = true, params = "", native = true })
     end
     local names = {}
-    -- Capture and restore whatever hook was installed (the debugger's, say) on
-    -- every exit path.
-    local prev_hook, prev_mask, prev_count = dbg.gethook()
-    local function restore()
-      if prev_hook then
-        dbg.sethook(prev_hook, prev_mask or "", prev_count or 0)
-      else
-        dbg.sethook()
-      end
-    end
-    local hook = function()
+    local co = coroutine.create(fn)
+    dbg.sethook(co, function()
       -- Frame 1 is this hook; frame 2 is the just-entered callee. Ignore any
-      -- frame that is not our target (e.g. pcall itself), so getlocal never
-      -- runs against a C frame.
+      -- frame that is not our target, so getlocal never runs against a C frame.
       local fi = dbg.getinfo(2, "f")
       if not fi or fi.func ~= fn then
         return
@@ -427,17 +431,18 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
         i = i + 1
       end
       error("") -- abort before the body runs
+    end, "c") -- call events only
+    -- Confirm the hook really landed on the probe thread before resuming it: a
+    -- debug library that ignored the thread argument would leave the coroutine
+    -- unhooked, and the resume below would then run the body for real — the
+    -- exact side effect this whole shape exists to prevent.
+    if dbg.gethook(co) == nil then
+      return RT.encode({ ok = false, err = "signature unavailable - the probe hook could not be installed" })
     end
-    -- TODO: clean-code - 0.85 - PANIC (#33): Lua 5.1 will not fire a hook from inside
-    -- a hook, so whenever this is served while the debug engine holds the sim
-    -- thread (hold_pause -> D.pump, or the throttled run-loop drain) the hook
-    -- never fires and `pcall(fn)` RUNS THE TARGET FUNCTION with no arguments —
-    -- arbitrary DCS/mission side effects, error swallowed, and the caller is
-    -- told the function takes no parameters. Refuse when dbg.gethook() is
-    -- already set, or probe on a fresh coroutine the way call_bounded does.
-    dbg.sethook(hook, "c") -- call events only
-    pcall(fn)
-    restore()
+    coroutine.resume(co)
+    -- Lua 5.1 keeps per-thread hooks in a registry keyed by the thread, and a
+    -- dead coroutine's entry is not collected with it; clearing drops it.
+    dbg.sethook(co)
     return RT.encode({ ok = true, params = table.concat(names, ", ") })
   end
 

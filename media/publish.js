@@ -136,11 +136,18 @@
   }
 
   const logEl = () => document.getElementById("log");
+  // showLog() needs no guard: it only ever runs from a click on a control that
+  // exists in the same render as the log pane.
   function showLog() {
     logEl().classList.add("show");
   }
+  // appendLog does, though — it is reachable from host pushes, and "nofolder"
+  // replaces the whole panel with a note that has no log pane. The same is true
+  // of the shareResult/releaseResult lookups below; the "busy" case already
+  // guards its button for exactly this reason.
   function appendLog(line) {
     const el = logEl();
+    if (!el) return;
     el.textContent += (el.textContent ? "\n" : "") + line;
     el.scrollTop = el.scrollHeight;
   }
@@ -177,6 +184,7 @@
       }
       case "shareDone": {
         const r = document.getElementById("shareResult");
+        if (!r) break;
         r.style.display = "block";
         r.innerHTML = `Shared → <button class="btn link" data-testid="share-repo-link" data-open="${esc(m.result.owner)}/${esc(m.result.name)}">${esc(m.result.owner)}/${esc(m.result.name)}</button>. Create a release below.`;
         r.querySelector("[data-open]").addEventListener("click", (ev) =>
@@ -192,6 +200,7 @@
       }
       case "releaseDone": {
         const r = document.getElementById("releaseResult");
+        if (!r) break;
         r.style.display = "block";
         r.innerHTML = `Published release <span class="mono" data-testid="release-tag">${esc(m.result.url.split("/").pop())}</span> · <button class="btn link" data-testid="release-link" data-url="${esc(m.result.url)}">view on GitHub</button><div class="assets" data-testid="release-assets">${m.result.assets.map(esc).join("<br>")}</div>`;
         r.querySelector("[data-url]").addEventListener("click", (ev) =>

@@ -458,14 +458,18 @@ async fn get_health(data: Data<Mutex<AppData>>) -> Json<Health> {
 fn respond(lua: &Lua, router: &JsonRpcRouter, app_request: AppRequest, service: &ServiceInfo) {
     match process_request(lua, router, app_request.request, service) {
         Ok(Some(response)) => {
-            info!("Sending response: {response:?}");
+            // At `debug`, not `info`: this is the whole response BODY, written
+            // on the sim thread into a file that never rolls. A paused debug
+            // session polls `debug_state` four times a second and every answer
+            // carries the entire pause snapshot.
+            debug!("Sending response: {response:?}");
             match app_request.response_sender {
                 Some(sender) => {
                     if sender.send(response).is_err() {
                         error!("Failed to send response");
                     }
                 }
-                None => info!("Processed notification: {response:?}"),
+                None => debug!("Processed notification: {response:?}"),
             }
         }
         // A notification and a request that could not be processed at all are
@@ -485,15 +489,12 @@ fn success_response(id: String, result: serde_json::Value) -> JsonRpcResponse {
     }
 }
 
-/// Build the success envelope for a handler's `result`. A result the serializer
-/// can't represent — a cyclic table past the depth cap, a function, … — becomes
-/// a JSON-RPC error carrying the real cause, not a resultless response the
-/// editor can't interpret, and never a panic that would take the sim down.
-// TODO: clean-code - 0.55 - NAMING (#47): named for the happy path but returns an
-// error envelope on the serialize failure, which is the branch the doc comment
-// above spends most of its words on. `response_for` or `encode_result` says what
-// it does; `ok_response` invites a reader to assume the error case is elsewhere.
-fn ok_response(id: String, result: &LuaValue) -> JsonRpcResponse {
+/// Build the response envelope for a handler's `result`. A result the
+/// serializer can't represent — a cyclic table past the depth cap, a function,
+/// … — becomes a JSON-RPC error carrying the real cause, not a resultless
+/// response the editor can't interpret, and never a panic that would take the
+/// sim down.
+fn response_for(id: String, result: &LuaValue) -> JsonRpcResponse {
     match serialize_lua_to_json(result) {
         Ok(value) => success_response(id, value),
         Err(cause) => JsonRpcResponse {
@@ -590,7 +591,7 @@ fn process_request(
     };
 
     match outcome {
-        Ok(result) => Ok(Some(ok_response(id, &result))),
+        Ok(result) => Ok(Some(response_for(id, &result))),
         Err(e) => {
             // Strip the Lua stack traceback: the editor only needs the message.
             let msg = e.to_string();
@@ -674,9 +675,9 @@ fn get_timeout_duration_from_config(config: &ServerConfig) -> Duration {
 mod tests {
     use super::{
         drain_queue, enqueue_text_frame, error_response, get_timeout_duration_from_config,
-        lock_app_data, ok_response, process_global_queue, process_request, push_rpc_request,
-        respond, AppData, AppRequest, JsonRpcServer, ServerConfig, ServiceInfo, DEFAULT_TIMEOUT,
-        JSON_RPC_INTERNAL_ERROR, JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_VERSION,
+        lock_app_data, process_global_queue, process_request, push_rpc_request, respond,
+        response_for, AppData, AppRequest, JsonRpcServer, ServerConfig, ServiceInfo,
+        DEFAULT_TIMEOUT, JSON_RPC_INTERNAL_ERROR, JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_VERSION,
     };
     use crate::jsonrpc::router::{JsonRpcRouter, MethodMeta};
     use crate::jsonrpc::{JsonRpcRequest, JsonRpcResponse};
@@ -749,6 +750,46 @@ mod tests {
             Duration::from_secs(u64::MAX),
             "0 is the documented infinite timeout"
         );
+    }
+
+    /// The server config is a table the hook and the mission init write by
+    /// hand, so it is the one place a typo reaches Rust. A value with no
+    /// serializable form at all (a function — `timeout = os.clock` instead of
+    /// `os.clock()` is the easy slip) and a well-formed table of the wrong
+    /// types must both come back as Lua errors the startup pcall can report,
+    /// never a panic and never a server quietly bound with defaults.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_config_that_is_not_plain_data_is_refused_with_the_cause() {
+        use mlua::FromLua;
+
+        let lua = Lua::new();
+        let with_function: mlua::Value = lua
+            .load(r#"return { host = "127.0.0.1", port = 25570, timeout = print }"#)
+            .eval()
+            .expect("eval config");
+        let err = ServerConfig::from_lua(with_function, &lua)
+            .expect_err("a function is not configuration");
+        assert!(
+            err.to_string().contains("function"),
+            "the cause names what could not be read: {err}"
+        );
+
+        let wrong_types: mlua::Value = lua
+            .load(r#"return { host = "127.0.0.1", port = "25570" }"#)
+            .eval()
+            .expect("eval config");
+        let err = ServerConfig::from_lua(wrong_types, &lua).expect_err("a port is a number");
+        assert!(err.to_string().contains("port"), "{err}");
+
+        // The shape the hook actually writes still reads.
+        let good: mlua::Value = lua
+            .load(r#"return { host = "127.0.0.1", port = 25569, timeout = 30, env = "gui" }"#)
+            .eval()
+            .expect("eval config");
+        let config = ServerConfig::from_lua(good, &lua).expect("the hook's own config");
+        assert_eq!(config.port, 25569);
+        assert_eq!(config.env.as_deref(), Some("gui"));
     }
 
     /// `/health` and `rpc.discover` are how an agent probing 25569/25570 tells
@@ -908,7 +949,7 @@ mod tests {
             .eval()
             .expect("cycle");
 
-        let response = ok_response("c".to_string(), &cyclic);
+        let response = response_for("c".to_string(), &cyclic);
         assert_eq!(response.id, "c");
         assert!(response.result.is_none(), "no half-built result");
         let error = response.error.expect("error");

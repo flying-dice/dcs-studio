@@ -237,6 +237,18 @@ mod tests {
         let err = serialize_lua_to_json(&eval(&lua, "return print")).expect_err("no JSON form");
         assert!(err.contains("not JSON-serializable"), "{err}");
         assert!(err.contains("function"), "{err}");
+
+        // Buried in a container it is the same answer, from either shape: the
+        // element/field is what has no JSON form, and the walk reports that
+        // instead of silently dropping it or encoding a placeholder. A DCS
+        // table full of API functions reaches this on both paths — `db.Weapons`
+        // (keyed) and a pylon's `Launchers` (an array).
+        let in_array = serialize_lua_to_json(&eval(&lua, "return { 1, 2, print }"))
+            .expect_err("an array element with no JSON form");
+        assert!(in_array.contains("function"), "{in_array}");
+        let in_object = serialize_lua_to_json(&eval(&lua, "return { fn = print }"))
+            .expect_err("a field with no JSON form");
+        assert!(in_object.contains("function"), "{in_object}");
     }
 
     /// A self-referential table would recurse until the stack overflows, and a

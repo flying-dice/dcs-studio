@@ -12,7 +12,7 @@
 //             content the renderer must survive rather than throw on
 // `?page=<id>` sets __INITIAL_PAGE__ the way the host does when a command deep
 // links into a specific doc page.
-(function () {
+(() => {
   const params = new URLSearchParams(location.search);
   window.__INITIAL_PAGE__ = params.get("page") || "";
 

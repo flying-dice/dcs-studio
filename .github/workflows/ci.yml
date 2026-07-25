@@ -12,6 +12,14 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
+# A push to an open PR supersedes the commit before it, but without this every
+# one of those pushes runs the full six-job matrix — a Windows runner and two
+# Rust builds included — against a commit nobody will merge. Tag and branch
+# pushes are never cancelled: those are the ones that gate a release.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # One job per layer of the testing pyramid, so a failure names the layer that
 # broke rather than "tests failed", and so the layers run concurrently instead
 # of serially behind one another. Each vitest layer gates its own coverage at
@@ -34,14 +42,13 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      # TODO: clean-code - 0.58 - BOUNDARY (#58): `tsc -p ./` typechecks src/ only —
-      # tsconfig.json's `include` is ["src"], and it is the repo's only
-      # compilation unit. All of test/, tests/, the shared vscode double and the
-      # config files are transpiled by esbuild without ever being typechecked,
-      # so the double and the ports it stands in for can drift apart silently
-      # while this step reads as a repo-wide gate. Add a tsconfig.test.json
-      # (extends the base, noEmit, includes test/ tests/ *.config.ts) and run it
-      # here too.
+      # TODO: clean-code - 0.58 - BOUNDARY (#58): tsconfig.test.json now covers
+      # test/, tests/ and the config files, but its first run surfaced 23 type
+      # errors across 10 test files (and both vitest configs pass a `coverage.all`
+      # option the installed vitest no longer has). Add
+      #   - name: Typecheck tests + configs
+      #     run: npm run typecheck:tests
+      # here once those are fixed — until then it would fail every build.
       - name: TypeScript compile
         run: npm run compile
       - name: Biome lint + format check (JS/TS)
@@ -102,6 +109,17 @@ jobs:
         with:
           name: coverage-e2e
           path: coverage/e2e
+      # `trace: "on-first-retry"` with retries: 2 means a CI-only failure is the
+      # one case that produces a trace — and it is written to test-results/,
+      # which nothing above collects. Without this the only artefact of a flake
+      # that does not reproduce locally is a one-line "list" reporter summary.
+      - name: Upload Playwright traces
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: test-results/
+          if-no-files-found: ignore
 
   rust:
     name: Rust bridge tests (100% gate)

@@ -10,7 +10,7 @@
 //
 // Browse and Save are answered the way the host answers them: `browse`
 // resolves to a scripted pick, `save` acknowledges with {type:"saved"}.
-(function () {
+(() => {
   const scenario = new URLSearchParams(location.search).get("scenario") || "";
 
   // Deliberately mixed validity: a green candidate and a red one, so the pill

@@ -8,7 +8,7 @@
 // (which sets that flag) never races it.
 window.__LOGO__ = "../media/icon.png";
 
-(function () {
+(() => {
   window.__host.onPost((m) => {
     if (m && m.type === "run") window.__toast(`&rarr; runs command <b>${m.command}</b>`);
   });

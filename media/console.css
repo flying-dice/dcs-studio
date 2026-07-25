@@ -1,7 +1,14 @@
 /* Base tokens, reset, .btn / .card / header primitives live in media/base.css
    (linked first). Only the console-specific overrides and components are here. */
-html, body { height: 100%; }
-#app { display: flex; flex-direction: column; height: 100vh; }
+html,
+body {
+  height: 100%;
+}
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
 
 /* Status bar */
 .status {
@@ -12,12 +19,30 @@ html, body { height: 100%; }
   border-bottom: 1px solid var(--border);
   font-size: 12px;
 }
-.dot { width: 9px; height: 9px; border-radius: 999px; background: var(--muted); flex-shrink: 0; }
-.dot.off { background: var(--vscode-descriptionForeground); }
-.dot.menu { background: var(--vscode-charts-yellow, #cca700); }
-.dot.mission { background: var(--vscode-testing-iconPassed, #3fb950); }
-.status .label { font-weight: 600; }
-.status .warn { color: var(--vscode-charts-yellow, #cca700); font-size: 11px; margin-left: auto; }
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+.dot.off {
+  background: var(--vscode-descriptionForeground);
+}
+.dot.menu {
+  background: var(--vscode-charts-yellow, #cca700);
+}
+.dot.mission {
+  background: var(--vscode-testing-iconPassed, #3fb950);
+}
+.status .label {
+  font-weight: 600;
+}
+.status .warn {
+  color: var(--vscode-charts-yellow, #cca700);
+  font-size: 11px;
+  margin-left: auto;
+}
 .status select {
   border: 1px solid var(--vscode-dropdown-border, var(--border));
   border-radius: 4px;
@@ -27,8 +52,15 @@ html, body { height: 100%; }
   padding: 2px 6px;
   outline: none;
 }
-.status .time { font-family: var(--mono); color: var(--muted); font-size: 11px; }
-.status .btn.launch { padding: 3px 10px; font-size: 11px; }
+.status .time {
+  font-family: var(--mono);
+  color: var(--muted);
+  font-size: 11px;
+}
+.status .btn.launch {
+  padding: 3px 10px;
+  font-size: 11px;
+}
 
 /* Tabs */
 .tabs {
@@ -46,15 +78,24 @@ html, body { height: 100%; }
   cursor: pointer;
   border-bottom: 2px solid transparent;
 }
-.tab:hover { color: var(--vscode-foreground); }
+.tab:hover {
+  color: var(--vscode-foreground);
+}
 .tab.active {
   color: var(--vscode-foreground);
   border-bottom-color: var(--vscode-focusBorder, #007fd4);
 }
 
 /* Tab views */
-.view { display: none; flex: 1; min-height: 0; flex-direction: column; }
-.view.active { display: flex; }
+.view {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+.view.active {
+  display: flex;
+}
 
 /* Output log */
 .log {
@@ -65,15 +106,38 @@ html, body { height: 100%; }
   font-size: 12.5px;
   line-height: 1.5;
 }
-.entry { padding: 3px 0; white-space: pre-wrap; word-break: break-word; }
-.entry.input { color: var(--vscode-foreground); }
-.entry.input::before { content: "› "; color: var(--vscode-textLink-foreground); }
-.entry.result { color: var(--vscode-charts-blue, #4daafc); }
-.entry.result::before { content: "= "; color: var(--muted); }
-.entry.print { color: var(--muted); }
-.entry.error { color: var(--vscode-errorForeground, #f14c4c); }
-.entry.error::before { content: "✖ "; }
-.hint { color: var(--muted); font-style: italic; }
+.entry {
+  padding: 3px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.entry.input {
+  color: var(--vscode-foreground);
+}
+.entry.input::before {
+  content: "› ";
+  color: var(--vscode-textLink-foreground);
+}
+.entry.result {
+  color: var(--vscode-charts-blue, #4daafc);
+}
+.entry.result::before {
+  content: "= ";
+  color: var(--muted);
+}
+.entry.print {
+  color: var(--muted);
+}
+.entry.error {
+  color: var(--err);
+}
+.entry.error::before {
+  content: "✖ ";
+}
+.hint {
+  color: var(--muted);
+  font-style: italic;
+}
 
 /* Input */
 .input-row {
@@ -83,8 +147,13 @@ html, body { height: 100%; }
   border-top: 1px solid var(--border);
   align-items: flex-end;
 }
-.input-row.top { border-top: none; border-bottom: 1px solid var(--border); align-items: center; }
-textarea, input#expr {
+.input-row.top {
+  border-top: none;
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+textarea,
+input#expr {
   flex: 1;
   resize: none;
   min-height: 34px;
@@ -98,7 +167,10 @@ textarea, input#expr {
   font-size: 13px;
   outline: none;
 }
-textarea:focus, input#expr:focus { border-color: var(--vscode-focusBorder); }
+textarea:focus,
+input#expr:focus {
+  border-color: var(--vscode-focusBorder);
+}
 .btn {
   display: inline-flex;
   align-items: center;
@@ -111,14 +183,25 @@ textarea:focus, input#expr:focus { border-color: var(--vscode-focusBorder); }
   color: var(--vscode-button-foreground);
   cursor: pointer;
 }
-.btn:hover { background: var(--vscode-button-hoverBackground); }
-.btn:disabled { opacity: 0.5; cursor: default; }
+.btn:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .btn.secondary {
   background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.2));
   color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
 }
-.btn.secondary:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.35)); }
-.kbd { font-size: 10px; color: var(--muted); margin-left: 6px; }
+.btn.secondary:hover {
+  background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.35));
+}
+.kbd {
+  font-size: 10px;
+  color: var(--muted);
+  margin-left: 6px;
+}
 
 /* Explorer toolbar (filter + sweep + refresh) */
 .explorer-toolbar {
@@ -128,7 +211,12 @@ textarea:focus, input#expr:focus { border-color: var(--vscode-focusBorder); }
   padding: 8px 14px;
   border-bottom: 1px solid var(--border);
 }
-.filter-wrap { position: relative; flex: 1; display: flex; align-items: center; }
+.filter-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
 .filter-icon {
   position: absolute;
   left: 8px;
@@ -136,7 +224,10 @@ textarea:focus, input#expr:focus { border-color: var(--vscode-focusBorder); }
   color: var(--muted);
   pointer-events: none;
 }
-.filter-icon .ic { width: 14px; height: 14px; }
+.filter-icon .ic {
+  width: 14px;
+  height: 14px;
+}
 #explorerFilter {
   flex: 1;
   min-height: 30px;
@@ -149,7 +240,9 @@ textarea:focus, input#expr:focus { border-color: var(--vscode-focusBorder); }
   font-size: 12.5px;
   outline: none;
 }
-#explorerFilter:focus { border-color: var(--vscode-focusBorder); }
+#explorerFilter:focus {
+  border-color: var(--vscode-focusBorder);
+}
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -164,9 +257,19 @@ textarea:focus, input#expr:focus { border-color: var(--vscode-focusBorder); }
   cursor: pointer;
   flex-shrink: 0;
 }
-.icon-btn:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15)); }
-.icon-btn:disabled { opacity: 0.4; cursor: default; background: none; }
-.icon-btn .ic { width: 15px; height: 15px; }
+.icon-btn:hover {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: none;
+}
+.icon-btn .ic {
+  width: 15px;
+  height: 15px;
+}
 
 /* Sweep notice bar */
 .sweep-notice {
@@ -188,8 +291,12 @@ textarea:focus, input#expr:focus { border-color: var(--vscode-focusBorder); }
 }
 /* .tree-env visibility is driven entirely by inline style (display none/"") so
    the active env's cached tree shows and the rest stay mounted-but-hidden. */
-.node.root { margin-bottom: 2px; }
-.node.hidden { display: none; }
+.node.root {
+  margin-bottom: 2px;
+}
+.node.hidden {
+  display: none;
+}
 .node .row {
   display: flex;
   align-items: center;
@@ -199,7 +306,9 @@ textarea:focus, input#expr:focus { border-color: var(--vscode-focusBorder); }
   white-space: nowrap;
   cursor: pointer;
 }
-.node .row:hover { background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.1)); }
+.node .row:hover {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.1));
+}
 .toggle {
   display: inline-flex;
   align-items: center;
@@ -213,19 +322,71 @@ textarea:focus, input#expr:focus { border-color: var(--vscode-focusBorder); }
   cursor: pointer;
   flex-shrink: 0;
 }
-.toggle:disabled { cursor: default; }
-.toggle .ic { width: 13px; height: 13px; }
-.toggle .ic.spin { animation: spin 0.9s linear infinite; }
-@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
-.node .key { color: var(--vscode-symbolIcon-variableForeground, var(--vscode-charts-blue, #75beff)); flex-shrink: 0; }
-.node .preview { color: var(--muted); overflow: hidden; text-overflow: ellipsis; font-style: italic; }
-.node .preview.t-string { color: var(--vscode-charts-orange, #ce9178); font-style: normal; }
-.node .preview.t-number, .node .preview.t-boolean { color: var(--vscode-charts-green, #b5cea8); font-style: normal; }
-.node .preview.sig-error { color: var(--vscode-errorForeground, #f14c4c); }
-.node .children { margin-left: 12px; padding-left: 6px; border-left: 1px solid var(--border); }
-.node .row .icon-btn { width: 20px; height: 20px; visibility: hidden; }
-.node .row .icon-btn .ic { width: 13px; height: 13px; }
-.node .row:hover .icon-btn { visibility: visible; }
-.node .row .icon-btn.copied { visibility: visible; color: var(--vscode-testing-iconPassed, #3fb950); }
-.node .row .icon-btn:disabled { visibility: hidden; }
-.node .row:hover .icon-btn:disabled { visibility: visible; opacity: 0.35; }
+.toggle:disabled {
+  cursor: default;
+}
+.toggle .ic {
+  width: 13px;
+  height: 13px;
+}
+.toggle .ic.spin {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  from {
+    transform: rotate(0);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.node .key {
+  color: var(--vscode-symbolIcon-variableForeground, var(--vscode-charts-blue, #75beff));
+  flex-shrink: 0;
+}
+.node .preview {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-style: italic;
+}
+.node .preview.t-string {
+  color: var(--vscode-charts-orange, #ce9178);
+  font-style: normal;
+}
+.node .preview.t-number,
+.node .preview.t-boolean {
+  color: var(--vscode-charts-green, #b5cea8);
+  font-style: normal;
+}
+.node .preview.sig-error {
+  color: var(--err);
+}
+.node .children {
+  margin-left: 12px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+}
+.node .row .icon-btn {
+  width: 20px;
+  height: 20px;
+  visibility: hidden;
+}
+.node .row .icon-btn .ic {
+  width: 13px;
+  height: 13px;
+}
+.node .row:hover .icon-btn {
+  visibility: visible;
+}
+.node .row .icon-btn.copied {
+  visibility: visible;
+  color: var(--vscode-testing-iconPassed, #3fb950);
+}
+.node .row .icon-btn:disabled {
+  visibility: hidden;
+}
+.node .row:hover .icon-btn:disabled {
+  visibility: visible;
+  opacity: 0.35;
+}

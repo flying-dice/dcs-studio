@@ -301,7 +301,7 @@ mod tests {
         .expect("set writedir");
         lua.globals().set("lfs", lfs).expect("set lfs");
 
-        let sqlite = sub_table(&lua, "sqlite", register).expect("sqlite sub");
+        let sqlite = sub_table(&lua, "sqlite", register);
         lua.globals().set("sqlite", sqlite).expect("set sqlite");
         (lua, root)
     }
@@ -386,6 +386,11 @@ mod tests {
         let (lua, root) = state("open");
         // A regular file where the next open wants a directory.
         std::fs::write(root.join("blocked"), b"not a directory").expect("plant blocker");
+        // ... and a directory where the next open wants the database file, so
+        // the parent resolves and SQLite itself is what refuses. `Logs` and
+        // `Temp` are directories DCS creates, and a mod naming one of them is
+        // the realistic way here.
+        std::fs::create_dir_all(root.join("Logs")).expect("plant a directory");
 
         lua.load(
             r#"
@@ -396,8 +401,13 @@ mod tests {
             assert(out2 == nil and err2:find("escapes the write root"), tostring(err2))
 
             -- Not an escape, just unopenable: still (nil, err), never a raise.
+            -- The parent cannot be created ...
             local out3, err3 = sqlite.open("blocked/inner.db")
             assert(out3 == nil and type(err3) == "string", tostring(err3))
+            -- ... and the database name is taken by a directory, which only
+            -- SQLite itself can tell us, so its own words are the answer.
+            local out4, err4 = sqlite.open("Logs")
+            assert(out4 == nil and err4:find("unable to open database", 1, true), tostring(err4))
             "#,
         )
         .exec()
@@ -433,6 +443,11 @@ mod tests {
             failed("sqlite.query", db:query("SELECT * FROM t WHERE id = ?", {}))
             -- ... and one that only fails once SQLite starts stepping rows.
             failed("sqlite.query", db:query("SELECT abs(-9223372036854775808)"))
+            -- A parameter with no SQL form is refused by name, on the query
+            -- path as well as exec's: a mission script that passes a table or
+            -- a function by mistake gets told which, not a wrong-arity error.
+            failed("sqlite.query", db:query("SELECT * FROM t WHERE id = ?", { print }))
+            failed("sqlite.exec", db:exec("INSERT INTO t VALUES (?)", { {} }))
             "#,
         )
         .exec()

@@ -154,7 +154,7 @@ mod tests {
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn every_level_logs_with_and_without_a_namespace() {
         let lua = Lua::new();
-        let logger = sub_table(&lua, "logger", super::register).expect("logger sub");
+        let logger = sub_table(&lua, "logger", super::register);
         lua.globals().set("logger", logger).expect("set global");
 
         lua.load(
@@ -185,7 +185,7 @@ mod tests {
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn the_logger_userdata_carries_its_namespace_through_every_method() {
         let lua = Lua::new();
-        let logger = sub_table(&lua, "logger", super::register).expect("logger sub");
+        let logger = sub_table(&lua, "logger", super::register);
         lua.globals().set("logger", logger).expect("set global");
 
         let shown: String = lua

@@ -151,11 +151,10 @@ mod tests {
             .expect("seed lfs");
 
         let resolved = resolve_under_writedir(&lua, "Logs/dcs.log").expect("contained path");
+        // Normalised to one separator before asserting: the host's separator is
+        // not the subject — the join is (issue #28 runs this on Linux).
         let shown = resolved.to_string_lossy().replace('/', "\\");
-        assert!(
-            shown.ends_with(r"Logs\dcs.log") || shown.ends_with("Logs/dcs.log"),
-            "{shown}"
-        );
+        assert!(shown.ends_with(r"Logs\dcs.log"), "{shown}");
         assert!(shown.starts_with(r"C:\SG\DCS"), "{shown}");
     }
 

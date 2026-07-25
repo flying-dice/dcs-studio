@@ -41,7 +41,12 @@ if type(coroutine) ~= "table" or type(coroutine.create) ~= "function" then
     .. "so the debugger would risk freezing the sim"
 end
 
-if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
+-- `type(...) == "table"` rather than a plain truth test: the global belongs to a
+-- state shared with every other mod, and indexing a non-table one raises at
+-- CHUNK LOAD — which the DLL propagates with `?`, so the whole module fails to
+-- require and the header's "never raises" promise breaks. A non-table means no
+-- engine is installed, so install ours over it.
+if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
   local DRAIN_INTERVAL_SECONDS = 0.05 -- max sim stall between RPC drains during a run
   local MAX_TABLE_CHILDREN = 1000 -- cap children returned/previewed for one table
   local MAX_REFS = 100000 -- per-pause ref ceiling so a cyclic/huge tree can't pin unbounded memory
@@ -562,17 +567,23 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
     local function hold_pause()
       local mode = nil
       dbg.last_ping = clock() -- the editor just requested this stop; it's alive
-      -- TODO: clean-code - 0.6 - KISS (#37): this spins with no throttle while the run
-      -- loop below deliberately drains on DRAIN_INTERVAL_SECONDS. Every pause
-      -- pegs a core and takes the process-wide app_data/resume mutexes millions
-      -- of times a second — contending with the very actix worker that must
-      -- enqueue the debug_continue that ends the pause. Gate D.pump() on the
-      -- same clock()-based interval the run loop already uses.
+      -- Drain on the SAME interval the run loop uses, rather than as fast as the
+      -- CPU allows. The resume that ends this pause can only arrive through
+      -- D.pump — the debug_continue handler runs on THIS thread, inside that
+      -- drain — so a tighter loop buys no latency at all, and costs a pegged
+      -- core plus the bridge's process-wide queue/resume mutexes taken millions
+      -- of times a second, contending with the very actix worker that has to
+      -- enqueue the request.
+      local last_pump = nil
       repeat
-        D.pump() -- a debug_state during this drain refreshes last_ping
-        mode = bridge.debug.take_resume()
-        if not mode and (clock() - dbg.last_ping) > D.idle_seconds then
-          mode = "continue" -- the editor stopped polling (gone): don't freeze forever
+        local now = clock()
+        if last_pump == nil or (now - last_pump) > DRAIN_INTERVAL_SECONDS then
+          last_pump = now
+          D.pump() -- a debug_state during this drain refreshes last_ping
+          mode = bridge.debug.take_resume()
+          if not mode and (clock() - dbg.last_ping) > D.idle_seconds then
+            mode = "continue" -- the editor stopped polling (gone): don't freeze forever
+          end
         end
       until mode ~= nil
       bridge.debug.clear_paused()
@@ -686,6 +697,24 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
       return trace
     end
 
+    -- Capture print for the debugged run by swapping AROUND the xpcall (no
+    -- wrapping pcall there — on_error must snapshot the crash frames live). The
+    -- shim is rt.lua's shared print_shim (RT is installed before this engine);
+    -- the console ring is the sink.
+    --
+    -- Built BEFORE the session is claimed below, because it reads a GLOBAL out
+    -- of a state shared with every other mod and with the console this bridge
+    -- serves — `__DCS_STUDIO_RT = nil` typed into the REPL is enough to make it
+    -- raise. Refusing the run here costs one run; raising with D.running
+    -- already true would cost the rest of the DCS session, every later
+    -- debug_run answering "a debug session is already running".
+    local prev_print = _G.print
+    local rt = __DCS_STUDIO_RT
+    if type(rt) ~= "table" or type(rt.print_shim) ~= "function" then
+      return { ran = false, error = "the console runtime (__DCS_STUDIO_RT) is not installed in this state" }
+    end
+    local print_shim = rt.print_shim(bridge.console.print, prev_print)
+
     -- Session liveness is reported via debug_state (running / error), so the
     -- editor detects the end by polling rather than by awaiting this call —
     -- which it can't, since the run blocks for the whole session and the
@@ -694,29 +723,31 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
     D.error = nil
     dbg.cond_error = nil
     dbg.pause_id = 0
-    -- Clear any stale break-all / resume / pause from a prior session so it
-    -- can't phantom-break this run on its first line.
-    bridge.debug.reset_session()
-    dbg.last_ping = clock()
-    -- Capture print for the debugged run by swapping AROUND the xpcall (no
-    -- wrapping pcall — on_error must snapshot the crash frames live). The shim is
-    -- rt.lua's shared print_shim (RT is installed before this engine); the
-    -- console ring is the sink.
-    local prev_print = _G.print
-    -- TODO: clean-code - 0.55 - PANIC (#38): D.running was set true several statements
-    -- above, and this line indexes a GLOBAL in a state shared with every other
-    -- mod and with the console this bridge serves (`__DCS_STUDIO_RT = nil` typed
-    -- into the REPL is enough). If it raises, D.running stays true and every
-    -- later debug_run answers "a debug session is already running" until DCS
-    -- restarts. Hoist the print_shim lookup above `D.running = true`, or pcall
-    -- from there to the restore block with the restore in the always-run tail.
-    _G.print = __DCS_STUDIO_RT.print_shim(bridge.console.print, prev_print)
-    debug.sethook(hook, "l") -- line events only; depth is walked, never counted
-    local ran_ok, run_err = xpcall(chunk, on_error)
+    -- Everything from the claim to the restore runs under a pcall so that NO
+    -- path can leave the flag (or the hook, or _G.print) stuck: the setup below
+    -- calls into the DLL and writes a global, and a state where either raises
+    -- must still be able to start the next session.
+    local started, ran_ok, run_err = pcall(function()
+      -- Clear any stale break-all / resume / pause from a prior session so it
+      -- can't phantom-break this run on its first line.
+      bridge.debug.reset_session()
+      dbg.last_ping = clock()
+      _G.print = print_shim
+      debug.sethook(hook, "l") -- line events only; depth is walked, never counted
+      return xpcall(chunk, on_error)
+    end)
+    -- Ordered by what a raise in the next line would cost: the hook first (it
+    -- would otherwise keep firing over DCS's own code), then the session flag,
+    -- and only then the global that a hostile __newindex could refuse.
     debug.sethook() -- always remove the scoped hook (double-off is harmless)
-    _G.print = prev_print
     dbg.hook_fn = nil
     D.running = false
+    _G.print = prev_print
+    if not started then
+      -- The session never got as far as the chunk; `ran_ok` carries the raise.
+      D.error = "debug session failed to start: " .. tostring(ran_ok)
+      return { ran = false, error = D.error }
+    end
     if not ran_ok then
       local msg = tostring(run_err)
       -- A user Stop unwinds via error() but is a clean end, not a failure.

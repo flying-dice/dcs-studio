@@ -214,7 +214,7 @@ mod tests {
         .expect("set writedir");
         lua.globals().set("lfs", lfs).expect("set lfs");
 
-        let file = sub_table(&lua, "file", register).expect("file sub");
+        let file = sub_table(&lua, "file", register);
         lua.globals().set("file", file).expect("set file");
         (lua, root)
     }
@@ -310,6 +310,11 @@ mod tests {
     fn an_unwritable_destination_is_reported_per_binding() {
         let (lua, root) = state("io");
         block_with_a_file(&root, "blocked");
+        // The other half of the same story: the parent resolves fine and the
+        // FILE is what cannot be opened, because a directory already owns that
+        // name. `<writedir>Temp` and `Logs` are directories DCS itself creates,
+        // so a mission script writing to a bare "Logs" reaches exactly this.
+        std::fs::create_dir_all(root.join("Logs")).expect("plant a directory");
 
         lua.load(
             r#"
@@ -321,6 +326,8 @@ mod tests {
             failed("file.write_json", file.write_json("blocked/a.json", { a = 1 }))
             failed("file.write_csv", file.write_csv("blocked/a.csv", { { 1 } }))
             failed("file.dump", file.dump("blocked/a.txt", "x"))
+            -- The destination is a directory: the open fails, not the mkdir.
+            failed("file.write_text", file.write_text("Logs", "x"))
             "#,
         )
         .exec()
@@ -471,7 +478,7 @@ mod tests {
             .set("__DCS_STUDIO_WRITEDIR", format!("{}/", root.display()))
             .expect("set writedir global");
 
-        let file: LuaTable = sub_table(&lua, "file", register).expect("file sub");
+        let file: LuaTable = sub_table(&lua, "file", register);
         lua.globals().set("file", file).expect("set file");
         lua.load(r#"assert(file.write_text("m.txt", "mission"))"#)
             .exec()
@@ -492,7 +499,7 @@ mod tests {
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn a_missing_write_root_refuses_the_write_rather_than_guessing() {
         let lua = Lua::new();
-        let file: LuaTable = sub_table(&lua, "file", register).expect("file sub");
+        let file: LuaTable = sub_table(&lua, "file", register);
         lua.globals().set("file", file).expect("set file");
         lua.load(
             r#"

@@ -31,19 +31,21 @@ if (compile.status !== 0) {
 }
 
 console.log("› Launching Extension Development Host (this extension only)…");
-// TODO: clean-code - 0.5 - BOUNDARY (#57): `shell: true` means this argv is re-parsed
-// by the shell, and neither interpolated path is quoted. The shipping target is
-// Windows, where `C:\Users\First Last\…` and `…\OneDrive - Company\…` are
-// normal — `npm run dev` there opens the wrong folder or fails to launch, with
-// no error that points at quoting. `shell: true` is genuinely needed (`code` is
-// `code.cmd`), so quote the two interpolations rather than dropping it.
+// `shell: true` is needed on Windows — `code` is `code.cmd`, which spawn cannot
+// exec directly — but it means this argv is re-parsed by the shell. The shipping
+// target is Windows, where `C:\Users\First Last\…` and `…\OneDrive - Company\…`
+// are normal, so an unquoted interpolation splits mid-path and the host opens
+// the wrong folder or fails to launch with nothing that points at quoting.
+// Double quotes are the one form both cmd.exe and sh honour.
 spawn(
   "code",
-  [`--extensionDevelopmentPath=${root}`, "--disable-extensions", "--new-window", sandbox],
+  [`--extensionDevelopmentPath="${root}"`, "--disable-extensions", "--new-window", `"${sandbox}"`],
   { cwd: root, stdio: "inherit", shell: true },
 );
 
 console.log("› Watching for changes (edits rebuild out/ and the dev host auto-reloads)…");
+// Also shelled out, but every argument here is a literal — `cwd` is handed to
+// the OS directly rather than through the shell, so there is nothing to quote.
 const watch = spawn("npx", ["tsc", "-watch", "-p", "./"], {
   cwd: root,
   stdio: "inherit",

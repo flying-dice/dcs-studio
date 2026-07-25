@@ -479,6 +479,31 @@ mod bootstrap_tests {
         );
     }
 
+    /// `__DCS_STUDIO_DBG` is an ordinary global in a state every other mod
+    /// shares, so the engine cannot assume it owns the name. Its version check
+    /// runs at CHUNK LOAD, and a raise there comes back through `bootstrap`'s
+    /// `?` — the whole `require("dcs_studio_gui")` fails and the user loses the
+    /// bridge entirely, over a name collision. A non-table simply means no
+    /// engine of ours is installed, so ours installs over it.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn another_mod_owning_the_engine_global_does_not_fail_the_module_load() {
+        // SAFETY: test-only state; `unsafe_new` loads the debug stdlib so the
+        // engine gets past its library guards and reaches the version check.
+        let lua = unsafe { Lua::unsafe_new() };
+        lua.globals()
+            .set("__DCS_STUDIO_DBG", 42)
+            .expect("plant a non-table");
+
+        let exports = bootstrap(&lua, BridgeKind::Gui, "test").expect("bootstrap");
+        exports.get::<LuaTable>("json").expect("json survived");
+        let engine: LuaTable = lua
+            .globals()
+            .get("__DCS_STUDIO_DBG")
+            .expect("the engine installed over the collision");
+        assert_eq!(engine.get::<i64>("version").expect("version"), 1);
+    }
+
     /// The log file is per DLL and lives under the write root's `Logs`. The two
     /// bridges must never share one: each has its own log4rs instance, and a
     /// shared truncating appender would have them clobber each other's file.
@@ -534,6 +559,94 @@ mod bootstrap_tests {
         with_writedir(&lua, "/tmp/live/");
         assert_eq!(get_lfs_writedir(&lua).expect("writedir"), "/tmp/live/");
     }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
+mod gui_method_tests {
+    use super::{composed_methods_source, BridgeKind};
+    use mlua::prelude::LuaFunction;
+    use mlua::Lua;
+
+    /// The GUI bridge in a state where the debug engine DECLINED to install
+    /// (`deps.DBG` nil — a hooks state without `debug`/`coroutine`), driven
+    /// through the same fake-router harness as the db methods. The engine is
+    /// designed to decline and the DLL only warns, so the cost must be
+    /// breakpoints and nothing else: the debug_* methods say why, every other
+    /// method works, and `repl_export` reports a write that failed instead of
+    /// handing back a path to a truncated file.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn debug_methods_refuse_and_exports_are_written_through_the_guarded_writer() {
+        let lua = Lua::new();
+        // The console runtime repl_export calls into, installed as the DLL does.
+        lua.load(crate::RT_SOURCE).exec().expect("install RT");
+        let register: LuaFunction = lua
+            .load(composed_methods_source(BridgeKind::Gui))
+            .eval()
+            .expect("load register_methods");
+        lua.globals()
+            .set("register_methods", register)
+            .expect("bind register_methods");
+        lua.load(SUITE).exec().expect("gui method suite");
+    }
+
+    const SUITE: &str = r#"
+      H = {}
+      local router = { add_method = function(_, name, fn, _meta) H[name] = fn end }
+
+      local written = {}
+      local deps = {
+        -- DBG is absent: this is a state where the engine declined.
+        bridge = {
+          file = {
+            write_text = function(rel, text)
+              if written.refuse then return nil, "The disc is full" end
+              written.rel, written.text = rel, text
+              return true
+            end,
+          },
+          -- The pause/continue/stop trio drives the DLL's registry directly, so
+          -- it works with or without an engine in the state.
+          debug = { request_pause = function() paused = true end },
+        },
+        RT = __DCS_STUDIO_RT,
+      }
+      lfs = { writedir = function() return "C:/wd/" end }
+
+      register_methods(router, deps)
+
+      -- Every debugger method answers with the reason. Before the guard they
+      -- indexed a nil engine, so the editor got "attempt to index a nil value"
+      -- — or, in the hook, no bridge at all, because the startup asserted.
+      local debug_methods = {
+        "debug_run", "debug_state", "debug_expand", "debug_eval",
+        "debug_set_breakpoints", "debug_clear_breakpoints",
+      }
+      for _, name in ipairs(debug_methods) do
+        local ok, err = pcall(H[name], { code = "x", source = "=s", ref = 0, frame = 0, expr = "1" })
+        assert(not ok, name .. " must refuse without an engine")
+        assert(string.find(tostring(err), "debug library is not available", 1, true),
+          name .. ": " .. tostring(err))
+      end
+      -- The methods that only talk to the DLL's registry still answer.
+      assert(H.debug_pause().ok == true and paused == true, "debug_pause needs no engine")
+
+      -- repl_export writes through the guarded writer (which creates the
+      -- directory and checks the write AND the close) and reports its path.
+      local out = H.repl_export({ expr = "{ answer = 42 }" })
+      assert(string.find(written.rel, "^Temp/dcs%-studio%-export%-"), written.rel)
+      assert(string.find(written.text, '"answer": 42', 1, true), written.text)
+      assert(out.bytes == #written.text, "bytes match the written body")
+      assert(out.path == "C:/wd/" .. string.gsub(written.rel, "/", "\\"), out.path)
+
+      -- A write that fails is an error, not a path to a truncated file. Raw
+      -- io.open reported success here: the editor opened half a JSON document.
+      written.refuse = true
+      local ok, err = pcall(H.repl_export, { expr = "{ answer = 42 }" })
+      assert(not ok, "a failed write must not report success")
+      assert(string.find(tostring(err), "The disc is full", 1, true), tostring(err))
+    "#;
 }
 
 #[cfg(test)]
