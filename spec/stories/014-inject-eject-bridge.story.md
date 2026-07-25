@@ -43,6 +43,99 @@ Feature: Bridge injection
     Given the hook or DLL was updated and re-injected
     Then the new code is only picked up when DCS next starts
 
+  @chaos
+  Scenario: The bin and Hooks directories are created under the write dir itself
+    Given a write dir "D:\Saved Games\DCS" that has never had a mod installed
+    When the user runs "Inject Bridge into DCS"
+    Then "D:\Saved Games\DCS\Mods\tech\DcsStudio\bin" is created
+    And "D:\Saved Games\DCS\Scripts\Hooks" is created
+    # The parent directory is taken with Windows path rules. A POSIX dirname of
+    # a "D:\..." path yields ".", which would create the directories beside the
+    # editor and leave every copy failing with ENOENT.
+
+  @chaos
+  Scenario: A partly copied payload is left in place
+    Given the GUI DLL copies successfully
+    But the mission DLL cannot be overwritten because DCS holds it
+    When the user runs "Inject Bridge into DCS"
+    Then the inject stops at the failing copy — the hook is never copied
+    And the already-copied GUI DLL is NOT rolled back
+    And an error reads
+      "Could not overwrite the bridge DLLs — DCS appears to be running. Close DCS and inject again."
+    And no success toast is shown
+
+  @chaos
+  Scenario Outline: Inject failures that are not a locked DLL
+    Given the copy or directory creation fails with <failure>
+    When the user runs "Inject Bridge into DCS"
+    Then an error reads "Inject failed: <message>"
+    And no success toast is shown
+
+    Examples:
+      | failure                              | message                        |
+      | a full disk                          | ENOSPC: no space left on device |
+      | a rejection that is not an Error     | access denied                  |
+
+  @chaos
+  Scenario: A stale hook and single-DLL-era artifacts from an older DCS Studio
+    Given "<writeDir>\Scripts\Hooks\DcsStudio.lua" is an older version of the hook
+    And "<writeDir>\Mods\tech\DcsStudio\bin\dcs_studio.dll" is still present
+    And "<writeDir>\Scripts\DcsStudioMission.lua" is still present
+    When the user runs "Inject Bridge into DCS"
+    Then the hook is overwritten with the shipped one
+    And "dcs_studio.dll", "dcs_bridge.dll" and "Scripts\DcsStudioMission.lua" are deleted
+    # The old DLL binds port 25569 too: left behind it answers instead of the
+    # new GUI bridge and nothing the extension does lands.
+
+  @chaos
+  Scenario: A legacy artifact that cannot be deleted does not fail the inject
+    Given DCS still holds the legacy "dcs_studio.dll"
+    And both current DLLs and the hook copy successfully
+    When the user runs "Inject Bridge into DCS"
+    Then the inject succeeds and the success toast is shown
+    # Clearing yesterday's DLL is a courtesy; failing it must not report a
+    # broken install when today's files landed.
+
+  @chaos
+  Scenario: A half-finished build pairs a fresh DLL with a shipped one
+    Given "bridge\target\release" contains only "dcs_studio_gui.dll"
+    When the user runs "Inject Bridge into DCS"
+    Then the built GUI DLL and the SHIPPED mission DLL are deployed side by side
+    And the mismatch is not detected or reported # UNVERIFIED: neither DLL nor the hook carries a version the other checks, and the extension compares nothing — the pair is chosen per file, on existence alone
+
+  @chaos
+  Scenario: The DLL is present but DCS cannot load it
+    Given a deployed "dcs_studio_gui.dll" that fails to load (wrong architecture, missing MSVC runtime)
+    When DCS starts
+    Then the hook logs "load failed: <reason>" to dcs.log and returns quietly
+    And no JSON-RPC server binds 25569
+    And the extension shows "$(debug-disconnect) DCS: offline" with no other explanation
+
+  @chaos
+  Scenario: Neither Saved Games folder exists
+    Given "dcsStudio.savedGamesPath" is empty
+    And neither "Saved Games\DCS" nor "Saved Games\DCS.openbeta" exists
+    When the user runs "Inject Bridge into DCS"
+    Then "<home>\Saved Games\DCS" is used anyway and its directories are created
+    And the toast names that folder
+    # There is no "DCS is not installed" check here — a mistyped or missing
+    # write dir produces a complete, unused install tree rather than an error.
+
+  @chaos
+  Scenario: The write dir is a UNC network path
+    Given "dcsStudio.savedGamesPath" is "\\nas\share\Saved Games\DCS"
+    When the user runs "Inject Bridge into DCS"
+    Then the Windows path rules build "\\nas\share\Saved Games\DCS\Mods\tech\DcsStudio\bin" unchanged
+    And a network failure surfaces as "Inject failed: <message>" rather than a silent no-op
+
+  @chaos
+  Scenario: Injecting twice in a row
+    Given the bridge is already injected and DCS is not running
+    When the user runs "Inject Bridge into DCS" again
+    Then every file is overwritten in place
+    And the success toast is shown again
+    # Injection is idempotent by overwrite — a double-click cannot half-install.
+
 Feature: Bridge ejection
 
   Scenario: Ejecting
@@ -53,4 +146,37 @@ Feature: Bridge ejection
   Scenario: Automatic cleanup on shutdown
     When the extension deactivates
     Then the bridge files are ejected if DCS is not holding the DLLs
+
+  @chaos
+  Scenario: Ejecting when the files are already gone
+    Given the bridge was never injected, or was ejected already
+    When the user runs "Eject Bridge from DCS"
+    Then every removal is attempted and none of them fail the command
+    And the toast still confirms "Bridge ejected from <writeDir>."
+    # Extension shutdown ejects unconditionally, so a user who never injected
+    # must not see an error.
+
+  @chaos
+  Scenario: DCS holds one DLL during an eject
+    Given DCS is running with the bridge loaded
+    When the user runs "Eject Bridge from DCS"
+    Then the hook script, the mission DLL and the legacy artifacts are still removed
+    And the locked GUI DLL stays on disk
+    And the toast reads "Bridge ejected from <writeDir>." with no mention of what was left behind
+    # Each file is attempted independently so one that will not go does not
+    # strand the others — but the toast overstates what happened.
+
+  @chaos
+  Scenario: The hook is removed while DCS is still running
+    Given DCS is running and the mission bridge has not booted yet
+    When the bridge is ejected
+    Then the hook script is gone for the rest of that DCS run
+    And the mission bridge's boot dispatch cannot be re-driven until DCS restarts # UNVERIFIED: the hook is already loaded in memory, so its per-frame callbacks keep running; what is lost is the file DCS would read on the next start
+
+  @chaos
+  Scenario: Ejecting between an inject and a DCS start
+    Given the bridge was injected but DCS has not been started since
+    When the user runs "Eject Bridge from DCS"
+    Then every deployed file is removed
+    And the next DCS start loads no bridge at all
 ```

@@ -58,6 +58,27 @@ Feature: Documentation panel
       And the panel is already open
       Then the existing panel is revealed and navigates to that page
 
+    @chaos
+    Scenario Outline: A page id that does not exist
+      Given the bundled content has no page with the id "<id>"
+      When the panel is asked for it <via>
+      Then the "Welcome to DCS Studio" page renders instead
+      And the body is never left blank
+
+      Examples:
+        | id           | via                                        |
+        | renamed-away | as a deep link on first open               |
+        | no-such-page | as a navigation message to an open panel   |
+        | deleted-page | as the page remembered from the last visit |
+
+    @chaos
+    Scenario: The bundled content fails to load
+      Given "docs-content.js" did not load
+      When the Documentation panel opens
+      Then the table-of-contents sidebar renders, empty
+      And no page title or body is shown
+      And the webview raises no error, rather than taking the panel down with it
+
   Rule: Docs can launch the features they describe
 
     Scenario Outline: Command buttons inside pages
@@ -77,4 +98,11 @@ Feature: Documentation panel
     Scenario: External links open in the browser
       When the user clicks an http(s) link in a page
       Then it opens in the system browser, not the webview
+
+    @chaos
+    Scenario: A command button whose command this build no longer registers
+      Given the user is reading the "Publishing Your Mod" page
+      When they click "Open Publish Panel" and that command is not registered
+      Then the panel stays on "Publishing Your Mod" rather than navigating
+      And the click is silently ignored  # UNVERIFIED: the host fires the command without awaiting it, so a missing command produces no user-visible feedback
 ```
