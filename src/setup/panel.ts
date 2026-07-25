@@ -1,4 +1,6 @@
+import { win32 as path } from "node:path";
 import * as fs from "fs";
+import * as os from "os";
 import * as vscode from "vscode";
 import { find7z } from "../adapters/node/sevenZip";
 import type { DetectService } from "../core/app/detectService";
@@ -49,13 +51,13 @@ export class SetupPanel {
   private async pushInit(): Promise<void> {
     const saved = await this.detect.detectSavedGames();
     const installs = await this.detect.detectGameInstalls();
-    const home = process.env.USERPROFILE || require("os").homedir();
+    const home = process.env.USERPROFILE || os.homedir();
     this.post({
       type: "init",
       savedGames: this.cfg().get<string>("savedGamesPath")?.trim() ?? "",
       gameInstall: this.cfg().get<string>("gameInstallPath")?.trim() ?? "",
       dataDir: this.cfg().get<string>("dataDir")?.trim() ?? "",
-      dataDirDefault: require("path").join(home, "DCSStudio", "mods"),
+      dataDirDefault: path.join(home, "DCSStudio", "mods"),
       sevenZip: this.cfg().get<string>("sevenZipPath")?.trim() ?? "",
       sevenZipDetected: find7z(this.cfg().get<string>("sevenZipPath")?.trim() || undefined) ?? "",
       savedCandidates: saved,
