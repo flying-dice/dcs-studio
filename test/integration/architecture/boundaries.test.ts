@@ -2,19 +2,20 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
-// Enforces the hexagonal dependency rule from ARCHITECTURE.md: `src/core/**` may
-// import only other core modules and `path`/`node:path`. Anything else — `vscode`,
-// Node I/O builtins, or `src/adapters` — is a boundary violation. Also: core is
-// TypeScript-only (no compiled `.js` leaking in).
+// Enforces both directions of the hexagonal dependency rule from ARCHITECTURE.md.
 //
-// TODO: clean-code - 0.5 - BOUNDARY (#53): this checks one direction only. The other
-// half of the rule ARCHITECTURE.md states — that adapters reach core through
-// ports and domain types, not through each other's internals — is unchecked, so
-// a panel importing another feature's concrete class (see MyModsPanel taking
-// JsonLedgerStore) passes. Walk src/ outside core and assert cross-feature
-// imports resolve to core/** or the feature's own directory.
+// Inward: `src/core/**` may import only other core modules and `path`/`node:path`.
+// Anything else — `vscode`, Node I/O builtins, or `src/adapters` — is a boundary
+// violation. Also: core is TypeScript-only (no compiled `.js` leaking in).
+//
+// Sideways: everything outside core is an adapter (the `<feature>/` directories
+// are adapters that happen to live beside their one caller), and adapters reach
+// core through ports and domain types — never into each other's internals. A
+// panel that names another module's concrete class has bound itself to that
+// implementation, which is exactly what the port existed to prevent.
 
-const CORE_DIR = path.resolve(process.cwd(), "src", "core");
+const SRC_DIR = path.resolve(process.cwd(), "src");
+const CORE_DIR = path.join(SRC_DIR, "core");
 
 /** Node builtins core must never reach for (with/without the `node:` prefix). */
 const FORBIDDEN_BUILTINS = new Set(
@@ -77,6 +78,92 @@ function classify(file: string, spec: string): string | null {
   // A bare (third-party or other) import is not part of the pure core surface.
   return `disallowed non-core import: "${spec}"`;
 }
+
+// ── Sideways: adapters and features must not reach into each other ───────────
+
+/**
+ * The unit a module belongs to: its first path segment under `src/`, so
+ * `src/adapters/node/fs.ts` is `adapters` and `src/errors.ts` is `errors.ts`.
+ */
+function unitOf(relToSrc: string): string {
+  return relToSrc.split(path.sep)[0];
+}
+
+/** Cross-cutting modules every unit may import: no feature owns them. */
+const SHARED = new Set(["errors.ts", "external.ts", "webview"]);
+
+/**
+ * `extension.ts` is the composition root — the one place that is *supposed* to
+ * name every concrete adapter, because wiring them together is its whole job.
+ */
+const COMPOSITION_ROOT = "extension.ts";
+
+/**
+ * Crossings that already existed when this half of the rule was written. It is
+ * a ratchet, not a licence: a new crossing fails the check, and this list must
+ * shrink to empty — delete each entry as its site is fixed. Only the first is
+ * tracked by an issue (#40 — MyModsPanel names the concrete JsonLedgerStore
+ * rather than the SubscriptionLedgerStore port it actually needs); the rest are
+ * the same defect, surfaced by writing this check, and have no issue yet.
+ *
+ * Deliberately not asserted to be exhaustive: a fix landing elsewhere would
+ * then fail this test, and "someone repaired a boundary" must never read as a
+ * boundary violation.
+ */
+const KNOWN_CROSSINGS = new Set([
+  "src/install/myModsPanel.ts -> src/adapters/node/jsonLedgerStore",
+  "src/install/myModsPanel.ts -> src/adapters/node/processLauncher",
+  "src/adapters/vscode/installRoots.ts -> src/bridge/paths",
+  "src/adapters/vscode/installRoots.ts -> src/install/dataDir",
+  "src/bridge/client.ts -> src/adapters/node/wsTransport",
+  "src/debug/adapter.ts -> src/adapters/node/scheduler",
+  "src/debug/adapter.ts -> src/bridge/client",
+  "src/debug/adapter.ts -> src/bridge/clients",
+  "src/debug/adapter.ts -> src/mission/missionPanel",
+  "src/debug/factory.ts -> src/adapters/node/scheduler",
+  "src/debug/factory.ts -> src/bridge/client",
+  "src/debug/factory.ts -> src/bridge/clients",
+  // `bridge/paths` is imported by three unrelated features: it is a shared
+  // module wearing a feature's clothes, and the fix is to move it, not to widen
+  // the rule for it.
+  "src/log/logPanel.ts -> src/bridge/paths",
+  "src/manifest/formPanel.ts -> src/bridge/paths",
+  "src/mission/missionPanel.ts -> src/bridge/paths",
+  "src/nav/navView.ts -> src/bridge/clients",
+  "src/nav/navView.ts -> src/skills/library",
+  "src/publish/preflight.ts -> src/adapters/vscode/manifest",
+  "src/setup/panel.ts -> src/adapters/node/sevenZip",
+]);
+
+/** The crossing `file` makes by importing `spec`, or null when it makes none. */
+function crossing(file: string, spec: string): string | null {
+  if (!spec.startsWith(".")) return null; // vscode/node/third-party: not our rule
+  const target = path.relative(SRC_DIR, path.resolve(path.dirname(file), spec));
+  const from = path.relative(SRC_DIR, file);
+  const toUnit = unitOf(target);
+  if (toUnit === "core" || toUnit === unitOf(from)) return null;
+  if (SHARED.has(toUnit) || SHARED.has(`${target}.ts`)) return null;
+  return `src/${from} -> src/${target}`.replaceAll(path.sep, "/");
+}
+
+describe("adapter boundary", () => {
+  it("no module outside core reaches into another unit's internals", () => {
+    const files = walk(SRC_DIR, ".ts").filter(
+      (f) => !f.startsWith(CORE_DIR + path.sep) && path.relative(SRC_DIR, f) !== COMPOSITION_ROOT,
+    );
+    expect(files.length).toBeGreaterThan(0);
+
+    const violations: string[] = [];
+    for (const file of files) {
+      const source = fs.readFileSync(file, "utf8");
+      for (const spec of importSpecifiers(source)) {
+        const problem = crossing(file, spec);
+        if (problem && !KNOWN_CROSSINGS.has(problem)) violations.push(problem);
+      }
+    }
+    expect(violations, `\n${violations.join("\n")}`).toEqual([]);
+  });
+});
 
 describe("core boundary", () => {
   const tsFiles = fs.existsSync(CORE_DIR) ? walk(CORE_DIR, ".ts") : [];

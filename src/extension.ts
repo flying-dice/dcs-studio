@@ -201,9 +201,10 @@ export function activate(
   // marketplace backend sources its own token through it; the panels receive it
   // to read the session (token + account label) they surface.
   const auth = new VsCodeGitHubAuth();
-  // The marketplace backend (MarketplacePort). To demo against the static
-  // sample catalog, swap this single line for:
-  //   const marketplace = new MockMarketplace();   // from ./adapters/mock/marketplace
+  // The marketplace backend (MarketplacePort). The port has a second
+  // implementation — the sample catalog in test/support/mockMarketplace.ts,
+  // which the shared contract suite runs against alongside this one — so the
+  // swap below is a checked claim rather than an aspiration.
   const marketplace = new GithubMarketplace(auth);
   // ──────────────────────────────────────────────────────────────────────────
 

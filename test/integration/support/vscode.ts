@@ -39,7 +39,6 @@ export interface VscodeState {
   executedCommands: { command: string; args: unknown[] }[];
   registeredCommands: Map<string, (...args: unknown[]) => unknown>;
   openedExternal: string[];
-  clipboard: string;
   workspaceFolders:
     | { uri: { fsPath: string; scheme: string }; name: string; index: number }[]
     | undefined;
@@ -118,7 +117,6 @@ function blankState(): VscodeState {
     executedCommands: [],
     registeredCommands: new Map(),
     openedExternal: [],
-    clipboard: "",
     workspaceFolders: undefined,
     panels: [],
     statusBarItems: [],
@@ -341,7 +339,6 @@ export class FakeStatusBarItem {
   text = "";
   tooltip: string | undefined;
   command: string | undefined;
-  backgroundColor: unknown;
   shown = false;
   disposed = false;
   constructor(
@@ -476,7 +473,9 @@ class FakeUri {
  *
  * Only the surface the extension actually touches is implemented; anything
  * missing should be added here rather than stubbed per-spec, so every spec sees
- * the same VS Code.
+ * the same VS Code. Surface the extension stops touching comes straight back
+ * out: the coverage gate spans `src/**`, so nothing else will ever notice that
+ * a member of this double has become a lie nobody exercises.
  */
 export function vscodeMock() {
   return {
@@ -513,7 +512,6 @@ export function vscodeMock() {
       onDidOpenTextDocument: openDocEmitter.event,
       onDidChangeTextDocument: changeDocEmitter.event,
       onDidCloseTextDocument: closeDocEmitter.event,
-      onDidSaveTextDocument: new FakeEventEmitter<unknown>().event,
       applyEdit: (edit: { replacements: { uri: string; text: string }[] }) => {
         state.appliedEdits.push(...edit.replacements);
         return Promise.resolve(true);
@@ -685,7 +683,6 @@ export function vscodeMock() {
       get visibleTextEditors() {
         return state.visibleTextEditors;
       },
-      onDidChangeActiveTextEditor: new FakeEventEmitter<unknown>().event,
     },
 
     // ── commands ──
@@ -706,14 +703,6 @@ export function vscodeMock() {
         state.openedExternal.push(uri.toString());
         return Promise.resolve(true);
       },
-      clipboard: {
-        writeText: (text: string) => {
-          state.clipboard = text;
-          return Promise.resolve();
-        },
-        readText: () => Promise.resolve(state.clipboard),
-      },
-      openExternalSync: undefined,
     },
 
     // ── auth ──
@@ -747,15 +736,7 @@ export function vscodeMock() {
     StatusBarAlignment: { Left: 1, Right: 2 },
     ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
     ProgressLocation: { Notification: 15, Window: 10, SourceControl: 1 },
-    ThemeColor: class {
-      constructor(readonly id: string) {}
-    },
-    ThemeIcon: class {
-      constructor(readonly id: string) {}
-    },
-    TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
     FileType: { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 },
-    UIKind: { Desktop: 1, Web: 2 },
     ExtensionMode: { Production: 1, Development: 2, Test: 3 },
     WorkspaceEdit: class {
       readonly replacements: { uri: string; text: string }[] = [];

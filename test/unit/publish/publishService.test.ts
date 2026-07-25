@@ -4,7 +4,6 @@ import { type PublishPorts, PublishService } from "../../../src/core/app/publish
 import { DEFAULT_VOLUME_BYTES } from "../../../src/core/domain/archivePolicy";
 import type { InstallRoots, ManifestModel, PackagedPayload } from "../../../src/core/domain/types";
 import type { ArchivePort } from "../../../src/core/ports/archive";
-import type { FileSystemPort } from "../../../src/core/ports/filesystem";
 import type {
   GhPort,
   GhReleaseCreateOptions,
@@ -14,6 +13,8 @@ import type {
 } from "../../../src/core/ports/gh";
 import type { GitPort } from "../../../src/core/ports/git";
 import type { ManifestPort } from "../../../src/core/ports/manifest";
+import { MemFileSystem } from "../../support/memFileSystem";
+import { RecordingFileSystem } from "../../support/recordingFileSystem";
 
 // ── Recording fakes ──────────────────────────────────────────────────────────
 
@@ -132,49 +133,6 @@ class FakeArchive implements ArchivePort {
   }
 }
 
-class FakeFs implements FileSystemPort {
-  calls: unknown[][] = [];
-  files = new Map<string, string>();
-  async readText(p: string): Promise<string> {
-    this.calls.push(["readText", p]);
-    const text = this.files.get(p);
-    if (text === undefined) throw new Error(`ENOENT: ${p}`);
-    return text;
-  }
-  async writeText(p: string, contents: string): Promise<void> {
-    this.calls.push(["writeText", p, contents]);
-    this.files.set(p, contents);
-  }
-  async exists(p: string): Promise<boolean> {
-    this.calls.push(["exists", p]);
-    return this.files.has(p);
-  }
-  async isDirectory(p: string): Promise<boolean> {
-    this.calls.push(["isDirectory", p]);
-    return false;
-  }
-  async readDir(p: string): Promise<string[]> {
-    this.calls.push(["readDir", p]);
-    return [];
-  }
-  async remove(p: string): Promise<void> {
-    this.calls.push(["remove", p]);
-    this.files.delete(p);
-  }
-  async mkdirp(p: string): Promise<void> {
-    this.calls.push(["mkdirp", p]);
-  }
-  async copy(src: string, dest: string): Promise<void> {
-    this.calls.push(["copy", src, dest]);
-    this.files.set(dest, this.files.get(src) ?? "");
-  }
-  async move(src: string, dest: string): Promise<void> {
-    this.calls.push(["move", src, dest]);
-    this.files.set(dest, this.files.get(src) ?? "");
-    this.files.delete(src);
-  }
-}
-
 class FakeManifest implements ManifestPort {
   calls: unknown[][] = [];
   model: ManifestModel | null = null;
@@ -209,7 +167,8 @@ interface Rig {
   git: FakeGit;
   gh: FakeGh;
   archive: FakeArchive;
-  fs: FakeFs;
+  fs: RecordingFileSystem;
+  mem: MemFileSystem;
   manifest: FakeManifest;
   service: PublishService;
   logs: string[];
@@ -220,7 +179,8 @@ function rig(): Rig {
   const git = new FakeGit();
   const gh = new FakeGh();
   const archive = new FakeArchive();
-  const fs = new FakeFs();
+  const mem = new MemFileSystem();
+  const fs = new RecordingFileSystem(mem);
   const manifest = new FakeManifest();
   const ports: PublishPorts = { git, gh, archive, fs, manifest };
   const logs: string[] = [];
@@ -229,6 +189,7 @@ function rig(): Rig {
     gh,
     archive,
     fs,
+    mem,
     manifest,
     service: new PublishService(ports),
     logs,
@@ -267,7 +228,7 @@ describe("PublishService.share", () => {
       // repository now exists.
       ["getRemoteUrl", ROOT, "origin"],
     ]);
-    expect(r.fs.files.get(gitignorePath)).toBe(".dcs-studio/\n");
+    expect(r.mem.read(gitignorePath)).toBe(".dcs-studio/\n");
     expect(r.gh.calls).toEqual([
       ["login"],
       [
@@ -300,7 +261,7 @@ describe("PublishService.share", () => {
     const r = rig();
     r.git.changes = false;
     r.git.remoteUrlValue = "https://github.com/octocat/mod.git";
-    r.fs.files.set(gitignorePath, "out/\n.dcs-studio/\n");
+    r.mem.seedFile(gitignorePath, "out/\n.dcs-studio/\n");
     await r.service.share(ROOT, { name: "mod", description: "" }, r.log);
 
     expect(r.git.calls).toEqual([
@@ -316,9 +277,9 @@ describe("PublishService.share", () => {
 
   it("appends the ignore entry to an existing .gitignore missing a trailing newline", async () => {
     const r = rig();
-    r.fs.files.set(gitignorePath, "out/");
+    r.mem.seedFile(gitignorePath, "out/");
     await r.service.share(ROOT, { name: "mod", description: "" }, r.log);
-    expect(r.fs.files.get(gitignorePath)).toBe("out/\n.dcs-studio/\n");
+    expect(r.mem.read(gitignorePath)).toBe("out/\n.dcs-studio/\n");
   });
 
   it("repo already exists on GitHub: wires the remote and pushes instead", async () => {
@@ -411,9 +372,12 @@ const releaseOpts = { owner: "octocat", name: "mod", tag: "v1.0.0", notes: "" };
 /** A rig whose manifest + files are set up for a successful release. */
 function releaseRig(bundle: { path: string }[] = []) {
   const r = rig();
-  r.fs.files.set(manifestPath, "[project]");
+  r.mem.seedFile(manifestPath, "[project]");
   r.manifest.model = model(bundle);
-  for (const b of bundle) r.fs.files.set(path.join(ROOT, b.path), "built");
+  // A built bundle path is a directory, and the check is `exists`, not a read —
+  // the fake this replaced answered false for directories, so seeding files was
+  // the only way to make the check pass at all.
+  for (const b of bundle) r.mem.seedDir(path.join(ROOT, b.path));
   r.archive.packaged = {
     volumes: [path.join(outDir, "dcs-studio-mod-v1.0.0.7z")],
     totalBytes: 2048,
@@ -432,7 +396,7 @@ describe("PublishService.cutRelease", () => {
 
   it("rejects when the manifest does not parse", async () => {
     const r = rig();
-    r.fs.files.set(manifestPath, "not toml");
+    r.mem.seedFile(manifestPath, "not toml");
     r.manifest.model = null; // parseToml throws
     await expect(r.service.cutRelease(ROOT, releaseOpts, r.log)).rejects.toThrow(
       "Cannot read dcs-studio.toml.",

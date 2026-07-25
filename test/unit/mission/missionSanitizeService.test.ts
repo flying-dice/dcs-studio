@@ -7,7 +7,8 @@ import {
   stampFor,
 } from "../../../src/core/domain/missionSanitize";
 import { AFTER_TRIGGER, BEFORE_TRIGGER } from "../../../src/core/domain/missionScriptTrigger";
-import type { FileSystemPort } from "../../../src/core/ports/filesystem";
+import { MemFileSystem } from "../../support/memFileSystem";
+import { RecordingFileSystem } from "../../support/recordingFileSystem";
 
 const LUA = "C:\\DCS\\Scripts\\MissionScripting.lua";
 const BAK = backupPath(LUA);
@@ -24,51 +25,11 @@ const PRISTINE = [
   "end",
 ].join("\r\n");
 
-/** In-memory FileSystemPort recording copies/writes. */
-class MemFs implements FileSystemPort {
-  files = new Map<string, string>();
-  copies: Array<[string, string]> = [];
-  writes: string[] = [];
-  /** Paths whose writes reject — a folder the process may not write into. */
-  failWrites = new Set<string>();
-
-  async readText(p: string): Promise<string> {
-    const c = this.files.get(p);
-    if (c === undefined) throw new Error(`ENOENT: ${p}`);
-    return c;
-  }
-  async writeText(p: string, contents: string): Promise<void> {
-    if (this.failWrites.has(p)) throw new Error(`EACCES: ${p}`);
-    this.files.set(p, contents);
-    this.writes.push(p);
-  }
-  async exists(p: string): Promise<boolean> {
-    return this.files.has(p);
-  }
-  async isDirectory(): Promise<boolean> {
-    return false;
-  }
-  async readDir(): Promise<string[]> {
-    return [];
-  }
-  async remove(p: string): Promise<void> {
-    this.files.delete(p);
-  }
-  async mkdirp(): Promise<void> {}
-  async copy(src: string, dest: string): Promise<void> {
-    this.files.set(dest, await this.readText(src));
-    this.copies.push([src, dest]);
-  }
-  async move(src: string, dest: string): Promise<void> {
-    this.files.set(dest, await this.readText(src));
-    this.files.delete(src);
-  }
-}
-
 function setup(initial?: Record<string, string>) {
-  const fs = new MemFs();
-  for (const [p, c] of Object.entries(initial ?? {})) fs.files.set(p, c);
-  return { fs, svc: new MissionSanitizeService(fs) };
+  const mem = new MemFileSystem();
+  for (const [p, c] of Object.entries(initial ?? {})) mem.seedFile(p, c);
+  const fs = new RecordingFileSystem(mem);
+  return { fs, mem, svc: new MissionSanitizeService(fs) };
 }
 
 describe("MissionSanitizeService.status", () => {
@@ -101,39 +62,39 @@ describe("MissionSanitizeService.status", () => {
 
 describe("MissionSanitizeService.setItems", () => {
   it("backs up on first change with the frozen filename, then writes", async () => {
-    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    const { fs, mem, svc } = setup({ [LUA]: PRISTINE });
     const s = await svc.setItems(LUA, allItems(false));
-    expect(fs.copies).toEqual([[LUA, BAK]]);
-    expect(fs.files.get(BAK)).toBe(PRISTINE);
-    expect(fs.writes).toEqual([LUA, STAMP]);
+    expect(fs.argsFor("copy")).toEqual([[LUA, BAK]]);
+    expect(mem.read(BAK)).toBe(PRISTINE);
+    expect(fs.pathsFor("writeText")).toEqual([LUA, STAMP]);
     expect(s.backupExists).toBe(true);
     for (const item of s.items) expect(item).toMatchObject({ present: true, sanitized: false });
   });
 
   it("preserves CRLF in the written file", async () => {
-    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    const { mem, svc } = setup({ [LUA]: PRISTINE });
     await svc.setItems(LUA, allItems(false));
-    const written = fs.files.get(LUA)!;
+    const written = mem.read(LUA)!;
     expect(written).toContain("-- sanitizeModule('os')\r\n");
     expect(written).not.toMatch(/[^\r]\n/);
   });
 
   it("does not overwrite an existing backup on later changes", async () => {
-    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    const { fs, mem, svc } = setup({ [LUA]: PRISTINE });
     await svc.setItems(LUA, allItems(false));
-    const desanitized = fs.files.get(LUA)!;
+    const desanitized = mem.read(LUA)!;
     await svc.setItems(LUA, allItems(true));
-    expect(fs.copies).toEqual([[LUA, BAK]]); // only the first change copied
-    expect(fs.files.get(BAK)).toBe(PRISTINE); // pristine snapshot intact
-    expect(fs.files.get(LUA)).toBe(PRISTINE); // round-trip restored the original
-    expect(fs.files.get(LUA)).not.toBe(desanitized);
+    expect(fs.argsFor("copy")).toEqual([[LUA, BAK]]); // only the first change copied
+    expect(mem.read(BAK)).toBe(PRISTINE); // pristine snapshot intact
+    expect(mem.read(LUA)).toBe(PRISTINE); // round-trip restored the original
+    expect(mem.read(LUA)).not.toBe(desanitized);
   });
 
   it("neither backs up nor writes when nothing changes", async () => {
     const { fs, svc } = setup({ [LUA]: PRISTINE });
     const s = await svc.setItems(LUA, allItems(true)); // already sanitized
-    expect(fs.copies).toEqual([]);
-    expect(fs.writes).toEqual([]);
+    expect(fs.argsFor("copy")).toEqual([]);
+    expect(fs.pathsFor("writeText")).toEqual([]);
     expect(s.backupExists).toBe(false);
     for (const item of s.items) expect(item.sanitized).toBe(true);
   });
@@ -160,11 +121,11 @@ describe("MissionSanitizeService.restore", () => {
   });
 
   it("copies the pristine backup back over the live file", async () => {
-    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    const { mem, svc } = setup({ [LUA]: PRISTINE });
     await svc.setItems(LUA, allItems(false));
-    expect(fs.files.get(LUA)).not.toBe(PRISTINE);
+    expect(mem.read(LUA)).not.toBe(PRISTINE);
     const s = await svc.restore(LUA);
-    expect(fs.files.get(LUA)).toBe(PRISTINE);
+    expect(mem.read(LUA)).toBe(PRISTINE);
     expect(s.exists).toBe(true);
     expect(s.backupExists).toBe(true);
     for (const item of s.items) expect(item.sanitized).toBe(true);
@@ -173,19 +134,19 @@ describe("MissionSanitizeService.restore", () => {
   it("refuses an empty backup and leaves the live file alone", async () => {
     // Copying a truncated .bak over the live file breaks the install while
     // still reporting success — the failure mode this check exists for.
-    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    const { mem, svc } = setup({ [LUA]: PRISTINE });
     await svc.setItems(LUA, allItems(false));
-    const desanitized = fs.files.get(LUA)!;
-    fs.files.set(BAK, "");
+    const desanitized = mem.read(LUA)!;
+    mem.seedFile(BAK, "");
 
     await expect(svc.restore(LUA)).rejects.toThrow(/Refusing to restore.*empty/);
-    expect(fs.files.get(LUA)).toBe(desanitized);
+    expect(mem.read(LUA)).toBe(desanitized);
   });
 
   it("refuses a backup with none of the sandbox lines", async () => {
     const { fs, svc } = setup({ [LUA]: PRISTINE, [BAK]: "-- half a file\n" });
     await expect(svc.restore(LUA)).rejects.toThrow(/truncated/);
-    expect(fs.copies).toEqual([]);
+    expect(fs.argsFor("copy")).toEqual([]);
   });
 
   it("re-stamps the live file so the restore is not itself read as drift", async () => {
@@ -207,9 +168,9 @@ describe("MissionSanitizeService.backupIsStale", () => {
     // The case that matters: a DCS update ships a new MissionScripting.lua and
     // the never-refreshed backup now shadows it, so restoring would rewind the
     // user past the update.
-    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    const { mem, svc } = setup({ [LUA]: PRISTINE });
     await svc.setItems(LUA, allItems(false));
-    fs.files.set(LUA, `${PRISTINE}\n-- DCS 2.10 update\n`);
+    mem.seedFile(LUA, `${PRISTINE}\n-- DCS 2.10 update\n`);
     expect(await svc.backupIsStale(LUA)).toBe(true);
   });
 
@@ -221,38 +182,38 @@ describe("MissionSanitizeService.backupIsStale", () => {
   });
 
   it("tolerates a stamp file with trailing whitespace", async () => {
-    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    const { mem, svc } = setup({ [LUA]: PRISTINE });
     await svc.setItems(LUA, allItems(false));
-    fs.files.set(STAMP, `${fs.files.get(STAMP)}\n`);
+    mem.seedFile(STAMP, `${mem.read(STAMP)}\n`);
     expect(await svc.backupIsStale(LUA)).toBe(false);
   });
 });
 
 describe("MissionSanitizeService stamping", () => {
   it("records a stamp beside the backup on every write", async () => {
-    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    const { mem, svc } = setup({ [LUA]: PRISTINE });
     await svc.setItems(LUA, allItems(false));
-    expect(fs.files.get(STAMP)).toBe(stampFor(fs.files.get(LUA)!));
+    expect(mem.read(STAMP)).toBe(stampFor(mem.read(LUA)!));
 
     await svc.setItems(LUA, allItems(true));
-    expect(fs.files.get(STAMP)).toBe(stampFor(PRISTINE));
+    expect(mem.read(STAMP)).toBe(stampFor(PRISTINE));
   });
 
   it("writes no stamp when nothing changed", async () => {
-    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    const { mem, svc } = setup({ [LUA]: PRISTINE });
     await svc.setItems(LUA, allItems(true));
-    expect(fs.files.has(STAMP)).toBe(false);
+    expect(mem.hasFile(STAMP)).toBe(false);
   });
 
   it("still reports the edit as done when the stamp cannot be written", async () => {
     // The stamp only powers a warning; a sidecar the folder refuses is not a
     // reason to tell the user their desanitize failed.
-    const { fs, svc } = setup({ [LUA]: PRISTINE });
-    fs.failWrites.add(STAMP);
+    const { fs, mem, svc } = setup({ [LUA]: PRISTINE });
+    fs.failOn("writeText", `EACCES: ${STAMP}`, STAMP);
     const s = await svc.setItems(LUA, allItems(false));
 
-    expect(fs.files.get(LUA)).toContain("-- sanitizeModule('os')");
-    expect(fs.files.has(STAMP)).toBe(false);
+    expect(mem.read(LUA)).toContain("-- sanitizeModule('os')");
+    expect(mem.hasFile(STAMP)).toBe(false);
     for (const item of s.items) expect(item.sanitized).toBe(false);
   });
 });
@@ -267,13 +228,13 @@ describe("MissionSanitizeService.triggerStatus", () => {
 
 describe("MissionSanitizeService.installTriggers", () => {
   it("backs up on first change with the frozen filename, writes, and reports both valid", async () => {
-    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    const { fs, mem, svc } = setup({ [LUA]: PRISTINE });
     const status = await svc.installTriggers(LUA);
-    expect(fs.copies).toEqual([[LUA, BAK]]);
-    expect(fs.files.get(BAK)).toBe(PRISTINE);
-    expect(fs.writes).toEqual([LUA, STAMP]);
-    expect(fs.files.get(LUA)).toContain(BEFORE_TRIGGER);
-    expect(fs.files.get(LUA)).toContain(AFTER_TRIGGER);
+    expect(fs.argsFor("copy")).toEqual([[LUA, BAK]]);
+    expect(mem.read(BAK)).toBe(PRISTINE);
+    expect(fs.pathsFor("writeText")).toEqual([LUA, STAMP]);
+    expect(mem.read(LUA)).toContain(BEFORE_TRIGGER);
+    expect(mem.read(LUA)).toContain(AFTER_TRIGGER);
     expect(status).toEqual({ before: "valid", after: "valid" });
   });
 
@@ -281,25 +242,25 @@ describe("MissionSanitizeService.installTriggers", () => {
     const { fs, svc } = setup({ [LUA]: PRISTINE });
     await svc.installTriggers(LUA);
     await svc.installTriggers(LUA);
-    expect(fs.copies).toEqual([[LUA, BAK]]); // only the first change copied
-    expect(fs.writes).toEqual([LUA, STAMP]); // only the first change wrote
+    expect(fs.argsFor("copy")).toEqual([[LUA, BAK]]); // only the first change copied
+    expect(fs.pathsFor("writeText")).toEqual([LUA, STAMP]); // only the first change wrote
   });
 });
 
 describe("MissionSanitizeService.removeTriggers", () => {
   it("removes the trigger lines and reports both missing", async () => {
-    const { fs, svc } = setup({ [LUA]: PRISTINE });
+    const { fs, mem, svc } = setup({ [LUA]: PRISTINE });
     await svc.installTriggers(LUA);
     const status = await svc.removeTriggers(LUA);
-    expect(fs.files.get(LUA)).toBe(PRISTINE); // fully restored
-    expect(fs.copies).toEqual([[LUA, BAK]]); // backup was made once, not again
+    expect(mem.read(LUA)).toBe(PRISTINE); // fully restored
+    expect(fs.argsFor("copy")).toEqual([[LUA, BAK]]); // backup was made once, not again
     expect(status).toEqual({ before: "missing", after: "missing" });
   });
 
   it("neither backs up nor writes when there are no triggers to remove", async () => {
     const { fs, svc } = setup({ [LUA]: PRISTINE });
     await svc.removeTriggers(LUA);
-    expect(fs.copies).toEqual([]);
-    expect(fs.writes).toEqual([]);
+    expect(fs.argsFor("copy")).toEqual([]);
+    expect(fs.pathsFor("writeText")).toEqual([]);
   });
 });

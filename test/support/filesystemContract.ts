@@ -3,26 +3,18 @@ import type { FileSystemPort } from "../../src/core/ports/filesystem";
 
 // The behavioural contract every FileSystemPort implementation must satisfy.
 //
-// TODO: clean-code - 0.6 - KISS (#49): this is parameterised over `create` + a harness
-// but has exactly one caller (NodeFileSystem), so the drift it exists to prevent
-// is not actually prevented — the four hand-written fakes in test/unit
-// (publishService, subscriptionService, missionSanitizeService, detectService)
-// never run through it, and each guesses separately at whether writeText mkdirps
-// and whether remove throws on a missing path. Consolidate them into one
-// MemFileSystem under test/support/ and add a second describe… call; that
-// redeems the parameterisation and deletes three fakes' worth of duplication.
-//
-// Core services are tested against in-memory fakes of this port, so those tests
-// only prove the services work against whatever the fake happens to do. This
-// suite is the other half: run it against the real adapter and against any
-// future one, and the fakes' assumptions become checked claims rather than
-// hopeful ones. The clauses here are exactly the ones core relies on —
-// notably that writeText and copy create missing parent directories, and that
-// remove and isDirectory never throw on a missing path.
+// Core services are tested against an in-memory fake of this port, so those
+// tests only prove the services work against whatever the fake happens to do.
+// This suite is the other half: `MemFileSystem` (the unit layer's fake) and
+// `NodeFileSystem` (the real adapter) are both run through it, so the fake's
+// assumptions are checked claims rather than hopeful ones. The clauses here are
+// exactly the ones core relies on — notably that writeText and copy create
+// missing parent directories, that remove and isDirectory never throw on a
+// missing path, and that readDir does.
 
 export interface FileSystemContractHarness {
-  /** A fresh, empty directory for one test. */
-  makeRoot(): Promise<string> | string;
+  /** A fresh, empty directory for the implementation just handed back by `create`. */
+  makeRoot(): string;
   /** Join path segments the way the implementation expects them. */
   join(...parts: string[]): string;
 }
@@ -33,11 +25,11 @@ export function describeFileSystemPortContract(
   harness: FileSystemContractHarness,
 ): void {
   describe(`FileSystemPort contract: ${name}`, () => {
-    const root = async () => await harness.makeRoot();
+    const root = () => harness.makeRoot();
 
     it("round-trips text through writeText/readText", async () => {
       const fs = create();
-      const file = harness.join(await root(), "a.txt");
+      const file = harness.join(root(), "a.txt");
       await fs.writeText(file, "hello");
       expect(await fs.readText(file)).toBe("hello");
     });
@@ -45,7 +37,7 @@ export function describeFileSystemPortContract(
     it("round-trips content that is not plain ASCII", async () => {
       // Manifests carry mod names and descriptions; a UTF-8 slip corrupts them.
       const fs = create();
-      const file = harness.join(await root(), "b.txt");
+      const file = harness.join(root(), "b.txt");
       await fs.writeText(file, "Bf 109 K-4 — “Kurfürst”\r\nline2");
       expect(await fs.readText(file)).toBe("Bf 109 K-4 — “Kurfürst”\r\nline2");
     });
@@ -53,14 +45,14 @@ export function describeFileSystemPortContract(
     it("creates missing parent directories on write", async () => {
       // Core writes into <dataDir>/<repo>/… without mkdirp-ing first.
       const fs = create();
-      const file = harness.join(await root(), "deep", "deeper", "c.txt");
+      const file = harness.join(root(), "deep", "deeper", "c.txt");
       await fs.writeText(file, "x");
       expect(await fs.exists(file)).toBe(true);
     });
 
     it("overwrites an existing file rather than appending", async () => {
       const fs = create();
-      const file = harness.join(await root(), "d.txt");
+      const file = harness.join(root(), "d.txt");
       await fs.writeText(file, "first");
       await fs.writeText(file, "second");
       expect(await fs.readText(file)).toBe("second");
@@ -68,7 +60,7 @@ export function describeFileSystemPortContract(
 
     it("reports existence for files and directories, and absence otherwise", async () => {
       const fs = create();
-      const base = await root();
+      const base = root();
       const file = harness.join(base, "e.txt");
       await fs.writeText(file, "x");
       expect(await fs.exists(file)).toBe(true);
@@ -79,7 +71,7 @@ export function describeFileSystemPortContract(
     it("distinguishes directories from files, and answers false for missing paths", async () => {
       // Never throws: link planning probes paths that may not exist.
       const fs = create();
-      const base = await root();
+      const base = root();
       const file = harness.join(base, "f.txt");
       await fs.writeText(file, "x");
       expect(await fs.isDirectory(base)).toBe(true);
@@ -89,7 +81,7 @@ export function describeFileSystemPortContract(
 
     it("lists directory entries by name", async () => {
       const fs = create();
-      const base = await root();
+      const base = root();
       await fs.writeText(harness.join(base, "one.txt"), "1");
       await fs.writeText(harness.join(base, "two.txt"), "2");
       await fs.mkdirp(harness.join(base, "sub"));
@@ -98,12 +90,20 @@ export function describeFileSystemPortContract(
 
     it("lists an empty directory as an empty array", async () => {
       const fs = create();
-      expect(await fs.readDir(await root())).toEqual([]);
+      expect(await fs.readDir(root())).toEqual([]);
+    });
+
+    it("rejects a listing of something that is not there", async () => {
+      // Detection tells "no Saved Games folder" from "an empty one" by catching
+      // this; an implementation answering [] would report no DCS installs on a
+      // machine that has them and no way to tell why.
+      const fs = create();
+      await expect(fs.readDir(harness.join(root(), "never-existed"))).rejects.toThrow();
     });
 
     it("mkdirp creates nested directories and is idempotent", async () => {
       const fs = create();
-      const dir = harness.join(await root(), "x", "y", "z");
+      const dir = harness.join(root(), "x", "y", "z");
       await fs.mkdirp(dir);
       await fs.mkdirp(dir);
       expect(await fs.isDirectory(dir)).toBe(true);
@@ -111,7 +111,7 @@ export function describeFileSystemPortContract(
 
     it("removes a file", async () => {
       const fs = create();
-      const file = harness.join(await root(), "g.txt");
+      const file = harness.join(root(), "g.txt");
       await fs.writeText(file, "x");
       await fs.remove(file);
       expect(await fs.exists(file)).toBe(false);
@@ -120,7 +120,7 @@ export function describeFileSystemPortContract(
     it("removes a directory and everything under it", async () => {
       // Uninstall clears an unpacked mod tree in one call.
       const fs = create();
-      const base = await root();
+      const base = root();
       const dir = harness.join(base, "tree");
       await fs.writeText(harness.join(dir, "nested", "h.txt"), "x");
       await fs.remove(dir);
@@ -130,12 +130,12 @@ export function describeFileSystemPortContract(
     it("removing a missing path succeeds rather than throwing", async () => {
       // Uninstall is idempotent; a partially-removed install must still clean.
       const fs = create();
-      await expect(fs.remove(harness.join(await root(), "never-existed"))).resolves.toBeUndefined();
+      await expect(fs.remove(harness.join(root(), "never-existed"))).resolves.toBeUndefined();
     });
 
     it("copies a file, creating missing parent directories", async () => {
       const fs = create();
-      const base = await root();
+      const base = root();
       const src = harness.join(base, "src.txt");
       const dest = harness.join(base, "out", "nested", "dest.txt");
       await fs.writeText(src, "payload");
@@ -149,7 +149,7 @@ export function describeFileSystemPortContract(
       // The install swap: a staged payload is renamed onto the live mod dir, so
       // a failed extraction can never have destroyed the working one.
       const fs = create();
-      const base = await root();
+      const base = root();
       const src = harness.join(base, "staging");
       const dest = harness.join(base, "live");
       await fs.writeText(harness.join(src, "Scripts", "mod.lua"), "payload");
@@ -160,7 +160,7 @@ export function describeFileSystemPortContract(
 
     it("moves a file, creating missing parent directories", async () => {
       const fs = create();
-      const base = await root();
+      const base = root();
       const src = harness.join(base, "from.txt");
       const dest = harness.join(base, "out", "nested", "to.txt");
       await fs.writeText(src, "payload");
@@ -173,15 +173,29 @@ export function describeFileSystemPortContract(
       // Callers stage into a known-empty path; a silent no-op would let a
       // failed extraction look like a successful swap.
       const fs = create();
-      const base = await root();
+      const base = root();
       await expect(
         fs.move(harness.join(base, "never-existed"), harness.join(base, "dest")),
       ).rejects.toThrow();
     });
 
+    it("refuses to merge a moved directory into an occupied one", async () => {
+      // The install swap renames a staged payload onto the live mod dir, and the
+      // caller clears that dir first precisely because a merge would leave the
+      // previous version's files mixed into the new one and call it a success.
+      const fs = create();
+      const base = root();
+      const src = harness.join(base, "staging");
+      const dest = harness.join(base, "live");
+      await fs.writeText(harness.join(src, "new.lua"), "new");
+      await fs.writeText(harness.join(dest, "old.lua"), "old");
+      await expect(fs.move(src, dest)).rejects.toThrow();
+      expect(await fs.readText(harness.join(dest, "old.lua"))).toBe("old");
+    });
+
     it("copy overwrites an existing destination", async () => {
       const fs = create();
-      const base = await root();
+      const base = root();
       const src = harness.join(base, "s.txt");
       const dest = harness.join(base, "d.txt");
       await fs.writeText(src, "new");

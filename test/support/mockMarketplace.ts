@@ -1,21 +1,18 @@
-import type { MarketListing, ProductDetail } from "../../core/domain/types";
-import type { MarketplacePort } from "../../core/ports/marketplace";
+import type { MarketListing, ProductDetail } from "../../src/core/domain/types";
+import type { MarketplacePort } from "../../src/core/ports/marketplace";
 
-// Mock adapter for `MarketplacePort` — sample Marketplace data for the
-// consumer-UX preview, previously src/marketplace/mockData.ts. The shapes are
-// the core domain contracts (MarketListing feeds the storefront grid,
-// ProductDetail feeds the product page); in dcs-studio these come from a
-// headless Rust sidecar over JSON-RPC. This adapter is static so the
-// mod-consumer experience runs with no DCS install and no network — and proves
-// the marketplace backend swaps behind the port with one composition-root line.
+// The second `MarketplacePort` implementation: a static sample catalog.
 //
-// TODO: clean-code - 0.55 - DEAD (#52): this is the one module under src/ unreachable
-// from the composition root, so tsc compiles it into out/ and every .vsix ships
-// 400 lines of sample catalog to users who can never reach it. It also has to be
-// covered, because the integration gate includes src/** at 100% per file — which
-// is the only reason its test exists. Moving it under test/support/ keeps the
-// MarketplacePort contract running against two implementations (its actual job)
-// while dropping it from the package and from the gate.
+// Its job is to keep the port's swappability a checked claim rather than a
+// comment — `marketplaceContract.ts`'s invariants run against this and against
+// the GitHub adapter, so a change to the port that only one of them satisfies
+// fails here. It doubles as the fixture for driving the consumer UX with no DCS
+// install and no network.
+//
+// It lives under test/ and not src/ because nothing in the extension can reach
+// it: as an adapter it was compiled into out/ and shipped inside every .vsix,
+// and the integration gate's 100%-per-file rule over src/** meant 400 lines of
+// sample data had to carry a test of their own to stay green.
 
 const KB = 1024;
 const MB = 1024 * 1024;

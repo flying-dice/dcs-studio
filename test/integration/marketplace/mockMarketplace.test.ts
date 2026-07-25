@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { LISTINGS, MockMarketplace, PRODUCTS } from "../../../src/adapters/mock/marketplace";
 import type { MarketplacePort } from "../../../src/core/ports/marketplace";
 import { productInvariants } from "../../support/marketplaceContract";
+import { LISTINGS, MockMarketplace, PRODUCTS } from "../../support/mockMarketplace";
 
 // The mock backend implements the same `MarketplacePort` as the GitHub adapter
 // and its products satisfy the same behavioral contract — proving the

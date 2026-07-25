@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 // The webview's pure explorer logic runs unmodified in Node via its UMD export
@@ -275,5 +277,22 @@ describe("signatureDisplay", () => {
 describe("SWEEP_BUDGET", () => {
   it("is 200 fetches", () => {
     expect(core.SWEEP_BUDGET).toBe(200);
+  });
+});
+
+describe("UMD wrapper", () => {
+  it("attaches the API to the global when there is no module.exports", () => {
+    // media/console-explorer.js loads this file as a plain <script> and reads
+    // the global `DcsExplorerCore`; `module` is undefined there, so the branch
+    // every Node test skips is the only one the webview ever takes. Evaluating
+    // the source in a module-less vm context is exactly that environment.
+    const src = readFileSync(new URL("../../../media/explorer-core.js", import.meta.url), "utf8");
+    const sandbox: { self?: Record<string, unknown> } = {};
+    sandbox.self = sandbox as Record<string, unknown>;
+    runInNewContext(src, sandbox);
+
+    const api = (sandbox.self as { DcsExplorerCore?: typeof core }).DcsExplorerCore;
+    expect(api).toBeDefined();
+    expect(api.globMatch("_G/db/Units", "_G/**/Units", {})).toBe(true);
   });
 });

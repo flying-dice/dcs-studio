@@ -17,11 +17,12 @@ import type {
 import type { ArchivePort } from "../../../src/core/ports/archive";
 import type { ClockPort } from "../../../src/core/ports/clock";
 import type { DownloadPort } from "../../../src/core/ports/downloader";
-import type { FileSystemPort } from "../../../src/core/ports/filesystem";
 import type { InstallRootsPort } from "../../../src/core/ports/installRoots";
 import type { SubscriptionLedgerStore } from "../../../src/core/ports/ledger";
 import type { LinkerPort } from "../../../src/core/ports/linker";
 import type { ManifestPort } from "../../../src/core/ports/manifest";
+import { MemFileSystem } from "../../support/memFileSystem";
+import { RecordingFileSystem } from "../../support/recordingFileSystem";
 
 // Full subscription-lifecycle tests against in-memory fake ports — no vscode, no
 // fs, no network. The fakes record every interaction so the tests can assert the
@@ -29,7 +30,6 @@ import type { ManifestPort } from "../../../src/core/ports/manifest";
 // enabled-state preservation, verbatim error messages and progress labels).
 
 const DATA = "D:\\data";
-const SEP = path.sep;
 
 // ── fakes ────────────────────────────────────────────────────────────────────
 
@@ -48,68 +48,6 @@ class FakeLedger implements SubscriptionLedgerStore {
   }
 }
 
-class FakeFs implements FileSystemPort {
-  files = new Map<string, string>();
-  dirs = new Set<string>();
-  removed: string[] = [];
-
-  async readText(p: string): Promise<string> {
-    const c = this.files.get(p);
-    if (c === undefined) throw new Error(`ENOENT: ${p}`);
-    return c;
-  }
-  async writeText(p: string, contents: string): Promise<void> {
-    this.files.set(p, contents);
-  }
-  async exists(p: string): Promise<boolean> {
-    return this.files.has(p) || this.dirs.has(p);
-  }
-  async isDirectory(p: string): Promise<boolean> {
-    return this.dirs.has(p);
-  }
-  async readDir(p: string): Promise<string[]> {
-    const out = new Set<string>();
-    for (const k of [...this.files.keys(), ...this.dirs]) {
-      if (k.startsWith(p + SEP)) out.add(k.slice(p.length + 1).split(SEP)[0]);
-    }
-    return [...out];
-  }
-  async remove(p: string): Promise<void> {
-    this.removed.push(p);
-    for (const k of [...this.files.keys()]) {
-      if (k === p || k.startsWith(p + SEP)) this.files.delete(k);
-    }
-    for (const d of [...this.dirs]) {
-      if (d === p || d.startsWith(p + SEP)) this.dirs.delete(d);
-    }
-  }
-  async mkdirp(p: string): Promise<void> {
-    this.dirs.add(p);
-  }
-  async copy(src: string, dest: string): Promise<void> {
-    this.files.set(dest, this.files.get(src) ?? "");
-  }
-  /** Set to make the next move fail, standing in for a locked/blocked rename. */
-  moveFails: string | undefined;
-  moves: { src: string; dest: string }[] = [];
-  async move(src: string, dest: string): Promise<void> {
-    if (this.moveFails) throw new Error(this.moveFails);
-    this.moves.push({ src, dest });
-    for (const [k, v] of [...this.files]) {
-      if (k === src || k.startsWith(src + SEP)) {
-        this.files.delete(k);
-        this.files.set(dest + k.slice(src.length), v);
-      }
-    }
-    for (const d of [...this.dirs]) {
-      if (d === src || d.startsWith(src + SEP)) {
-        this.dirs.delete(d);
-        this.dirs.add(dest + d.slice(src.length));
-      }
-    }
-  }
-}
-
 class FakeDownloader implements DownloadPort {
   calls: { url: string; dest: string; token?: string }[] = [];
   /** Content written per downloaded file; keyed by url, default the url itself. */
@@ -117,7 +55,7 @@ class FakeDownloader implements DownloadPort {
   /** Progress fractions to report per download (when a callback is given). */
   fractions: number[] = [];
 
-  constructor(private readonly fs: FakeFs) {}
+  constructor(private readonly fs: MemFileSystem) {}
 
   async download(
     url: string,
@@ -127,7 +65,7 @@ class FakeDownloader implements DownloadPort {
   ): Promise<void> {
     this.calls.push({ url, dest, token });
     if (onProgress) for (const f of this.fractions) onProgress(f);
-    this.fs.files.set(dest, this.content.get(url) ?? url);
+    this.fs.seedFile(dest, this.content.get(url) ?? url);
   }
 }
 
@@ -139,7 +77,7 @@ class FakeArchive implements ArchivePort {
   /** Set to make extract fail the way 7-Zip does on a truncated volume. */
   extractFails: string | undefined;
 
-  constructor(private readonly fs: FakeFs) {}
+  constructor(private readonly fs: MemFileSystem) {}
 
   async available(): Promise<string | null> {
     return this.cmd;
@@ -147,7 +85,7 @@ class FakeArchive implements ArchivePort {
   async extract(archive: string, outDir: string): Promise<void> {
     this.extracts.push({ archive, outDir });
     if (this.extractFails) throw new Error(this.extractFails);
-    for (const [rel, content] of this.unpacked) this.fs.files.set(path.join(outDir, rel), content);
+    for (const [rel, content] of this.unpacked) this.fs.seedFile(path.join(outDir, rel), content);
   }
   async packagePayload(): Promise<never> {
     throw new Error("not used by the subscription service");
@@ -221,10 +159,11 @@ class FakeClock implements ClockPort {
 }
 
 function makeWorld() {
-  const fs = new FakeFs();
+  const mem = new MemFileSystem();
+  const fs = new RecordingFileSystem(mem);
   const ledger = new FakeLedger();
-  const downloader = new FakeDownloader(fs);
-  const archive = new FakeArchive(fs);
+  const downloader = new FakeDownloader(mem);
+  const archive = new FakeArchive(mem);
   const linker = new FakeLinker();
   const manifest = new FakeManifest();
   const roots = new FakeRoots();
@@ -243,6 +182,7 @@ function makeWorld() {
   const onProgress = (p: Progress) => progress.push(p);
   return {
     fs,
+    mem,
     ledger,
     downloader,
     archive,
@@ -366,8 +306,8 @@ describe("fetchPlan", () => {
       requires: [{ id: "ed/f16c" }],
     });
     // tmp cleanup
-    expect(w.fs.files.has(tmp)).toBe(false);
-    expect(w.fs.removed).toContain(tmp);
+    expect(w.mem.hasFile(tmp)).toBe(false);
+    expect(w.fs.pathsFor("remove")).toContain(tmp);
   });
 
   it("resolves {GameInstall} dests to null when the game install is unconfigured", async () => {
@@ -432,9 +372,9 @@ describe("subscribe", () => {
     expect(w.archive.extracts).toEqual([
       { archive: path.join(DL_DIR, "big.7z.001"), outDir: STAGING },
     ]);
-    expect(w.fs.moves).toEqual([{ src: STAGING, dest: MOD_DIR }]);
+    expect(w.fs.argsFor("move")).toEqual([[STAGING, MOD_DIR]]);
     // The .download dir is cleaned up afterwards.
-    expect(w.fs.removed).toContain(DL_DIR);
+    expect(w.fs.pathsFor("remove")).toContain(DL_DIR);
 
     expect(sub).toEqual({
       repo: "Owner/Repo",
@@ -469,19 +409,19 @@ describe("subscribe", () => {
 
   it("replaces prior unpacked content with the staged payload once extraction succeeds", async () => {
     const w = makeWorld();
-    w.fs.dirs.add(MOD_DIR);
-    w.fs.files.set(path.join(MOD_DIR, "old-file.lua"), "stale");
-    w.fs.dirs.add(path.join(MOD_DIR, "old-dir"));
+    w.mem.seedDir(MOD_DIR);
+    w.mem.seedFile(path.join(MOD_DIR, "old-file.lua"), "stale");
+    w.mem.seedDir(path.join(MOD_DIR, "old-dir"));
     w.archive.unpacked.set("new-file.lua", "fresh");
 
     await w.service.subscribe(target(), undefined, w.onProgress);
 
-    expect(w.fs.files.has(path.join(MOD_DIR, "old-file.lua"))).toBe(false);
-    expect(w.fs.dirs.has(path.join(MOD_DIR, "old-dir"))).toBe(false);
-    expect(w.fs.files.get(path.join(MOD_DIR, "new-file.lua"))).toBe("fresh");
+    expect(w.mem.hasFile(path.join(MOD_DIR, "old-file.lua"))).toBe(false);
+    expect(w.mem.hasDir(path.join(MOD_DIR, "old-dir"))).toBe(false);
+    expect(w.mem.read(path.join(MOD_DIR, "new-file.lua"))).toBe("fresh");
     // Nothing is left at the staging path once it has been renamed into place.
-    expect(w.fs.files.has(path.join(STAGING, "new-file.lua"))).toBe(false);
-    expect(w.fs.dirs.has(STAGING)).toBe(false);
+    expect(w.mem.hasFile(path.join(STAGING, "new-file.lua"))).toBe(false);
+    expect(w.mem.hasDir(STAGING)).toBe(false);
   });
 
   it("leaves the previous install and its ledger entry untouched when extraction fails", async () => {
@@ -491,18 +431,18 @@ describe("subscribe", () => {
     const w = makeWorld();
     const links = [{ id: "Owner/Repo:0", dest: "C:\\SG\\DCS\\Scripts\\X" }];
     w.ledger.store = { "owner/repo": seeded({ tag: "v1.0.0", enabled: true, links }) };
-    w.fs.dirs.add(MOD_DIR);
-    w.fs.files.set(path.join(MOD_DIR, "Scripts", "X"), "working payload");
+    w.mem.seedDir(MOD_DIR);
+    w.mem.seedFile(path.join(MOD_DIR, "Scripts", "X"), "working payload");
     w.archive.extractFails = "7-Zip exited 2: Unexpected end of archive";
 
     await expect(
       w.service.subscribe(target({ tag: "v2.0.0" }), undefined, w.onProgress),
     ).rejects.toThrow("7-Zip exited 2: Unexpected end of archive");
 
-    expect(w.fs.files.get(path.join(MOD_DIR, "Scripts", "X"))).toBe("working payload");
-    expect(w.fs.moves).toEqual([]);
-    expect(w.fs.removed).toContain(STAGING); // the half-written staging copy
-    expect(w.fs.removed).not.toContain(MOD_DIR);
+    expect(w.mem.read(path.join(MOD_DIR, "Scripts", "X"))).toBe("working payload");
+    expect(w.fs.argsFor("move")).toEqual([]);
+    expect(w.fs.pathsFor("remove")).toContain(STAGING); // the half-written staging copy
+    expect(w.fs.pathsFor("remove")).not.toContain(MOD_DIR);
     // Still recorded as installed and enabled at the tag whose files are on disk.
     expect(w.ledger.saves).toEqual([]);
     expect(w.ledger.store["owner/repo"]).toMatchObject({ tag: "v1.0.0", enabled: true, links });
@@ -510,13 +450,13 @@ describe("subscribe", () => {
 
   it("bins the staged payload when the swap into place fails", async () => {
     const w = makeWorld();
-    w.fs.moveFails = "EPERM: operation not permitted, rename";
+    w.fs.failOn("move", "EPERM: operation not permitted, rename");
 
     await expect(w.service.subscribe(target(), undefined, w.onProgress)).rejects.toThrow(
       "EPERM: operation not permitted, rename",
     );
 
-    expect(w.fs.removed.filter((p) => p === STAGING)).toHaveLength(2); // before and after
+    expect(w.fs.pathsFor("remove").filter((p) => p === STAGING)).toHaveLength(2); // before and after
     expect(w.ledger.saves).toEqual([]);
   });
 
@@ -524,12 +464,12 @@ describe("subscribe", () => {
     // A fixed staging name means the next attempt starts from a clean slate
     // instead of extracting on top of a half-unpacked previous try.
     const w = makeWorld();
-    w.fs.dirs.add(STAGING);
-    w.fs.files.set(path.join(STAGING, "half-written.lua"), "junk");
+    w.mem.seedDir(STAGING);
+    w.mem.seedFile(path.join(STAGING, "half-written.lua"), "junk");
 
     await w.service.subscribe(target(), undefined, w.onProgress);
 
-    expect(w.fs.files.has(path.join(MOD_DIR, "half-written.lua"))).toBe(false);
+    expect(w.mem.hasFile(path.join(MOD_DIR, "half-written.lua"))).toBe(false);
   });
 
   it("snapshots the unpacked manifest's entrypoints onto the ledger entry", async () => {
@@ -658,7 +598,7 @@ describe("subscribe", () => {
 
 function seedInstalled(w: ReturnType<typeof makeWorld>, over: Partial<Subscription> = {}): void {
   w.ledger.store = { "owner/repo": seeded(over) };
-  w.fs.files.set(path.join(MOD_DIR, "dcs-studio.toml"), JSON.stringify(MODEL));
+  w.mem.seedFile(path.join(MOD_DIR, "dcs-studio.toml"), JSON.stringify(MODEL));
 }
 
 describe("enable", () => {
@@ -699,7 +639,7 @@ describe("enable", () => {
     w.roots.game = undefined;
     const model = { ...MODEL, symlink: [{ source: "Mods/X", dest: "{GameInstall}/Mods/X" }] };
     w.ledger.store = { "owner/repo": seeded() };
-    w.fs.files.set(path.join(MOD_DIR, "dcs-studio.toml"), JSON.stringify(model));
+    w.mem.seedFile(path.join(MOD_DIR, "dcs-studio.toml"), JSON.stringify(model));
 
     await expect(w.service.enable("Owner/Repo")).rejects.toThrow(
       "Cannot resolve {GameInstall}/Mods/X — configure {GameInstall} in Settings.",
@@ -729,7 +669,7 @@ describe("enable", () => {
       symlink: [{ source: "Scripts/X", dest: "{SavedGames}/../../Windows/System32/evil.dll" }],
     };
     w.ledger.store = { "owner/repo": seeded() };
-    w.fs.files.set(path.join(MOD_DIR, "dcs-studio.toml"), JSON.stringify(model));
+    w.mem.seedFile(path.join(MOD_DIR, "dcs-studio.toml"), JSON.stringify(model));
 
     await expect(w.service.enable("Owner/Repo")).rejects.toThrow(
       'Link destination "{SavedGames}/../../Windows/System32/evil.dll" reaches outside the configured DCS folders.',
@@ -746,7 +686,7 @@ describe("enable", () => {
       symlink: [{ source: "../../Windows/System32", dest: "{SavedGames}/Scripts/X" }],
     };
     w.ledger.store = { "owner/repo": seeded() };
-    w.fs.files.set(path.join(MOD_DIR, "dcs-studio.toml"), JSON.stringify(model));
+    w.mem.seedFile(path.join(MOD_DIR, "dcs-studio.toml"), JSON.stringify(model));
 
     await expect(w.service.enable("Owner/Repo")).rejects.toThrow(
       'Link source "../../Windows/System32" reaches outside the mod\'s own folder.',
@@ -766,7 +706,7 @@ describe("enable", () => {
       extras: [],
     };
     w.ledger.store = { "owner/repo": seeded() };
-    w.fs.files.set(path.join(MOD_DIR, "dcs-studio.toml"), JSON.stringify(old));
+    w.mem.seedFile(path.join(MOD_DIR, "dcs-studio.toml"), JSON.stringify(old));
 
     await w.service.enable("Owner/Repo");
     expect(w.ledger.store["owner/repo"].enabled).toBe(true);
@@ -861,8 +801,8 @@ describe("aggregator regeneration", () => {
 
     await w.service.enable("Owner/Repo");
 
-    const before = w.fs.files.get(BEFORE_AGG)!;
-    const after = w.fs.files.get(AFTER_AGG)!;
+    const before = w.mem.read(BEFORE_AGG)!;
+    const after = w.mem.read(AFTER_AGG)!;
     expect(before).toContain("local function dofileifexist");
     expect(before).toContain("-- Owner/Repo@v1.0.0");
     expect(before).toContain(`dofileifexist([[${absScript("Scripts/b.lua")}]])`);
@@ -883,7 +823,7 @@ describe("aggregator regeneration", () => {
 
     await w.service.disable("Owner/Repo");
 
-    const after = w.fs.files.get(AFTER_AGG)!;
+    const after = w.mem.read(AFTER_AGG)!;
     expect(after).toContain("local function dofileifexist"); // still a valid guard-only file
     expect(after).not.toContain("Scripts/s.lua"); // no stale reference to the disabled mod
   });
@@ -900,7 +840,7 @@ describe("aggregator regeneration", () => {
 
     await w.service.unsubscribe("Owner/Repo");
 
-    const before = w.fs.files.get(BEFORE_AGG)!;
+    const before = w.mem.read(BEFORE_AGG)!;
     expect(before).toContain("local function dofileifexist");
     expect(before).not.toContain("Scripts/s.lua");
   });
@@ -924,7 +864,7 @@ describe("aggregator regeneration", () => {
 
     await w.service.enable("Owner/Repo");
 
-    const after = w.fs.files.get(AFTER_AGG)!;
+    const after = w.mem.read(AFTER_AGG)!;
     expect(after).toContain("Scripts/live.lua");
     expect(after).not.toContain("Scripts/ghost.lua"); // disabled mod excluded
   });
@@ -1006,7 +946,7 @@ describe("unsubscribe", () => {
     const w = makeWorld();
     await w.service.unsubscribe("Owner/Repo");
     expect(w.ledger.saves).toEqual([]);
-    expect(w.fs.removed).toEqual([]);
+    expect(w.fs.pathsFor("remove")).toEqual([]);
   });
 
   it("removes links (when enabled), deletes the unpacked dir, and drops the ledger entry", async () => {
@@ -1019,7 +959,7 @@ describe("unsubscribe", () => {
     expect(w.linker.disables).toEqual([
       [{ id: "Owner/Repo:0", installedPath: "C:\\SG\\DCS\\Scripts\\X" }],
     ]);
-    expect(w.fs.removed).toContain(MOD_DIR);
+    expect(w.fs.pathsFor("remove")).toContain(MOD_DIR);
     expect(w.ledger.store).toEqual({});
   });
 
@@ -1030,7 +970,7 @@ describe("unsubscribe", () => {
     await w.service.unsubscribe("Owner/Repo");
 
     expect(w.linker.disables).toEqual([]);
-    expect(w.fs.removed).toContain(MOD_DIR);
+    expect(w.fs.pathsFor("remove")).toContain(MOD_DIR);
     expect(w.ledger.store).toEqual({});
   });
 });

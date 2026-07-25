@@ -12,12 +12,8 @@ import * as vscode from "vscode";
 // `static current`, `static show`, `panel`, `disposables`, `onDidDispose ->
 // dispose`, `dispose() { current = undefined; … }` block. They have already
 // diverged in teardown detail, and each divergence needs its own test.
-//
-// TODO: clean-code - 0.5 - DRY (#51): nothing checks that a panel's `styles`/`scripts`
-// lists match the assets its previews/*.html loads. The e2e layer measures the
-// preview pages, so a script added here and not to the preview is simply not
-// covered — and the 100% gate still reports green. A test asserting the two
-// lists agree per panel would close it.
+// (The asset-list half of #51 is closed: see
+// test/integration/webview/previewAssets.test.ts.)
 /** A webview-safe URI for a file under the extension's media/ folder. */
 export function mediaUri(
   webview: vscode.Webview,

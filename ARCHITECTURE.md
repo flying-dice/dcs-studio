@@ -16,7 +16,6 @@ src/
     node/          fs, child_process, net, fetch, os — one file per port implementation.
     vscode/        auth, config-backed install roots, the manifest asset path.
     github/        GitHub REST marketplace adapter.
-    mock/          The sample-catalog MarketplacePort, for demoing without GitHub.
   <feature>/       Panels, commands and feature glue: marketplace/, install/, bridge/,
                    publish/, setup/, skills/, project/, log/, manifest/, mission/,
                    nav/, docs/, debug/, webview/. These are adapters too — they live
@@ -43,9 +42,13 @@ The two motivating cases:
   `<dataDir>/subscriptions.json` (+ derived `uninstall-all.bat`). A future sidecar/DB
   backend implements the same port.
 - **Marketplace backend** — `MarketplacePort`; current adapter is GitHub REST discovery.
-  A Rust sidecar over JSON-RPC implements the same port; `src/adapters/mock/marketplace.ts`
-  is the second implementation that keeps the swap honest. The live Marketplace and My Mods panels receive the port instance from the
-  composition root, so swapping backends is literally one line in `extension.ts`:
+  A Rust sidecar over JSON-RPC implements the same port;
+  `test/support/mockMarketplace.ts` is the second implementation that keeps the swap
+  honest — the shared contract suite runs its invariants against both. It lives under
+  `test/` rather than `src/` because nothing in the extension reaches it: as an adapter
+  it was compiled into `out/` and shipped inside every `.vsix`. The live Marketplace and
+  My Mods panels receive the port instance from the composition root, so swapping
+  backends is one line in `extension.ts`:
 
   ```ts
   const marketplace = new GithubMarketplace(new VsCodeGitHubAuth());
@@ -74,9 +77,9 @@ port files, when they carry behavior.
 | `gh.ts` | `GhPort` | install/auth check + login, repo create + topic, release view/create/edit/delete, asset upload/list/delete (gh CLI) |
 | `bridgeTransport.ts` | `BridgeTransportPort` | connect/send/close + handler callbacks (raw-TCP WebSocket) |
 | `registry.ts` | `RegistryPort` | Windows registry value queries (reg.exe) |
-| `env.ts` | `EnvPort` | homedir/userProfile/programFiles candidates |
+| `env.ts` | `EnvPort` | homedir/userProfile (install roots are pure math in `core/domain/dcsDetect.ts`) |
 | `clock.ts` | `ClockPort` | `now()` (Date.now) — inject wherever time feeds logic |
-| `scheduler.ts` | `SchedulerPort` | `setInterval`/`setTimeout` + clears over an opaque `TimerHandle` (node timers) — inject wherever a poll loop, backoff or timeout feeds logic |
+| `scheduler.ts` | `SchedulerPort` | `setInterval`/`clearInterval` over an opaque `TimerHandle` (node timers) — inject wherever a poll loop's cadence feeds logic |
 
 Slice work MAY add new port files here when a genuine boundary is missing; never widen
 an existing port with adapter-specific details.
