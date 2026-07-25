@@ -1,4 +1,5 @@
 import * as os from "node:os";
+import * as nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type FakeWebviewPanel,
@@ -362,7 +363,7 @@ describe("exporting a table", () => {
     state.saveDialogReplies = [TARGET];
     await send({ type: "export", ref: 5, reqId: 2 });
     const options = state.saveDialogOptions[0] as { defaultUri: { fsPath: string } };
-    expect(options.defaultUri.fsPath).toBe(`${os.homedir()}/lua-export.json`);
+    expect(options.defaultUri.fsPath).toBe(nodePath.join(os.homedir(), "lua-export.json"));
   });
 
   it("announces an export too large to open rather than opening it", async () => {

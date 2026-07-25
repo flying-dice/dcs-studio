@@ -31,6 +31,26 @@ vi.mock("child_process", () => ({
     spawner.spawnSync(cmd, args, opts),
 }));
 
+// Two of the four discovery candidates are absolute Program Files paths probed
+// with existsSync — so on a machine that really has 7-Zip installed, which the
+// Windows CI runner does, every "nothing usable here" case would find the
+// host's own copy and answer with it. The suite's whole point is that discovery
+// order is decided by the scenario, not by the machine it runs on.
+//
+// Everything else about the filesystem stays real: these specs pack and split
+// actual files, which is the only way to reach the volume-split path without
+// generating gigabytes. Only the two well-known install locations are forced
+// absent.
+vi.mock("fs", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...real,
+    default: real,
+    existsSync: (p: Parameters<typeof real.existsSync>[0]) =>
+      /7-Zip[\\/]7z\.exe$/i.test(String(p)) ? false : real.existsSync(p),
+  };
+});
+
 import {
   cleanVolumeFamily,
   find7z,

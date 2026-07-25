@@ -66,8 +66,23 @@ let root: string;
 let src: string;
 let dest: string;
 
-/** The same directory addressed so win32 parsing sees a different volume root. */
-const otherVolume = (p: string) => `/${p}`;
+/**
+ * The same file, addressed so `path.win32.parse` sees a different volume root —
+ * which is what `sameVolume()` compares, and therefore what sends the adapter
+ * down the cross-volume branch.
+ *
+ * A second real volume cannot be conjured on either CI host, so this fabricates
+ * the spelling instead, and the spelling has to differ per host because it must
+ * ALSO still resolve to the file for the real symlink/lstat calls below:
+ *
+ * - off Windows, a leading slash — `//tmp/x` is the same file as `/tmp/x` to
+ *   POSIX, while win32 parsing reads `//tmp/x` as its own UNC-ish root;
+ * - on Windows, the extended-length prefix — `\\?\C:\x` is the same file to
+ *   the Win32 API, and parses with root `\\?\C:\` rather than `C:\`.
+ *   (`/C:\x` was the old spelling and does neither: Windows resolves it
+ *    against the current drive, producing `D:\C:\x`, which does not exist.)
+ */
+const otherVolume = (p: string) => (process.platform === "win32" ? `\\\\?\\${p}` : `/${p}`);
 
 beforeEach(() => {
   spawner = createSpawnHarness();
@@ -374,19 +389,30 @@ describe("disable", () => {
 
   it("records a failure per link and still removes the others", async () => {
     // One unremovable link must not abandon the rest of the mod's links.
+    //
+    // The refusal is injected rather than provoked, for the reason this file's
+    // header gives about EPERM: the real case is DCS holding a file open, which
+    // no test can arrange, and the host-specific tricks that fail a removal do
+    // not agree — a path under a regular file is ENOTDIR on POSIX and simply a
+    // missing path to `rmSync(..., { force: true })` on Windows, which counts
+    // as removed. What is under test is the per-link bookkeeping, not the OS.
     const good = path.join(dest, "good.lua");
     nodeFs.symlinkSync(file("mod.lua"), good, "file");
-    const blocker = path.join(dest, "blocker");
-    nodeFs.writeFileSync(blocker, "not a directory");
+    const held = path.join(dest, "held.lua");
+    nodeFs.writeFileSync(held, "in use by DCS");
+    rmFault = (target) => {
+      if (target === held) throw new Error("EBUSY: resource busy or locked");
+    };
 
     const res = new Linker().disable([
       { id: "m:0", installedPath: good },
-      { id: "m:1", installedPath: path.join(blocker, "under-a-file.lua") },
+      { id: "m:1", installedPath: held },
     ]);
     expect(res.removed).toEqual(["m:0"]);
     expect(res.failed).toHaveLength(1);
     expect(res.failed[0].id).toBe("m:1");
-    expect(res.failed[0].message).toMatch(/ENOTDIR/);
+    expect(res.failed[0].message).toMatch(/EBUSY/);
+    // The link that could go, went — the failure did not abandon it.
     expect(nodeFs.existsSync(good)).toBe(false);
   });
 

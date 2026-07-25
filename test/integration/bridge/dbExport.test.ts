@@ -1,4 +1,5 @@
 import * as os from "node:os";
+import * as nodePath from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetVscode, seededText, seedFile, state, vscodeMock } from "../support/vscode";
 
@@ -170,7 +171,7 @@ describe("saving the dump", () => {
 
     await dbExportCommand(clients);
 
-    expect(saveDialogDefault()).toBe(`${os.homedir()}/dcs-db-all.json`);
+    expect(saveDialogDefault()).toBe(nodePath.join(os.homedir(), "dcs-db-all.json"));
   });
 
   it("writes nothing when the save dialog is cancelled, but still tidies up", async () => {

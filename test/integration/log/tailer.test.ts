@@ -315,35 +315,46 @@ describe("LogTailer", () => {
     expect(lines.length).toBe(countAtStop);
   });
 
-  it("reports a path that stats but cannot be read as missing, and recovers when it becomes a real file", async () => {
-    // Everything after the stat is a separate set of syscalls that can fail on
-    // their own: dcs.log deleted between the stat and the open, a savedGamesPath
-    // pointing at something that is not a file, a network share dropping. A
-    // directory reproduces that class deterministically. The loop has to survive
-    // it — an escaping rejection would land as an unhandled error in the
-    // extension host, invisible to the user and fatal to the tail.
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcslog-"));
-    const file = path.join(tmpDir, "dcs.log");
-    fs.mkdirSync(file);
-    const states: string[] = [];
-    const lines: string[] = [];
-    const tailer = makeTailer({
-      filePath: file,
-      pollMs: 20,
-      onLines: (l: string[]) => lines.push(...l),
-      onState: (s: string) => states.push(s),
-      onReset: () => {},
-    });
-    tailer.start();
-    await waitFor(() => states.includes("missing"));
-    fs.rmdirSync(file);
-    fs.writeFileSync(file, "readable at last\n");
-    await waitFor(() => lines.length >= 1);
-    expect(lines).toEqual(["readable at last"]);
-    // Back to "ok" as well, so the viewer's banner clears itself rather than
-    // leaving the log looking permanently gone.
-    expect(states[states.length - 1]).toBe("ok");
-  });
+  it.skipIf(process.platform === "win32")(
+    "reports a path that stats but cannot be read as missing, and recovers when it becomes a real file",
+    async () => {
+      // Everything after the stat is a separate set of syscalls that can fail on
+      // their own: dcs.log deleted between the stat and the open, a savedGamesPath
+      // pointing at something that is not a file, a network share dropping. A
+      // directory reproduces that class deterministically. The loop has to survive
+      // it — an escaping rejection would land as an unhandled error in the
+      // extension host, invisible to the user and fatal to the tail.
+      //
+      // POSIX only, and not for want of trying: a directory stats non-zero here
+      // and so reaches the open that fails, but on Windows it stats as size 0 and
+      // the tailer never opens it (see backfill's note) — so the same setup
+      // exercises a different path there rather than a weaker one. Nothing
+      // portable produces "stats fine, will not open": the alternatives need an
+      // ACL, a foreign process holding an exclusive handle, or a real race
+      // between the stat and the open.
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcslog-"));
+      const file = path.join(tmpDir, "dcs.log");
+      fs.mkdirSync(file);
+      const states: string[] = [];
+      const lines: string[] = [];
+      const tailer = makeTailer({
+        filePath: file,
+        pollMs: 20,
+        onLines: (l: string[]) => lines.push(...l),
+        onState: (s: string) => states.push(s),
+        onReset: () => {},
+      });
+      tailer.start();
+      await waitFor(() => states.includes("missing"));
+      fs.rmdirSync(file);
+      fs.writeFileSync(file, "readable at last\n");
+      await waitFor(() => lines.length >= 1);
+      expect(lines).toEqual(["readable at last"]);
+      // Back to "ok" as well, so the viewer's banner clears itself rather than
+      // leaving the log looking permanently gone.
+      expect(states[states.length - 1]).toBe("ok");
+    },
+  );
 
   it("stop() is safe before start and on a second call", async () => {
     // The log panel calls stop() from its dispose path unconditionally, so a

@@ -184,6 +184,15 @@ export class LogTailer {
     const start = Math.max(0, size - this.backfillBytes);
     this.offset = start;
     this.backfilled = true;
+    // Nothing to read, so nothing is opened. That is right for the common case
+    // — DCS truncates dcs.log on restart, and a 0-byte log is healthy, not
+    // missing — but it does mean a path that stats as 0 and could not be read
+    // anyway is reported "ok". On Windows a DIRECTORY stats as size 0, so a
+    // savedGamesPath pointing at one reads as fine rather than missing; on
+    // POSIX the same directory stats non-zero, fails the open, and is correctly
+    // reported missing. Opening every 0-byte file just to prove it is readable
+    // would cost a syscall per poll to catch a misconfiguration the Setup panel
+    // already refuses.
     if (size === 0) return;
     // Opening mid-file (start > 0) means the very first line read is a
     // fragment of whatever line straddles the backfill boundary — drop it.
