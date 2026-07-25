@@ -9,7 +9,7 @@
   const boot = window.__BOOTSTRAP__;
   const app = document.getElementById("app");
 
-  const { ROOT_TOKENS, MISSION_SCRIPT_RUN_ON, parseToml, emitToml, splitDest } =
+  const { ROOT_TOKENS, MISSION_SCRIPT_RUN_ON, parseToml, emitToml, splitDest, destStaysUnder } =
     self.DcsManifestCore;
   let roots = boot.roots;
   const resolveDest = (dest) => self.DcsManifestCore.resolveDest(dest, roots);
@@ -53,7 +53,12 @@
       if (!r.source.trim()) out.push(`Symlink ${i + 1}: source is empty.`);
       else if (!coveredByBundle(r.source, bundlePaths))
         out.push(`Symlink ${i + 1}: source is not inside any bundled path.`);
-      if (splitDest(r.dest).root === "{GameInstall}" && !roots.gameInstall)
+      // An escaping dest is a hard authoring error, not a machine-local one: it
+      // would be refused at install time on every machine, so say that instead
+      // of the {GameInstall} note (which is about THIS machine's settings).
+      if (!destStaysUnder(r.dest))
+        out.push(`Symlink ${i + 1}: destination reaches outside the DCS folders.`);
+      else if (splitDest(r.dest).root === "{GameInstall}" && !roots.gameInstall)
         out.push(
           `Symlink ${i + 1}: {GameInstall} is not configured (set dcsStudio.gameInstallPath).`,
         );
@@ -190,11 +195,27 @@
       </section>`;
   }
 
+  /**
+   * The body of a symlink row's resolved-destination line. resolveDest returns
+   * null for two very different reasons and the form must not conflate them: a
+   * dest that reaches outside the DCS folders is refused on every machine (an
+   * authoring mistake to fix here), while an unresolvable {GameInstall} is only
+   * about this machine's settings. Shared by the full render and the live
+   * per-keystroke update so the two can never disagree.
+   */
+  function resolvedDestHtml(dest) {
+    if (!destStaysUnder(dest))
+      return `<span class="warn-text" data-testid="escaping-dest-warning">${I.warn} Reaches outside the DCS folders</span>`;
+    const resolved = resolveDest(dest);
+    return resolved
+      ? esc(resolved)
+      : `<span class="warn-text" data-testid="unresolved-warning">${I.warn} {GameInstall} not configured</span>`;
+  }
+
   function sectionSymlink(m) {
     const rows = m.symlink
       .map((r, i) => {
         const { root, rest } = splitDest(r.dest);
-        const resolved = resolveDest(r.dest);
         return `
         <div class="row" data-testid="symlink-row" data-row="symlink-${i}">
           <div class="row-grid">
@@ -209,7 +230,7 @@
               </span>
             </label>
           </div>
-          <div class="resolved mono" data-testid="resolved-dest">${I.arrow}${resolved ? esc(resolved) : `<span class="warn-text" data-testid="unresolved-warning">${I.warn} {GameInstall} not configured</span>`}</div>
+          <div class="resolved mono" data-testid="resolved-dest">${I.arrow}${resolvedDestHtml(r.dest)}</div>
           <button class="rm" data-testid="remove-row-btn" data-rm="symlink" data-idx="${i}" title="Remove link">${I.x}</button>
         </div>`;
       })
@@ -374,10 +395,7 @@
   function updateResolved(i) {
     const row = app.querySelector(`[data-row="symlink-${i}"] .resolved`);
     if (!row) return;
-    const resolved = resolveDest(state.model.symlink[i].dest);
-    row.innerHTML = resolved
-      ? I.arrow + esc(resolved)
-      : `<span class="warn-text" data-testid="unresolved-warning">${I.warn} {GameInstall} not configured</span>`;
+    row.innerHTML = I.arrow + resolvedDestHtml(state.model.symlink[i].dest);
   }
 
   function renderPreview() {

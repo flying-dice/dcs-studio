@@ -154,42 +154,63 @@ Feature: One-click mod install
 
   Rule: The manifest comes from a stranger's release and must not reach outside the DCS roots
 
-    @chaos
-    Scenario Outline: A destination that looks absolute is pinned under the root anyway
-      Given a [[symlink]] rule whose dest is "<dest>"
+    Every path a dcs-studio.toml declares — a [[symlink]] dest and source, an
+    [[entrypoint]] exe and cwd, a [[mission_script]] path — is measured against
+    the same containment predicate the bridge applies to its write root, so the
+    two halves of the product cannot disagree about what a safe relative path
+    is. A mod that fails it is refused at plan time: the product page shows it
+    as not installable with the reason, and nothing is downloaded, recorded in
+    the ledger or handed to the linker.
+
+    Scenario: A destination written root-relative is still pinned under the root
+      Given a [[symlink]] rule whose dest is "/Scripts/Hooks"
       When the install resolves that rule
-      Then it resolves under the configured root, to "<resolved>":
-        an unrecognised root token is treated as {SavedGames} and any leading
-        separator is stripped
-      And nothing is written to the literal path the manifest asked for
+      Then it resolves to "{SavedGames}\Scripts\Hooks" — a leading separator
+        names the configured root, not the filesystem root, and a dest with no
+        root token at all is treated as {SavedGames}-relative
+
+    @chaos
+    Scenario Outline: A destination that reaches outside the DCS roots
+      Given a [[symlink]] rule whose dest is "<dest>"
+      When the user clicks "Install"
+      Then the mod is refused before anything is downloaded, naming the dest
+      And nothing is written outside the configured {SavedGames} / {GameInstall}
+        roots
 
       Examples:
-        | dest                      | resolved                               |
-        | C:/Windows/System32/evil  | {SavedGames}\C:\Windows\System32\evil  |
-        | //server/share/payload    | {SavedGames}\server\share\payload      |
-        | /Scripts/Hooks            | {SavedGames}\Scripts\Hooks             |
-
-    @chaos
-    Scenario: A destination that walks up out of the DCS roots
-      Given a [[symlink]] rule with dest "{SavedGames}/../../Windows/System32/evil.dll"
-      When the user clicks "Install"
-      Then the rule is rejected before any link is created, naming it
-      And nothing is written outside the configured {SavedGames} / {GameInstall}
-        roots # UNVERIFIED: the dest is joined verbatim — ".." is neither stripped nor normalised and there is no containment check, so today this resolves outside the roots and is handed to the linker
+        | dest                                         | shape                            |
+        | {SavedGames}/../../Windows/System32/evil.dll | climbs out with ".."             |
+        | {GameInstall}/..\..\evil.dll                 | climbs out on the other slash    |
+        | C:/Windows/System32/evil                     | drive prefix                     |
+        | //server/share/payload                       | UNC path                         |
+        | {SavedGames}/notes.txt:hidden                | NTFS alternate data stream       |
+        | {SavedGames}                                 | the root itself, not a path in it |
 
     @chaos
     Scenario: A source that walks up out of the mod's unpacked folder
       Given a [[symlink]] rule with source "../../Windows/System32"
       When the user clicks "Install"
-      Then the rule is rejected, naming it
+      Then the mod is refused, naming the source
       And no link created in the DCS folders points at anything outside the
-        mod's own unpacked directory # UNVERIFIED: source is joined onto the unpacked dir with no containment check, so today the escaped path is linked whenever it exists
+        mod's own unpacked directory
 
     @chaos
-    Scenario: A destination naming an NTFS alternate data stream
-      Given a [[symlink]] rule with dest "{SavedGames}/notes.txt:hidden"
-      Then the rule is rejected the way the bridge's write-root guard rejects
-        alternate-data-stream writes # UNVERIFIED: the install path has no such guard; the dest resolves to "<SavedGames>\notes.txt:hidden" and is passed to the linker as an ordinary path
+    Scenario: An escaping exe or mission script, even with every link contained
+      Given every [[symlink]] rule stays under the roots
+      But an "[[entrypoint]] exe" or a "[[mission_script]] path" walks out of
+        the unpacked folder
+      Then the mod is refused just the same, naming that path — the ledger
+        entry is what would later let My Mods launch the exe, or the mission
+        aggregator dofile the script, neither of which needs the mod enabled
+
+    @chaos
+    Scenario: An already-subscribed mod whose manifest changed on disk
+      Given the mod was recorded before the containment guard existed, or its
+        unpacked dcs-studio.toml was replaced afterwards
+      When the user enables it
+      Then the manifest is re-checked as it is read, and enabling fails with
+        the same reason — the check at install time is not trusted to still
+        hold at link time
 
   Rule: Shared DCS folders never block an install
 

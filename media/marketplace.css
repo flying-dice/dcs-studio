@@ -399,6 +399,23 @@ select {
   font-size: 12px;
 }
 
+/* Why a mod with an escaping manifest is not offered for install. */
+.unsafe-reasons {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.unsafe-reasons li {
+  margin-top: 4px;
+  word-break: break-all;
+}
+
+/* A plan row whose declared path reaches outside its root. */
+.plan-item[data-escapes="true"] {
+  color: var(--vscode-editorError-foreground, #f14c4c);
+}
+
 .plan-item {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 11px;

@@ -144,8 +144,21 @@ Feature: Product page
     @chaos
     Scenario: A manifest whose destination walks out of the DCS roots
       Given a [[symlink]] rule with dest "{SavedGames}/../../Windows/System32"
-      Then the product page flags the rule as escaping the configured DCS roots
-        and does not offer the mod for install # UNVERIFIED: destinations are joined verbatim — ".." segments are neither stripped nor normalised and there is no containment check, so today this renders as an ordinary install-plan row
+      Then the install plan still enumerates every rule, so the user can see
+        what the mod wanted to do
+      And the offending rule is flagged, and only that one
+      And the "Install" action is replaced by "Not installable — this mod's
+        manifest asks to write outside your DCS folders", listing each path
+        and what it reaches outside of
+      And an install message arriving anyway — from a page rendered before the
+        manifest was re-read — is refused before anything is downloaded
+
+    @chaos
+    Scenario: A mod already installed before its manifest started escaping
+      Given the mod is installed
+      And its latest release's manifest now names a path outside the DCS roots
+      Then the page still offers "Uninstall" — refusing the install must not
+        take away the way out of one done earlier
 ```
 
 ## Design intent (not yet implemented)

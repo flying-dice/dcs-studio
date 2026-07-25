@@ -406,3 +406,87 @@ test.describe("marketplace — install manifest transparency (#12)", () => {
     await expect(page.getByTestId("install-btn")).toBeVisible();
   });
 });
+
+test.describe("marketplace — a manifest reaching outside the DCS folders (#16)", () => {
+  // The host derives this view from the release's dcs-studio.toml and refuses
+  // the mod from the same list; the page's job is to say so instead of offering
+  // an install that could only fail. Pushed directly so the shape under test is
+  // exactly what src/core/domain/installManifestView.ts produces.
+  const ESCAPING = {
+    known: true,
+    bundles: [{ path: "payload" }],
+    symlinks: [
+      {
+        source: "payload/ok.lua",
+        dest: "{SavedGames}/Scripts/ok.lua",
+        resolved: "C:\\SG\\DCS\\Scripts\\ok.lua",
+        escapes: false,
+      },
+      {
+        source: "payload/evil.dll",
+        dest: "{SavedGames}/../../Windows/System32/evil.dll",
+        resolved: null,
+        escapes: true,
+      },
+    ],
+    entrypoints: [],
+    missionScripts: [],
+    counts: { bundles: 1, symlinks: 2, entrypoints: 0, missionScripts: 0, beforeSanitize: 0 },
+    risks: ["links-files"],
+    unsafePaths: [
+      {
+        kind: "symlink-dest",
+        value: "{SavedGames}/../../Windows/System32/evil.dll",
+        reason:
+          'Link destination "{SavedGames}/../../Windows/System32/evil.dll" reaches outside the configured DCS folders.',
+      },
+    ],
+  };
+
+  async function openEscapingProduct(page: import("@playwright/test").Page, installed = false) {
+    await openProduct(page, "utils/dcs-lua-common");
+    await hostSend(page, {
+      type: "product",
+      product: {
+        repo: "shady/free-skins",
+        name: "Free Skins Pack",
+        author: "shady",
+        repo_url: "https://github.com/shady/free-skins",
+        avatar_url: "../media/icon.png",
+        stars: 3,
+        assets: [],
+        release_tag: "v1.0.0",
+        installable: true,
+      },
+      manifest: ESCAPING,
+      installed,
+    });
+  }
+
+  test("is not offered for install, and every reason is named", async ({ page }) => {
+    await openEscapingProduct(page);
+    await expect(page.getByTestId("unsafe-manifest-note")).toContainText("Not installable");
+    await expect(page.getByTestId("unsafe-reasons")).toContainText(
+      "reaches outside the configured DCS folders",
+    );
+    await expect(page.getByTestId("install-btn")).toHaveCount(0);
+  });
+
+  test("flags the offending rule while still showing the whole plan", async ({ page }) => {
+    await openEscapingProduct(page);
+    // The user can see exactly what the mod wanted to do, not just that it was
+    // refused — and only the rule at fault is flagged.
+    await expect(page.getByTestId("symlink-item")).toHaveCount(2);
+    await expect(page.locator('[data-testid="symlink-item"][data-escapes="true"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid="symlink-item"][data-escapes="true"]')).toContainText(
+      "evil.dll",
+    );
+  });
+
+  test("an already-installed mod still gets its uninstall action", async ({ page }) => {
+    // Refusing the install must not strip the way out of one done earlier.
+    await openEscapingProduct(page, true);
+    await expect(page.getByTestId("uninstall-btn")).toBeVisible();
+    await expect(page.getByTestId("unsafe-manifest-note")).toHaveCount(0);
+  });
+});

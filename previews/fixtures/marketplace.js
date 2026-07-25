@@ -176,21 +176,64 @@
   // and posts it; the fixture reproduces the same shape so the webview renders
   // exactly what production would. (The derivation logic itself is unit-tested in
   // vitest; this stand-in only needs to match the output shape.)
+  // Containment mirror of src/core/domain/pathContainment.ts — see there for
+  // why the rules are spelled out rather than delegated to a path library.
+  function staysUnder(p) {
+    if (!p) return false;
+    if (p.includes(":")) return false;
+    if (p.startsWith("/") || p.startsWith("\\")) return false;
+    let normal = 0;
+    for (const c of p.split(/[/\\]/)) {
+      if (c === "" || c === "..") return false;
+      if (c !== ".") normal++;
+    }
+    return normal > 0;
+  }
+  function destStaysUnder(dest) {
+    for (const t of ["{SavedGames}", "{GameInstall}"]) {
+      if (dest.startsWith(t)) return staysUnder(dest.slice(t.length).replace(/^\//, ""));
+    }
+    return staysUnder(dest.replace(/^\//, ""));
+  }
+  function unsafe(kind, subject, root, value) {
+    return { kind, value, reason: subject + ' "' + value + '" reaches outside ' + root + "." };
+  }
+  function symlinkEscapes(s) {
+    const out = [];
+    if (!destStaysUnder(s.dest)) out.push(unsafe("symlink-dest", "Link destination", "the configured DCS folders", s.dest));
+    if (!staysUnder(s.source)) out.push(unsafe("symlink-source", "Link source", "the mod's own folder", s.source));
+    return out;
+  }
+  function entrypointEscapes(e) {
+    const out = [];
+    if (!staysUnder(e.exe)) out.push(unsafe("entrypoint-exe", "Executable", "the mod's own folder", e.exe));
+    if (e.cwd && !staysUnder(e.cwd)) out.push(unsafe("entrypoint-cwd", "Executable working directory", "the mod's own folder", e.cwd));
+    return out;
+  }
+  function missionScriptEscapes(m) {
+    return staysUnder(m.path) ? [] : [unsafe("mission-script-path", "Mission script", "the mod's own folder", m.path)];
+  }
+
   function deriveManifest(surface) {
     if (!surface) {
-      return { known: false, bundles: [], symlinks: [], entrypoints: [], missionScripts: [], counts: { bundles: 0, symlinks: 0, entrypoints: 0, missionScripts: 0, beforeSanitize: 0 }, risks: [] };
+      return { known: false, bundles: [], symlinks: [], entrypoints: [], missionScripts: [], counts: { bundles: 0, symlinks: 0, entrypoints: 0, missionScripts: 0, beforeSanitize: 0 }, risks: [], unsafePaths: [] };
     }
     const bundles = (surface.bundles || []).map((b) => ({ path: b.path }));
-    const symlinks = (surface.symlinks || []).map((s) => ({ source: s.source, dest: s.dest, resolved: s.resolved == null ? null : s.resolved }));
-    const entrypoints = (surface.entrypoints || []).map((e) => ({ id: e.id, name: e.name, exe: e.exe, args: e.args || [], cwd: e.cwd == null ? null : e.cwd }));
-    const missionScripts = (surface.missionScripts || []).map((m) => ({ name: m.name, purpose: m.purpose == null ? null : m.purpose, path: m.path, run_on: m.run_on, beforeSanitize: m.run_on === "before-sanitize" }));
+    const symlinks = (surface.symlinks || []).map((s) => ({ source: s.source, dest: s.dest, resolved: s.resolved == null ? null : s.resolved, escapes: symlinkEscapes(s).length > 0 }));
+    const entrypoints = (surface.entrypoints || []).map((e) => ({ id: e.id, name: e.name, exe: e.exe, args: e.args || [], cwd: e.cwd == null ? null : e.cwd, escapes: entrypointEscapes(e).length > 0 }));
+    const missionScripts = (surface.missionScripts || []).map((m) => ({ name: m.name, purpose: m.purpose == null ? null : m.purpose, path: m.path, run_on: m.run_on, beforeSanitize: m.run_on === "before-sanitize", escapes: missionScriptEscapes(m).length > 0 }));
     const beforeSanitize = missionScripts.filter((m) => m.beforeSanitize).length;
     const counts = { bundles: bundles.length, symlinks: symlinks.length, entrypoints: entrypoints.length, missionScripts: missionScripts.length, beforeSanitize };
     const risks = [];
     if (symlinks.length) risks.push("links-files");
     if (entrypoints.length) risks.push("runs-executable");
     if (beforeSanitize) risks.push("pre-sanitize-script");
-    return { known: true, bundles, symlinks, entrypoints, missionScripts, counts, risks };
+    const unsafePaths = [].concat(
+      ...(surface.symlinks || []).map(symlinkEscapes),
+      ...(surface.entrypoints || []).map(entrypointEscapes),
+      ...(surface.missionScripts || []).map(missionScriptEscapes),
+    );
+    return { known: true, bundles, symlinks, entrypoints, missionScripts, counts, risks, unsafePaths };
   }
 
   function manifestFor(p) {

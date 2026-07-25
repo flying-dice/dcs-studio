@@ -1,6 +1,11 @@
 import { win32 as path } from "node:path";
 import { selectPayloadVolumes } from "../domain/archivePolicy";
 import {
+  type InstallManifestInput,
+  unsafeManifestMessage,
+  unsafeManifestPaths,
+} from "../domain/installManifestView";
+import {
   AFTER_SANITIZE_FILE,
   type AggregatorEntry,
   BEFORE_SANITIZE_FILE,
@@ -204,6 +209,23 @@ export class SubscriptionService {
   }
 
   /**
+   * Refuse a manifest surface that declares a path reaching outside its root.
+   *
+   * The manifest came from a stranger's release, so `..`, a drive prefix or an
+   * NTFS stream suffix in a `dest` is an arbitrary-write primitive and the same
+   * in a `source`/`exe`/mission-script `path` reads (or runs) whatever the mod
+   * points at. The product page refuses such a mod from the same predicate at
+   * plan time; these two calls are what make the refusal true even when the
+   * page was never opened, or the manifest changed after it was.
+   *
+   * @throws when any declared path fails containment, naming every one.
+   */
+  private refuseUnsafeManifest(surface: InstallManifestInput): void {
+    const unsafe = unsafeManifestPaths(surface);
+    if (unsafe.length) throw new Error(unsafeManifestMessage(unsafe));
+  }
+
+  /**
    * Regenerate BOTH managed aggregator files from scratch from the full set of
    * currently-enabled subscriptions, so they always reflect current enabled
    * state and never reference a disabled or uninstalled mod. Called after every
@@ -251,6 +273,12 @@ export class SubscriptionService {
     // Snapshot declared entrypoints + mission scripts so My Mods can launch and
     // the aggregators can regenerate without re-fetching manifests.
     const snapshot = await this.readSnapshot(dir);
+    // The snapshot is what every later action reads — enable links from it, the
+    // aggregators dofile from it, My Mods launches from it — so a path that
+    // reaches outside its root must never enter the ledger in the first place.
+    // The unpacked payload is left on disk (inert, and a retry overwrites it);
+    // what is refused is the record that would let the rest of the app act on it.
+    this.refuseUnsafeManifest(snapshot);
     const sub: Subscription = {
       repo: target.repo,
       name: target.name,
@@ -278,6 +306,16 @@ export class SubscriptionService {
     const model = this.ports.manifest.parseToml(
       await this.ports.fs.readText(path.join(sub.dir, MANIFEST)),
     );
+    // Re-checked here rather than trusted from subscribe: enable reads the
+    // manifest off disk, and that file can have been replaced (or recorded by a
+    // build of DCS Studio that predates the guard) since the ledger entry was
+    // written. This is the last point before real paths reach the linker.
+    this.refuseUnsafeManifest({
+      bundles: model.bundle,
+      symlinks: model.symlink,
+      entrypoints: model.entrypoint ?? [],
+      missionScripts: model.mission_script ?? [],
+    });
     const r = this.roots();
     const defs: LinkDefinition[] = [];
     model.symlink.forEach((rule, i) => {

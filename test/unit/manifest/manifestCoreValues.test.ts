@@ -3,8 +3,22 @@ import { win32 as path } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import DcsManifestCore from "../../../media/manifest-core.js";
+import {
+  destStaysUnder as domainDestStaysUnder,
+  staysUnder as domainStaysUnder,
+} from "../../../src/core/domain/pathContainment";
 
-const { parseVal, q, emitToml, splitDest, winJoin, resolveDest, emptyModel } = DcsManifestCore;
+const {
+  parseVal,
+  q,
+  emitToml,
+  splitDest,
+  winJoin,
+  staysUnder,
+  destStaysUnder,
+  resolveDest,
+  emptyModel,
+} = DcsManifestCore;
 
 // Scalar coercion, dest-token resolution and the UMD wrapper — the parts of
 // manifest-core the round-trip tests never reach because they only exercise
@@ -273,6 +287,75 @@ describe("resolveDest", () => {
 
   it("resolves an untokenised dest against Saved Games", () => {
     expect(resolveDest("Scripts/a.lua", roots)).toBe(path.join("C:\\SG\\DCS", "Scripts", "a.lua"));
+  });
+
+  it("refuses a dest that walks up out of the roots (issue #16)", () => {
+    // Before the guard this returned "C:\SG\DCS\..\..\Windows\System32\evil.dll",
+    // which Windows normalises to C:\Windows\System32\evil.dll — a mod picking
+    // its own install location.
+    expect(resolveDest("{SavedGames}/../../Windows/System32/evil.dll", roots)).toBeNull();
+    expect(resolveDest("{GameInstall}/../../Windows/System32/evil.dll", roots)).toBeNull();
+  });
+
+  it("refuses an NTFS alternate-data-stream dest", () => {
+    expect(resolveDest("{SavedGames}/notes.txt:hidden", roots)).toBeNull();
+  });
+
+  it("refuses before consulting either root, so the refusal never depends on settings", () => {
+    // {GameInstall} unconfigured AND escaping: still null, and destStaysUnder is
+    // what tells the two apart for the caller.
+    expect(resolveDest("{GameInstall}/../x", { savedGames: "C:\\SG\\DCS" })).toBeNull();
+    expect(destStaysUnder("{GameInstall}/../x")).toBe(false);
+    expect(destStaysUnder("{GameInstall}/Mods/x")).toBe(true);
+  });
+});
+
+describe("staysUnder (webview copy)", () => {
+  // The predicate the browser gets. Its behaviour is specified once, in
+  // src/core/domain/pathContainment.ts; this asserts the copy agrees rather
+  // than re-litigating the rules.
+  const CASES = [
+    "dcs.log",
+    "Logs/dcs.log",
+    "Logs\\dcs.log",
+    "./dcs.log",
+    "a/./b",
+    "",
+    ".",
+    "./.",
+    "/",
+    "\\",
+    "..",
+    "../secrets",
+    "..\\secrets",
+    "Logs/../../secrets",
+    "a/b/../../../../etc/passwd",
+    "/etc/passwd",
+    "\\Windows\\System32",
+    "\\\\server\\share\\x",
+    "//server/share/x",
+    "C:\\Windows\\System32",
+    "C:/Windows",
+    "C:relative",
+    "notes.txt:hidden",
+    "a/b.txt:$DATA",
+    "a//b",
+    "a/",
+  ];
+
+  it("gives the same verdict as the domain predicate for every case", () => {
+    for (const c of CASES) {
+      expect([c, staysUnder(c)]).toEqual([c, domainStaysUnder(c)]);
+    }
+  });
+
+  it("agrees with the domain predicate about manifest dests too", () => {
+    for (const c of CASES) {
+      for (const token of ["", "{SavedGames}/", "{GameInstall}/"]) {
+        const dest = token + c;
+        expect([dest, destStaysUnder(dest)]).toEqual([dest, domainDestStaysUnder(dest)]);
+      }
+    }
   });
 });
 

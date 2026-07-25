@@ -274,6 +274,25 @@ describe("product page", () => {
     await h.presenter.handle({ type: "openProduct" });
     expect(h.posted).toEqual([]);
   });
+
+  it("carries the escaping paths in the posted manifest view (issue #16)", async () => {
+    const h = harness({
+      subs: {
+        ...harness().deps.subs,
+        fetchPlan: async () =>
+          ({
+            requires: [],
+            bundles: [],
+            symlinks: [{ source: "p", dest: "{SavedGames}/../../evil", resolved: null }],
+            entrypoints: [],
+            missionScripts: [],
+          }) as never,
+      },
+    });
+    await h.presenter.handle({ type: "openProduct", repo: "Owner/Repo" });
+    const manifest = typed(h.posted, "product")[0].manifest as { unsafePaths: unknown[] };
+    expect(manifest.unsafePaths).toHaveLength(1);
+  });
 });
 
 describe("install", () => {
@@ -355,6 +374,65 @@ describe("install", () => {
     const h = harness();
     await h.presenter.handle({ type: "install" });
     expect(h.posted).toEqual([]);
+  });
+
+  // Issue #16: the page hides the install action for these, but the message can
+  // still arrive from a page rendered before the manifest was re-read. The
+  // refusal has to be enforced here, before anything is downloaded.
+  it("refuses to install a mod whose manifest reaches outside the DCS folders", async () => {
+    const base = harness().deps;
+    const h = await withCachedProduct({
+      subs: {
+        ...base.subs,
+        fetchPlan: async () =>
+          ({
+            requires: [],
+            bundles: [],
+            symlinks: [
+              { source: "p", dest: "{SavedGames}/../../Windows/System32", resolved: null },
+            ],
+            entrypoints: [],
+            missionScripts: [],
+          }) as never,
+      },
+    });
+    await h.presenter.handle({ type: "install", repo: "Owner/Repo" });
+
+    expect(typed(h.posted, "installError")[0]).toMatchObject({
+      message:
+        "This mod's manifest asks to write outside your DCS folders. " +
+        'Link destination "{SavedGames}/../../Windows/System32" reaches outside the configured DCS folders.',
+    });
+    expect(typed(h.posted, "installProgress")).toEqual([]);
+    expect(typed(h.posted, "installed")).toEqual([]);
+  });
+
+  it("clears an earlier refusal when the product is re-opened with a clean manifest", async () => {
+    // The refusal is per-load, not sticky: a mod that fixes its manifest in a
+    // new release must become installable again without restarting the editor.
+    let hostile = true;
+    const h = await withCachedProduct({
+      subs: {
+        ...harness().deps.subs,
+        fetchPlan: async () =>
+          ({
+            requires: [],
+            bundles: [],
+            symlinks: [
+              { source: "p", dest: hostile ? "{SavedGames}/../evil" : "{SavedGames}/Scripts/x" },
+            ],
+            entrypoints: [],
+            missionScripts: [],
+          }) as never,
+      },
+    });
+    await h.presenter.handle({ type: "install", repo: "Owner/Repo" });
+    expect(typed(h.posted, "installed")).toEqual([]);
+
+    hostile = false;
+    await h.presenter.handle({ type: "openProduct", repo: "Owner/Repo" });
+    await h.presenter.handle({ type: "install", repo: "Owner/Repo" });
+    expect(typed(h.posted, "installed")).toHaveLength(1);
   });
 });
 

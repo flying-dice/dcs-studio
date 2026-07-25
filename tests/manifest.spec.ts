@@ -348,3 +348,50 @@ test.describe("manifest — validation and host pushes", () => {
     expect(errors).toEqual([]);
   });
 });
+
+test.describe("manifest — a destination reaching outside the DCS folders (#16)", () => {
+  // resolveDest returns null for two unrelated reasons, and the form must not
+  // conflate them: an escaping dest is refused on every machine (fix it here),
+  // an unconfigured {GameInstall} is only about this machine's settings.
+  const ESCAPING = [
+    "[project]",
+    'name = "shady"',
+    "",
+    "[[bundle]]",
+    'path = "payload"',
+    "",
+    "[[symlink]]",
+    'source = "payload/evil.dll"',
+    'dest = "{SavedGames}/../../Windows/System32/evil.dll"',
+    "",
+  ].join("\n");
+
+  test("says the destination leaves the DCS folders instead of blaming the roots", async ({
+    page,
+  }) => {
+    const errors = await openPreview(page, "manifest");
+    await hostSend(page, { type: "external", rawText: ESCAPING });
+
+    await expect(page.getByTestId("escaping-dest-warning")).toBeVisible();
+    await expect(page.getByTestId("unresolved-warning")).toHaveCount(0);
+    await expect(page.getByTestId("validation-issues")).toContainText(
+      "Symlink 1: destination reaches outside the DCS folders.",
+    );
+    expect(errors).toEqual([]);
+  });
+
+  test("warns as the author types, not only on a full redraw", async ({ page }) => {
+    // The per-keystroke update and the full render share one renderer, so the
+    // warning has to appear without the row being rebuilt.
+    await openPreview(page, "manifest");
+    const rest = page.locator('[data-sec="symlink"][data-idx="0"][data-key="__rest"]');
+    await rest.fill("../../Windows/System32/evil.dll");
+
+    await expect(page.getByTestId("escaping-dest-warning")).toBeVisible();
+    await rest.fill("Scripts/ok.lua");
+    await expect(page.getByTestId("escaping-dest-warning")).toHaveCount(0);
+    await expect(page.getByTestId("resolved-dest")).toContainText(
+      "Saved Games\\DCS\\Scripts\\ok.lua",
+    );
+  });
+});

@@ -577,6 +577,53 @@ describe("subscribe", () => {
     expect(w.ledger.store["owner/repo"].missionScripts).toEqual(sub.missionScripts);
   });
 
+  // Issue #16: the snapshot is what every later action reads, so a manifest
+  // declaring a path outside its root must never become a ledger entry — that
+  // entry is what would let My Mods launch the exe or the aggregator dofile the
+  // script, neither of which needs the mod to be enabled first.
+  it("refuses to record a mod whose manifest reaches outside the DCS roots", async () => {
+    const w = makeWorld();
+    const hostile: ManifestModel = {
+      ...MODEL,
+      symlink: [{ source: "Scripts/X", dest: "{SavedGames}/notes.txt:hidden" }],
+    };
+    w.archive.unpacked.set("dcs-studio.toml", JSON.stringify(hostile));
+
+    await expect(w.service.subscribe(target(), undefined, w.onProgress)).rejects.toThrow(
+      "This mod's manifest asks to write outside your DCS folders.",
+    );
+    expect(w.ledger.store).toEqual({});
+    expect(w.ledger.saves).toEqual([]);
+  });
+
+  it("refuses a mod whose entrypoint exe escapes the unpacked folder", async () => {
+    const w = makeWorld();
+    const hostile: ManifestModel = {
+      ...MODEL,
+      entrypoint: [{ id: "x", name: "X", exe: "../../Windows/System32/cmd.exe" }],
+    };
+    w.archive.unpacked.set("dcs-studio.toml", JSON.stringify(hostile));
+
+    await expect(w.service.subscribe(target(), undefined, w.onProgress)).rejects.toThrow(
+      'Executable "../../Windows/System32/cmd.exe" reaches outside the mod\'s own folder.',
+    );
+    expect(w.ledger.store).toEqual({});
+  });
+
+  it("refuses a mod whose mission script escapes the unpacked folder", async () => {
+    const w = makeWorld();
+    const hostile: ManifestModel = {
+      ...MODEL,
+      mission_script: [{ name: "L", path: "../../evil.lua", run_on: "before-sanitize" }],
+    };
+    w.archive.unpacked.set("dcs-studio.toml", JSON.stringify(hostile));
+
+    await expect(w.service.subscribe(target(), undefined, w.onProgress)).rejects.toThrow(
+      'Mission script "../../evil.lua" reaches outside the mod\'s own folder.',
+    );
+    expect(w.ledger.store).toEqual({});
+  });
+
   it("tolerates a manifest lacking the entrypoint/mission_script fields (older schema)", async () => {
     const w = makeWorld();
     const old = {
@@ -670,6 +717,59 @@ describe("enable", () => {
     );
     expect(w.ledger.saves).toEqual([]);
     expect(w.ledger.store["owner/repo"].enabled).toBe(false);
+  });
+
+  // Issue #16: enable re-reads the manifest off disk, so it re-checks it. A
+  // ledger written before the guard existed, or a manifest replaced under an
+  // already-subscribed mod, must not reach the linker.
+  it("refuses a manifest whose dest walks out of the DCS roots, before linking", async () => {
+    const w = makeWorld();
+    const model = {
+      ...MODEL,
+      symlink: [{ source: "Scripts/X", dest: "{SavedGames}/../../Windows/System32/evil.dll" }],
+    };
+    w.ledger.store = { "owner/repo": seeded() };
+    w.fs.files.set(path.join(MOD_DIR, "dcs-studio.toml"), JSON.stringify(model));
+
+    await expect(w.service.enable("Owner/Repo")).rejects.toThrow(
+      'Link destination "{SavedGames}/../../Windows/System32/evil.dll" reaches outside the configured DCS folders.',
+    );
+    expect(w.linker.enables).toEqual([]);
+    expect(w.ledger.saves).toEqual([]);
+    expect(w.ledger.store["owner/repo"].enabled).toBe(false);
+  });
+
+  it("refuses a manifest whose source walks out of the unpacked folder", async () => {
+    const w = makeWorld();
+    const model = {
+      ...MODEL,
+      symlink: [{ source: "../../Windows/System32", dest: "{SavedGames}/Scripts/X" }],
+    };
+    w.ledger.store = { "owner/repo": seeded() };
+    w.fs.files.set(path.join(MOD_DIR, "dcs-studio.toml"), JSON.stringify(model));
+
+    await expect(w.service.enable("Owner/Repo")).rejects.toThrow(
+      'Link source "../../Windows/System32" reaches outside the mod\'s own folder.',
+    );
+    expect(w.linker.enables).toEqual([]);
+  });
+
+  it("refuses an on-disk manifest lacking the newer sections without tripping over them", async () => {
+    // The optional-section defaulting in the containment check has to survive an
+    // older payload, or the guard itself becomes the failure.
+    const w = makeWorld();
+    const old = {
+      project: MODEL.project,
+      bundle: [],
+      symlink: [{ source: "Scripts/X", dest: "{SavedGames}/Scripts/X" }],
+      requires_module: [],
+      extras: [],
+    };
+    w.ledger.store = { "owner/repo": seeded() };
+    w.fs.files.set(path.join(MOD_DIR, "dcs-studio.toml"), JSON.stringify(old));
+
+    await w.service.enable("Owner/Repo");
+    expect(w.ledger.store["owner/repo"].enabled).toBe(true);
   });
 });
 

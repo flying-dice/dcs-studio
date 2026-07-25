@@ -216,17 +216,16 @@ Feature: My Mods panel
     @chaos
     Scenario: An entrypoint exe declared as an absolute path
       Given "[[entrypoint]] exe" is "C:\Windows\System32\calc.exe"
-      Then it is joined onto the mod's unpacked dir rather than used as an
-        absolute path, resolving to "<unpackedDir>\C:\Windows\System32\calc.exe"
-      And the confirmation modal names that resolved path, so the user judges
-        what will actually run
-      And launching fails with "Executable not found: <that path>"
+      Then the mod never reaches My Mods to be launched: an exe that is not a
+        contained relative path is refused when the mod is installed, so no
+        ledger entry naming it is ever written (see story 006)
 
     @chaos
     Scenario: An entrypoint exe that walks out of the mod folder
       Given "[[entrypoint]] exe" is "..\..\..\Windows\System32\calc.exe"
-      Then the launch is refused because the exe resolves outside the mod's
-        unpacked directory # UNVERIFIED: the path is joined with no containment check, so it does resolve outside; the only protection today is that the modal names the resolved absolute path and consent is required per mod + entrypoint
+      Then the mod is refused at install time for the same reason, so there is
+        no Launch button to press — the containment check runs before the exe
+        is recorded, not in front of the confirmation modal
 
     @chaos
     Scenario: Declining the launch prompt

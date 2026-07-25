@@ -1,4 +1,4 @@
-import { deriveInstallManifestView } from "../domain/installManifestView";
+import { deriveInstallManifestView, unsafeManifestMessage } from "../domain/installManifestView";
 import type { ProductDetail } from "../domain/types";
 import type { AuthPort } from "../ports/auth";
 import type { MarketplacePort } from "../ports/marketplace";
@@ -58,6 +58,13 @@ export class MarketplacePresenter {
   private browsing = false;
   /** Products loaded this session, keyed by lowercased repo. */
   private readonly products = new Map<string, ProductDetail>();
+  /**
+   * Why a loaded product may not be installed, keyed like `products`. Set when
+   * its manifest declares a path reaching outside the DCS roots — the webview
+   * hides the install action for those, and this makes an `install` message
+   * arriving anyway (a stale page, a crafted post) refuse before downloading.
+   */
+  private readonly refusals = new Map<string, string>();
 
   constructor(private readonly deps: MarketplacePresenterDeps) {}
 
@@ -143,10 +150,15 @@ export class MarketplacePresenter {
         // A missing or unreadable manifest just means no plan preview — shown
         // as the explicit "install actions unknown" state, never a silent gap.
       }
+      const manifest = deriveInstallManifestView(plan);
+      const key = product.repo.toLowerCase();
+      if (manifest.unsafePaths.length)
+        this.refusals.set(key, unsafeManifestMessage(manifest.unsafePaths));
+      else this.refusals.delete(key);
       this.deps.post({
         type: "product",
         product,
-        manifest: deriveInstallManifestView(plan),
+        manifest,
         requires: plan?.requires ?? [],
         installed: await this.deps.subs.isSubscribed(product.repo),
       });
@@ -160,6 +172,14 @@ export class MarketplacePresenter {
     // silently ignored rather than installed from a half-known descriptor.
     const product = this.products.get(repo.toLowerCase());
     if (!product) return;
+    // A manifest that reaches outside the DCS roots is refused here, before the
+    // payload is even downloaded — the same verdict the product page rendered
+    // in place of the install button, enforced rather than assumed.
+    const refusal = this.refusals.get(repo.toLowerCase());
+    if (refusal) {
+      this.deps.post({ type: "installError", repo, message: refusal });
+      return;
+    }
     if (!product.release_tag) {
       this.deps.post({
         type: "installError",

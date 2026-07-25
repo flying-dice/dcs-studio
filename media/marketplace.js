@@ -117,7 +117,7 @@
       ? manifest.symlinks
           .map(
             (s) =>
-              `<div class="plan-item" data-testid="symlink-item"><div>${esc(s.source)}</div><div class="plan-dest">${I.arrow}${esc(
+              `<div class="plan-item" data-testid="symlink-item" data-escapes="${s.escapes}"><div>${esc(s.source)}</div><div class="plan-dest">${I.arrow}${esc(
                 s.resolved || s.dest,
               )}</div></div>`,
           )
@@ -133,7 +133,7 @@
     const items = manifest.entrypoints
       .map(
         (e) =>
-          `<div class="plan-item warn-item" data-testid="executable-item"><div>${I.terminal} <strong>${esc(
+          `<div class="plan-item warn-item" data-testid="executable-item" data-escapes="${e.escapes}"><div>${I.terminal} <strong>${esc(
             e.name,
           )}</strong></div><div class="plan-dest mono">${esc(e.exe)}${
             e.args?.length ? ` ${esc(e.args.join(" "))}` : ""
@@ -153,7 +153,7 @@
     const items = manifest.missionScripts
       .map((s) => {
         const b = s.beforeSanitize;
-        return `<div class="plan-item${b ? " warn-item" : ""}" data-testid="mission-script-item" data-run="${esc(s.run_on)}">
+        return `<div class="plan-item${b ? " warn-item" : ""}" data-testid="mission-script-item" data-run="${esc(s.run_on)}" data-escapes="${s.escapes}">
           <div>${I.script} <strong>${esc(s.name)}</strong>${
             b
               ? ` <span class="badge warn" data-testid="before-sanitize-tag">before-sanitize</span>`
@@ -397,6 +397,11 @@
       return renderList();
     }
 
+    // A manifest that names a path outside the DCS folders is not offered for
+    // install at all — the host refuses it too, so an install click here could
+    // only ever fail. An already-installed mod still gets its Uninstall action.
+    const escaping = state.manifest?.unsafePaths.length ? state.manifest.unsafePaths : null;
+
     let action = "";
     if (!p.installable) {
       action = `<p class="note warn" data-testid="not-installable-note">${I.warn} Not installable — the latest release ships no <span class="mono">dcs-studio.toml</span>${p.release_tag ? "" : " (no release yet)"}.</p>`;
@@ -404,6 +409,11 @@
       action = `<div class="installed-row" data-testid="installed-row">${I.check} Installed</div>
         <button class="btn secondary block" id="uninstall" data-testid="uninstall-btn" style="margin-top:10px">${I.trash} Uninstall</button>
         <p class="note">Enable/disable/update it under <b>My Mods</b>.</p>`;
+    } else if (escaping) {
+      action = `<p class="note warn" data-testid="unsafe-manifest-note">${I.warn} Not installable — this mod's manifest asks to write outside your DCS folders.</p>
+        <ul class="unsafe-reasons" data-testid="unsafe-reasons">${escaping
+          .map((u) => `<li>${esc(u.reason)}</li>`)
+          .join("")}</ul>`;
     } else if (state.installing) {
       const pct = Math.round((state.installing.pct || 0) * 100);
       action = `<div class="progress" data-testid="install-progress"><div style="font-size:12px;display:flex;gap:6px;align-items:center"><span class="spin">${I.refresh}</span> ${esc(state.installing.label)}</div>

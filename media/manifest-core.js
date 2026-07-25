@@ -230,8 +230,51 @@
     return r ? `${b}\\${r}` : b;
   }
 
+  /**
+   * True when `p` is a relative path that stays under whatever root it is
+   * joined onto. Mirror of `staysUnder` in src/core/domain/pathContainment.ts,
+   * which is itself a mirror of the bridge's `stays_under` in
+   * bridge-core/src/path_guard.rs — a manifest comes from a stranger's release,
+   * and both halves of the product must agree on what a safe relative path is.
+   * The webview loads this file as a plain <script>, so it cannot import the
+   * TypeScript one; test/unit/manifest/manifestCoreValues.test.ts asserts the
+   * two agree over a shared table so the copies cannot drift.
+   *
+   * Rejects, with Windows semantics on every host: empty input; any `:` (drive
+   * prefix, and NTFS alternate data streams like `notes.txt:hidden`); leading
+   * separators (absolute and UNC); any `..` component on either separator; and
+   * empty components from doubled or trailing separators. A bare `.` is a no-op
+   * segment and normalises away.
+   */
+  function staysUnder(p) {
+    if (!p) return false;
+    if (p.includes(":")) return false;
+    if (p.startsWith("/") || p.startsWith("\\")) return false;
+    let normal = 0;
+    for (const component of p.split(/[/\\]/)) {
+      if (component === "" || component === "..") return false;
+      if (component !== ".") normal++;
+    }
+    return normal > 0;
+  }
+
+  /** True when a manifest dest stays under the DCS root it names. */
+  function destStaysUnder(dest) {
+    return staysUnder(splitDest(dest).rest);
+  }
+
+  /**
+   * Resolve a manifest dest to an absolute path, or null when it cannot be
+   * honoured. Null has two causes, and callers that need to tell them apart ask
+   * destStaysUnder(): the dest reaches outside the DCS roots (refused — the
+   * manifest is untrusted), or it names {GameInstall} on a machine where that
+   * root is not configured (unresolvable — the user can fix it in Settings).
+   */
   function resolveDest(dest, roots) {
     const { root, rest } = splitDest(dest);
+    // Refused before either root is consulted, so an escaping dest never
+    // resolves against whichever root happens to be set.
+    if (!staysUnder(rest)) return null;
     // splitDest is total — it returns {GameInstall} or defaults to
     // {SavedGames} — so the write dir is the fall-through, not a third case.
     if (root === "{GameInstall}") {
@@ -250,6 +293,8 @@
     emitToml,
     splitDest,
     winJoin,
+    staysUnder,
+    destStaysUnder,
     resolveDest,
   };
 });
