@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { openPreview } from "./helpers";
 
 const PREVIEWS = ["skills", "nav", "docs", "manifest", "marketplace", "log", "console", "mymods"];

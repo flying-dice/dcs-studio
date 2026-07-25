@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { hostSend, openPreview, sentMessages } from "./helpers";
 
 // Build node selectors from the raw path — our paths only contain _, /,

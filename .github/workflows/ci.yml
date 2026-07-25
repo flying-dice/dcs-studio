@@ -7,60 +7,143 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
+# One job per layer of the testing pyramid, so a failure names the layer that
+# broke rather than "tests failed", and so the layers run concurrently instead
+# of serially behind one another. Each vitest layer gates its own coverage at
+# 100% against its own disjoint include set (see vitest.*.config.ts); the e2e
+# layer does the same for media/*.js via scripts/e2e-coverage.mjs.
+#
+# The three TypeScript layers run on Linux: the domain layer resolves paths
+# with explicit Windows semantics regardless of host, so they are deterministic
+# off-Windows. The `windows` job keeps the shipping target honest — it compiles
+# and builds the bridge DLLs on the OS the extension actually runs on.
+
 jobs:
-  gates:
-    name: Quality gates
-    runs-on: windows-latest
+  static:
+    name: Compile + lint
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
+      - run: npm ci
       - name: TypeScript compile
         run: npm run compile
-
       - name: Biome lint + format check (JS/TS)
         run: npm run lint
 
-      - name: Unit tests + coverage gate (100% per-file on src/core)
-        run: npx vitest run --coverage
+  unit:
+    name: Unit layer (100% gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Unit tests + coverage gate
+        run: npm run coverage:unit
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-unit
+          path: coverage/unit
 
+  integration:
+    name: Integration layer (100% gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Integration tests + coverage gate
+        run: npm run coverage:integration
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-integration
+          path: coverage/integration
+
+  e2e:
+    name: E2E layer (100% gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
       - name: Install Playwright browser
-        run: npx playwright install chromium
+        run: npx playwright install --with-deps chromium
+      - name: Webview e2e + coverage gate
+        run: npm run coverage:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-e2e
+          path: coverage/e2e
 
-      - name: Webview e2e (previews harness)
-        run: npm run test:e2e
-
+  rust:
+    name: Rust bridge tests (100% gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-
+        with:
+          components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: bridge
+      # bridge-core/build.rs links PUC liblua5.1 on non-Windows so the unit
+      # tests — which create real Lua states — run as ordinary executables
+      # here. Same 5.1 ABI DCS ships; DCS's own lua.dll is not redistributable.
+      - name: Install Lua 5.1 (test-time link target)
+        run: sudo apt-get update && sudo apt-get install -y liblua5.1-0-dev
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Rust tests + coverage gate
+        run: cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-functions 100
+        working-directory: bridge
 
+  windows:
+    name: Shipping target (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: TypeScript compile
+        run: npm run compile
+      # The layers already gated on Linux; re-run the two headless ones here to
+      # prove the Windows path semantics the domain layer assumes are the real
+      # ones, not just the ones path.win32 emulates.
+      - name: Unit + integration on the shipping OS
+        run: npm run test:unit && npm run test:integration
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bridge
       - name: Rust format check
         run: cargo fmt --check
         working-directory: bridge
-
       # -D warnings promotes the workspace lint policy (clippy pedantic +
       # panic-path restriction lints, see bridge/Cargo.toml) into a hard gate.
       - name: Rust clippy (pedantic workspace policy)
         run: cargo clippy --all-targets -- -D warnings
         working-directory: bridge
-
-      # Build gate only: the lua-runtime-gated unit tests need DCS's own
-      # lua.dll on PATH at process load (not redistributable to CI). Run them
-      # locally per .claude/skills/dcs-dev:
-      #   cd bridge; cargo test --workspace -- --include-ignored --skip regenerate_dlua_golden
       - name: Rust workspace builds (both bridge DLLs)
         run: cargo build --release --workspace
         working-directory: bridge
-
       - name: Upload bridge DLLs artifact
         uses: actions/upload-artifact@v4
         with:

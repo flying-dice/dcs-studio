@@ -483,12 +483,17 @@
     "lint:fix": "biome check --write",
     "docs:bridge": "node scripts/generate-bridge-docs.mjs",
     "dev": "node scripts/dev.mjs",
-    "test": "vitest run",
-    "coverage": "vitest run --coverage",
     "preview": "node scripts/serve.mjs 4173",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
-    "test:ui": "playwright test --ui"
+    "test:ui": "playwright test --ui",
+    "test": "npm run test:unit && npm run test:integration && npm run test:e2e",
+    "test:unit": "vitest run -c vitest.unit.config.ts",
+    "test:integration": "vitest run -c vitest.integration.config.ts",
+    "coverage": "npm run coverage:unit && npm run coverage:integration && npm run coverage:e2e",
+    "coverage:unit": "vitest run -c vitest.unit.config.ts --coverage",
+    "coverage:integration": "vitest run -c vitest.integration.config.ts --coverage",
+    "coverage:e2e": "node scripts/e2e-coverage.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",
@@ -497,6 +502,7 @@
     "@types/vscode": "^1.125.0",
     "@vitest/coverage-v8": "^4.1.10",
     "typescript": "^5.4.0",
+    "v8-to-istanbul": "^9.3.0",
     "vitest": "^4.1.10"
   }
 }

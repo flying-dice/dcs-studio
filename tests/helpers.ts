@@ -13,7 +13,7 @@
 //   - empty/error/progress states get their own testid (list-empty,
 //     list-error, install-error, install-progress, ...) so assertions never
 //     depend on copy text.
-import { expect, type Page } from "@playwright/test";
+import { type ConsoleMessage, expect, type Page } from "@playwright/test";
 
 /**
  * Navigate to a previews/<name>.html harness and start collecting console
@@ -25,10 +25,23 @@ export async function openPreview(page: Page, name: string): Promise<string[]> {
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(String(err)));
   page.on("console", (msg) => {
-    if (msg.type() === "error") errors.push(msg.text());
+    // Browser-chrome noise, not app errors: a full Chromium build requests
+    // /favicon.ico and logs a 404 the headless shell never emits. Assertions
+    // on this array must mean "the webview script misbehaved", so that the
+    // suite gives the same verdict whichever binary Playwright launches.
+    if (msg.type() === "error" && !isBrowserNoise(msg)) errors.push(msg.text());
   });
   await page.goto(`/previews/${name}.html`);
   return errors;
+}
+
+/**
+ * True for console errors the browser itself raises, unrelated to the webview.
+ * The favicon 404's message text is generic ("Failed to load resource…") — the
+ * URL only appears in the message's location, so match on that.
+ */
+function isBrowserNoise(msg: ConsoleMessage): boolean {
+  return `${msg.location().url} ${msg.text()}`.includes("favicon.ico");
 }
 
 /** Every message the webview has posted to the (stubbed) host so far, in order. */

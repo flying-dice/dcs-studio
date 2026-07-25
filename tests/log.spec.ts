@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { expectSent, hostSend, openPreview } from "./helpers";
 
 function fillerEntries(startSeq: number, count: number) {
