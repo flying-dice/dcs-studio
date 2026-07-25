@@ -1,5 +1,5 @@
+import { win32 as path } from "node:path";
 import * as os from "os";
-import * as path from "path";
 import * as vscode from "vscode";
 import { renderWebviewHtml } from "../webview/html";
 

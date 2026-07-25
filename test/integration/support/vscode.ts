@@ -46,6 +46,8 @@ export interface VscodeState {
   extensions: Record<string, { packageJSON: Record<string, unknown> }>;
   /** Transient status-bar messages set via window.setStatusBarMessage. */
   statusBarMessages: string[];
+  /** Workspace edits applied via workspace.applyEdit, in order. */
+  appliedEdits: { uri: string; text: string }[];
   /** Paths workspace.fs.stat resolves for; anything else rejects. */
   existingPaths: Set<string>;
   /** File-system watchers created via workspace.createFileSystemWatcher. */
@@ -77,6 +79,7 @@ function blankState(): VscodeState {
     shownDocuments: [],
     extensions: {},
     statusBarMessages: [],
+    appliedEdits: [],
     existingPaths: new Set(),
     watchers: [],
   };
@@ -97,6 +100,9 @@ export function resetVscode(
   // still reacts and one fire() looks like N.
   workspaceFoldersEmitter.dispose();
   authChangeEmitter.dispose();
+  changeDocEmitter.dispose();
+  closeDocEmitter.dispose();
+  changeConfigEmitter.dispose();
   if (seed.config) state.config = { ...seed.config };
   if (seed.extensions) state.extensions = { ...seed.extensions };
   if (seed.existingPaths) state.existingPaths = new Set(seed.existingPaths);
@@ -278,6 +284,24 @@ export class FakeWebviewView {
 }
 
 const workspaceFoldersEmitter = new FakeEventEmitter<unknown>();
+const changeDocEmitter = new FakeEventEmitter<{ document: { uri: { toString(): string } } }>();
+const closeDocEmitter = new FakeEventEmitter<{ uri: { toString(): string } }>();
+const changeConfigEmitter = new FakeEventEmitter<{ affectsConfiguration(s: string): boolean }>();
+
+/** Fire `workspace.onDidChangeTextDocument` for one document. */
+export function fireDocumentChanged(document: unknown): void {
+  changeDocEmitter.fire(document as { document: { uri: { toString(): string } } });
+}
+
+/** Fire `workspace.onDidCloseTextDocument` for one document. */
+export function fireDocumentClosed(document: unknown): void {
+  closeDocEmitter.fire(document as { uri: { toString(): string } });
+}
+
+/** Fire `workspace.onDidChangeConfiguration` for a settings section. */
+export function fireConfigurationChanged(section: string): void {
+  changeConfigEmitter.fire({ affectsConfiguration: (s: string) => section.startsWith(s) });
+}
 
 /** Fire `workspace.onDidChangeWorkspaceFolders`. */
 export function fireWorkspaceFoldersChanged(): void {
@@ -358,8 +382,14 @@ export function vscodeMock() {
           ? full.slice(folder.length).replace(/^[\\/]+/, "")
           : full;
       },
-      onDidChangeConfiguration: new FakeEventEmitter<unknown>().event,
+      onDidChangeConfiguration: changeConfigEmitter.event,
+      onDidChangeTextDocument: changeDocEmitter.event,
+      onDidCloseTextDocument: closeDocEmitter.event,
       onDidSaveTextDocument: new FakeEventEmitter<unknown>().event,
+      applyEdit: (edit: { replacements: { uri: string; text: string }[] }) => {
+        state.appliedEdits.push(...edit.replacements);
+        return Promise.resolve(true);
+      },
       onDidChangeWorkspaceFolders: workspaceFoldersEmitter.event,
       createFileSystemWatcher: (pattern: unknown) => {
         const watcher = new FakeFileSystemWatcher(pattern);
@@ -507,6 +537,20 @@ export function vscodeMock() {
     FileType: { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 },
     UIKind: { Desktop: 1, Web: 2 },
     ExtensionMode: { Production: 1, Development: 2, Test: 3 },
+    WorkspaceEdit: class {
+      readonly replacements: { uri: string; text: string }[] = [];
+      replace(uri: { toString(): string }, _range: unknown, text: string): void {
+        this.replacements.push({ uri: uri.toString(), text });
+      }
+    },
+    Range: class {
+      constructor(
+        readonly startLine: number,
+        readonly startChar: number,
+        readonly endLine: number,
+        readonly endChar: number,
+      ) {}
+    },
     RelativePattern: class {
       constructor(
         readonly base: unknown,
