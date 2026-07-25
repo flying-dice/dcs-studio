@@ -1,21 +1,28 @@
 import * as vscode from "vscode";
+import { nodeScheduler } from "../adapters/node/scheduler";
 import type { DebugEnv } from "../bridge/client";
 import type { BridgeClients } from "../bridge/clients";
+import type { SchedulerPort } from "../core/ports/scheduler";
 import { showError } from "../errors";
 import { DcsDebugAdapter } from "./adapter";
 
 export const DEBUG_TYPE = "dcs-lua";
 
 /** Inline adapter: runs in the extension host and shares the extension's two
- * bridge clients (the adapter picks the one serving the session's env). */
+ * bridge clients (the adapter picks the one serving the session's env). The
+ * scheduler is threaded through so a session's poll loop can be driven by a
+ * test; the extension leaves it at the real timers. */
 export class DcsDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory {
-  constructor(private readonly clients: BridgeClients) {}
+  constructor(
+    private readonly clients: BridgeClients,
+    private readonly scheduler: SchedulerPort = nodeScheduler,
+  ) {}
 
   createDebugAdapterDescriptor(
     session: vscode.DebugSession,
   ): vscode.ProviderResult<vscode.DebugAdapterDescriptor> {
     return new vscode.DebugAdapterInlineImplementation(
-      new DcsDebugAdapter(this.clients, session.configuration),
+      new DcsDebugAdapter(this.clients, session.configuration, this.scheduler),
     );
   }
 }
