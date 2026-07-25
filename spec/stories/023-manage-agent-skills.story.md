@@ -56,6 +56,15 @@ Feature: Agent Skills panel
       | never closed by a second "---"  | 0.0.0    | Update available |
       | "version: v2"                   | v2       | Update available |
 
+  @chaos
+  Scenario: A version already written with a leading "v"
+    Given a skill's frontmatter declares "version: v2.0.0"
+    When its card renders
+    Then the version line reads "installed v2.0.0", not "installed vv2.0.0"
+    And the update button reads "Update to v2.0.0"
+    # The panel prefixes a "v" for display; one already in the author's
+    # frontmatter is dropped rather than doubled.
+
   Rule: Install, update and remove are guarded appropriately
 
     Scenario: Installing a skill
@@ -155,9 +164,17 @@ Feature: Agent Skills panel
       When the user clicks "Update"
       Then the installed copy is unchanged
       And no confirmation message appears
-      And no error is surfaced to the user  # UNVERIFIED: the nudge's install has no rejection handler, so the failure is swallowed — untested and almost certainly a defect
-      And the nudge does not reappear for that bundled version, because the
-        nudged flag is written before the message is shown
+      And an error reads "Skill install failed: <reason>" — the same
+        wording the Skills panel's own Install button gives
+      And the nudge is offered again on the next activation, because the
+        nudged flag is only written once the offer has been dealt with
+
+    @chaos
+    Scenario: The nudge is dismissed rather than acted on
+      Given the activation nudge for an outdated skill is showing
+      When the user dismisses it, or opens the Skills panel instead
+      Then it is marked as delivered and does not return for that
+        bundled version — only a failed install earns another try
 
     @chaos
     Scenario: The nudge is remembered per repo, not per machine

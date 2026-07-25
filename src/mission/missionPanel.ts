@@ -116,14 +116,24 @@ async function mutate(edit: (p: string) => Promise<string>): Promise<void> {
   }
 }
 
+/**
+ * " (backup: MissionScripting.lua.dcsstudio.bak)" — only when there really is
+ * one. The snapshot is taken on the first change that writes something, so a
+ * no-op toggle on a file with no prior backup writes nothing; naming a backup
+ * there tells the user a pristine copy exists when none does.
+ */
+function backupSuffix(p: string, exists: boolean): string {
+  return exists ? ` (backup: ${path.basename(backupPath(p))})` : "";
+}
+
 function apply(
   svc: MissionSanitizeService,
   desired: Record<string, boolean>,
   okMsg: string,
 ): Promise<void> {
   return mutate(async (p) => {
-    await svc.setItems(p, desired);
-    return `${okMsg} (backup: ${path.basename(backupPath(p))})`;
+    const status = await svc.setItems(p, desired);
+    return `${okMsg}${backupSuffix(p, status.backupExists)}`;
   });
 }
 
@@ -145,9 +155,24 @@ export function sanitizeMission(svc: MissionSanitizeService): Promise<void> {
   );
 }
 
-/** Copy the pristine backup back over the live file. */
+/**
+ * Copy the pristine backup back over the live file. The backup is snapshotted
+ * once and never refreshed, so if the live file has moved on since DCS Studio
+ * last wrote it — a DCS update shipping a new MissionScripting.lua is the case
+ * that matters — restoring rewinds the user past that update. Confirm first
+ * rather than doing it silently.
+ */
 export function restoreMission(svc: MissionSanitizeService): Promise<void> {
   return mutate(async (p) => {
+    if (await svc.backupIsStale(p)) {
+      const choice = await vscode.window.showWarningMessage(
+        "MissionScripting.lua has changed since DCS Studio last wrote it — most likely a DCS update. The backup is older than that change, so restoring it will undo the update's version of this file.",
+        { modal: true },
+        "Restore anyway",
+      );
+      if (choice !== "Restore anyway")
+        return "Restore cancelled — MissionScripting.lua is unchanged.";
+    }
     await svc.restore(p);
     return "Restored MissionScripting.lua from the backup.";
   });
@@ -167,7 +192,8 @@ function summarizeTriggers(s: { before: string; after: string }): string {
 export function installMissionHooks(svc: MissionSanitizeService): Promise<void> {
   return mutate(async (p) => {
     const status = await svc.installTriggers(p);
-    return `Mission-script hooks installed in MissionScripting.lua (${summarizeTriggers(status)}). Backup: ${path.basename(backupPath(p))}.`;
+    const backup = (await svc.backupExists(p)) ? ` Backup: ${path.basename(backupPath(p))}.` : "";
+    return `Mission-script hooks installed in MissionScripting.lua (${summarizeTriggers(status)}).${backup}`;
   });
 }
 

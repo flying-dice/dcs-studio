@@ -61,8 +61,8 @@ import { NavViewProvider } from "./nav/navView";
 import { NewProjectPanel, PENDING_OPEN_KEY } from "./project/newProjectPanel";
 import { PublishPanel } from "./publish/publishPanel";
 import { SetupPanel } from "./setup/panel";
-import { SkillsLibrary } from "./skills/library";
-import { SkillsPanel } from "./skills/skillsPanel";
+import { type SkillInfo, SkillsLibrary } from "./skills/library";
+import { SkillsPanel, showInstallFailed } from "./skills/skillsPanel";
 
 const MANIFEST_FILE = "dcs-studio.toml";
 
@@ -353,28 +353,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // Installed skill files older than what this build ships: nudge once per
   // skill per bundled version (a workspaceState key remembers the nudge, so
   // updating the extension re-alerts but reloading the window doesn't).
-  void skills.updatesAvailable().then(async (outdated) => {
+  void skills.updatesAvailable().then((outdated) => {
     for (const s of outdated) {
-      const key = `dcs.skillUpdateNudged.${s.id}.${s.bundledVersion}`;
-      if (context.workspaceState.get(key)) continue;
-      await context.workspaceState.update(key, true);
-      void vscode.window
-        .showInformationMessage(
-          `The "${s.name}" agent skill in this repo is outdated (v${s.installedVersion} installed, v${s.bundledVersion} bundled).`,
-          "Update",
-          "Manage Skills",
-        )
-        .then((choice) => {
-          if (choice === "Update") {
-            void skills.install(s.id).then(() => {
-              void vscode.window.showInformationMessage(
-                `"${s.name}" skill updated to v${s.bundledVersion} — commit the change.`,
-              );
-            });
-          } else if (choice === "Manage Skills") {
-            SkillsPanel.show(context, skills);
-          }
-        });
+      if (context.workspaceState.get(nudgeKey(s))) continue;
+      void nudgeSkillUpdate(context, skills, s);
     }
   });
 
@@ -393,6 +375,45 @@ export function activate(context: vscode.ExtensionContext): void {
         if (choice) SetupPanel.show(context, detect);
       });
   }
+}
+
+/** workspaceState key remembering that one skill was nudged at one version. */
+function nudgeKey(s: SkillInfo): string {
+  return `dcs.skillUpdateNudged.${s.id}.${s.bundledVersion}`;
+}
+
+/**
+ * Offer one outdated skill's update. The nudge is marked as delivered only
+ * once it has been dealt with — dismissed, deferred to the panel, or installed
+ * successfully. A failed install (a read-only repo is the usual cause) reports
+ * through the Skills panel's own error surface and leaves the key unwritten,
+ * so the next activation offers it again instead of the failure being both
+ * silent and permanent.
+ */
+async function nudgeSkillUpdate(
+  context: vscode.ExtensionContext,
+  skills: SkillsLibrary,
+  s: SkillInfo,
+): Promise<void> {
+  const choice = await vscode.window.showInformationMessage(
+    `The "${s.name}" agent skill in this repo is outdated (v${s.installedVersion} installed, v${s.bundledVersion} bundled).`,
+    "Update",
+    "Manage Skills",
+  );
+  if (choice === "Update") {
+    try {
+      await skills.install(s.id);
+    } catch (err) {
+      showInstallFailed(err);
+      return;
+    }
+    void vscode.window.showInformationMessage(
+      `"${s.name}" skill updated to v${s.bundledVersion} — commit the change.`,
+    );
+  } else if (choice === "Manage Skills") {
+    SkillsPanel.show(context, skills);
+  }
+  await context.workspaceState.update(nudgeKey(s), true);
 }
 
 /**

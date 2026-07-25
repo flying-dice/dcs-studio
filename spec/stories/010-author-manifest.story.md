@@ -160,17 +160,31 @@ Feature: Manifest form panel
       Then every resolved-path preview updates immediately
 
     @chaos
-    Scenario: A [project] name written as a TOML number breaks the form
-      Given the manifest carries name = 2024 — a valid TOML integer,
-        not a quoted string
-      Then the validation pass throws, because it calls trim() on a number
-      And the issues box stays empty — neither "Manifest looks valid."
-        nor any issue is shown
-      And every subsequent form edit is silently dropped: the emit that
-        would push it to the document never runs
-      And typing into the Name field is the only way out, because that
-        assigns a string back over the number
-        # UNVERIFIED: the TypeError is confirmed by evaluating media/manifest-core.js and media/manifest.js's issues() directly; the exact rendered state of the panel after the throw was not observed in a browser
+    Scenario Outline: A [project] scalar written as a bare TOML value
+      Given the manifest carries <field> = <written> — valid TOML,
+        but not a quoted string
+      Then the parser normalises the modeled [project] scalars to their
+        literal text, so the form is handed "<shown>"
+      And the field shows <shown> and the issues box reports on it like
+        any other value — no throw, nothing left blank
+      And the form stays live: a later keystroke still reaches
+        the document
+      And the emitted document settles on <field> = "<shown>",
+        which reparses to the same thing
+
+      Examples:
+        | field       | written | shown |
+        | name        | 2024    | 2024  |
+        | version     | 3       | 3     |
+        | author      | true    | true  |
+        | description | 1.5     | 1.5   |
+
+    @chaos
+    Scenario: An unmodeled [project] key keeps its TOML type
+      Given the manifest carries dcs_min_version = 2 under [project]
+      When the form emits the document
+      Then it is written back unquoted, as the integer it was —
+        only the four fields the form models are normalised to text
 
     @chaos
     Scenario: Rows added but not filled in

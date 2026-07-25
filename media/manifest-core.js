@@ -85,6 +85,25 @@
     return v;
   }
 
+  // The modeled [project] fields the model guarantees are strings. TOML is
+  // typed, so `name = 2024` is a valid integer and `version = 1` a valid one
+  // too — but every consumer treats these as text and calls .trim() on them
+  // (the form's issues(), publish preflight's computePreflight()), which turns
+  // a number or boolean into a TypeError. Normalise once here at the parse
+  // boundary rather than defending at each use.
+  const PROJECT_TEXT_KEYS = ["name", "version", "author", "description"];
+
+  /**
+   * A modeled [project] value as text: a quoted string unquotes as usual, and
+   * anything TOML types as a non-string (integer, float, boolean, array) keeps
+   * its literal source text. Unmodeled [project] keys deliberately do NOT go
+   * through this — they keep their parsed type so emitToml round-trips them.
+   */
+  function parseProjectText(raw) {
+    const v = parseVal(raw);
+    return typeof v === "string" ? v : raw;
+  }
+
   function parseToml(text) {
     const m = emptyModel();
     if (!text) return m;
@@ -138,7 +157,13 @@
         const line = t.replace(/^#.*$/, "");
         if (!line) continue;
         const kv = line.match(/^([A-Za-z0-9_-]+)\s*=\s*(.+)$/);
-        if (kv) cur[kv[1]] = parseVal(kv[2].trim());
+        if (kv) {
+          const val = kv[2].trim();
+          cur[kv[1]] =
+            cur === m.project && PROJECT_TEXT_KEYS.includes(kv[1])
+              ? parseProjectText(val)
+              : parseVal(val);
+        }
       }
       // Lines before any section (e.g. a leading comment) are dropped in v1.
     }

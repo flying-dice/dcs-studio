@@ -100,6 +100,42 @@ export function backupPath(p: string): string {
   return `${p}.dcsstudio.bak`;
 }
 
+/**
+ * `<path>.dcsstudio.bak.stamp` — sidecar recording the live file as DCS Studio
+ * last left it. The backup is deliberately taken once and never refreshed (it
+ * is the pristine pre-DCS-Studio copy), which means a DCS update that ships a
+ * new MissionScripting.lua leaves the old backup shadowing it. Comparing the
+ * live file against this stamp is how a restore can tell "unchanged since we
+ * wrote it" from "something else replaced it" and warn instead of regressing.
+ */
+export function backupStampPath(p: string): string {
+  return `${backupPath(p)}.stamp`;
+}
+
+/**
+ * Content stamp: length plus a djb2 hash, as hex. Not a cryptographic digest —
+ * core may not import node:crypto — just a cheap, stable fingerprint for
+ * "is this the same text we wrote?".
+ */
+export function stampFor(content: string): string {
+  let h = 5381;
+  for (let i = 0; i < content.length; i++) h = ((h << 5) + h + content.charCodeAt(i)) | 0;
+  return `${content.length}-${(h >>> 0).toString(16)}`;
+}
+
+/**
+ * Why the backup is unusable, or null when it looks like a MissionScripting.lua.
+ * A truncated or empty `.bak` copied straight over the live file breaks the
+ * user's install while still reporting success, so restore checks first.
+ */
+export function backupProblem(content: string): string | null {
+  if (!content.trim()) return "the backup file is empty";
+  if (!scanItems(content).some((i) => i.present)) {
+    return "it has none of the MissionScripting.lua sandbox lines, so it is not a copy of that file (truncated?)";
+  }
+  return null;
+}
+
 export interface MissionItemState {
   name: string;
   present: boolean;

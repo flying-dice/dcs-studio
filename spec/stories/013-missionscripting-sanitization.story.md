@@ -122,6 +122,9 @@ Feature: MissionScripting.lua management
       When the user desanitizes or re-sanitizes for the first time
       Then a pristine copy is saved as "MissionScripting.lua.dcsstudio.bak"
         before anything is written
+      And a "MissionScripting.lua.dcsstudio.bak.stamp" records what was
+        written, so a later restore can tell whether anything else has
+        touched the file since
 
     Scenario: Desanitizing
       When the user runs "Desanitize MissionScripting.lua"
@@ -137,9 +140,10 @@ Feature: MissionScripting.lua management
         "Re-sanitized MissionScripting.lua — DCS's default lockdown restored. (backup: …)"
 
     Scenario: Restoring from backup
-      Given a DCS update or manual edit left the file in doubt
+      Given an earlier toggle left the file in doubt
       When the user runs "Restore MissionScripting.lua from backup"
-      Then the backup is copied back over the live file
+      Then the backup is checked for plausible contents, then copied back
+        over the live file
       And a toast confirms "Restored MissionScripting.lua from the backup."
 
     Scenario: Restore without a backup
@@ -152,14 +156,22 @@ Feature: MissionScripting.lua management
       Then lines already in the desired state are left untouched
 
     @chaos
-    Scenario: Repeating a no-op change still names a backup that was never made
+    Scenario: A no-op change names no backup
       Given the file is already fully desanitized
       And no "MissionScripting.lua.dcsstudio.bak" exists
       When the user runs "Desanitize MissionScripting.lua"
       Then nothing is written and no backup is created
-      But the toast still ends "(backup: MissionScripting.lua.dcsstudio.bak)"
-      # The backup is snapshotted only when a line actually changes, while the
-      # toast names it unconditionally — so it can promise a file that is not there.
+      And the toast reports the state without naming a backup
+      # The snapshot is taken only when a line actually changes, so the toast
+      # names one only when it is there — promising a way back that does not
+      # exist is worse than saying nothing.
+
+    @chaos
+    Scenario: The same toggle on a file that already has a backup
+      Given a backup exists from an earlier change
+      When the user repeats a toggle that changes nothing
+      Then the toast still ends "(backup: MissionScripting.lua.dcsstudio.bak)",
+        because that file really is on disk
 
     @chaos
     Scenario: A DCS update rewrites the file after the backup was taken
@@ -167,8 +179,22 @@ Feature: MissionScripting.lua management
       And a DCS update has since replaced the live file
       When the user desanitizes the updated file
       Then the existing backup is left untouched — only the first change ever snapshots
-      And a later "Restore MissionScripting.lua from backup" puts the PRE-UPDATE
-        file back, not the version DCS just shipped
+      When the user then runs "Restore MissionScripting.lua from backup"
+      Then a modal warns that the file has changed since DCS Studio last wrote
+        it — most likely a DCS update — and that restoring undoes that version
+      And dismissing it leaves the live file exactly as DCS shipped it,
+        reporting "Restore cancelled"
+      And choosing "Restore anyway" puts the pre-update file back, as asked
+      # Each write records a stamp of what it wrote beside the backup; a live
+      # file that no longer matches it is the evidence that something else —
+      # an update, another tool, a hand edit — has been through.
+
+    @chaos
+    Scenario: A backup taken before stamps existed
+      Given a backup exists with no stamp beside it
+      When the user restores from it
+      Then no warning is shown — there is no evidence either way,
+        and warning on every restore would train the user to click through
 
     @chaos
     Scenario: The first change is snapshotted from a file another tool already edited
@@ -179,12 +205,26 @@ Feature: MissionScripting.lua management
       And "Restore MissionScripting.lua from backup" can only return to that state
 
     @chaos
-    Scenario: The backup itself is corrupt or truncated
-      Given "MissionScripting.lua.dcsstudio.bak" contains a truncated or mangled file
+    Scenario Outline: The backup itself is corrupt or truncated
+      Given "MissionScripting.lua.dcsstudio.bak" holds <content>
       When the user runs "Restore MissionScripting.lua from backup"
-      Then the backup is copied over the live file with no validation of its contents
-      And the toast still confirms "Restored MissionScripting.lua from the backup."
-      And the reported item states simply reflect whatever the backup contained
+      Then the restore is refused with a message naming <reason>
+      And the live file is not touched
+      # Copying a truncated .bak over the live file breaks the install while
+      # reporting success — the one outcome a restore must never produce.
+
+      Examples:
+        | content                                | reason        |
+        | nothing at all                         | it is empty   |
+        | whitespace only                        | it is empty   |
+        | Lua with none of the sandbox lines     | truncation    |
+
+    @chaos
+    Scenario: A backup that is only partly the original file
+      Given the backup holds a single recognisable lockdown line
+      When the user restores from it
+      Then the restore goes ahead — the check is a sanity gate on obvious
+        rubbish, not a schema for the whole file
 
     @chaos
     Scenario: The backup was deleted since it was taken

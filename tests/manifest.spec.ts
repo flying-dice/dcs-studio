@@ -156,6 +156,26 @@ test.describe("manifest preview", () => {
     expect(last.text).toContain('name = "renamed-mod"');
   });
 
+  test("a [project] written with bare TOML numbers still validates and still edits", async ({
+    page,
+  }) => {
+    // `name = 2024` is valid TOML. Parsed as a JS number it made the validation
+    // pass throw, and because that pass runs before the debounced edit is
+    // queued, the form went on accepting keystrokes while writing nothing back.
+    const errors = await openPreview(page, "manifest", { query: { project: "numeric" } });
+    await expect(page.locator('[data-sec="project"][data-key="name"]')).toHaveValue("2024");
+    await expect(page.locator('[data-sec="project"][data-key="version"]')).toHaveValue("3");
+    await expect(page.getByTestId("validation-ok")).toBeVisible();
+    await expect(page.getByTestId("toml-preview")).toContainText('name = "2024"');
+
+    // The form is live, not just drawn: an edit still reaches the host.
+    await page.locator('[data-sec="project"][data-key="author"]').fill("viper-drivers");
+    await expectSent(page, { type: "edit" });
+    const messages = await sentMessages(page);
+    expect(messages[messages.length - 1].text).toContain('author = "viper-drivers"');
+    expect(errors).toEqual([]);
+  });
+
   test("clearing the name shows a validation issue", async ({ page }) => {
     await openPreview(page, "manifest");
     const nameInput = page.locator('[data-sec="project"][data-key="name"]');

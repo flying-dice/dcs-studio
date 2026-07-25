@@ -4,7 +4,12 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../../src/adapters/node/fs";
 import { MissionSanitizeService } from "../../../src/core/app/missionSanitizeService";
-import { allItems, backupPath, ITEMS } from "../../../src/core/domain/missionSanitize";
+import {
+  allItems,
+  backupPath,
+  backupStampPath,
+  ITEMS,
+} from "../../../src/core/domain/missionSanitize";
 
 // Integration test: the real Node fs adapter wired into MissionSanitizeService
 // (exactly as the composition root wires it), exercised against actual temp
@@ -69,5 +74,26 @@ describe("MissionSanitizeService over the Node fs adapter (real fs)", () => {
     const s = await restore(lua);
     expect(fs.readFileSync(lua, "utf8")).toBe(PRISTINE);
     expect(s.backupExists).toBe(true);
+  });
+
+  it("refuses to copy a truncated backup over the live file", async () => {
+    await setItems(lua, allItems(false));
+    const desanitized = fs.readFileSync(lua, "utf8");
+    fs.writeFileSync(backupPath(lua), "");
+
+    await expect(restore(lua)).rejects.toThrow(/Refusing to restore/);
+    expect(fs.readFileSync(lua, "utf8")).toBe(desanitized);
+  });
+
+  it("stamps what it wrote, and reads an outside rewrite as stale", async () => {
+    // The stamp sidecar is the only record of what DCS Studio last wrote —
+    // without it a DCS update that replaces the file is indistinguishable from
+    // "nothing has happened since", and restore rewinds past the update.
+    await setItems(lua, allItems(false));
+    expect(fs.existsSync(backupStampPath(lua))).toBe(true);
+    expect(await svc.backupIsStale(lua)).toBe(false);
+
+    fs.writeFileSync(lua, `${PRISTINE}\r\n-- shipped by a DCS update`);
+    expect(await svc.backupIsStale(lua)).toBe(true);
   });
 });

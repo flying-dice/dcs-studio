@@ -104,6 +104,43 @@ test.describe("skills preview", () => {
     expect(errors).toEqual([]);
   });
 
+  test("a version already written with a leading v is not double-prefixed", async ({ page }) => {
+    // The version comes from author-written SKILL.md frontmatter, where both
+    // "2.0.0" and "v2.0.0" turn up. Prefixing blindly rendered the second as
+    // "installed vv2.0.0".
+    await openPreview(page, "skills");
+    await hostSend(page, {
+      type: "skills",
+      installDir: ".claude/skills",
+      hasWorkspace: true,
+      skills: [
+        {
+          id: "s1",
+          name: "s1",
+          description: "d",
+          bundledVersion: "v2.0.0",
+          installedVersion: "v1.0.0",
+          status: "outdated",
+        },
+        {
+          id: "s2",
+          name: "s2",
+          description: "d",
+          bundledVersion: "V3.0",
+          status: "not-installed",
+        },
+      ],
+    });
+    const outdated = page.locator('[data-testid="skill-card"][data-id="s1"]');
+    await expect(outdated.getByTestId("version-line")).toHaveText(
+      "installed v1.0.0 → bundled v2.0.0",
+    );
+    await expect(outdated.getByTestId("install-btn")).toHaveText("Update to v2.0.0");
+
+    const fresh = page.locator('[data-testid="skill-card"][data-id="s2"]');
+    await expect(fresh.getByTestId("version-line")).toHaveText("v3.0");
+  });
+
   test("empty skills list shows empty-note", async ({ page }) => {
     await openPreview(page, "skills");
     await hostSend(page, {

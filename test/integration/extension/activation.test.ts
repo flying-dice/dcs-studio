@@ -751,6 +751,43 @@ describe("skill update nudge", () => {
     expect(state.info[1]).toBe('"DCS Studio" skill updated to v2.0.0 — commit the change.');
   });
 
+  it("reports a failed update and offers the nudge again next activation", async () => {
+    // A read-only repo is the usual cause. Swallowing the rejection left the
+    // user with a button that did nothing, no error, and a nudge already
+    // marked as delivered — so the offer never came back either.
+    seedOutdatedSkill();
+    const copy = vi
+      .spyOn(vscode.workspace.fs, "copy")
+      .mockRejectedValueOnce(new Error("EROFS: read-only file system"));
+    state.messageReplies.push("Update");
+
+    await activateExtension();
+    await flush();
+
+    expect(state.errors).toEqual(["Skill install failed: EROFS: read-only file system"]);
+    expect(state.info).toHaveLength(1); // the nudge only — no "updated" toast
+    expect([...workspaceStore.keys()]).toEqual([]);
+
+    copy.mockRestore();
+    state.info.length = 0;
+    await activateExtension();
+    expect(state.info).toEqual([
+      'The "DCS Studio" agent skill in this repo is outdated (v1.0.0 installed, v2.0.0 bundled).',
+    ]);
+  });
+
+  it("renders a non-Error install failure", async () => {
+    seedOutdatedSkill();
+    const copy = vi.spyOn(vscode.workspace.fs, "copy").mockRejectedValueOnce("nope");
+    state.messageReplies.push("Update");
+
+    await activateExtension();
+    await flush();
+
+    expect(state.errors).toEqual(["Skill install failed: nope"]);
+    copy.mockRestore();
+  });
+
   it("opens the Skills panel when the user asks to manage them instead", async () => {
     seedOutdatedSkill();
     state.messageReplies.push("Manage Skills");

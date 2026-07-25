@@ -3,10 +3,13 @@ import {
   allItems,
   applyDesired,
   backupPath,
+  backupProblem,
+  backupStampPath,
   codeMatches,
   ITEMS,
   lineState,
   scanItems,
+  stampFor,
   stripQuoted,
   toggledLine,
 } from "../../../src/core/domain/missionSanitize";
@@ -182,6 +185,64 @@ describe("backupPath", () => {
     expect(backupPath("C:\\DCS\\Scripts\\MissionScripting.lua")).toBe(
       "C:\\DCS\\Scripts\\MissionScripting.lua.dcsstudio.bak",
     );
+  });
+});
+
+describe("backupStampPath", () => {
+  it("sits beside the backup, not beside the live file", () => {
+    // The stamp travels with the backup it describes: deleting the backup and
+    // leaving a stamp behind would make a fresh snapshot look stale.
+    expect(backupStampPath("C:\\DCS\\Scripts\\MissionScripting.lua")).toBe(
+      "C:\\DCS\\Scripts\\MissionScripting.lua.dcsstudio.bak.stamp",
+    );
+  });
+});
+
+describe("stampFor", () => {
+  it("is stable for the same content", () => {
+    expect(stampFor(PRISTINE_LF)).toBe(stampFor(PRISTINE_LF));
+  });
+
+  it("changes when a single character changes", () => {
+    expect(stampFor(PRISTINE_LF)).not.toBe(stampFor(`${PRISTINE_LF}\n`));
+    expect(stampFor("abc")).not.toBe(stampFor("abd"));
+  });
+
+  it("distinguishes an EOL rewrite of the same text", () => {
+    // A DCS update that only re-saves the file with different line endings is
+    // still a different file to restore over.
+    expect(stampFor(PRISTINE_LF)).not.toBe(stampFor(PRISTINE_CRLF));
+  });
+
+  it("handles empty content", () => {
+    expect(stampFor("")).toBe("0-1505");
+  });
+});
+
+describe("backupProblem", () => {
+  it("passes a real MissionScripting.lua, sanitized or not", () => {
+    expect(backupProblem(PRISTINE_LF)).toBeNull();
+    expect(backupProblem(applyDesired(PRISTINE_LF, allItems(false)).content)).toBeNull();
+  });
+
+  it.each([
+    ["an empty file", ""],
+    ["a whitespace-only file", "  \n\t\n"],
+  ])("rejects %s", (_label, content) => {
+    expect(backupProblem(content)).toContain("empty");
+  });
+
+  it("rejects a file with none of the sandbox lines", () => {
+    // A truncated copy: real Lua, but nothing that identifies it as the file
+    // being restored. Copying it over the live one would break the install
+    // while still reporting success.
+    expect(backupProblem("dofile('Scripts/ScriptingSystem.lua')\n")).toContain("truncated");
+  });
+
+  it("accepts a file truncated to a single recognisable lockdown line", () => {
+    // The check is a sanity gate, not a schema: one managed line is enough
+    // evidence that this is the right file.
+    expect(backupProblem("_G['require'] = nil\n")).toBeNull();
   });
 });
 

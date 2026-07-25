@@ -39,6 +39,10 @@ interface Recorded {
 let calls: Recorded;
 let items: MissionItemState[];
 let failure: unknown;
+/** Whether a pristine backup is on disk — what the "(backup: …)" note claims. */
+let backupExists: boolean;
+/** Whether the live file has moved on since DCS Studio last wrote it. */
+let staleBackup: boolean;
 
 function item(name: string, over: Partial<MissionItemState> = {}): MissionItemState {
   return { name, present: true, sanitized: true, ...over };
@@ -49,10 +53,13 @@ function service(): MissionSanitizeService {
     if (failure) throw failure;
   };
   return {
-    status: async (p: string) => ({ path: p, exists: true, backupExists: false, items }),
+    status: async (p: string) => ({ path: p, exists: true, backupExists, items }),
+    backupExists: async () => backupExists,
+    backupIsStale: async () => staleBackup,
     setItems: async (_p: string, desired: Record<string, boolean>) => {
       reject();
       calls.setItems.push(desired);
+      return { path: LUA, exists: true, backupExists, items };
     },
     restore: async (p: string) => {
       reject();
@@ -81,6 +88,8 @@ beforeEach(() => {
   calls = { setItems: [], restored: [], installedTriggers: [], removedTriggers: [] };
   items = [item("os"), item("io"), item("require")];
   failure = undefined;
+  backupExists = true;
+  staleBackup = false;
   installedAndClosed();
 });
 
@@ -172,10 +181,46 @@ describe("toggling the sandbox", () => {
     expect(state.info[0]).toContain("default lockdown restored");
   });
 
+  it("names no backup when the toggle was a no-op and none exists", async () => {
+    // Desanitizing an already-desanitized file writes nothing, so no pristine
+    // snapshot is taken. Naming one anyway promises the user a way back that
+    // is not on disk.
+    backupExists = false;
+    await desanitizeMission(service());
+
+    expect(state.info[0]).toContain("os/io/lfs/require/package are available");
+    expect(state.info[0]).not.toContain("backup:");
+  });
+
   it("restores the pristine backup over the live file", async () => {
     await restoreMission(service());
     expect(calls.restored).toEqual([LUA]);
     expect(state.info[0]).toContain("Restored MissionScripting.lua from the backup");
+    expect(state.warnings).toEqual([]);
+  });
+});
+
+describe("restoring over a file that has moved on", () => {
+  // The backup is snapshotted once and never refreshed. After a DCS update
+  // replaces MissionScripting.lua, restoring it rewinds the user past that
+  // update — so the restore asks first instead of doing it silently.
+  it("confirms before undoing a change made outside DCS Studio", async () => {
+    staleBackup = true;
+    state.messageReplies.push("Restore anyway");
+    await restoreMission(service());
+
+    expect(state.warnings[0]).toContain("most likely a DCS update");
+    expect(calls.restored).toEqual([LUA]);
+    expect(state.info[0]).toContain("Restored MissionScripting.lua from the backup");
+  });
+
+  it("leaves the file alone when that confirmation is dismissed", async () => {
+    staleBackup = true;
+    state.messageReplies.push(undefined);
+    await restoreMission(service());
+
+    expect(calls.restored).toEqual([]);
+    expect(state.info[0]).toContain("Restore cancelled");
   });
 });
 
@@ -245,6 +290,14 @@ describe("mod-script hooks", () => {
     expect(calls.installedTriggers).toEqual([LUA]);
     expect(state.info[0]).toContain("before-sanitize: valid, after-sanitize: missing");
     expect(state.info[0]).toContain("Backup: MissionScripting.lua.dcsstudio.bak");
+  });
+
+  it("names no backup when installing the hooks changed nothing", async () => {
+    backupExists = false;
+    await installMissionHooks(service());
+
+    expect(state.info[0]).toContain("before-sanitize: valid, after-sanitize: missing");
+    expect(state.info[0]).not.toContain("Backup:");
   });
 
   it("removes the trigger lines", async () => {

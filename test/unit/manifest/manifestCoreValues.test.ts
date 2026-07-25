@@ -150,6 +150,65 @@ this line is not a pair
   });
 });
 
+describe("parseToml — [project] scalars are normalised to text", () => {
+  const { parseToml, emitToml } = DcsManifestCore;
+
+  // TOML is typed and `name = 2024` is a perfectly valid integer, but every
+  // consumer of the modeled [project] fields treats them as strings and calls
+  // .trim() on them — the form's issues() and publish preflight both did, and
+  // both threw. The parser is the one boundary that can make them all safe.
+  it.each([
+    "name",
+    "version",
+    "author",
+    "description",
+  ])("keeps a bare integer %s as its literal text", (key) => {
+    const model = parseToml(`[project]\n${key} = 2024\n`);
+    expect(model.project[key]).toBe("2024");
+    expect(() => model.project[key].trim()).not.toThrow();
+  });
+
+  it.each([
+    ["a negative integer", "-7", "-7"],
+    ["a float", "1.5", "1.5"],
+    ["true", "true", "true"],
+    ["false", "false", "false"],
+    ["an inline array", '["a", "b"]', '["a", "b"]'],
+  ])("keeps %s name as its literal text", (_label, written, expected) => {
+    expect(parseToml(`[project]\nname = ${written}\n`).project.name).toBe(expected);
+  });
+
+  it("still unquotes a normal quoted string", () => {
+    const model = parseToml(`[project]\nname = "my-mod"\nversion = "0.1.0"\n`);
+    expect(model.project).toMatchObject({ name: "my-mod", version: "0.1.0" });
+  });
+
+  it("re-emits a numeric name as a quoted string that reparses identically", () => {
+    const once = emitToml(parseToml("[project]\nname = 2024\n"));
+    expect(once).toContain('name = "2024"');
+    expect(emitToml(parseToml(once))).toBe(once);
+  });
+
+  it("leaves unmodeled [project] keys typed so they round-trip unchanged", () => {
+    // Only the four modeled fields are text-normalised; a key the form does not
+    // edit keeps its TOML type, and emitToml writes it back without quotes.
+    const model = parseToml("[project]\nname = 2024\ndcs_min_version = 2\nbeta = true\n");
+    expect(model.project.dcs_min_version).toBe(2);
+    expect(model.project.beta).toBe(true);
+    const out = emitToml(model);
+    expect(out).toContain("dcs_min_version = 2");
+    expect(out).toContain("beta = true");
+  });
+
+  it("does not text-normalise the same key names in other modeled sections", () => {
+    // [[requires_module]].name and [[entrypoint]].id are separate keys on
+    // separate rows — the normalisation must key off the [project] table, not
+    // off the key name alone.
+    const model = parseToml("[[requires_module]]\nid = 50\nname = 42\n");
+    expect(model.requires_module[0]).toEqual({ id: 50, name: 42 });
+  });
+});
+
 describe("splitDest", () => {
   it("splits a {SavedGames} dest into token and remainder", () => {
     expect(splitDest("{SavedGames}/Scripts/a.lua")).toEqual({

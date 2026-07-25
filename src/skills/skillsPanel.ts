@@ -89,9 +89,7 @@ export class SkillsPanel {
           if (choice) void vscode.window.showTextDocument(uri);
         });
     } catch (err) {
-      void vscode.window.showErrorMessage(
-        `Skill install failed: ${err instanceof Error ? err.message : err}`,
-      );
+      showInstallFailed(err);
     }
     await this.postSkills();
   }
@@ -140,4 +138,15 @@ export class SkillsPanel {
       csp: { img: "data:" },
     });
   }
+}
+
+/**
+ * The one place a failed skill install is reported. Both entry points — the
+ * panel's Install/Update buttons and the activation nudge's "Update" — land
+ * here, so a repo that cannot be written to says the same thing either way.
+ */
+export function showInstallFailed(err: unknown): void {
+  void vscode.window.showErrorMessage(
+    `Skill install failed: ${err instanceof Error ? err.message : err}`,
+  );
 }
