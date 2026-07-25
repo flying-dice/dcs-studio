@@ -2,6 +2,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { savedGamesDir } from "../bridge/paths";
 import { LogBuffer, type LogEntry, type ModIdentity, modIdentity } from "../core/domain/dcsLog";
+import { MANIFEST_FILE } from "../core/domain/manifestFile";
 import type { ManifestPort } from "../core/ports/manifest";
 import { renderWebviewHtml } from "../webview/html";
 import { type FileState, LogTailer } from "./tailer";
@@ -69,7 +70,7 @@ export class LogPanel {
       if (!folder) {
         this.mod = null;
       } else {
-        const uri = vscode.Uri.joinPath(folder.uri, "dcs-studio.toml");
+        const uri = vscode.Uri.joinPath(folder.uri, MANIFEST_FILE);
         const bytes = await vscode.workspace.fs.readFile(uri);
         const text = Buffer.from(bytes).toString("utf8");
         const model = this.manifestPort.parseToml(text);

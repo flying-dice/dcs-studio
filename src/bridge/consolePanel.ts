@@ -6,6 +6,7 @@ import { fmtBytes } from "../core/domain/format";
 import { renderWebviewHtml } from "../webview/html";
 import type { BridgeClient, LuaEnv } from "./client";
 import type { BridgeClients } from "./clients";
+import { saveExport } from "./saveExport";
 
 // The Lua console: a REPL against the live sim over the bridges, with a target
 // environment picker (GUI/hooks, mission scripting env, or another net state).
@@ -214,29 +215,8 @@ export class ConsolePanel {
         .forEnv(env)
         .replExport(env, { ref: msg.ref, expr: msg.expr });
       temp = vscode.Uri.file(path);
-      // TODO: clean-code - 0.6 - DRY (#50): from here to the end of the try block is
-      // the same twenty lines as src/bridge/dbExport.ts — default folder, save
-      // dialog, copy, shouldOpenExport branch, temp cleanup — differing only in
-      // the filename base. Extract one `saveExport(temp, baseName, bytes)`
-      // helper; today a fix to either flow has to be remembered twice.
-      const base = exportFileBase(msg.label);
-      const folder = vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(os.homedir());
-      const target = await vscode.window.showSaveDialog({
-        defaultUri: vscode.Uri.joinPath(folder, `${base}.json`),
-        filters: { JSON: ["json"] },
-      });
-      if (target) {
-        await vscode.workspace.fs.copy(temp, target, { overwrite: true });
-        if (shouldOpenExport(bytes)) {
-          const doc = await vscode.workspace.openTextDocument(target);
-          await vscode.window.showTextDocument(doc, { preview: true });
-        } else {
-          void vscode.window.showInformationMessage(
-            `Exported ${fmtBytes(bytes)} to ${target.fsPath}`,
-          );
-        }
-      }
-      this.post({ type: "exportDone", reqId: msg.reqId, saved: !!target });
+      const saved = await saveExport(temp, exportFileBase(msg.label), bytes);
+      this.post({ type: "exportDone", reqId: msg.reqId, saved });
     } catch (e) {
       this.post({ type: "exportDone", reqId: msg.reqId, saved: false, error: errText(e) });
     } finally {

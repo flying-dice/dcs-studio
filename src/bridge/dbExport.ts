@@ -5,6 +5,7 @@ import { fmtBytes } from "../core/domain/format";
 import { showError } from "../errors";
 import type { BridgeClients } from "./clients";
 import type { DbExportWhat } from "./dbTypes";
+import { saveExport } from "./saveExport";
 
 // "DCS Studio: Export DCS Unit Database (JSON)…" — a quick-pick over the GUI
 // bridge's db_export method. Mirrors the console export flow: the sim writes the
@@ -87,23 +88,7 @@ export async function dbExportCommand(clients: BridgeClients): Promise<void> {
     );
 
     temp = vscode.Uri.file(path);
-    const folder = vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(os.homedir());
-    const target = await vscode.window.showSaveDialog({
-      defaultUri: vscode.Uri.joinPath(folder, `${dbExportFileBase(what)}.json`),
-      filters: { JSON: ["json"] },
-    });
-
-    if (target) {
-      await vscode.workspace.fs.copy(temp, target, { overwrite: true });
-      if (shouldOpenExport(bytes)) {
-        const doc = await vscode.workspace.openTextDocument(target);
-        await vscode.window.showTextDocument(doc, { preview: true });
-      } else {
-        void vscode.window.showInformationMessage(
-          `Exported ${fmtBytes(bytes)} to ${target.fsPath}`,
-        );
-      }
-    }
+    await saveExport(temp, dbExportFileBase(what), bytes);
   } catch (e) {
     void showError(`DCS database export failed: ${e instanceof Error ? e.message : String(e)}`, e);
   } finally {

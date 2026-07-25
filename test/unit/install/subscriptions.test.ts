@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { MANIFEST_FILE as CANONICAL_MANIFEST_FILE } from "../../../src/core/domain/manifestFile";
 import {
   dataDirName,
   isUpToDate,
   ledgerKey,
-  MANIFEST,
+  MANIFEST_FILE,
   renderUninstallScript,
   type Subscription,
   sortedByName,
@@ -23,8 +24,12 @@ const sub = (over: Partial<Subscription> = {}): Subscription => ({
 });
 
 describe("constants", () => {
-  it("names the manifest file", () => {
-    expect(MANIFEST).toBe("dcs-studio.toml");
+  it("re-exports the one manifest filename rather than repeating it", () => {
+    // The name is a contract with the Rust project tooling and with every
+    // published release asset, so it is declared once and imported; this
+    // module re-exports it so subscription code still gets it from one place.
+    expect(MANIFEST_FILE).toBe(CANONICAL_MANIFEST_FILE);
+    expect(MANIFEST_FILE).toBe("dcs-studio.toml");
   });
 });
 

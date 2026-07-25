@@ -1,3 +1,4 @@
+import { MANIFEST_FILE } from "./manifestFile";
 // Project templates scaffolded by the New Project flow (originally a port of
 // the real app's `crates/dcs-studio-project/src/templates.rs`, since diverged:
 // no lua-cargo build step here — plain scripts ship as-is, and the lua
@@ -197,7 +198,7 @@ function blank(name: string): TemplateFile[] {
   const slug = slugify(name);
   return [
     {
-      path: "dcs-studio.toml",
+      path: MANIFEST_FILE,
       contents: `${manifestHeader(name)}${projectBlock(name, "blank")}
 # [[bundle]] declares what gets packed into the release archive (paths are
 # relative to the project root). [[symlink]] declares which links are created
@@ -218,7 +219,7 @@ function luaMission(name: string): TemplateFile[] {
   const ident = luaIdent(name);
   return [
     {
-      path: "dcs-studio.toml",
+      path: MANIFEST_FILE,
       contents: `${manifestHeader(name)}${projectBlock(name, "lua-mission")}
 # Bundle the script into the release, then link it into Saved Games on enable.
 [[bundle]]
@@ -315,7 +316,7 @@ function luaHook(name: string): TemplateFile[] {
   const ident = luaIdent(name);
   return [
     {
-      path: "dcs-studio.toml",
+      path: MANIFEST_FILE,
       contents: `${manifestHeader(name)}${projectBlock(name, "lua-hook")}
 # Bundle the hook, then link it into Scripts/Hooks, where DCS auto-loads
 # every .lua at start.
@@ -437,7 +438,7 @@ LUA_LIB = { value = "lua5.1", relative = true }
 
 function rustDllManifest(name: string, slug: string, ident: string): TemplateFile {
   return {
-    path: "dcs-studio.toml",
+    path: MANIFEST_FILE,
     contents: `${manifestHeader(name)}${projectBlock(name, "rust-dll")}
 # Bundle the built DLL + the GameGUI hook, then link each into place — the
 # DLL under Mods/tech, the hook under Scripts/Hooks (the DCS Studio bridge
@@ -667,7 +668,7 @@ function mission(name: string): TemplateFile[] {
 
 function missionManifest(name: string, slug: string): TemplateFile {
   return {
-    path: "dcs-studio.toml",
+    path: MANIFEST_FILE,
     contents: `${manifestHeader(name)}${projectBlock(name, "mission")}
 # The mission ships as-is: packaged into the release archive on publish,
 # and symlinked into your DCS user Missions folder on install. Save your

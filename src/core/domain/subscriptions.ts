@@ -7,14 +7,15 @@
 // Subscription>`) and the generated `uninstall-all.bat` bytes are FROZEN — this
 // module is the single source of truth for both.
 
+import { MANIFEST_FILE } from "./manifestFile";
 import type { ManifestEntrypoint, ModLink, Subscription } from "./types";
 
 // The Subscription/ModLink shapes live in the shared types module; re-export them
 // so subscription code can import everything it needs from one place.
 export type { ManifestEntrypoint, ModLink, Subscription };
 
-/** The manifest file name a subscribed mod ships (asset + on-disk). */
-export const MANIFEST = "dcs-studio.toml";
+/** The manifest a subscribed mod ships (release asset + on-disk copy). */
+export { MANIFEST_FILE };
 
 /**
  * The ledger key for a repo — lowercased `owner/name`. The ledger is keyed by

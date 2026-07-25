@@ -5,11 +5,14 @@
 // adapter (`adapters/github/marketplace.ts`) does the fetching and hands these
 // functions the parsed JSON.
 
+import { MANIFEST_FILE } from "./manifestFile";
 import type { MarketListing, ProductAsset, ProductDetail } from "./types";
 
-// Marker topic + manifest file — the constants dcs-studio-project exports.
+// The marker topic dcs-studio-project exports. The manifest filename is the
+// other half of that pair and lives in manifestFile.ts, re-exported here so a
+// marketplace consumer still gets both from one import.
 export const DISCOVERY_TOPIC = "dcs-studio";
-export const MANIFEST_FILE = "dcs-studio.toml";
+export { MANIFEST_FILE };
 
 /** A repo item in the search-repositories response. */
 export interface SearchItem {

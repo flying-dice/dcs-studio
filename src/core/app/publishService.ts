@@ -2,6 +2,7 @@ import { win32 as path } from "node:path";
 import { payloadBase, stalePayloadVolumes } from "../domain/archivePolicy";
 import { fmtBytes } from "../domain/format";
 import { DISCOVERY_TOPIC } from "../domain/githubMarketplace";
+import { MANIFEST_FILE } from "../domain/manifestFile";
 import type { GhFacts } from "../domain/publishChecks";
 import { gitignoreNeedsEntry, gitignoreWithEntry } from "../domain/publishPolicy";
 import { parseRepoRemote, type RepoRef } from "../domain/repoRemote";
@@ -186,13 +187,13 @@ export class PublishService {
     if (!tag) throw new Error("A release tag is required (e.g. v1.0.0).");
     let m: ManifestModel;
     try {
-      m = manifest.parseToml(await fs.readText(path.join(root, "dcs-studio.toml")));
+      m = manifest.parseToml(await fs.readText(path.join(root, MANIFEST_FILE)));
     } catch {
       throw new Error("Cannot read dcs-studio.toml.");
     }
     if (!(await archive.available())) throw new Error("7z not found.");
 
-    const files = ["dcs-studio.toml"];
+    const files = [MANIFEST_FILE];
     const seen = new Set<string>();
     for (const b of m.bundle) {
       if (seen.has(b.path)) continue; // dedupe: one archive entry per path
@@ -215,8 +216,8 @@ export class PublishService {
 
     // The standalone manifest sits next to the release so the Marketplace reads the
     // install plan without downloading the payload.
-    const manifestAsset = path.join(outDir, "dcs-studio.toml");
-    await fs.copy(path.join(root, "dcs-studio.toml"), manifestAsset);
+    const manifestAsset = path.join(outDir, MANIFEST_FILE);
+    await fs.copy(path.join(root, MANIFEST_FILE), manifestAsset);
     const assets = [manifestAsset, ...packaged.volumes];
     const repo = `${opts.owner}/${opts.name}`;
     const notes = opts.notes || `Release ${tag}`;

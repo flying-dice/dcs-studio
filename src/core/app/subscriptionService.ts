@@ -11,7 +11,7 @@ import {
   BEFORE_SANITIZE_FILE,
   generateAggregator,
 } from "../domain/missionScriptAggregator";
-import { dataDirName, ledgerKey, MANIFEST, sortedByName } from "../domain/subscriptions";
+import { dataDirName, ledgerKey, MANIFEST_FILE, sortedByName } from "../domain/subscriptions";
 import type {
   InstallRoots,
   InstallTarget,
@@ -103,12 +103,12 @@ export class SubscriptionService {
 
   /** Parse a release's dcs-studio.toml asset into the resolved plan (for display). */
   async fetchPlan(assets: ProductAsset[], token: string | undefined): Promise<InstallPlan | null> {
-    const manifestAsset = assets.find((a) => a.name === MANIFEST);
+    const manifestAsset = assets.find((a) => a.name === MANIFEST_FILE);
     if (!manifestAsset) return null;
     const tmp = path.join(
       this.ports.roots.dataDir(),
       ".tmp",
-      `${this.ports.clock.now()}-${MANIFEST}`,
+      `${this.ports.clock.now()}-${MANIFEST_FILE}`,
     );
     await this.ports.downloader.download(manifestAsset.url, tmp, token);
     const m = this.ports.manifest.parseToml(await this.ports.fs.readText(tmp));
@@ -195,7 +195,7 @@ export class SubscriptionService {
   }> {
     try {
       const model = this.ports.manifest.parseToml(
-        await this.ports.fs.readText(path.join(dir, MANIFEST)),
+        await this.ports.fs.readText(path.join(dir, MANIFEST_FILE)),
       );
       return {
         bundles: model.bundle.map((b) => ({ path: b.path })),
@@ -304,7 +304,7 @@ export class SubscriptionService {
     if (!sub) throw new Error("Not subscribed.");
     if (sub.enabled) return;
     const model = this.ports.manifest.parseToml(
-      await this.ports.fs.readText(path.join(sub.dir, MANIFEST)),
+      await this.ports.fs.readText(path.join(sub.dir, MANIFEST_FILE)),
     );
     // Re-checked here rather than trusted from subscribe: enable reads the
     // manifest off disk, and that file can have been replaced (or recorded by a

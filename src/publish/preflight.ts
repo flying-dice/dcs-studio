@@ -3,6 +3,7 @@ import * as fs from "fs";
 import type * as vscode from "vscode";
 import { manifestCore } from "../adapters/vscode/manifest";
 import type { PublishService } from "../core/app/publishService";
+import { MANIFEST_FILE } from "../core/domain/manifestFile";
 import { type Check, computePreflight, type SourceProbe } from "../core/domain/publishChecks";
 import type { ManifestModel } from "../core/domain/types";
 
@@ -15,7 +16,7 @@ import type { ManifestModel } from "../core/domain/types";
 export type { Check };
 
 export function readManifest(ctx: vscode.ExtensionContext, root: string): ManifestModel | null {
-  const p = path.join(root, "dcs-studio.toml");
+  const p = path.join(root, MANIFEST_FILE);
   try {
     return manifestCore(ctx).parseToml(fs.readFileSync(p, "utf8"));
   } catch {
@@ -40,7 +41,7 @@ export async function preflight(
   root: string,
   publish: PublishService,
 ): Promise<Check[]> {
-  const manifestExists = fs.existsSync(path.join(root, "dcs-studio.toml"));
+  const manifestExists = fs.existsSync(path.join(root, MANIFEST_FILE));
   const manifest = manifestExists ? readManifest(ctx, root) : null;
   const tools = await publish.toolFacts();
   return computePreflight({

@@ -35,6 +35,7 @@ import {
   statusBarClickAction,
   statusBarView,
 } from "./core/domain/bridgeStatusView";
+import { MANIFEST_FILE } from "./core/domain/manifestFile";
 import {
   DcsDebugAdapterFactory,
   DcsDebugConfigProvider,
@@ -63,12 +64,6 @@ import { PublishPanel } from "./publish/publishPanel";
 import { SetupPanel } from "./setup/panel";
 import { type SkillInfo, SkillsLibrary } from "./skills/library";
 import { SkillsPanel, showInstallFailed } from "./skills/skillsPanel";
-
-// TODO: clean-code - 0.55 - DRY (#48): the manifest filename is declared three times
-// under three names (here, and in the publish and nav paths) plus eight bare
-// literals across src/. One exported constant in core/domain, imported
-// everywhere, is the whole fix.
-const MANIFEST_FILE = "dcs-studio.toml";
 
 // A My Mods deep link that arrived in a window with a project open: the handler
 // spawns a fresh empty window and stamps this key so that window finishes the

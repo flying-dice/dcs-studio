@@ -185,6 +185,9 @@ describe("launch rules", () => {
 
 describe("eject-on-shutdown policy", () => {
   it("ejects only when no managed DCS process is alive", () => {
+    // The argument is "is DCS still running", present tense — a reading of it
+    // as "did we launch DCS" inverts the policy and rips the DLL out from
+    // under a live sim.
     expect(shouldEjectOnShutdown(false)).toBe(true);
     expect(shouldEjectOnShutdown(true)).toBe(false);
   });
