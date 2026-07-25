@@ -17,7 +17,7 @@ Feature: New Project panel
   Background:
     Given the user opens the "New Project" panel
 
-  Rule: Four templates cover the common mod shapes
+  Rule: Five templates cover the common mod shapes
 
     Scenario: Template tiles
       Then the panel offers, with the first selected by default:
@@ -25,7 +25,8 @@ Feature: New Project panel
         | Blank Project       | Just a dcs-studio.toml manifest — bring your own structure.                  |
         | Lua Mission Script  | Runs in the mission scripting environment — loaded by a mission trigger.     |
         | Lua GameGUI Hook    | Runs in the GUI environment — auto-loaded from Scripts/Hooks at DCS start.   |
-        | Rust DLL Mod        | Native mod: cargo project building a DLL, deployed via install rules.        |
+        | Rust DLL Mod        | Native mod: cargo project building a DLL, bundled and symlinked into DCS.    |
+        | Share a Mission     | Package a .miz and link it into your DCS user Missions folder.               |
 
     Scenario Outline: What each template scaffolds
       When the user creates a project named "my mod" from "<template>"
@@ -44,6 +45,15 @@ Feature: New Project panel
       Given the project name contains spaces or punctuation
       Then folder and file slugs are lowercased with hyphens
       And Lua/Rust identifiers are keyword- and digit-safe
+
+    @chaos
+    Scenario: A name with no ASCII letters or digits
+      Given the project name is "Миссия"
+      When the user creates a project from "Lua Mission Script"
+      Then the folder is named "Миссия" exactly as typed
+      And every slug and identifier falls back to "untitled",
+        so the script is written to Scripts/untitled.lua
+      And the manifest still carries name = "Миссия"
 
   Rule: Destination adapts to whether a folder is open
 
@@ -89,4 +99,147 @@ Feature: New Project panel
         | invalid folder name           | "<name>" isn't a valid folder name.            |
         | no location chosen            | Choose a location for the project.             |
         | target folder exists non-empty | "<root>" already exists and isn't empty.      |
+
+    @chaos
+    Scenario: The target path is an existing file
+      Given a file — not a folder — already sits at the previewed path
+      When the user clicks "Create Project" in new-folder mode
+      Then the inline error reads "<root>" already exists.
+      And it is worded differently from the non-empty-folder case,
+        because a file at that path is not something the user can empty out
+      And nothing is written
+
+    @chaos
+    Scenario Outline: Names Windows cannot make a folder from
+      Given the project name is "<name>"
+      When the user clicks "Create Project" in new-folder mode
+      Then the inline error reads "<name>" isn't a valid folder name.
+      And nothing is written
+
+      Examples: characters the name may never contain
+        | name        |
+        | bad<name    |
+        | bad>name    |
+        | bad:name    |
+        | bad"name    |
+        | mods/my-mod |
+        | mods\my-mod |
+        | bad\|name    |
+        | bad?name    |
+        | bad*name    |
+
+    @chaos
+    Scenario: Endings and control characters Windows cannot keep
+      Then a name ending in a dot, a name ending in a space,
+        and a name containing any control character (U+0000–U+001F)
+        are each rejected with "<name>" isn't a valid folder name.
+      And a leading dot and inner dots are fine — ".hidden" and "v1.2.3-x" pass
+
+    @chaos
+    Scenario: Create is not gated on a template being selected
+      Given the host sent an empty template list, so no tile is selected
+      When the user types a name, picks a location and clicks "Create Project"
+      Then the panel still enables the button and posts a create
+        with an empty template id — the enable rule checks only
+        the name and the destination
+      And the scaffolder rejects it with Unknown template "".
+      And nothing is written
+
+    @chaos
+    Scenario: An unknown template is rejected before anything touches disk
+      Given the requested template id is not one the extension renders
+      When the user clicks "Create Project"
+      Then the inline error reads Unknown template "<template>".
+      And the target folder is never created
+
+    @chaos
+    Scenario: A write failing partway leaves the folder blocking its own retry
+      Given the target folder is created and the first files are written
+      When a later write fails — the disk fills, or the folder loses write permission
+      Then the inline error carries the platform's own message
+      And the files already written stay on disk — there is no rollback
+      And the panel stays open with "Create Project" re-armed
+      But retrying the same name now fails with
+        "<root>" already exists and isn't empty.
+      And the user must empty or rename the folder by hand to get any further
+
+    @chaos
+    Scenario: The location is not writable
+      Given the chosen location cannot be written to
+      When the user clicks "Create Project"
+      Then the panel keeps the form and shows the host's message inline
+      And "Create Project" re-arms so the user can pick another location
+      And editing the name or switching destination clears the stale error
+
+    @chaos
+    Scenario: Create cannot be fired twice
+      When the user clicks "Create Project" and then clicks again,
+        or presses Enter in the Name field, while it still reads "Creating…"
+      Then only one create is posted
+      And a success does not re-arm the button — the host tears the panel down
+
+    @chaos
+    Scenario: A failure the host cannot describe
+      Given the scaffold fails with a value that is not an Error
+      Then the inline error still says something —
+        the message text, or "Something went wrong." when there is none
+
+    @chaos
+    Scenario: Bootstrapping in place still refuses an empty name
+      Given a workspace folder is open and in-place mode is selected
+      When the user submits a whitespace-only name
+      Then the error reads "Enter a project name."
+      And nothing is written into the open folder
+
+    @chaos
+    Scenario: Bootstrapping in place when the folder already has every template file
+      Given the open folder already contains every file the template provides
+      When the user creates in-place
+      Then no file is written and none is overwritten
+      And the message names all of them:
+        "Kept N existing file(s) the template also provides: …"
+      And the manifest editor still opens
+
+    @chaos
+    Scenario: In-place accepts a name a folder could not have
+      Given a workspace folder is open and in-place mode is selected
+      When the user creates a project named "My Mod: Reloaded"
+      Then it is accepted — no folder is being created from the name
+      And the manifest carries name = "My Mod: Reloaded"
+
+    @chaos
+    Scenario: The reload lands somewhere other than the new project
+      Given a project was scaffolded into a new folder
+      And a pending-open breadcrumb was written before the window reloaded
+      When the reloaded window's first folder is not that project root
+      Then the breadcrumb is discarded rather than reused later
+      And the manifest and form do not open
+      But the scaffolded files are all on disk and intact
+
+  Rule: Names the folder validator does not catch surface as the platform's own error
+
+    @chaos
+    Scenario Outline: Windows reserved device names pass validation
+      Given the project name is "<name>"
+      When the user clicks "Create Project" in new-folder mode
+      Then the name passes the folder-name check —
+        reserved device names are not in the rejected set
+      And the failure surfaces later as the filesystem's own error
+        in the panel's inline error box # UNVERIFIED: no reserved-name guard exists in scaffoldPlan.ts; the exact message comes from Windows via vscode.workspace.fs and was not observed
+
+      Examples:
+        | name |
+        | CON  |
+        | PRN  |
+        | NUL  |
+        | COM1 |
+
+    @chaos
+    Scenario: A target path longer than the Windows path limit
+      Given the location plus the project name plus the deepest template path
+        exceeds the Windows maximum path length
+      When the user clicks "Create Project"
+      Then no length check rejects it up front
+      And the write fails partway with the filesystem's own error,
+        leaving the partially-written folder behind # UNVERIFIED: no path-length guard exists; behaviour inferred from the unrolled-back write loop in src/project/scaffold.ts
 ```
