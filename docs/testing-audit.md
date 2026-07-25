@@ -4,10 +4,10 @@ Audit of the test suite and the structural seams that make code testable, taken
 against `main` @ `8c45b98` (v0.16.0). Measurements are reproducible — every
 number below came from running the suites, not from reading them.
 
-> **Status note.** The findings below are the original audit and are kept as the
-> record. Work against them is under way — see
-> [Remediation status](#remediation-status) at the end for what has landed, the
-> current measured numbers per layer, and what is still outstanding.
+> **Status note.** Everything below is the original audit, kept as the record of
+> what was true at `8c45b98`. **All of it has since been addressed** — see
+> [Remediation status](#remediation-status) at the end for the measured numbers,
+> the defects the work uncovered, and the few things deliberately left undone.
 
 ## Verdict
 
@@ -288,133 +288,105 @@ untested band permanently testable rather than perpetually excluded.
 
 # Remediation status
 
-Measured after the work described below. Each layer now runs on its own command
-against its own config, and gates its own coverage over an include set that does
-not overlap the others'.
+**Complete.** All four layers gate at 100% and pass. Numbers below were measured
+by running each layer on its own — parallel runs share `coverage/**/.tmp` and
+corrupt each other's shards, so every reading here is from a serial run.
 
 | Layer | Command | Tests | Coverage | Gate |
 |---|---|---|---|---|
-| Unit | `npm run test:unit` | 806 | **100%** stmts/branch/funcs/lines | ✅ green |
-| Integration | `npm run test:integration` | 288 | 35.3% stmts / 35.6% lines | ❌ red — work outstanding |
-| E2E | `npm run test:e2e` | 91 | 80.8% stmts of `media/*.js` | ❌ red — work outstanding |
-| Rust | `cargo llvm-cov --workspace` | 33 | 77.3% lines / 66.9% functions | ❌ red — work outstanding |
+| Unit | `npm run test:unit` | 806 | 100% stmts / branches / funcs / lines | green |
+| Integration | `npm run test:integration` | 879 | 100% (2270 stmts, 925 br, 604 fn, 2026 lines) | green |
+| E2E | `npm run test:e2e` | 221 | 100% across all 14 webview scripts | green |
+| Rust bridge | `cargo llvm-cov --workspace` | 116 | 100% lines (3832), 100% functions (444) | green |
 
-Modules at 100% in the integration layer: `adapters/github/marketplace.ts`,
-`adapters/node/{fs,clock,env,registry}.ts`, `adapters/vscode/{installRoots,manifest}.ts`,
-`bridge/paths.ts`, `install/dataDir.ts`, `webview/html.ts`, `errors.ts`,
-`marketplace/panel.ts`, `nav/navView.ts`, `docs/docsPanel.ts`,
-`skills/skillsPanel.ts`, `publish/{publishPanel,preflight}.ts`,
-`setup/panel.ts`, `manifest/formPanel.ts`, `project/newProjectPanel.ts`.
+**2,022 tests**, up from 905 (790 unit + 91 e2e + 24 Rust) at the start. No
+coverage-ignore was added to reach any of it beyond the two documented in the
+unit layer, and no gate was weakened.
 
-Remaining integration areas, by size: `src/debug` (0%, 625 lines),
-`src/install` (2.8% — myModsPanel + shortcut), `src/mission` (0%),
-`src/bridge` (25% — consolePanel, deploy, launch, dbExport, build),
-`src/adapters/node` (25% — gh, git, sevenZip, downloader, wsTransport,
-processLauncher), `src/log` (47% — logPanel), `src/skills` (48% — library),
-`src/project` (56% — scaffold), `src/extension.ts` (0%).
+Rust *region* coverage is 98.75% and is deliberately not gated: regions split on
+panic edges the compiler inserts, which cannot all be driven from a test.
 
-`npm test` runs all three TypeScript layers in sequence; `npm run coverage` does
-the same with each gate enforced.
+## Every gap from the audit above
 
-## Landed
+| Gap | Status |
+|---|---|
+| G1 — Rust tests never run in CI | Fixed: one CI job per layer, incl. a Linux `cargo llvm-cov` job |
+| G2 — sandbox-escape guard untested | Fixed, and the guard was rewritten (it was host-dependent) |
+| G3 — webview/panel seam unverified | Fixed by construction: both halves now execute under their own gate |
+| G4 — three webviews with no harness | Fixed: publish, setup and newproject harnesses added |
+| G5 — panels ~90% logic, 0% tested | Fixed: every panel at 100%; marketplace extracted to a presenter |
+| G6 — CLI argv untested | Fixed: extracted to `core/domain/cliArgs.ts` under the unit gate |
+| G7 — host-dependent path logic | Fixed across core, adapters and panels |
+| G8 — no extension-host integration | Fixed: `activate()` is really called and every handler driven |
 
-- **G7 — host-dependent path logic.** `core/**` now resolves with explicit
-  `path.win32` semantics on every host, so the domain layer is deterministic
-  off-Windows. This is what allows the TypeScript layers to gate on Linux CI.
-- **Three separately-runnable layers.** `vitest.unit.config.ts`,
-  `vitest.integration.config.ts` and the Playwright config each own a disjoint
-  include set and an independent 100% per-file threshold. The e2e layer had no
-  coverage story at all; `scripts/e2e-coverage.mjs` now collects V8 coverage
-  through a Playwright fixture, merges it into one Istanbul map, and gates it.
-  A webview that never loads reports 0% rather than the empty-map 100% that
-  `v8-to-istanbul` yields by default — without that, a view with no harness
-  passes the gate silently, which is the exact gap G4 describes.
-- **G1 — Rust tests never ran in CI.** CI is now one job per layer, including a
-  Linux `cargo llvm-cov` job. The stale claim that the tests need DCS's
-  non-redistributable `lua.dll` is gone: `build.rs` already links PUC
-  liblua5.1 off-Windows, so they run as ordinary executables.
-- **G2 — the write-root guard.** `path_guard` went from no tests to 100% lines
-  and functions, and the guard itself was rewritten. It delegated to
-  `std::path::Component`, whose parsing follows the compilation target, so
-  drive-prefixed and backslash-climbing input was accepted off-Windows. The
-  rules are now explicit and host-independent, and additionally reject NTFS
-  alternate-data-stream writes (`notes.txt:hidden`) that the old guard passed
-  even on Windows.
-- **G6 — CLI argument construction.** `gh`/`git`/7-Zip argv now lives in
-  `core/domain/cliArgs.ts` under the unit gate, asserted whole rather than by
-  substring. The adapters keep only the spawn call and its error mapping.
-- **G8 — contribution wiring.** A static contract test asserts every
-  `package.json` command has a `registerCommand`, every menu entry points at a
-  declared command, no id is registered twice, and every settings key read in
-  code is declared. It passes today, so it is a regression guard.
-- **Unit layer to 100%.** `manifest-core.js` entered the gate at 80%; its
-  scalar coercion, dest-token resolution and emit-time optional branches are now
-  covered. `resolveDest`'s dead third branch was removed rather than tested
-  around; the UMD preamble and a regex zero-length-match guard carry scoped
-  ignores with justifications, per the rule in `ARCHITECTURE.md`.
-- **S1 piloted — presenter extraction.** `MarketplacePanel` was 255 lines of
-  which 16 touched `vscode`; the sign-in state machine, product cache, install
-  guards and error mapping now live in `core/app/marketplacePresenter.ts`,
-  unit-tested to 100%. Editor work is *described* as a typed effect the panel
-  performs, so tests assert on values rather than spying on a mocked API. The
-  panel is down to 129 lines and integration-tested through the double.
-- **S5 generalised — port contract suites.** `productInvariants` now runs
-  against the GitHub backend as well as the mock, and a new
-  `FileSystemPort` contract runs the real node adapter against the clauses core
-  relies on (parent-directory creation on write/copy, recursive and
-  missing-path-tolerant remove). The in-memory fakes core is tested against are
-  now checked claims rather than hopeful ones.
-- **A shared `vscode` test double** (`test/integration/support/vscode.ts`):
-  configuration resolves against a settings map, EventEmitter dispatches, and
-  webview panels record what was posted and expose their message handler. This
-  is what unblocks the rest of the integration layer.
-- The e2e console spec no longer fails on browser-chrome noise (a full Chromium
-  requests `/favicon.ico`; the headless shell does not), and the Playwright
-  config accepts a `PW_CHROMIUM_PATH` override for images that ship their own
-  browser.
+## Defects found while writing the tests
 
-## Outstanding
+Eleven, none of which a coverage percentage would have revealed on its own. They
+came out of asking what happens when a user acts at the wrong moment.
 
-Ordered as the work should be picked up. The three red gates above are the
-acceptance criteria.
+**Data loss / corruption**
+- `path_guard` accepted drive-prefixed and backslash-climbing input off-Windows,
+  and accepted NTFS alternate-data-stream writes (`notes.txt:hidden`) *on*
+  Windows. This is the containment check for every file and SQLite write the
+  bridge exposes over its local JSON-RPC surface.
+- `restoreMission` had no unsaved-buffer guard, so restore-from-backup could be
+  silently undone by the very editor buffer that mangled the file.
+- `setup.js` routed a browsed `7z.exe` into the DCS *installation path* field,
+  overwriting it — on the first-run screen everything else depends on.
+- `sqlite` could not bind SQL NULL: params were walked as a sequence, which
+  stops at the first `nil`, so `{1, nil, 3}` bound one parameter and the
+  statement was rejected.
 
-1. **Integration layer to 100% (G5).** Still the largest piece, ~1,850
-   statements outstanding. The double and the presenter pattern are in place;
-   what remains is applying them:
-   - the remaining panels: `consolePanel` (309), `myModsPanel` (305),
-     `missionPanel` (187), `logPanel` (165). Panels covered so far were
-     tested in place against the double rather than presenter-extracted;
-     that is the right call for shells that only translate messages, but
-     `myModsPanel` and `consolePanel` carry enough decision logic to be
-     worth the `marketplacePresenter` treatment;
-   - **S2, a `SchedulerPort`** for `setInterval`/`setTimeout`, so
-     `debug/adapter.ts` (512 lines, the largest untested unit in the repo) and
-     `BridgeClient` become deterministic. The 30-second breakpoint
-     auto-continue is a safety mechanism — if it regresses, a crashed editor
-     freezes the user's sim — and nothing tests it;
-   - injected `spawn` seams for `gh.ts`, `git.ts` and `sevenZip.ts`; their argv
-     is already covered in core, so only the spawn/error mapping is left;
-   - `extension.ts` activation, which the contribution contract checks
-     statically but nothing executes.
-2. **E2E layer to 100% (G4).** Harnesses for `publish.js`, `setup.js` and
-   `newproject.js`, which sit at 0% — publish performs irreversible GitHub
-   operations and setup gates first-run. These three views address elements by
-   `getElementById` rather than the repo's `data-testid` convention, so they
-   need testids adding as part of the work. Then close the remaining gaps in
-   `console.js` (76%), `shared.js` (85%) and `console-explorer.js` (90%).
-3. **Rust to 100%.** Currently 77.3% lines. Largest gaps: `file.rs` (39% lines,
-   4 of 29 functions executed), `jsonrpc/server.rs` (49%), `logger.rs` (56%),
-   `lua_utils.rs` (74%), `sqlite.rs` (78%). The Lua-bound modules are testable
-   with in-process `Lua::new()` fixtures, as `path_guard`'s tests now show;
-   `server.rs` needs an actix test-server harness. **S4** — splitting a
-   Lua-free protocol crate — would make the highest-traffic logic testable
-   without any linkage setup, and is worth doing before chasing the last few
-   percent.
-4. **G3 — the webview↔panel message contract.** Deliberately not implemented
-   yet. Deriving the message sets by regex is unreliable: the webviews use
-   several different dispatch shapes (`postMessage` inline, helper wrappers,
-   `case` blocks, `if (m.type === …)`), so an inferred contract produces false
-   failures. It needs an explicit declared contract table per pair, checked
-   against both sides — worth doing alongside the presenter extraction in (1),
-   where a typed `HostMessage`/`WebviewMessage` union makes the table
-   mechanical rather than hand-maintained.
+**Availability**
+- A poisoned `AppData` mutex bricked the bridge for the rest of the DCS session
+  — every request 500ing, `/health` dead.
+- `logPanel` could create its tailer *after* dispose, orphaning a 500 ms poll of
+  `dcs.log` that posted to a dead webview for the rest of the session.
+- `tailer` left `open`/`read`/`close` outside its catch, so a log deleted between
+  stat and open threw an unhandled rejection and the tail silently stopped.
+- `stop_on_thread` was fallible with a `Drop` caller — a failure there becomes a
+  panic, and a panic while unwinding aborts the process.
+
+**Correctness**
+- `debug` applied in-flight `debug_state` answers after the session ended,
+  re-emitting `stopped` and reopening the debug UI on a dead session.
+- `deploy.ts` mixed native and win32 paths, so `dirname` returned `"."` and the
+  pre-copy `mkdir` targeted the wrong directory.
+- `marketplace.js` never restored the persisted product page: `render()` reset
+  the view before the re-open check could read it, making the feature dead code
+  since it was written.
+
+## Structural changes
+
+- **Three layers, disjoint include sets** — a gap in one can never be masked by
+  another layer executing the same line. This is what made the rest measurable.
+- **Presenter extraction (S1)** — piloted on the marketplace: 255 lines of panel
+  became a 129-line VS Code shell plus a presenter that knows nothing about the
+  editor and describes side effects as values. Remaining panels were covered in
+  place, which is the right shape for shells that only translate messages.
+- **`SchedulerPort` (S2)** — poll loops, backoff and the 30-second held-breakpoint
+  auto-continue are now deterministic. That auto-continue is a safety mechanism:
+  if it regresses, a crashed editor freezes the user's sim.
+- **`core/domain/cliArgs.ts` (S3)** — the flags that create repos, delete tags and
+  split release archives are now pure values under the unit gate.
+- **Port contract suites (S5)** — `FileSystemPort` and the marketplace product
+  invariants run against every implementation, so the fakes core is tested
+  against are checked claims rather than hopeful ones.
+- **The `vscode` test double** (`test/integration/support/vscode.ts`) — a small
+  real implementation, not a bag of spies. Two of its own bugs were worth more
+  than the tests that found them: it dropped VS Code's third `disposables`
+  argument (making every panel's teardown loop unreachable — exactly the code
+  that prevents listener leaks), and it leaked listeners between specs.
+
+## What is deliberately not done
+
+- **G3's declared message-contract table.** Both halves of every webview protocol
+  now execute under a gate, so a dropped handler fails a test. A typed contract
+  table would still be worth adding alongside a wider presenter rollout; deriving
+  it by regex is not, because the webviews use several dispatch shapes and an
+  inferred contract produces false failures.
+- **Presenter extraction beyond the marketplace pilot.** `myModsPanel` and
+  `consolePanel` carry enough decision logic to deserve it.
+- **`console.js` history recall needs a double tap.** The obvious fix moves the
+  problem to the down-arrow; fixing both directions needs a history-navigation
+  mode flag that changes multi-line editing ergonomics. Documented in the spec.

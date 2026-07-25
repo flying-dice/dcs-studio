@@ -88,10 +88,16 @@ Rust unit tests are Windows-gated on a real Lua 5.1 — put DCS's own `lua.dll` 
 ```powershell
 $env:PATH = "D:\Program Files\Eagle Dynamics\DCS World OpenBeta\bin;$env:PATH"
 cd bridge
-cargo test --workspace -- --include-ignored --skip regenerate_dlua_golden
+cargo test --workspace
 ```
 
-(`regenerate_dlua_golden` is a tool, not a test — run it explicitly after intentional surface changes to refresh `crates/bridge-{gui,mission}/types/*.d.lua`.)
+(On a non-Windows host the tests run without any of that: `bridge-core`'s
+build.rs links PUC liblua5.1, which is the same 5.1 ABI DCS ships. That is how
+CI runs them.)
+
+After an intentional surface change, refresh the checked-in goldens —
+`crates/bridge-{gui,mission}/types/*.d.lua` and the OpenRPC documents — by
+re-running the suite with `DCS_STUDIO_REGENERATE_GOLDENS=1` set.
 
 ## Teardown
 

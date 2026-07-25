@@ -98,6 +98,6 @@ The two `.openrpc.json` files are **goldens**: bridge tests
 (`golden_matches_live_openrpc` in each of `bridge-gui` and `bridge-mission`)
 assert the checked-in document byte-for-byte against what `rpc.discover`
 generates from the live method registration. On an intentional method-set
-change, the companion `regenerate_openrpc_golden` test rewrites the file from the
-live surface. The document you browse here is therefore always exactly what a
+change, re-running the suite with `DCS_STUDIO_REGENERATE_GOLDENS=1` rewrites the
+file from the live surface. The document you browse here is therefore always exactly what a
 running bridge of the same version will report.
