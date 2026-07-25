@@ -84,58 +84,51 @@ mod tests {
     use super::{resolve_under_writedir, stays_under};
     use mlua::Lua;
 
-    #[test]
-    fn accepts_ordinary_relative_paths() {
-        assert!(stays_under("dcs.log"));
-        assert!(stays_under("Logs/dcs.log"));
-        assert!(stays_under(r"Logs\dcs.log"));
-        assert!(stays_under("a/b/c/d.json"));
-        // A `.` segment is a no-op, not an escape.
-        assert!(stays_under("./dcs.log"));
-        assert!(stays_under("a/./b"));
+    /// The containment rule as data, shared with the extension's copy in
+    /// `src/core/domain/pathContainment.ts` and the webview's in
+    /// `media/manifest-core.js`. Read from the repo at COMPILE time, so a case
+    /// added to the table cannot be silently missing from this guard's tests —
+    /// which is exactly what a hand-retyped copy of it allowed.
+    #[derive(serde::Deserialize)]
+    struct Cases {
+        accept: Vec<Case>,
+        reject: Vec<Case>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Case {
+        path: String,
+        why: String,
+    }
+
+    fn cases() -> Cases {
+        serde_json::from_str(include_str!("../../../../spec/path-containment.cases.json"))
+            .expect("the shared containment case table must parse")
     }
 
     #[test]
-    fn rejects_parent_traversal_on_either_separator() {
-        assert!(!stays_under(".."));
-        assert!(!stays_under("../secrets"));
-        assert!(!stays_under(r"..\secrets"));
-        assert!(!stays_under("Logs/../../secrets"));
-        assert!(!stays_under(r"Logs\..\..\secrets"));
-        // Buried in the middle, after legitimate-looking segments.
-        assert!(!stays_under("a/b/../../../../etc/passwd"));
-    }
+    fn agrees_with_the_shared_case_table() {
+        let cases = cases();
+        // Guards the guard: an empty table would make both loops vacuous.
+        assert!(cases.accept.len() > 5, "accept cases missing");
+        assert!(cases.reject.len() > 15, "reject cases missing");
 
-    #[test]
-    fn rejects_absolute_and_unc_paths() {
-        assert!(!stays_under("/etc/passwd"));
-        assert!(!stays_under(r"\Windows\System32"));
-        assert!(!stays_under(r"\\server\share\x"));
-        assert!(!stays_under("//server/share/x"));
-    }
-
-    #[test]
-    fn rejects_drive_prefixes_and_data_streams_on_every_host() {
-        // The case a Component-based guard gets wrong off-Windows: on Linux
-        // these parse as one Normal component and would be accepted.
-        assert!(!stays_under(r"C:\Windows\System32\drivers\etc\hosts"));
-        assert!(!stays_under("C:/Windows"));
-        assert!(!stays_under("C:relative"));
-        // NTFS alternate data stream — writes hidden content beside a file.
-        assert!(!stays_under("notes.txt:hidden"));
-        assert!(!stays_under("a/b.txt:$DATA"));
-    }
-
-    #[test]
-    fn rejects_empty_and_separator_only_input() {
-        assert!(!stays_under(""));
-        assert!(!stays_under("."));
-        assert!(!stays_under("./."));
-        assert!(!stays_under("/"));
-        assert!(!stays_under(r"\"));
-        // Doubled separators are refused rather than silently collapsed.
-        assert!(!stays_under("a//b"));
-        assert!(!stays_under("a/"));
+        for c in &cases.accept {
+            assert!(
+                stays_under(&c.path),
+                "should accept {:?} — {}",
+                c.path,
+                c.why
+            );
+        }
+        for c in &cases.reject {
+            assert!(
+                !stays_under(&c.path),
+                "should reject {:?} — {}",
+                c.path,
+                c.why
+            );
+        }
     }
 
     /// Windows-ignored like the rest of the crate's mlua tests: there it needs

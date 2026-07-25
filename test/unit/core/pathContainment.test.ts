@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   destRelative,
@@ -7,65 +9,32 @@ import {
 } from "../../../src/core/domain/pathContainment";
 
 // The containment predicate a hostile dcs-studio.toml is measured against
-// (issue #16). These cases are deliberately the same ones the bridge's
-// path_guard.rs asserts — the two guards are mirrors, so the evidence that they
-// agree is that they are held to the same table. The webview's third copy is
-// checked against this one in test/unit/manifest/manifestCoreValues.test.ts.
+// (issue #16). The cases are not written here: all three implementations of the
+// rule — this one, the webview's copy in media/manifest-core.js, and the in-sim
+// bridge's path_guard.rs — read the same table, so a case cannot be added to
+// one guard's tests and forgotten in another's.
 
-describe("staysUnder — accepts", () => {
-  it("ordinary relative paths on either separator", () => {
-    expect(staysUnder("dcs.log")).toBe(true);
-    expect(staysUnder("Logs/dcs.log")).toBe(true);
-    expect(staysUnder("Logs\\dcs.log")).toBe(true);
-    expect(staysUnder("a/b/c/d.json")).toBe(true);
+export const CASES: {
+  accept: { path: string; why: string }[];
+  reject: { path: string; why: string }[];
+} = JSON.parse(
+  readFileSync(join(resolve(__dirname, "../../.."), "spec", "path-containment.cases.json"), "utf8"),
+);
+
+describe("staysUnder — the shared case table", () => {
+  it("carries cases in both directions", () => {
+    // Guards the guard: an empty or half-loaded table would make every
+    // assertion below pass vacuously.
+    expect(CASES.accept.length).toBeGreaterThan(5);
+    expect(CASES.reject.length).toBeGreaterThan(15);
   });
 
-  it("a `.` segment, which is a no-op rather than an escape", () => {
-    expect(staysUnder("./dcs.log")).toBe(true);
-    expect(staysUnder("a/./b")).toBe(true);
-  });
-});
-
-describe("staysUnder — rejects", () => {
-  it("parent traversal on either separator, anywhere in the path", () => {
-    expect(staysUnder("..")).toBe(false);
-    expect(staysUnder("../secrets")).toBe(false);
-    expect(staysUnder("..\\secrets")).toBe(false);
-    expect(staysUnder("Logs/../../secrets")).toBe(false);
-    expect(staysUnder("Logs\\..\\..\\secrets")).toBe(false);
-    // Buried in the middle, after legitimate-looking segments.
-    expect(staysUnder("a/b/../../../../etc/passwd")).toBe(false);
+  it.each(CASES.accept)("accepts $path — $why", ({ path }) => {
+    expect(staysUnder(path)).toBe(true);
   });
 
-  it("absolute and UNC paths", () => {
-    expect(staysUnder("/etc/passwd")).toBe(false);
-    expect(staysUnder("\\Windows\\System32")).toBe(false);
-    expect(staysUnder("\\\\server\\share\\x")).toBe(false);
-    expect(staysUnder("//server/share/x")).toBe(false);
-  });
-
-  it("drive prefixes and NTFS data streams on every host", () => {
-    // The case a component-based guard gets wrong off-Windows: on Linux these
-    // parse as one ordinary component and would be accepted.
-    expect(staysUnder("C:\\Windows\\System32\\drivers\\etc\\hosts")).toBe(false);
-    expect(staysUnder("C:/Windows")).toBe(false);
-    expect(staysUnder("C:relative")).toBe(false);
-    // An alternate data stream writes hidden content beside a file.
-    expect(staysUnder("notes.txt:hidden")).toBe(false);
-    expect(staysUnder("a/b.txt:$DATA")).toBe(false);
-  });
-
-  it("empty, separator-only and dot-only input", () => {
-    expect(staysUnder("")).toBe(false);
-    expect(staysUnder(".")).toBe(false);
-    expect(staysUnder("./.")).toBe(false);
-    expect(staysUnder("/")).toBe(false);
-    expect(staysUnder("\\")).toBe(false);
-  });
-
-  it("doubled and trailing separators rather than silently collapsing them", () => {
-    expect(staysUnder("a//b")).toBe(false);
-    expect(staysUnder("a/")).toBe(false);
+  it.each(CASES.reject)("rejects $path — $why", ({ path }) => {
+    expect(staysUnder(path)).toBe(false);
   });
 });
 

@@ -7,6 +7,7 @@ import {
   destStaysUnder as domainDestStaysUnder,
   staysUnder as domainStaysUnder,
 } from "../../../src/core/domain/pathContainment";
+import { CASES as CONTAINMENT } from "../core/pathContainment.test";
 
 const {
   parseVal,
@@ -358,36 +359,10 @@ describe("resolveDest", () => {
 
 describe("staysUnder (webview copy)", () => {
   // The predicate the browser gets. Its behaviour is specified once, in
-  // src/core/domain/pathContainment.ts; this asserts the copy agrees rather
-  // than re-litigating the rules.
-  const CASES = [
-    "dcs.log",
-    "Logs/dcs.log",
-    "Logs\\dcs.log",
-    "./dcs.log",
-    "a/./b",
-    "",
-    ".",
-    "./.",
-    "/",
-    "\\",
-    "..",
-    "../secrets",
-    "..\\secrets",
-    "Logs/../../secrets",
-    "a/b/../../../../etc/passwd",
-    "/etc/passwd",
-    "\\Windows\\System32",
-    "\\\\server\\share\\x",
-    "//server/share/x",
-    "C:\\Windows\\System32",
-    "C:/Windows",
-    "C:relative",
-    "notes.txt:hidden",
-    "a/b.txt:$DATA",
-    "a//b",
-    "a/",
-  ];
+  // src/core/domain/pathContainment.ts, and the cases come from the table all
+  // three implementations of the rule are held to — so this asserts the copy
+  // agrees rather than re-litigating (or quietly under-covering) the rules.
+  const CASES = [...CONTAINMENT.accept, ...CONTAINMENT.reject].map((c) => c.path);
 
   it("gives the same verdict as the domain predicate for every case", () => {
     for (const c of CASES) {

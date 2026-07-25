@@ -1,0 +1,56 @@
+{
+  "$comment": [
+    "The containment rule, as data, read by all three implementations' tests.",
+    "",
+    "A dcs-studio.toml arrives inside a stranger's GitHub release, so every path",
+    "it declares gets joined onto a root the user can write to. Three copies of",
+    "the rule enforce that: src/core/domain/pathContainment.ts (the extension),",
+    "media/manifest-core.js (the webview, which cannot import TypeScript) and",
+    "bridge/crates/bridge-core/src/path_guard.rs (the in-sim bridge, which the",
+    "extension cannot reach). They are deliberate copies — the alternative is a",
+    "runtime dependency between the sim and the editor — but a rule enforced in",
+    "three places is only as strong as its weakest copy.",
+    "",
+    "Two of the three were already held to each other. The Rust one was held to",
+    "a hand-retyped table, so a case added here and not retyped there left the",
+    "bridge's guard quietly weaker than the extension's. This file is the table",
+    "all three read, so adding a case is enough to hold all three to it.",
+    "",
+    "Add a case here first, then watch all three suites fail."
+  ],
+  "accept": [
+    { "path": "dcs.log", "why": "a bare filename" },
+    { "path": "Logs/dcs.log", "why": "forward separator" },
+    { "path": "Logs\\dcs.log", "why": "backslash separator — DCS is Windows-only" },
+    { "path": "a/b/c/d.json", "why": "nested, no traversal" },
+    { "path": "./dcs.log", "why": "a leading `.` segment is a no-op, not an escape" },
+    { "path": "a/./b", "why": "an interior `.` segment likewise" }
+  ],
+  "reject": [
+    { "path": "..", "why": "the traversal itself" },
+    { "path": "../secrets", "why": "leading traversal" },
+    { "path": "..\\secrets", "why": "leading traversal, backslash" },
+    { "path": "Logs/../../secrets", "why": "traversal after a legitimate segment" },
+    { "path": "Logs\\..\\..\\secrets", "why": "the same on backslashes" },
+    { "path": "a/b/../../../../etc/passwd", "why": "buried after legitimate-looking segments" },
+    { "path": "/etc/passwd", "why": "absolute, POSIX style" },
+    { "path": "\\Windows\\System32", "why": "absolute, Windows style" },
+    { "path": "\\\\server\\share\\x", "why": "UNC — writes to another machine" },
+    { "path": "//server/share/x", "why": "UNC on forward slashes" },
+    {
+      "path": "C:\\Windows\\System32\\drivers\\etc\\hosts",
+      "why": "drive prefix. The case a component-based guard gets wrong off-Windows: Node's path and Rust's Path both parse this as one ordinary component on Linux and would accept it"
+    },
+    { "path": "C:/Windows", "why": "drive prefix, forward slashes" },
+    { "path": "C:relative", "why": "drive-relative — resolves against that drive's cwd" },
+    { "path": "notes.txt:hidden", "why": "NTFS alternate data stream: hidden content beside a file" },
+    { "path": "a/b.txt:$DATA", "why": "the stream's canonical name" },
+    { "path": "", "why": "empty is not a path under anything" },
+    { "path": ".", "why": "names the root itself, not a destination under it" },
+    { "path": "./.", "why": "likewise, spelled out" },
+    { "path": "/", "why": "separator only" },
+    { "path": "\\", "why": "separator only, Windows style" },
+    { "path": "a//b", "why": "doubled separator — refused rather than silently collapsed" },
+    { "path": "a/", "why": "trailing separator, for the same reason" }
+  ]
+}

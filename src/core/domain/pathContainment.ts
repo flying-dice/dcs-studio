@@ -15,11 +15,11 @@
 // loads as a UMD global and cannot import TypeScript); the unit layer asserts
 // that copy against this one so the pair cannot drift.
 //
-// TODO: clean-code - 0.55 - DRY (#46): that anti-drift check covers two of the three
-// copies. The Rust one is held to a hand-retyped table in its own tests, so a
-// case added here and in the webview — but not retyped there — leaves the
-// bridge's guard quietly weaker than the extension's, in a security predicate.
-// One shared JSON case table, read by all three test suites, closes it.
+// All three are held to ONE table of cases, spec/path-containment.cases.json:
+// the two TypeScript suites read it at run time and the Rust one at compile
+// time via include_str!. Adding a case there fails all three until every copy
+// agrees — which is what the Rust half, held to a hand-retyped list, could not
+// promise before.
 //
 // Windows semantics on every host, for the same reason the Rust guard spells
 // its rules out by hand: DCS is Windows-only, but Node's `path` — like Rust's
