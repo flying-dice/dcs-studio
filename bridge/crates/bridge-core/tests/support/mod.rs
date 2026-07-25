@@ -15,6 +15,7 @@
 // The hand-rolled WS frame codec truncates lengths on purpose: test payloads are tiny.
 #![allow(clippy::cast_possible_truncation)]
 
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
@@ -25,6 +26,13 @@ use std::time::{Duration, Instant};
 pub struct Ws {
     stream: TcpStream,
     rx: Vec<u8>,
+    /// Text frames already taken off the socket while waiting for something
+    /// else (a Pong, a close), kept in order for `poll`/`await_id`.
+    pending: VecDeque<String>,
+    /// Pongs seen so far — the counter [`Ws::barrier`] waits on.
+    pongs: u32,
+    /// True once the peer has closed the connection (a Close frame, EOF, reset).
+    closed: bool,
 }
 
 impl Ws {
@@ -52,7 +60,13 @@ impl Ws {
                     return Err(std::io::Error::other(format!("handshake: {head}")));
                 }
                 let rx = buf[pos + 4..].to_vec(); // any frame bytes past the header
-                return Ok(Ws { stream, rx });
+                return Ok(Ws {
+                    stream,
+                    rx,
+                    pending: VecDeque::new(),
+                    pongs: 0,
+                    closed: false,
+                });
             }
         }
     }
@@ -119,7 +133,7 @@ impl Ws {
         let deadline = Instant::now() + wait;
         let needle = format!("\"id\":\"{id}\"");
         while Instant::now() < deadline {
-            if let Some(message) = self.poll(Duration::from_millis(50)).expect("poll") {
+            if let Some(message) = self.poll(Duration::from_millis(50)) {
                 if message.contains(&needle) {
                     return Some(message);
                 }
@@ -128,29 +142,78 @@ impl Ws {
         None
     }
 
-    /// Read one text message if one is available within `wait`, else None.
-    pub fn poll(&mut self, wait: Duration) -> std::io::Result<Option<String>> {
-        if let Some(m) = self.take_frame() {
-            return Ok(Some(m));
+    /// Send a Ping and wait for its Pong: a barrier proving the server's read
+    /// loop has already consumed every frame sent on this connection before it,
+    /// since one connection's frames are read strictly in order.
+    ///
+    /// This is what a test waits on instead of sleeping. A sleep asserts nothing
+    /// about the server — on a loaded runner the frames can still be unread when
+    /// it expires, and a test whose next assertion is an ABSENCE (no answer
+    /// arrives, no stale request is dropped) then passes for entirely the wrong
+    /// reason, having exercised none of the path it exists to cover.
+    pub fn barrier(&mut self, wait: Duration) -> bool {
+        let before = self.pongs;
+        self.ping(b"barrier").expect("ping");
+        let deadline = Instant::now() + wait;
+        while Instant::now() < deadline && !self.closed {
+            self.fill(Duration::from_millis(50));
+            self.drain_frames();
+            if self.pongs > before {
+                return true;
+            }
         }
-        self.stream.set_read_timeout(Some(wait))?;
+        false
+    }
+
+    /// Wait until the peer closes the connection (a Close frame, EOF or reset)
+    /// — the positive form of "the server ended this session". The absence of a
+    /// reply would look identical on a runner that has not read the frame yet.
+    pub fn wait_until_closed(&mut self, wait: Duration) -> bool {
+        let deadline = Instant::now() + wait;
+        while Instant::now() < deadline && !self.closed {
+            self.fill(Duration::from_millis(50));
+            self.drain_frames();
+        }
+        self.closed
+    }
+
+    /// Read whatever has arrived into the frame buffer, waiting up to `wait`.
+    /// EOF and a reset both mean the peer is gone.
+    fn fill(&mut self, wait: Duration) {
+        self.stream.set_read_timeout(Some(wait)).expect("timeout");
         let mut tmp = [0u8; 8192];
         match self.stream.read(&mut tmp) {
-            Ok(0) => Ok(None),
-            Ok(n) => {
-                self.rx.extend_from_slice(&tmp[..n]);
-                Ok(self.take_frame())
-            }
+            Ok(0) => self.closed = true,
+            Ok(n) => self.rx.extend_from_slice(&tmp[..n]),
             Err(e)
                 if matches!(
                     e.kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                Ok(None)
-            }
-            Err(e) => Err(e),
+                ) => {}
+            Err(_) => self.closed = true,
         }
+    }
+
+    /// Take every complete frame out of the buffer, queueing the text ones so a
+    /// barrier never swallows a response `await_id` is about to look for.
+    fn drain_frames(&mut self) {
+        while let Some(text) = self.take_frame() {
+            self.pending.push_back(text);
+        }
+    }
+
+    /// Read one text message if one is available within `wait`, else None. A
+    /// read that fails is the peer going away, which `fill` records as closed —
+    /// indistinguishable from "nothing arrived" to a caller that is polling.
+    pub fn poll(&mut self, wait: Duration) -> Option<String> {
+        if let Some(m) = self.pending.pop_front() {
+            return Some(m);
+        }
+        if let Some(m) = self.take_frame() {
+            return Some(m);
+        }
+        self.fill(wait);
+        self.take_frame()
     }
 
     /// Pull the next complete text frame from the buffer, skipping control
@@ -209,8 +272,12 @@ impl Ws {
             self.rx.drain(..total);
             match opcode {
                 0x1 => return Some(String::from_utf8_lossy(&payload).into_owned()),
-                0x8 => return None, // close
-                _ => {}             // ping/pong/binary: skip and try the next
+                0x8 => {
+                    self.closed = true; // close
+                    return None;
+                }
+                0xa => self.pongs += 1, // the barrier's answer
+                _ => {}                 // ping/binary: skip and try the next
             }
         }
     }

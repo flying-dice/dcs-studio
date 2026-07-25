@@ -573,6 +573,10 @@ mod tests {
 
         let mut relaxed_enough_to_answer = false;
         for headroom in (0..64_000).step_by(8) {
+            // Collect first: the ceiling has to be measured against a settled
+            // heap, or the pass's failure point drifts with whatever garbage the
+            // previous pass happened to leave behind.
+            lua.gc_collect().expect("collect");
             let ceiling = lua.used_memory() + headroom;
             lua.set_memory_limit(ceiling)
                 .expect("mlua owns this state's allocator");

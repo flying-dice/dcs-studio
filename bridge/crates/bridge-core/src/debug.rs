@@ -759,6 +759,9 @@ mod tests {
             let lua = mlua::Lua::new();
             let dbg = crate::facade::sub_table(&lua, "debug", register);
             let breakpoints: mlua::Function = dbg.get("breakpoints").expect("breakpoints binding");
+            // Measure against a settled heap: the registration above leaves
+            // garbage, and un-collected garbage moves the pass's failure point.
+            lua.gc_collect().expect("collect");
             let ceiling = lua.used_memory() + headroom;
             lua.set_memory_limit(ceiling)
                 .expect("mlua owns this state's allocator");

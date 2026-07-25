@@ -557,6 +557,9 @@ mod bootstrap_tests {
         let mut relaxed_enough_to_load = false;
         for headroom in (0..2_000_000).step_by(256) {
             let lua = Lua::new();
+            // Measure against a settled heap, so the pass's failure point does
+            // not drift with whatever the standard libraries left behind.
+            lua.gc_collect().expect("collect");
             let ceiling = lua.used_memory() + headroom;
             lua.set_memory_limit(ceiling)
                 .expect("mlua owns this state's allocator");
@@ -595,6 +598,7 @@ mod bootstrap_tests {
         let mut relaxed_enough_to_render = false;
         for headroom in (0..2_000_000).step_by(256) {
             let lua = Lua::new();
+            lua.gc_collect().expect("collect"); // as above: a settled baseline
             let ceiling = lua.used_memory() + headroom;
             lua.set_memory_limit(ceiling)
                 .expect("mlua owns this state's allocator");

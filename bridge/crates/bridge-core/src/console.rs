@@ -272,6 +272,9 @@ mod tests {
             let lua = Lua::new();
             let console = crate::facade::sub_table(&lua, "console", register);
             let read: Function = console.get("read").expect("read binding");
+            // Measure against a settled heap: the registration above leaves
+            // garbage, and un-collected garbage moves the pass's failure point.
+            lua.gc_collect().expect("collect");
             let ceiling = lua.used_memory() + headroom;
             lua.set_memory_limit(ceiling)
                 .expect("mlua owns this state's allocator");

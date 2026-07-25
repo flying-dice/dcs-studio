@@ -141,7 +141,7 @@ fn first_stop_is_prompt_while_run_blocks_the_sim() {
         n += 1;
         ws.send(&rpc(&format!("st{n}"), "debug_state", "{}"))
             .unwrap();
-        if let Some(msg) = ws.poll(Duration::from_millis(100)).unwrap() {
+        if let Some(msg) = ws.poll(Duration::from_millis(100)) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg) {
                 if v["result"]["paused"] == serde_json::Value::Bool(true) {
                     paused_at = Some(start.elapsed());
@@ -165,7 +165,7 @@ fn first_stop_is_prompt_while_run_blocks_the_sim() {
 fn wait_for_id(ws: &mut Ws, id: &str, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if let Some(msg) = ws.poll(Duration::from_millis(100)).unwrap() {
+        if let Some(msg) = ws.poll(Duration::from_millis(100)) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg) {
                 if v["id"] == serde_json::Value::String(id.to_string()) {
                     return;

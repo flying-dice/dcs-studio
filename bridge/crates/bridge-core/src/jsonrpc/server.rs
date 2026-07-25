@@ -675,9 +675,10 @@ fn get_timeout_duration_from_config(config: &ServerConfig) -> Duration {
 mod tests {
     use super::{
         drain_queue, enqueue_text_frame, error_response, get_timeout_duration_from_config,
-        lock_app_data, process_global_queue, process_request, push_rpc_request, respond,
-        response_for, AppData, AppRequest, JsonRpcServer, ServerConfig, ServiceInfo,
-        DEFAULT_TIMEOUT, JSON_RPC_INTERNAL_ERROR, JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_VERSION,
+        lock_app_data, post_rpc, process_global_queue, process_request, push_rpc_request, respond,
+        response_for, success_response, AppData, AppRequest, JsonRpcServer, ServerConfig,
+        ServiceInfo, DEFAULT_TIMEOUT, JSON_RPC_INTERNAL_ERROR, JSON_RPC_METHOD_NOT_FOUND,
+        JSON_RPC_VERSION,
     };
     use crate::jsonrpc::router::{JsonRpcRouter, MethodMeta};
     use crate::jsonrpc::{JsonRpcRequest, JsonRpcResponse};
@@ -981,6 +982,9 @@ mod tests {
 
         let mut relaxed_enough_to_answer = false;
         for headroom in (0..64_000).step_by(8) {
+            // Measure against a settled heap: the previous pass's garbage would
+            // otherwise move where this one runs out.
+            lua.gc_collect().expect("collect");
             let ceiling = lua.used_memory() + headroom;
             lua.set_memory_limit(ceiling)
                 .expect("mlua owns this state's allocator");
@@ -1006,6 +1010,130 @@ mod tests {
         assert!(
             relaxed_enough_to_answer,
             "the squeeze never relaxed enough to answer — the test proves nothing"
+        );
+    }
+
+    /// The `POST /rpc` transport's four answers, driven IN PROCESS — no socket,
+    /// no worker thread, no sleep: a notification (202, accepted without
+    /// waiting for a sim that has nothing to answer), a request the sim drains
+    /// (200 with the body), a request nobody drains (500 on the server's own
+    /// timeout), and one whose caller was dropped out of the queue by a mission
+    /// reload (500 with the cause).
+    ///
+    /// The end-to-end forms of these live in `tests/jsonrpc_server.rs`. They
+    /// are also the paths most exposed to a loaded CI runner, where a race the
+    /// test cannot observe decides whether the timeout or the drop is what
+    /// answers — so the contract is pinned here too, where nothing but the
+    /// handler's own logic can decide it.
+    #[actix_web::test]
+    async fn the_post_transport_accepts_answers_and_fails_a_request_in_process() {
+        use actix_web::{test, App};
+
+        let data = app_data(); // a 1s request timeout
+        let app =
+            test::init_service(App::new().service(post_rpc).app_data(Data::clone(&data))).await;
+        let post = |body: serde_json::Value| {
+            test::TestRequest::post()
+                .uri("/rpc")
+                .set_json(body)
+                .to_request()
+        };
+
+        // A notification is accepted at once: there is no id to answer to, and
+        // making the caller wait a frame for nothing is the bug this prevents.
+        let accepted = test::call_service(
+            &app,
+            post(serde_json::json!({ "jsonrpc": "2.0", "method": "bump" })),
+        )
+        .await;
+        assert_eq!(accepted.status(), 202);
+        {
+            let mut queue = lock_app_data(&data);
+            assert_eq!(queue.rpc_queue.len(), 1, "queued for its side effect");
+            assert!(
+                queue.rpc_queue[0].response_sender.is_none(),
+                "and with nothing to answer to"
+            );
+            queue.rpc_queue.clear(); // the sim drained it; each phase starts empty
+        }
+
+        // A request the sim answers comes back as its serialized envelope. No
+        // background task and no sleep: the handler enqueues SYNCHRONOUSLY
+        // before its first await, so after one yield the request is in the
+        // queue by construction — `join!` polls the handler first, and the
+        // `expect` below is the invariant, not a hope.
+        let sim = Data::clone(&data);
+        let (answered, ()) = tokio::join!(
+            test::call_service(
+                &app,
+                post(serde_json::json!({ "jsonrpc": "2.0", "id": "1", "method": "ping" })),
+            ),
+            async {
+                actix_web::rt::task::yield_now().await;
+                let queued = lock_app_data(&sim)
+                    .rpc_queue
+                    .pop_front()
+                    .expect("the handler queues before it awaits");
+                let sender = queued
+                    .response_sender
+                    .expect("a request carries its channel");
+                let _ = sender.send(success_response(
+                    queued.request.id.unwrap_or_default(),
+                    serde_json::json!({ "pong": true }),
+                ));
+            }
+        );
+        assert_eq!(answered.status(), 200);
+        let body = test::read_body(answered).await;
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.contains(r#""id":"1""#), "{body}");
+        assert!(body.contains(r#""pong":true"#), "{body}");
+
+        // A request nobody drains fails on the server's own timeout rather than
+        // pinning the connection: inside DCS the sim thread stops pumping for a
+        // load screen, and an editor blocked forever looks like a hung IDE.
+        let timed_out = test::call_service(
+            &app,
+            post(serde_json::json!({ "jsonrpc": "2.0", "id": "2", "method": "ping" })),
+        )
+        .await;
+        assert_eq!(timed_out.status(), 500);
+        let body = test::read_body(timed_out).await;
+        assert!(
+            String::from_utf8_lossy(&body).contains("Timed out"),
+            "the caller is told why it was released"
+        );
+
+        // A caller dropped from the queue — what a mission reload does to
+        // everything stranded in it — is released with the cause instead of
+        // waiting out the timeout for an answer that can never come.
+        //
+        // The timed-out request above is still sitting in the queue (its caller
+        // gave up, the entry did not), so clear it first: otherwise the reload
+        // below would drop THAT one and this request would leave by the timeout
+        // again, testing the previous case twice.
+        lock_app_data(&data).rpc_queue.clear();
+        let reload = Data::clone(&data);
+        let (stranded, ()) = tokio::join!(
+            test::call_service(
+                &app,
+                post(serde_json::json!({ "jsonrpc": "2.0", "id": "3", "method": "ping" })),
+            ),
+            async {
+                actix_web::rt::task::yield_now().await;
+                let queued = lock_app_data(&reload)
+                    .rpc_queue
+                    .pop_front()
+                    .expect("the handler queues before it awaits");
+                drop(queued); // the reload's swap-and-drop takes the channel with it
+            }
+        );
+        assert_eq!(stranded.status(), 500);
+        let body = test::read_body(stranded).await;
+        let body = String::from_utf8_lossy(&body);
+        assert!(
+            !body.contains("Timed out"),
+            "released by the drop, not by waiting out the timeout: {body}"
         );
     }
 

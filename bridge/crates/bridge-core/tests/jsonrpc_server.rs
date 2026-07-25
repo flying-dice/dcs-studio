@@ -298,6 +298,13 @@ fn an_undrained_request_times_out_instead_of_hanging_the_caller() {
     // still served once the sim resumes pumping.
     let mut ws = connect_ws(bridge.port);
     ws.send(&rpc("expired", "echo", "{}")).expect("send");
+    // The barrier proves the server has READ that frame — without it the
+    // assertion below ("no answer arrives") is also satisfied by a runner that
+    // never got to the request at all, and the timeout path goes unexercised.
+    assert!(
+        ws.barrier(Duration::from_secs(10)),
+        "the server must have read the request before we wait for it to expire"
+    );
     assert!(
         ws.await_id("expired", Duration::from_secs(3)).is_none(),
         "an undrained WS request must expire rather than be answered late"
@@ -384,7 +391,7 @@ fn the_websocket_session_survives_every_frame_the_editor_can_send() {
     let mut seen: Vec<String> = Vec::new();
     bridge.pump_until(
         || {
-            while let Some(message) = ws.poll(Duration::from_millis(20)).expect("poll") {
+            while let Some(message) = ws.poll(Duration::from_millis(20)) {
                 seen.push(message);
             }
             (seen.len() >= 5).then_some(())
@@ -427,7 +434,7 @@ fn a_ping_is_ponged_and_a_close_ends_the_session() {
 
     let mut ws = connect_ws(bridge.port);
     ws.ping(b"hi").expect("ping");
-    let raw = ws.read_raw(Duration::from_secs(5));
+    let raw = ws.read_raw(Duration::from_secs(10));
     assert_eq!(
         raw.first().map(|b| b & 0x0f),
         Some(0xa),
@@ -435,7 +442,7 @@ fn a_ping_is_ponged_and_a_close_ends_the_session() {
     );
 
     ws.close().expect("close");
-    let echoed = ws.read_raw(Duration::from_secs(5));
+    let echoed = ws.read_raw(Duration::from_secs(10));
     assert_eq!(
         echoed.first().map(|b| b & 0x0f),
         Some(0x8),
@@ -443,14 +450,14 @@ fn a_ping_is_ponged_and_a_close_ends_the_session() {
     );
 
     // A frame this server does not serve ends the loop rather than being
-    // misread as a request.
+    // misread as a request. Observed as the session CLOSING, not as the absence
+    // of an answer: an absence is also what a runner too busy to have read the
+    // frame yet would show, which would pass while covering nothing.
     let mut other = connect_ws(bridge.port);
     other.binary(b"\x00\x01").expect("binary");
-    other.send(&rpc("after", "echo", "{}")).expect("send after");
-    bridge.pump();
     assert!(
-        other.await_id("after", Duration::from_secs(1)).is_none(),
-        "the read loop must have ended on the binary frame"
+        other.wait_until_closed(Duration::from_secs(10)),
+        "the read loop must end on the binary frame"
     );
 
     bridge.shutdown(Some(false));
@@ -535,12 +542,21 @@ fn reserving_across_a_mission_reload_reuses_the_server_and_drops_stale_requests(
     // have to be let go rather than left waiting on the new mission.
     let mut ws = connect_ws(served);
     ws.send(&rpc("stranded", "echo", "{}")).expect("send");
-    let (posted, post_answer) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = posted.send(post_rpc(served, &rpc("stranded-post", "echo", "{}")));
-    });
-    // Give the read loop a moment to enqueue both before the reload.
-    std::thread::sleep(Duration::from_millis(200));
+    // It must be QUEUED before the reload, or there is nothing stale to drop and
+    // the test proves nothing. The barrier is that proof: one connection's
+    // frames are read in order, so a Pong means the request is already in the
+    // queue. (A sleep here proved nothing — on a loaded runner the frame can
+    // still be unread when it expires.)
+    //
+    // Only the WebSocket side is driven from out here. The POST caller's half
+    // of this contract — a stranded request released with an error instead of
+    // waiting out its timeout — is pinned in process by
+    // `the_post_transport_accepts_answers_and_fails_a_request_in_process`,
+    // where the enqueue cannot lose a race with the reload.
+    assert!(
+        ws.barrier(Duration::from_secs(10)),
+        "the server must have queued the stranded request before the reload"
+    );
 
     // The next mission's serve reuses the running server — even though it asks
     // for a different port — and drops whatever was stranded, so the stale
@@ -553,16 +569,6 @@ fn reserving_across_a_mission_reload_reuses_the_server_and_drops_stale_requests(
         ws.await_id("stranded", Duration::from_secs(1)).is_none(),
         "the stranded request must be dropped, not answered later"
     );
-    // The POSTing caller is told the request died with its mission, promptly —
-    // not left holding the connection until its own timeout.
-    let (status, _body) = post_answer
-        .recv_timeout(Duration::from_secs(10))
-        .expect("the stranded POST must be released, not left hanging");
-    assert!(
-        status.contains("500"),
-        "a request dropped by the reload must fail its caller, got {status}"
-    );
-
     // The debugger's pump reaches the running server's queue from this state,
     // without holding the server userdata.
     bridge.pump_global();
