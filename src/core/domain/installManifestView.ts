@@ -110,14 +110,14 @@ function unsafePath(kind: UnsafePathKind, value: string): UnsafePath {
   return { kind, value, reason: `${UNSAFE_SUBJECT[kind]} "${value}" reaches outside ${root}.` };
 }
 
-function symlinkEscapes(s: { source: string; dest: string }): UnsafePath[] {
+function symlinkEscapePaths(s: { source: string; dest: string }): UnsafePath[] {
   const out: UnsafePath[] = [];
   if (!destStaysUnder(s.dest)) out.push(unsafePath("symlink-dest", s.dest));
   if (!staysUnder(s.source)) out.push(unsafePath("symlink-source", s.source));
   return out;
 }
 
-function entrypointEscapes(e: ManifestEntrypoint): UnsafePath[] {
+function entrypointEscapePaths(e: ManifestEntrypoint): UnsafePath[] {
   const out: UnsafePath[] = [];
   if (!staysUnder(e.exe)) out.push(unsafePath("entrypoint-exe", e.exe));
   // `cwd` is optional and defaults to the exe's own directory; only a declared
@@ -126,7 +126,7 @@ function entrypointEscapes(e: ManifestEntrypoint): UnsafePath[] {
   return out;
 }
 
-function missionScriptEscapes(m: ManifestMissionScript): UnsafePath[] {
+function missionScriptEscapePaths(m: ManifestMissionScript): UnsafePath[] {
   return staysUnder(m.path) ? [] : [unsafePath("mission-script-path", m.path)];
 }
 
@@ -140,9 +140,9 @@ function missionScriptEscapes(m: ManifestMissionScript): UnsafePath[] {
  */
 export function unsafeManifestPaths(input: InstallManifestInput): UnsafePath[] {
   return [
-    ...input.symlinks.flatMap(symlinkEscapes),
-    ...input.entrypoints.flatMap(entrypointEscapes),
-    ...input.missionScripts.flatMap(missionScriptEscapes),
+    ...input.symlinks.flatMap(symlinkEscapePaths),
+    ...input.entrypoints.flatMap(entrypointEscapePaths),
+    ...input.missionScripts.flatMap(missionScriptEscapePaths),
   ];
 }
 
@@ -215,7 +215,7 @@ export function deriveInstallManifestView(input: InstallManifestInput | null): I
     source: s.source,
     dest: s.dest,
     resolved: s.resolved ?? null,
-    escapes: symlinkEscapes(s).length > 0,
+    escapes: symlinkEscapePaths(s).length > 0,
   }));
   const entrypoints: EntrypointView[] = input.entrypoints.map((e) => ({
     id: e.id,
@@ -223,7 +223,7 @@ export function deriveInstallManifestView(input: InstallManifestInput | null): I
     exe: e.exe,
     args: e.args ?? [],
     cwd: e.cwd ?? null,
-    escapes: entrypointEscapes(e).length > 0,
+    escapes: entrypointEscapePaths(e).length > 0,
   }));
   const missionScripts: MissionScriptView[] = input.missionScripts.map((m) => ({
     name: m.name,
@@ -231,7 +231,7 @@ export function deriveInstallManifestView(input: InstallManifestInput | null): I
     path: m.path,
     run_on: m.run_on,
     beforeSanitize: m.run_on === "before-sanitize",
-    escapes: missionScriptEscapes(m).length > 0,
+    escapes: missionScriptEscapePaths(m).length > 0,
   }));
 
   const beforeSanitize = missionScripts.filter((m) => m.beforeSanitize).length;
