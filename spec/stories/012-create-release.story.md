@@ -44,14 +44,26 @@ Feature: Create a release
   Scenario: Re-publishing the same tag is idempotent
     Given a release with the same tag already exists
     When the user publishes again
-    Then the prior release and tag are deleted first
-    And the new release replaces them
+    Then the existing release is replaced in place: the new assets are
+      uploaded over it, its title and notes are updated,
+      and volumes the previous payload left behind are removed afterwards
+    And neither the release nor the tag is ever deleted, so there is no
+      moment where the version has no release
+    And the log reads
+      "Release <tag> already exists — uploading N assets over it…"
+      then "Replaced release <tag> in place — the tag was never removed."
 
   Scenario: Malformed repo field
-    Given the Repo field is not "owner/name" shaped
+    Given the Repo field is not exactly "owner/name"
     When the user clicks "Package & publish release"
     Then the log shows
       "✖ Enter the repo as owner/name (share first if you haven't)."
+    And nothing is packaged
+
+  Scenario: Missing tag
+    Given the Tag field is empty or whitespace
+    When the user clicks "Package & publish release"
+    Then the log shows "✖ Enter a tag for the release, e.g. v1.0.0."
     And nothing is packaged
 
   Scenario Outline: Packaging failures
@@ -63,32 +75,47 @@ Feature: Create a release
       | the manifest cannot be read        | Cannot read dcs-studio.toml.                             |
       | 7-Zip is missing                   | 7z not found.                                            |
       | a [[bundle]] path is missing        | Bundle path missing: <path> — build the project first.   |
+      | the tag is empty                   | A release tag is required (e.g. v1.0.0).                 |
 
   Scenario: Default release notes
     Given the notes textarea is left empty
     Then the release is created with the notes "Release <tag>"
 
   @chaos
-  Scenario: Re-publishing destroys the old release before the new one exists
+  Scenario: The replacement upload fails part-way through
     Given a release with the same tag already exists on GitHub
     When the user clicks "Package & publish release"
-    Then the prior release AND its tag are deleted first —
-      the delete passes --cleanup-tag, so anyone who already fetched
-      that tag now has one the repo no longer has
-    And the delete runs unconditionally, even for a tag that never existed,
-      because deleting a missing release is a silent no-op
-    But if the create then fails — the upload times out, the network drops
-      part-way through a multi-volume payload, the token lost its scope —
-      the repo is left with no release for that tag at all
-    And nothing restores the release that was just deleted
-    And the only recovery documented is to fix the cause and publish again
+    And the upload fails — it times out, the network drops part-way through
+      a multi-volume payload, or the token lost its scope
+    Then the previous release and its tag are still there, untouched,
+      because nothing was deleted to make room for the replacement
+    And anyone who already fetched that tag still has a tag the repo has
+    And the log shows "✖ gh release upload: <stderr>"
+    And the recovery is to fix the cause and publish again — the retry
+      clobbers whatever assets did make it up
 
   @chaos
-  Scenario: The delete itself fails
-    Given the account cannot delete the existing release
-    Then the failure is swallowed — the delete is best-effort
-    And the create then fails against the tag that is still there,
-      surfacing as "✖ gh release create: <stderr>" # UNVERIFIED: gh's exact stderr for a colliding tag was not observed
+  Scenario: A first release for a tag dies mid-upload
+    Given no release exists for this tag yet
+    When the create fails after gh has already cut the release and its tag
+    Then the half-created release AND its tag are deleted, because nothing
+      existed for this tag before this attempt — the rollback restores the
+      repository rather than destroying anything
+    And the log says
+      "Release <tag> failed — removing the half-created release and tag."
+      before the "✖ <message>" line
+    And a tag that never got created is a silent no-op to delete
+
+  @chaos
+  Scenario: Pruning a stale volume fails
+    Given the previous payload needed more volumes than this one
+    When a leftover volume cannot be detached
+    Then the release still succeeds — its own assets are already uploaded
+    And the log names the file it could not remove:
+      "⚠ Could not remove stale asset <name> — delete it by hand before
+      anyone installs."
+    And assets outside this payload's volume family — screenshots, a
+      changelog, anything attached by hand — are never proposed for deletion
 
   @chaos
   Scenario Outline: Repo fields the panel refuses to send
@@ -100,28 +127,34 @@ Feature: Create a release
       or uploaded
 
     Examples:
-      | repo        |
-      | just-a-name |
-      | owner/      |
-      | /name       |
-      |             |
+      | repo             |
+      | just-a-name      |
+      | owner/           |
+      | /name            |
+      |                  |
+      | owner/name/extra |
 
   @chaos
-  Scenario: A repo field with too many segments is accepted
+  Scenario: A repo field with too many segments is refused, not truncated
     Given the Repo field is "owner/name/extra"
     When the user clicks "Package & publish release"
-    Then it passes the guard — only the first two segments are read
-    And the release is cut against "owner/name", the trailing segment
-      dropped without comment
+    Then the guard rejects it rather than reading the first two segments
+      and dropping the rest without comment
+    And nothing is packaged or uploaded
 
   @chaos
-  Scenario: An empty tag is not guarded
+  Scenario: An empty tag is guarded on both sides
     Given the user clears the Tag field
     When the user clicks "Package & publish release"
-    Then nothing client-side stops it — only the Repo field is validated
-    And the payload is packaged under a base name ending in a bare hyphen
-    And the release fails at the CLI, after the prior release for the
-      empty tag was already deleted # UNVERIFIED: gh's exact failure and message for an empty tag were not observed; what is verified is that no tag validation exists in media/publish.js, publishPanel.ts or publishService.ts
+    Then the panel refuses it with
+      "✖ Enter a tag for the release, e.g. v1.0.0."
+      and no message reaches the host
+    And a release message that reaches the host with an empty tag anyway
+      fails with "A release tag is required (e.g. v1.0.0)." before the
+      payload is packaged, rather than packaging under a base name ending
+      in a bare hyphen and failing at the CLI
+    And a tag with surrounding whitespace is trimmed once, so the packaged
+      base name, the release and the result link all agree
 
   @chaos
   Scenario: A tag containing a slash is displayed truncated
@@ -179,6 +212,9 @@ Feature: Create a release
     Then the whole prior volume family for that base name is deleted first
     And only the volumes from this run are uploaded — a stale .7z.003
       from the previous attempt cannot ride along and corrupt the set
+    And the same holds for the release itself: a .7z.003 already attached
+      to the existing release is detached after the new volumes are up,
+      because upload only overwrites the names it uploads
 
   @chaos
   Scenario: Package & publish cannot be fired twice

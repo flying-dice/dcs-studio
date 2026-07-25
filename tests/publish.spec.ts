@@ -138,6 +138,33 @@ test.describe("publish preview", () => {
     expect(msgs.filter((m) => m.type === "release")).toHaveLength(0);
   });
 
+  // Every one of these used to reach the host, or be silently truncated to
+  // something the user never typed. A release is addressed once and cannot be
+  // recalled, so a half-formed target has to stop at the button.
+  for (const repo of ["owner/name/extra", "/name", "owner/"]) {
+    test(`Release refuses the repo "${repo}"`, async ({ page }) => {
+      await openPreview(page, "publish");
+      await page.getByTestId("rel-repo-input").fill(repo);
+      await page.getByTestId("release-btn").click();
+
+      await expect(page.getByTestId("log")).toContainText("✖ Enter the repo as owner/name");
+      expect((await sentMessages(page)).filter((m) => m.type === "release")).toHaveLength(0);
+    });
+  }
+
+  test("Release refuses an empty tag before anything is packaged", async ({ page }) => {
+    // An empty tag packaged the payload under a base name ending in a bare
+    // hyphen and only failed at the CLI, with the work already done.
+    await openPreview(page, "publish", { query: { scenario: "shared" } });
+    await page.getByTestId("rel-tag-input").fill("   ");
+    await page.getByTestId("release-btn").click();
+
+    await expect(page.getByTestId("log")).toContainText(
+      "✖ Enter a tag for the release, e.g. v1.0.0.",
+    );
+    expect((await sentMessages(page)).filter((m) => m.type === "release")).toHaveLength(0);
+  });
+
   test("Release posts owner, name, trimmed tag and raw notes", async ({ page }) => {
     await openPreview(page, "publish", { query: { scenario: "shared" } });
 

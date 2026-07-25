@@ -1,4 +1,8 @@
-import type { GhReleaseCreateOptions, GhRepoCreateOptions } from "../ports/gh";
+import type {
+  GhReleaseCreateOptions,
+  GhReleaseEditOptions,
+  GhRepoCreateOptions,
+} from "../ports/gh";
 
 // Argument vectors for the three external CLIs the adapters drive: `gh`, `git`
 // and 7-Zip. These are pure string arrays with no spawning, so the flags that
@@ -59,8 +63,10 @@ export const ghArgs = {
   releaseView: (repo: string, tag: string): string[] => ["release", "view", tag, "-R", repo],
 
   /**
-   * Delete a release AND its tag. `--cleanup-tag` is what makes a re-release
-   * idempotent rather than leaving a tag that the next create collides with.
+   * Delete a release AND its tag. `--cleanup-tag` is what makes the rollback of
+   * a half-created release complete: without it the tag survives and the next
+   * create collides with it. This is only ever aimed at a release this run just
+   * created — an existing release is replaced in place, never deleted.
    */
   releaseDelete: (repo: string, tag: string): string[] => [
     "release",
@@ -83,6 +89,58 @@ export const ghArgs = {
     opts.title,
     "--notes",
     opts.notes,
+  ],
+
+  /**
+   * Upload assets onto an *existing* release. `--clobber` is load-bearing:
+   * without it gh refuses an asset whose name is already attached, so a
+   * re-release could not replace its own payload without deleting it first.
+   */
+  releaseUpload: (repo: string, tag: string, assets: string[]): string[] => [
+    "release",
+    "upload",
+    tag,
+    ...assets,
+    "-R",
+    repo,
+    "--clobber",
+  ],
+
+  /** Retitle/re-note an existing release, leaving its tag and assets alone. */
+  releaseEdit: (opts: GhReleaseEditOptions): string[] => [
+    "release",
+    "edit",
+    opts.tag,
+    "-R",
+    opts.repo,
+    "--title",
+    opts.title,
+    "--notes",
+    opts.notes,
+  ],
+
+  /** The asset file names attached to a release, one per line. */
+  releaseAssetNames: (repo: string, tag: string): string[] => [
+    "release",
+    "view",
+    tag,
+    "-R",
+    repo,
+    "--json",
+    "assets",
+    "-q",
+    ".assets[].name",
+  ],
+
+  /** Detach one asset from a release (the release and tag survive). */
+  releaseAssetDelete: (repo: string, tag: string, name: string): string[] => [
+    "release",
+    "delete-asset",
+    tag,
+    name,
+    "-R",
+    repo,
+    "--yes",
   ],
 } as const;
 

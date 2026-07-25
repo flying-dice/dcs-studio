@@ -24,7 +24,7 @@ Feature: Publish preflight
     When the Publish panel opens
     Then it runs and displays these checks with ok/warn/error dots:
       | Check           | Error condition and message                                          |
-      | Manifest        | "dcs-studio.toml not found in the workspace root." / "Could not parse dcs-studio.toml." / rejects a manifest still using the legacy single-array install format — replace each rule with [[bundle]] + [[symlink]]. |
+      | Manifest        | "dcs-studio.toml not found in the workspace root." / "dcs-studio.toml could not be read." / rejects a manifest still using the legacy single-array install format — replace each rule with [[bundle]] + [[symlink]]. |
       | Project name    | "[project] name is required."                                        |
       | Bundle paths    | warn: "No [[bundle]] paths — the release will ship only the manifest." |
       | Bundle paths    | "N of M bundle path(s) missing — build the project first." or "N bundle path(s) are symlinks (refused by the packager)." |
@@ -43,14 +43,16 @@ Feature: Publish preflight
     Then all preflight checks re-run
 
   @chaos
-  Scenario: A manifest that is garbage never reaches the "could not parse" message
+  Scenario: A manifest that is garbage blocks on the name, not on a parse error
     Given "dcs-studio.toml" contains no recognisable TOML at all
     Then the Manifest check is still green, because the parser is tolerant
       by design and yields an empty model rather than throwing
     And what blocks publishing is "[project] name is required." instead
-    And "Could not parse dcs-studio.toml." is reached only when the file
-      cannot be READ — deleted between the existence check and the read,
-      or unreadable by this process
+    And the check no longer claims a parse failure it cannot detect: the
+      message for a manifest that exists but yields no model reads
+      "dcs-studio.toml could not be read.", which is the only way to reach
+      it — deleted between the existence check and the read, or unreadable
+      by this process
 
   @chaos
   Scenario: A [project] name written as a TOML number breaks preflight
@@ -72,13 +74,19 @@ Feature: Publish preflight
       missing and symlinked paths reports the missing ones first
 
   @chaos
-  Scenario: Preflight is a snapshot, not a gate
+  Scenario: The rendered checks are a snapshot, but the action is gated
     Given every check passed when the panel last ran them
     When the manifest is deleted, or a [[bundle]] path is removed,
       without the user clicking "Re-check"
-    Then both buttons stay enabled — the disabled state comes from the
-      last results, and the host re-validates nothing before acting
-    And the failure surfaces only when the action itself fails
+    Then both buttons still look enabled — the disabled state comes from the
+      last results, which nothing invalidates
+    But pressing either one re-runs preflight in the host first, and the
+      action is refused before it touches git, gh or the archiver
+    And the log names the blocking check, e.g.
+      "✖ Manifest: dcs-studio.toml not found in the workspace root."
+    And the re-run results are pushed back to the panel, so the red items
+      appear without the user asking for them
+    And the busy latch clears, so the button is usable again
 
 Feature: Step 1 — Share to GitHub
 
@@ -143,17 +151,18 @@ Feature: Step 1 — Share to GitHub
     And nothing is rolled back automatically
 
   @chaos
-  Scenario: Tagging the discovery topic fails silently
+  Scenario: Tagging the discovery topic fails
     Given the repo was created and pushed
     When adding the "dcs-studio" topic fails — no permission, rate limited,
       or the network drops
-    Then the failure is swallowed by design: topics are treated as a nicety,
-      not a publish blocker
-    And the log still shows "Tagging topic: dcs-studio", because the line
-      is written before the attempt
-    And the share reports success
-    But the mod is invisible to Marketplace discovery, which searches on
-      exactly that topic, and nothing tells the user
+    Then the failure still does not block the publish: topics are a nicety,
+      and the repo and its push are already done
+    But the log is written after the attempt and reports what happened —
+      "⚠ Could not tag topic dcs-studio — the mod stays invisible to
+      Marketplace discovery until it is tagged."
+    And a successful tagging reads "Tagged topic: dcs-studio" instead, so
+      the two outcomes are never confusable
+    And re-running "Share to GitHub" retries the tagging
 
   @chaos
   Scenario: The commit step fails
@@ -175,10 +184,14 @@ Feature: Step 1 — Share to GitHub
     Given the Repository name is prefilled from the manifest's [project] name,
       which for a scaffolded project is a human-readable name like "My Mod"
     When the user shares without editing it
-    Then DCS Studio reports the owner/name and builds the repo URL from the
-      name as typed, not from what GitHub actually created
-    And the release step is prefilled with that same name
-      # UNVERIFIED: whether GitHub normalises "My Mod" to "My-Mod" on create was not exercised; what is verified is that publishService.ts derives both the URL and the already-exists remote from opts.name rather than from gh's response
+    Then the reported owner/name comes from the "origin" remote that
+      "gh repo create --source --remote" wired up, which is the repository
+      GitHub actually created — not the name that was typed
+    And the log says "GitHub named it <owner>/<name>." whenever the two differ
+    And the repo URL, the discovery topic and the release step's prefill all
+      address that same repository
+    And a remote that is missing or is not a GitHub URL falls back to the
+      requested name, which is the only answer left
 
   @chaos
   Scenario: Sharing while the panel has no workspace folder

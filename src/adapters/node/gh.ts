@@ -4,6 +4,7 @@ import type { GhFacts } from "../../core/domain/publishChecks";
 import type {
   GhPort,
   GhReleaseCreateOptions,
+  GhReleaseEditOptions,
   GhRepoCreateOptions,
   GhRepoCreateResult,
 } from "../../core/ports/gh";
@@ -85,10 +86,11 @@ export class GhCli implements GhPort {
     throw new Error(`gh repo create: ${create.stderr.trim() || create.stdout.trim()}`);
   }
 
-  // Best-effort by design: the original flow ignored a topic-tagging failure —
-  // discovery topics are a nicety, not a publish blocker.
-  async repoTopicAdd(repo: string, topic: string): Promise<void> {
-    await run("gh", ghArgs.repoTopicAdd(repo, topic));
+  // Best-effort by design: a topic-tagging failure never blocks a publish. The
+  // outcome is still returned, because a mod that failed to get the discovery
+  // topic is invisible in the Marketplace and the user has to be told.
+  async repoTopicAdd(repo: string, topic: string): Promise<boolean> {
+    return (await run("gh", ghArgs.repoTopicAdd(repo, topic))).code === 0;
   }
 
   async releaseView(repo: string, tag: string): Promise<boolean> {
@@ -96,12 +98,39 @@ export class GhCli implements GhPort {
     return r.code === 0;
   }
 
-  // Idempotent: deleting a release that doesn't exist is a silent no-op.
+  // Idempotent: deleting a release that doesn't exist is a silent no-op. Used
+  // to roll back a release this run half-created, never to clear the way for
+  // one — an existing release is replaced through upload/edit instead.
   async releaseDelete(repo: string, tag: string): Promise<void> {
     await run("gh", ghArgs.releaseDelete(repo, tag));
   }
 
   async releaseCreate(opts: GhReleaseCreateOptions): Promise<void> {
     await must("gh", ghArgs.releaseCreate(opts), "gh release create");
+  }
+
+  async releaseUpload(repo: string, tag: string, assets: string[]): Promise<void> {
+    await must("gh", ghArgs.releaseUpload(repo, tag, assets), "gh release upload");
+  }
+
+  async releaseEdit(opts: GhReleaseEditOptions): Promise<void> {
+    await must("gh", ghArgs.releaseEdit(opts), "gh release edit");
+  }
+
+  // A release that cannot be read back reports no assets: the caller only uses
+  // the list to prune leftovers, and pruning nothing is the safe answer.
+  async releaseAssetNames(repo: string, tag: string): Promise<string[]> {
+    const r = await run("gh", ghArgs.releaseAssetNames(repo, tag));
+    if (r.code !== 0) return [];
+    return r.stdout
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+  }
+
+  // Best-effort: a leftover asset that refuses to delete is untidy, not a
+  // reason to fail a release whose payload is already uploaded.
+  async releaseAssetDelete(repo: string, tag: string, name: string): Promise<boolean> {
+    return (await run("gh", ghArgs.releaseAssetDelete(repo, tag, name))).code === 0;
   }
 }

@@ -89,9 +89,11 @@ describe("ghArgs — releases", () => {
   });
 
   it("deletes the release AND its tag, without prompting", () => {
-    // --cleanup-tag is what makes re-releasing the same version idempotent;
-    // dropping it leaves a tag the next create collides with. --yes keeps the
-    // spawn non-interactive.
+    // This vector only ever undoes a release the current run half-created, so
+    // --cleanup-tag is what makes the rollback complete: leave the tag behind
+    // and the next attempt collides with it. --yes keeps the spawn
+    // non-interactive. Nothing that existed before a publish is deleted with
+    // this — an existing release is replaced through upload/edit instead.
     expect(ghArgs.releaseDelete("owner/repo", "v1.0.0")).toEqual([
       "release",
       "delete",
@@ -147,6 +149,76 @@ describe("ghArgs — releases", () => {
       "t",
       "--notes",
       "n",
+    ]);
+  });
+});
+
+describe("ghArgs — replacing a release in place", () => {
+  it("uploads over an existing release with --clobber", () => {
+    // Without --clobber gh refuses an asset name already attached, and the
+    // only way to re-release would be to delete the release first — which is
+    // exactly the window this vector exists to avoid.
+    expect(
+      ghArgs.releaseUpload("owner/repo", "v1.0.0", ["C:\\out\\mod.7z", "C:\\out\\dcs-studio.toml"]),
+    ).toEqual([
+      "release",
+      "upload",
+      "v1.0.0",
+      "C:\\out\\mod.7z",
+      "C:\\out\\dcs-studio.toml",
+      "-R",
+      "owner/repo",
+      "--clobber",
+    ]);
+  });
+
+  it("edits title and notes without naming the tag or the assets", () => {
+    // No --tag / --target here: re-pointing a tag people have already fetched
+    // is the damage this flow exists to avoid.
+    expect(
+      ghArgs.releaseEdit({
+        repo: "owner/repo",
+        tag: "v1.0.0",
+        title: "v1.0.0",
+        notes: "Release notes",
+      }),
+    ).toEqual([
+      "release",
+      "edit",
+      "v1.0.0",
+      "-R",
+      "owner/repo",
+      "--title",
+      "v1.0.0",
+      "--notes",
+      "Release notes",
+    ]);
+  });
+
+  it("reads back the attached asset names, one per line", () => {
+    expect(ghArgs.releaseAssetNames("owner/repo", "v1.0.0")).toEqual([
+      "release",
+      "view",
+      "v1.0.0",
+      "-R",
+      "owner/repo",
+      "--json",
+      "assets",
+      "-q",
+      ".assets[].name",
+    ]);
+  });
+
+  it("detaches a single asset without prompting", () => {
+    // delete-asset, not delete: the release and its tag must survive the prune.
+    expect(ghArgs.releaseAssetDelete("owner/repo", "v1.0.0", "mod.7z.003")).toEqual([
+      "release",
+      "delete-asset",
+      "v1.0.0",
+      "mod.7z.003",
+      "-R",
+      "owner/repo",
+      "--yes",
     ]);
   });
 });

@@ -42,6 +42,21 @@ export function isVolumeFamilyMember(fileName: string, base: string): boolean {
   return fileName === `${base}.7z` || fileName.startsWith(`${base}.7z.`);
 }
 
+/**
+ * Volumes of `base` still attached to a release that this run did not re-upload
+ * — what a payload that shrank from three volumes to two leaves behind. Only
+ * `base`'s own volume family is considered, so an asset the author attached by
+ * hand is never proposed for deletion.
+ */
+export function stalePayloadVolumes(
+  attached: readonly string[],
+  base: string,
+  uploaded: readonly string[],
+): string[] {
+  const keep = new Set(uploaded);
+  return attached.filter((name) => isVolumeFamilyMember(name, base) && !keep.has(name));
+}
+
 /** The ordered numbered split volumes for `base` among a directory's file names. */
 export function selectSplitVolumes(fileNames: readonly string[], base: string): string[] {
   return fileNames.filter((f) => f.startsWith(`${base}.7z.`)).sort();

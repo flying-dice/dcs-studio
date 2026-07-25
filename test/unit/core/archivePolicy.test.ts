@@ -7,6 +7,7 @@ import {
   selectPayloadVolumes,
   selectSplitVolumes,
   shouldSplit,
+  stalePayloadVolumes,
   volumeLimit,
 } from "../../../src/core/domain/archivePolicy";
 
@@ -82,6 +83,35 @@ describe("isVolumeFamilyMember", () => {
   it("rejects unrelated files and other bases", () => {
     expect(isVolumeFamilyMember("mod.zip", "mod")).toBe(false);
     expect(isVolumeFamilyMember("other.7z", "mod")).toBe(false);
+  });
+});
+
+describe("stalePayloadVolumes", () => {
+  it("names the volumes a shrunken payload left behind", () => {
+    // Re-releasing over an existing release overwrites same-named assets, so a
+    // payload that needed three volumes and now needs two leaves .003 attached.
+    // Uploading two good volumes next to a stale third is a set that unpacks to
+    // garbage, so it has to go.
+    expect(
+      stalePayloadVolumes(["dcs-studio.toml", "mod.7z.001", "mod.7z.002", "mod.7z.003"], "mod", [
+        "dcs-studio.toml",
+        "mod.7z.001",
+        "mod.7z.002",
+      ]),
+    ).toEqual(["mod.7z.003"]);
+  });
+
+  it("leaves assets outside the payload family alone", () => {
+    // Screenshots, changelogs and a hand-attached installer belong to the
+    // author, not to this run — pruning them would be destroying their work.
+    expect(
+      stalePayloadVolumes(["screenshot.png", "old-mod.7z", "mod.7z"], "mod", ["mod.7z"]),
+    ).toEqual([]);
+  });
+
+  it("has nothing to prune when the volume count did not change", () => {
+    expect(stalePayloadVolumes(["mod.7z"], "mod", ["mod.7z"])).toEqual([]);
+    expect(stalePayloadVolumes([], "mod", ["mod.7z"])).toEqual([]);
   });
 });
 

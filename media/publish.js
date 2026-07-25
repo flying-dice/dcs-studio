@@ -106,10 +106,19 @@
     });
     const releaseBtn = document.getElementById("releaseBtn");
     releaseBtn.addEventListener("click", () => {
-      const repo = document.getElementById("relRepo").value.trim();
-      const [owner, name] = repo.split("/");
-      if (!owner || !name) {
+      // Both fields are validated here because both address something
+      // irreversible: the repo decides whose release this becomes, and the tag
+      // names the release and the payload archive. "owner/name/extra" is
+      // rejected rather than silently truncated to its first two segments.
+      const parts = document.getElementById("relRepo").value.trim().split("/");
+      const tag = document.getElementById("relTag").value.trim();
+      if (parts.length !== 2 || !parts[0] || !parts[1]) {
         appendLog("✖ Enter the repo as owner/name (share first if you haven't).");
+        showLog();
+        return;
+      }
+      if (!tag) {
+        appendLog("✖ Enter a tag for the release, e.g. v1.0.0.");
         showLog();
         return;
       }
@@ -117,9 +126,9 @@
       vscode.postMessage({
         type: "release",
         opts: {
-          owner,
-          name,
-          tag: document.getElementById("relTag").value.trim(),
+          owner: parts[0],
+          name: parts[1],
+          tag,
           notes: document.getElementById("relNotes").value,
         },
       });

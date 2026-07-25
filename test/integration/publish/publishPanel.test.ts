@@ -26,9 +26,10 @@ import { PublishPanel } from "../../../src/publish/publishPanel";
 
 // The publish flow's host side. This is the panel with the least margin for
 // error in the product: share creates a real GitHub repository and pushes, and
-// a release packages assets and can delete an existing tag. The panel itself
-// never decides any of that — but it decides what the user is shown before they
-// press the button, and whether a failure leaves the buttons stuck busy.
+// a release packages assets and uploads them onto a tag. The panel itself never
+// decides any of that — but it decides what the user is shown before they press
+// the button, whether the checks are re-run before an action is allowed to
+// start, and whether a failure leaves the buttons stuck busy.
 
 // The repo root, so `require(<extensionUri>/media/manifest-core.js)` resolves
 // the real UMD module rather than a stub — the manifest parse under test is the
@@ -118,6 +119,23 @@ describe("initial state", () => {
     expect(checks.some((c) => c.level === "error")).toBe(false);
   });
 
+  it("survives a [project] name written as a bare TOML number", async () => {
+    // `name = 2024` is valid TOML. It used to parse into a JS number, so the
+    // preflight policy's name.trim() threw inside pushInit() and the panel
+    // never received its checks at all — an empty Publish view with no reason
+    // given. The parser now normalises the modeled [project] fields to text.
+    files.set(MANIFEST, '[project]\nname = 2024\nversion = 3\n\n[[bundle]]\npath = "Scripts"\n');
+    const panel = await show();
+    const init = panel.webview.postedOfType("init")[0];
+
+    expect(init.defaults).toMatchObject({ name: "2024", version: "3" });
+    const checks = init.checks as { label: string; level: string; detail: string }[];
+    expect(checks.find((c) => c.label === "Project name")).toMatchObject({
+      level: "ok",
+      detail: "2024",
+    });
+  });
+
   it("blocks on a missing manifest and falls back to empty defaults", async () => {
     files.delete(MANIFEST);
     const panel = await show();
@@ -175,6 +193,62 @@ describe("initial state", () => {
     await panel.webview.receive({ type: "refresh" });
     await flush();
     expect(panel.webview.postedOfType("init")).toHaveLength(2);
+  });
+});
+
+// The disabled state of the buttons is computed in the webview from whatever
+// preflight last returned. That snapshot can be minutes old, and nothing stops
+// a manifest being deleted or a build being cleaned in between — so the host
+// re-runs the checks at the moment it is asked to act, and refuses on its own.
+describe("preflight gates the action, not just the button", () => {
+  it("refuses a share when the manifest went missing since the panel last checked", async () => {
+    let shared = false;
+    shareImpl = async () => {
+      shared = true;
+      return { url: "u" };
+    };
+    const panel = await show();
+    files.delete(MANIFEST);
+    await panel.webview.receive({ type: "share", opts: { name: "my-mod" } });
+    await flush();
+
+    expect(shared).toBe(false);
+    expect(panel.webview.postedOfType("shareDone")).toHaveLength(0);
+    expect(panel.webview.postedOfType("log").at(-1)?.line).toBe(
+      "✖ Manifest: dcs-studio.toml not found in the workspace root.",
+    );
+    // The refusal re-renders the checks, so the panel now shows why.
+    expect(panel.webview.postedOfType("init")).toHaveLength(2);
+    // And the busy latch still clears, or the button would be left dead.
+    expect(panel.webview.postedOfType("busy").map((m) => m.busy)).toEqual([true, false]);
+  });
+
+  it("refuses a release when a bundle path was cleaned since the panel last checked", async () => {
+    let released = false;
+    releaseImpl = async () => {
+      released = true;
+      return { url: "u" };
+    };
+    const panel = await show();
+    files.delete(`${ROOT}\\Scripts`);
+    await panel.webview.receive({ type: "release", opts: { tag: "v1.2.3" } });
+    await flush();
+
+    expect(released).toBe(false);
+    expect(panel.webview.postedOfType("releaseDone")).toHaveLength(0);
+    expect(panel.webview.postedOfType("log").at(-1)?.line).toBe(
+      "✖ Bundle paths: 1 of 1 bundle path(s) missing — build the project first.",
+    );
+  });
+
+  it("lets both actions through while the checks still pass", async () => {
+    const panel = await show();
+    await panel.webview.receive({ type: "share", opts: { name: "my-mod" } });
+    await panel.webview.receive({ type: "release", opts: { tag: "v1.2.3" } });
+    await flush();
+
+    expect(panel.webview.postedOfType("shareDone")).toHaveLength(1);
+    expect(panel.webview.postedOfType("releaseDone")).toHaveLength(1);
   });
 });
 

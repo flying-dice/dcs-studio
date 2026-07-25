@@ -160,13 +160,22 @@ describe("GhCli.repoCreate", () => {
 });
 
 describe("GhCli release and topic operations", () => {
-  it("ignores a topic-tagging failure — discovery is a nicety, not a blocker", async () => {
+  it("reports a topic-tagging failure without throwing", async () => {
+    // Never a blocker — a mod still publishes without its topic — but the
+    // caller has to be told, because an untagged repo is invisible to
+    // Marketplace discovery and the share would otherwise report success.
     spawner.plan(() => ({ code: 1, stderr: "no permission to edit topics" }));
-    await expect(new GhCli().repoTopicAdd("me/mod", "dcs-studio")).resolves.toBeUndefined();
+    expect(await new GhCli().repoTopicAdd("me/mod", "dcs-studio")).toBe(false);
     expect(spawner.calls[0].args).toEqual(["repo", "edit", "me/mod", "--add-topic", "dcs-studio"]);
+
+    spawner.plan(() => ({ code: 0 }));
+    expect(await new GhCli().repoTopicAdd("me/mod", "dcs-studio")).toBe(true);
   });
 
   it("reports whether a release for the tag already exists", async () => {
+    // This is the branch that decides between replacing a release in place and
+    // creating one outright, so a wrong answer here is the difference between
+    // a safe re-release and a destructive one.
     spawner.plan(() => ({ code: 0 }));
     expect(await new GhCli().releaseView("me/mod", "v1.0.0")).toBe(true);
     spawner.plan(() => ({ code: 1, stderr: "release not found" }));
@@ -174,8 +183,8 @@ describe("GhCli release and topic operations", () => {
   });
 
   it("treats deleting a non-existent release as a no-op", async () => {
-    // cutRelease deletes before re-creating; a first-time release has nothing
-    // to delete and must not fail there.
+    // The rollback path fires after a create that may not have got far enough
+    // to leave anything behind; it must not turn into a second failure.
     spawner.plan(() => ({ code: 1, stderr: "release not found" }));
     await expect(new GhCli().releaseDelete("me/mod", "v1.0.0")).resolves.toBeUndefined();
   });
@@ -203,5 +212,57 @@ describe("GhCli release and topic operations", () => {
     await expect(
       new GhCli().releaseCreate({ repo: "me/mod", tag: "v1", title: "t", notes: "", assets: [] }),
     ).rejects.toThrow("gh release create: exit 3");
+  });
+});
+
+// Replacing a release in place is what keeps a re-publish from ever leaving the
+// repository with no release and no tag, so these three are the load-bearing
+// half of the publish flow's safety.
+describe("GhCli in-place release replacement", () => {
+  it("uploads over an existing release and surfaces an upload failure", async () => {
+    spawner.plan(() => ({ code: 0 }));
+    await expect(
+      new GhCli().releaseUpload("me/mod", "v1.0.0", ["D:\\out\\p.7z"]),
+    ).resolves.toBeUndefined();
+
+    spawner.plan(() => ({ code: 1, stderr: "connection reset by peer" }));
+    await expect(new GhCli().releaseUpload("me/mod", "v1.0.0", ["D:\\out\\p.7z"])).rejects.toThrow(
+      "gh release upload: connection reset by peer",
+    );
+  });
+
+  it("edits the release metadata and surfaces an edit failure", async () => {
+    const opts = { repo: "me/mod", tag: "v1.0.0", title: "v1.0.0", notes: "n" };
+    spawner.plan(() => ({ code: 0 }));
+    await expect(new GhCli().releaseEdit(opts)).resolves.toBeUndefined();
+
+    spawner.plan(() => ({ code: 1, stderr: "release not found" }));
+    await expect(new GhCli().releaseEdit(opts)).rejects.toThrow(
+      "gh release edit: release not found",
+    );
+  });
+
+  it("reads the attached asset names, dropping blank lines", async () => {
+    spawner.plan(() => ({ code: 0, stdout: "dcs-studio.toml\nmod.7z.001\n\n  mod.7z.002  \n" }));
+    expect(await new GhCli().releaseAssetNames("me/mod", "v1.0.0")).toEqual([
+      "dcs-studio.toml",
+      "mod.7z.001",
+      "mod.7z.002",
+    ]);
+  });
+
+  it("reports no assets rather than failing when the release cannot be read", async () => {
+    // The list is only used to decide what to prune, and pruning nothing is
+    // the safe answer — a read failure must not sink a release already up.
+    spawner.plan(() => ({ code: 1, stderr: "release not found" }));
+    expect(await new GhCli().releaseAssetNames("me/mod", "v1.0.0")).toEqual([]);
+  });
+
+  it("reports whether a stale asset was detached, without throwing", async () => {
+    spawner.plan(() => ({ code: 0 }));
+    expect(await new GhCli().releaseAssetDelete("me/mod", "v1.0.0", "mod.7z.003")).toBe(true);
+
+    spawner.plan(() => ({ code: 1, stderr: "HTTP 404" }));
+    expect(await new GhCli().releaseAssetDelete("me/mod", "v1.0.0", "mod.7z.003")).toBe(false);
   });
 });

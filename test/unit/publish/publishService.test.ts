@@ -8,6 +8,7 @@ import type { FileSystemPort } from "../../../src/core/ports/filesystem";
 import type {
   GhPort,
   GhReleaseCreateOptions,
+  GhReleaseEditOptions,
   GhRepoCreateOptions,
   GhRepoCreateResult,
 } from "../../../src/core/ports/gh";
@@ -58,6 +59,10 @@ class FakeGh implements GhPort {
   calls: unknown[][] = [];
   loginValue: string | null = "octocat";
   repoCreateResult: GhRepoCreateResult = { created: true, alreadyExists: false };
+  topicAddOk = true;
+  releaseExists = false;
+  attachedAssets: string[] = [];
+  assetDeleteOk = true;
   async isInstalled(): Promise<boolean> {
     this.calls.push(["isInstalled"]);
     return true;
@@ -74,18 +79,33 @@ class FakeGh implements GhPort {
     this.calls.push(["repoCreate", opts]);
     return this.repoCreateResult;
   }
-  async repoTopicAdd(repo: string, topic: string): Promise<void> {
+  async repoTopicAdd(repo: string, topic: string): Promise<boolean> {
     this.calls.push(["repoTopicAdd", repo, topic]);
+    return this.topicAddOk;
   }
   async releaseView(repo: string, tag: string): Promise<boolean> {
     this.calls.push(["releaseView", repo, tag]);
-    return false;
+    return this.releaseExists;
   }
   async releaseDelete(repo: string, tag: string): Promise<void> {
     this.calls.push(["releaseDelete", repo, tag]);
   }
   async releaseCreate(opts: GhReleaseCreateOptions): Promise<void> {
     this.calls.push(["releaseCreate", opts]);
+  }
+  async releaseUpload(repo: string, tag: string, assets: string[]): Promise<void> {
+    this.calls.push(["releaseUpload", repo, tag, assets]);
+  }
+  async releaseEdit(opts: GhReleaseEditOptions): Promise<void> {
+    this.calls.push(["releaseEdit", opts]);
+  }
+  async releaseAssetNames(repo: string, tag: string): Promise<string[]> {
+    this.calls.push(["releaseAssetNames", repo, tag]);
+    return this.attachedAssets;
+  }
+  async releaseAssetDelete(repo: string, tag: string, name: string): Promise<boolean> {
+    this.calls.push(["releaseAssetDelete", repo, tag, name]);
+    return this.assetDeleteOk;
   }
 }
 
@@ -234,6 +254,7 @@ describe("PublishService.share", () => {
   it("fresh folder: inits the repo, writes .gitignore, commits, creates + tags the repo", async () => {
     const r = rig();
     r.git.repo = false;
+    r.git.remoteUrlValue = "https://github.com/octocat/my-mod.git";
     const res = await r.service.share(ROOT, { name: "my-mod", description: "A mod" }, r.log);
 
     expect(r.git.calls).toEqual([
@@ -242,6 +263,9 @@ describe("PublishService.share", () => {
       ["addAll", ROOT],
       ["hasChanges", ROOT],
       ["commit", ROOT, "Publish with DCS Studio"],
+      // gh wired origin as part of the create; that remote is what says which
+      // repository now exists.
+      ["getRemoteUrl", ROOT, "origin"],
     ]);
     expect(r.fs.files.get(gitignorePath)).toBe(".dcs-studio/\n");
     expect(r.gh.calls).toEqual([
@@ -268,13 +292,14 @@ describe("PublishService.share", () => {
       "git init",
       "git commit",
       "Creating GitHub repo octocat/my-mod…",
-      "Tagging topic: dcs-studio",
+      "Tagged topic: dcs-studio",
     ]);
   });
 
   it("existing repo with a clean tree: skips init and commit", async () => {
     const r = rig();
     r.git.changes = false;
+    r.git.remoteUrlValue = "https://github.com/octocat/mod.git";
     r.fs.files.set(gitignorePath, "out/\n.dcs-studio/\n");
     await r.service.share(ROOT, { name: "mod", description: "" }, r.log);
 
@@ -282,10 +307,11 @@ describe("PublishService.share", () => {
       ["isRepo", ROOT],
       ["addAll", ROOT],
       ["hasChanges", ROOT],
+      ["getRemoteUrl", ROOT, "origin"],
     ]);
     // .gitignore already carried the entry — nothing rewritten.
     expect(r.fs.calls.filter((c) => c[0] === "writeText")).toEqual([]);
-    expect(r.logs).toEqual(["Creating GitHub repo octocat/mod…", "Tagging topic: dcs-studio"]);
+    expect(r.logs).toEqual(["Creating GitHub repo octocat/mod…", "Tagged topic: dcs-studio"]);
   });
 
   it("appends the ignore entry to an existing .gitignore missing a trailing newline", async () => {
@@ -318,6 +344,60 @@ describe("PublishService.share", () => {
     await expect(r.service.share(ROOT, { name: "mod", description: "" }, r.log)).rejects.toThrow(
       "gh repo create: boom",
     );
+  });
+
+  it("reports the repo GitHub actually created, not the name that was asked for", async () => {
+    // The Repository field is prefilled from the human-readable [project] name,
+    // so "My Mod" is the common input. GitHub takes the create and stores it as
+    // "My-Mod"; reporting "octocat/My Mod" would give the user a dead link, a
+    // release prefill that addresses nothing, and a topic tagged on nothing.
+    const r = rig();
+    r.git.remoteUrlValue = "https://github.com/octocat/My-Mod.git";
+    const res = await r.service.share(ROOT, { name: "My Mod", description: "" }, r.log);
+
+    expect(res).toEqual({
+      owner: "octocat",
+      name: "My-Mod",
+      url: "https://github.com/octocat/My-Mod",
+    });
+    expect(r.gh.calls).toContainEqual(["repoTopicAdd", "octocat/My-Mod", "dcs-studio"]);
+    expect(r.logs).toContain("GitHub named it octocat/My-Mod.");
+  });
+
+  it("takes the owner from the remote too, so an org create is reported correctly", async () => {
+    const r = rig();
+    r.git.remoteUrlValue = "git@github.com:flying-dice/mod.git";
+    const res = await r.service.share(ROOT, { name: "mod", description: "" }, r.log);
+    expect(res.owner).toBe("flying-dice");
+    expect(r.logs).toContain("GitHub named it flying-dice/mod.");
+  });
+
+  it("falls back to the requested name when the remote says nothing usable", async () => {
+    // No remote at all, or one that is not a GitHub URL: the requested name is
+    // the only answer left, and it is better than reporting nothing.
+    const r = rig();
+    r.git.remoteUrlValue = null;
+    expect((await r.service.share(ROOT, { name: "mod", description: "" }, r.log)).name).toBe("mod");
+
+    const other = rig();
+    other.git.remoteUrlValue = "https://gitlab.com/octocat/mod.git";
+    const res = await other.service.share(ROOT, { name: "mod", description: "" }, other.log);
+    expect(res).toEqual({ owner: "octocat", name: "mod", url: "https://github.com/octocat/mod" });
+    expect(other.logs).not.toContain("GitHub named it octocat/mod.");
+  });
+
+  it("says so when the discovery topic could not be applied", async () => {
+    // Logged after the attempt, not before: the topic is exactly what
+    // Marketplace discovery searches on, so a share that claims success while
+    // the tagging failed leaves a mod nobody can find.
+    const r = rig();
+    r.git.remoteUrlValue = "https://github.com/octocat/mod.git";
+    r.gh.topicAddOk = false;
+    await r.service.share(ROOT, { name: "mod", description: "" }, r.log);
+    expect(r.logs).toContain(
+      "⚠ Could not tag topic dcs-studio — the mod stays invisible to Marketplace discovery until it is tagged.",
+    );
+    expect(r.logs).not.toContain("Tagged topic: dcs-studio");
   });
 });
 
@@ -400,9 +480,10 @@ describe("PublishService.cutRelease", () => {
     ]);
     // The standalone manifest is copied alongside the payload.
     expect(r.fs.calls).toContainEqual(["copy", manifestPath, manifestAsset]);
-    // Idempotent re-publish: delete first, then create with all assets.
+    // Nothing exists for this tag, so nothing is deleted — the release is
+    // created outright.
     expect(r.gh.calls).toEqual([
-      ["releaseDelete", "octocat/mod", "v1.0.0"],
+      ["releaseView", "octocat/mod", "v1.0.0"],
       [
         "releaseCreate",
         {
@@ -456,11 +537,10 @@ describe("PublishService.cutRelease", () => {
     expect((create?.[1] as { notes: string } | undefined)?.notes).toBe("Release v1.0.0");
   });
 
-  it("re-release: deletes the previous release before creating the new one", async () => {
+  it("a first release for a tag deletes nothing at all", async () => {
     const r = releaseRig();
     await r.service.cutRelease(ROOT, releaseOpts, r.log);
-    const order = r.gh.calls.map((c) => c[0]);
-    expect(order.indexOf("releaseDelete")).toBeLessThan(order.indexOf("releaseCreate"));
+    expect(r.gh.calls.map((c) => c[0])).not.toContain("releaseDelete");
   });
 
   it("ships only the manifest when there are no bundle paths", async () => {
@@ -476,6 +556,120 @@ describe("PublishService.cutRelease", () => {
     const pack = r.archive.calls.find((c) => c[0] === "packagePayload");
     expect(pack?.[5]).toBeUndefined();
     expect(DEFAULT_VOLUME_BYTES).toBeGreaterThan(0); // policy default lives with the archiver
+  });
+
+  it("refuses an empty tag before packaging anything", async () => {
+    // An empty tag used to package under a base name ending in a bare hyphen
+    // and only fail at the CLI, with the destructive part already done.
+    const r = releaseRig();
+    await expect(r.service.cutRelease(ROOT, { ...releaseOpts, tag: "   " }, r.log)).rejects.toThrow(
+      "A release tag is required (e.g. v1.0.0).",
+    );
+    expect(r.archive.calls).toEqual([]);
+    expect(r.gh.calls).toEqual([]);
+  });
+
+  it("trims the tag it packages, releases and links against", async () => {
+    const r = releaseRig();
+    const res = await r.service.cutRelease(ROOT, { ...releaseOpts, tag: " v1.0.0 " }, r.log);
+    expect(r.archive.calls.find((c) => c[0] === "packagePayload")?.[4]).toBe(
+      "dcs-studio-mod-v1.0.0",
+    );
+    expect(r.gh.calls).toContainEqual(["releaseView", "octocat/mod", "v1.0.0"]);
+    expect(res.url).toBe("https://github.com/octocat/mod/releases/tag/v1.0.0");
+  });
+});
+
+// ── cutRelease: replacing a release that already exists ───────────────────────
+
+describe("PublishService.cutRelease — re-releasing an existing tag", () => {
+  it("replaces the release in place instead of deleting it first", async () => {
+    // The whole point. A delete-then-create leaves the repository with no
+    // release and no tag for the length of the upload, and an upload that dies
+    // half-way through a multi-volume payload leaves it that way for good.
+    const r = releaseRig();
+    r.gh.releaseExists = true;
+    r.gh.attachedAssets = ["dcs-studio.toml", "dcs-studio-mod-v1.0.0.7z"];
+    await r.service.cutRelease(ROOT, { ...releaseOpts, notes: "again" }, r.log);
+
+    const volume = path.join(outDir, "dcs-studio-mod-v1.0.0.7z");
+    expect(r.gh.calls).toEqual([
+      ["releaseView", "octocat/mod", "v1.0.0"],
+      ["releaseUpload", "octocat/mod", "v1.0.0", [manifestAsset, volume]],
+      ["releaseEdit", { repo: "octocat/mod", tag: "v1.0.0", title: "v1.0.0", notes: "again" }],
+      ["releaseAssetNames", "octocat/mod", "v1.0.0"],
+    ]);
+    expect(r.gh.calls.map((c) => c[0])).not.toContain("releaseDelete");
+    expect(r.logs).toContain("Release v1.0.0 already exists — uploading 2 assets over it…");
+    expect(r.logs).toContain("Replaced release v1.0.0 in place — the tag was never removed.");
+  });
+
+  it("prunes volumes the previous, larger payload left attached", async () => {
+    // Two volumes replacing three: the stale .003 would otherwise ride along
+    // and 7-Zip would reassemble a payload that never existed.
+    const r = releaseRig();
+    r.gh.releaseExists = true;
+    r.archive.packaged = {
+      volumes: [
+        path.join(outDir, "dcs-studio-mod-v1.0.0.7z.001"),
+        path.join(outDir, "dcs-studio-mod-v1.0.0.7z.002"),
+      ],
+      totalBytes: 4096,
+      split: true,
+    };
+    r.gh.attachedAssets = [
+      "dcs-studio.toml",
+      "dcs-studio-mod-v1.0.0.7z.001",
+      "dcs-studio-mod-v1.0.0.7z.002",
+      "dcs-studio-mod-v1.0.0.7z.003",
+      "screenshot.png",
+    ];
+    await r.service.cutRelease(ROOT, releaseOpts, r.log);
+
+    // Only the stale volume — the author's own screenshot is not ours to drop,
+    // and pruning runs after the replacement assets are already up.
+    expect(r.gh.calls.filter((c) => c[0] === "releaseAssetDelete")).toEqual([
+      ["releaseAssetDelete", "octocat/mod", "v1.0.0", "dcs-studio-mod-v1.0.0.7z.003"],
+    ]);
+    expect(r.logs).toContain("Removed stale asset dcs-studio-mod-v1.0.0.7z.003.");
+  });
+
+  it("names a stale asset it could not remove rather than staying quiet", async () => {
+    const r = releaseRig();
+    r.gh.releaseExists = true;
+    r.gh.assetDeleteOk = false;
+    r.gh.attachedAssets = ["dcs-studio-mod-v1.0.0.7z.001"];
+    await r.service.cutRelease(ROOT, releaseOpts, r.log);
+    expect(r.logs).toContain(
+      "⚠ Could not remove stale asset dcs-studio-mod-v1.0.0.7z.001 — delete it by hand before anyone installs.",
+    );
+  });
+
+  it("leaves the existing release standing when the replacement upload fails", async () => {
+    const r = releaseRig();
+    r.gh.releaseExists = true;
+    r.gh.releaseUpload = async () => {
+      throw new Error("gh release upload: connection reset");
+    };
+    await expect(r.service.cutRelease(ROOT, releaseOpts, r.log)).rejects.toThrow(
+      "connection reset",
+    );
+    // Nothing was deleted on the way in, so the previous release and its tag
+    // are exactly where they were.
+    expect(r.gh.calls.map((c) => c[0])).not.toContain("releaseDelete");
+  });
+
+  it("rolls back a first release whose create died mid-upload", async () => {
+    // Nothing existed for this tag beforehand, so removing the half-created
+    // release and its tag restores the repository rather than destroying
+    // anything — and leaves the retry a clean tag to create.
+    const r = releaseRig();
+    r.gh.releaseCreate = async () => {
+      throw new Error("gh release create: HTTP 502");
+    };
+    await expect(r.service.cutRelease(ROOT, releaseOpts, r.log)).rejects.toThrow("HTTP 502");
+    expect(r.gh.calls.at(-1)).toEqual(["releaseDelete", "octocat/mod", "v1.0.0"]);
+    expect(r.logs).toContain("Release v1.0.0 failed — removing the half-created release and tag.");
   });
 });
 

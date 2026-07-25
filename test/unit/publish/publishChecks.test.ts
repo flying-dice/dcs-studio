@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeGhCheck,
   computePreflight,
+  firstBlocker,
   isCoveredByBundle,
   type PreflightFacts,
 } from "../../../src/core/domain/publishChecks";
@@ -50,13 +51,26 @@ describe("computePreflight — manifest checks", () => {
     expect(byLabel(checks, "Bundle paths")).toBeUndefined();
   });
 
-  it("errors when the manifest exists but does not parse", () => {
+  it("errors when the manifest exists but cannot be read", () => {
+    // Deliberately not "could not parse": the parser is tolerant and answers
+    // garbage with an empty model, so a null manifest alongside a file that
+    // exists means the read itself failed — deleted between the existence
+    // check and the read, or unreadable by this process.
     const checks = computePreflight(facts({ manifest: null }));
     expect(byLabel(checks, "Manifest")).toEqual({
       label: "Manifest",
       level: "error",
-      detail: "Could not parse dcs-studio.toml.",
+      detail: "dcs-studio.toml could not be read.",
     });
+  });
+
+  it("blocks garbage TOML on the project name, not on a parse message", () => {
+    // What a manifest full of nonsense actually produces: an empty model.
+    const empty = manifest();
+    empty.project.name = "";
+    const checks = computePreflight(facts({ manifest: empty }));
+    expect(byLabel(checks, "Manifest")).toBeUndefined();
+    expect(byLabel(checks, "Project name")?.detail).toBe("[project] name is required.");
   });
 
   it("passes the project name through as the ok detail", () => {
@@ -530,5 +544,30 @@ describe("computeGhCheck", () => {
       level: "error",
       detail: "gh is not signed in. Run: gh auth login",
     });
+  });
+});
+
+describe("firstBlocker", () => {
+  it("returns the first error-level check, ignoring ok and warn", () => {
+    // Order matters: the panel logs this one line when it refuses to publish,
+    // so it has to be the check nearest the top of the rendered list.
+    expect(
+      firstBlocker([
+        { label: "Manifest", level: "ok", detail: "fine" },
+        { label: "Bundle paths", level: "warn", detail: "advisory" },
+        { label: "7-Zip", level: "error", detail: "7z not found." },
+        { label: "git", level: "error", detail: "git not found on PATH." },
+      ]),
+    ).toEqual({ label: "7-Zip", level: "error", detail: "7z not found." });
+  });
+
+  it("returns null when nothing blocks, warnings included", () => {
+    expect(firstBlocker([{ label: "Bundle paths", level: "warn", detail: "advisory" }])).toBeNull();
+    expect(firstBlocker([])).toBeNull();
+  });
+
+  it("finds the blocker in a real preflight run", () => {
+    expect(firstBlocker(computePreflight(facts({ sevenZip: null })))?.label).toBe("7-Zip");
+    expect(firstBlocker(computePreflight(facts()))).toBeNull();
   });
 });
