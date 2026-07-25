@@ -394,12 +394,46 @@ export class SubscriptionService {
   }
 
   /** Unsubscribe: disable + delete the unpacked files + drop the ledger entry. */
+  /**
+   * Remove a mod entirely: its links, then its unpacked payload, then its
+   * ledger entry.
+   *
+   * Links come out FIRST and the rest only happens if every one of them went.
+   * Uninstalling while DCS is running is an ordinary thing to do, and DCS holds
+   * its loaded files open — so a link surviving is the expected failure, not an
+   * exotic one. Deleting the entry anyway loses the record of what is still on
+   * disk, including from `uninstall-all.bat`, which exists for exactly this
+   * situation; and deleting the payload anyway leaves those surviving links
+   * pointing at nothing.
+   *
+   * So a partial uninstall leaves a coherent, retryable state: the surviving
+   * links, the payload they point into, and a ledger entry naming both. Closing
+   * DCS and running it again finishes the job.
+   */
   async unsubscribe(repo: string): Promise<void> {
     const subs = await this.ports.ledger.load();
     const sub = subs[ledgerKey(repo)];
     if (!sub) return;
-    if (sub.enabled)
-      this.ports.linker.disable(sub.links.map((l) => ({ id: l.id, installedPath: l.dest })));
+
+    const total = sub.links.length;
+    const { failed } = sub.enabled
+      ? this.ports.linker.disable(sub.links.map((l) => ({ id: l.id, installedPath: l.dest })))
+      : { failed: [] as { id: string; message: string }[] };
+    const reasons = new Map(failed.map((f) => [f.id, f.message]));
+    const survivors = sub.links.filter((l) => reasons.has(l.id));
+
+    if (survivors.length) {
+      sub.links = survivors;
+      // Still enabled, because links of ours are still in the user's DCS.
+      sub.enabled = true;
+      await this.ports.ledger.save(subs);
+      await this.regenerateAggregators();
+      const detail = survivors.map((l) => `${l.dest} (${reasons.get(l.id)})`).join("; ");
+      throw new Error(
+        `${survivors.length} of ${total} link(s) could not be removed — close DCS and try again. Still linked: ${detail}`,
+      );
+    }
+
     await this.ports.fs.remove(sub.dir);
     delete subs[ledgerKey(repo)];
     await this.ports.ledger.save(subs);

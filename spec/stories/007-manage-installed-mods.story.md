@@ -196,6 +196,21 @@ Feature: My Mods panel
       And a toast confirms "Uninstalled <repo>."
 
     @chaos
+    Scenario: A link that cannot be removed while uninstalling
+      Given DCS is running and holds one of the mod's links open
+      When the user clicks the trash icon
+      Then it fails with "<n> of <m> link(s) could not be removed — close DCS
+        and try again. Still linked: <dest> (<reason>)"
+      And the surviving link stays in the ledger, and therefore in
+        "uninstall-all.bat", which is the escape hatch for exactly this case
+      And the unpacked files are NOT deleted, because that would leave the
+        surviving link pointing at nothing
+      And the mod stays listed and enabled — a link of its is still in the
+        user's DCS, so saying it was uninstalled would be untrue
+      And clicking the trash icon again once DCS is closed removes what is
+        left and completes the uninstall
+
+    @chaos
     Scenario: Opening the folder of a mod whose directory was deleted
       Given the mod's unpacked folder was deleted outside the extension
       When the user clicks the folder icon

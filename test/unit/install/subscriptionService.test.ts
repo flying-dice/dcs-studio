@@ -963,6 +963,47 @@ describe("unsubscribe", () => {
     expect(w.ledger.store).toEqual({});
   });
 
+  it("keeps everything when a link could not be removed, and says what to do", async () => {
+    // Uninstalling while DCS is running is ordinary, and DCS holds its loaded
+    // files open — so a surviving link is the expected failure. Dropping the
+    // entry anyway would lose the record of what is still in the user's DCS,
+    // including from uninstall-all.bat, which exists for exactly this.
+    const w = makeWorld();
+    const links = [
+      { id: "Owner/Repo:0", dest: "C:\\SG\\DCS\\Scripts\\X" },
+      { id: "Owner/Repo:1", dest: "C:\\SG\\DCS\\Mods\\Y" },
+    ];
+    w.ledger.store = { "owner/repo": seeded({ enabled: true, links }) };
+    w.linker.undeletable.set("Owner/Repo:1", "EBUSY: resource busy or locked");
+
+    await expect(w.service.unsubscribe("Owner/Repo")).rejects.toThrow(
+      "1 of 2 link(s) could not be removed — close DCS and try again. " +
+        "Still linked: C:\\SG\\DCS\\Mods\\Y (EBUSY: resource busy or locked)",
+    );
+
+    const saved = w.ledger.store["owner/repo"];
+    expect(saved.enabled).toBe(true); // a link of ours is still in their DCS
+    expect(saved.links).toEqual([{ id: "Owner/Repo:1", dest: "C:\\SG\\DCS\\Mods\\Y" }]);
+    // The payload stays too: deleting it would leave that surviving link
+    // pointing at nothing, which is worse than a mod that is still installed.
+    expect(w.fs.pathsFor("remove")).not.toContain(MOD_DIR);
+  });
+
+  it("completes on a retry once the link is free", async () => {
+    // The half-uninstalled state has to be one a second attempt can finish.
+    const w = makeWorld();
+    const links = [{ id: "Owner/Repo:0", dest: "C:\\SG\\DCS\\Scripts\\X" }];
+    w.ledger.store = { "owner/repo": seeded({ enabled: true, links }) };
+    w.linker.undeletable.set("Owner/Repo:0", "EBUSY: resource busy or locked");
+    await expect(w.service.unsubscribe("Owner/Repo")).rejects.toThrow("could not be removed");
+
+    w.linker.undeletable.clear(); // the user closed DCS
+    await w.service.unsubscribe("Owner/Repo");
+
+    expect(w.ledger.store).toEqual({});
+    expect(w.fs.pathsFor("remove")).toContain(MOD_DIR);
+  });
+
   it("skips the linker for a disabled subscription but still deletes and drops it", async () => {
     const w = makeWorld();
     w.ledger.store = { "owner/repo": seeded({ enabled: false }) };
