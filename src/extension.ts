@@ -21,8 +21,8 @@ import { BridgeClient } from "./bridge/client";
 import { BridgeClients } from "./bridge/clients";
 import { ConsolePanel } from "./bridge/consolePanel";
 import { dbExportCommand } from "./bridge/dbExport";
-import { ejectCommand, injectCommand } from "./bridge/deploy";
-import { launchCleanup, launchDcs } from "./bridge/launch";
+import { type BridgeFs, ejectCommand, injectCommand, nodeBridgeFs } from "./bridge/deploy";
+import { DcsLauncher } from "./bridge/launch";
 import { DetectService } from "./core/app/detectService";
 import { MissionSanitizeService } from "./core/app/missionSanitizeService";
 import { PublishService } from "./core/app/publishService";
@@ -76,14 +76,41 @@ const MANIFEST_FILE = "dcs-studio.toml";
 const PENDING_MYMODS_KEY = "dcs.pendingMyMods";
 
 let bridge: BridgeClients | undefined;
+// The one managed DCS process. Held here rather than inside launch.ts because
+// `deactivate()` takes no arguments — VS Code's shape, not ours — so the
+// composition root is the only place that can hand it to the shutdown path.
+// Initialised eagerly, not on activation: `deactivate()` must still eject a
+// bridge a PREVIOUS session injected even if this activation threw before it got
+// here, and at that point the real filesystem is the only sensible guess.
+// `activate()` replaces it with one built from its injected dependencies.
+let dcsLauncher: DcsLauncher = new DcsLauncher(nodeBridgeFs);
 
 function isManifest(doc: vscode.TextDocument): boolean {
   return doc.uri.scheme === "file" && doc.uri.path.endsWith(`/${MANIFEST_FILE}`);
 }
 
-export function activate(context: vscode.ExtensionContext): void {
+/**
+ * What the composition root builds the extension out of. VS Code only ever
+ * passes the context, so the defaults are the real thing; the parameter exists
+ * so a test can drive activation against a substitute without a mutable slot
+ * that leaks from one spec into the next.
+ */
+export interface ExtensionDeps {
+  /** Filesystem for bridge inject/eject/launch. */
+  bridgeIo: BridgeFs;
+}
+
+export function activate(
+  context: vscode.ExtensionContext,
+  deps: ExtensionDeps = { bridgeIo: nodeBridgeFs },
+): void {
   // Dev-host only: reload the window when out/ or media/ changes.
   setupDevReload(context);
+
+  // Held in a module slot as well as locally, because `deactivate()` takes no
+  // arguments and still has to eject the bridge.
+  const dcs = new DcsLauncher(deps.bridgeIo);
+  dcsLauncher = dcs;
 
   // The live in-sim bridges (created early so the sidebar nav can show their
   // status): the GUI bridge is up whenever DCS runs; the mission bridge only
@@ -285,10 +312,12 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       if (picked) void vscode.commands.executeCommand(picked.command);
     }),
-    vscode.commands.registerCommand("dcs.bridge.inject", () => injectCommand(context)),
-    vscode.commands.registerCommand("dcs.bridge.eject", () => ejectCommand()),
+    vscode.commands.registerCommand("dcs.bridge.inject", () =>
+      injectCommand(context, deps.bridgeIo),
+    ),
+    vscode.commands.registerCommand("dcs.bridge.eject", () => ejectCommand(deps.bridgeIo)),
     vscode.commands.registerCommand("dcs.bridge.launch", async () => {
-      await launchDcs(context);
+      await dcs.launch(context);
       clients.reconnect();
     }),
     vscode.commands.registerCommand("dcs.bridge.build", () => buildBridge(context)),
@@ -450,8 +479,9 @@ function samePath(a: string, b: string): boolean {
 
 export function deactivate(): void {
   bridge?.dispose();
-  // Best-effort cleanup: eject the bridge if DCS isn't holding the DLL.
-  launchCleanup();
+  // Best-effort cleanup: eject the bridge if DCS isn't holding the DLL. Nothing
+  // to do if no launcher was ever built — that means no DCS was launched here.
+  dcsLauncher.cleanup();
   // Mod entrypoint processes (ProcessLauncher) are deliberately LEFT RUNNING on
   // IDE exit — matching the DCS launcher's policy of not killing DCS when the
   // extension shuts down. The tracking map simply goes away with the process; a

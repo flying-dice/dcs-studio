@@ -40,11 +40,26 @@ vi.mock("child_process", () => ({
 const written: { file: string; data: Uint8Array }[] = [];
 const madeDirs: string[] = [];
 let iconPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+/** Which icon filesystem call blows up, if any — set per test. */
+let iconFsError: { at: "mkdir" | "read" | "write"; error: Error } | undefined;
+
+function failAt(at: "mkdir" | "read" | "write"): void {
+  if (iconFsError?.at === at) throw iconFsError.error;
+}
 
 vi.mock("fs", () => ({
-  mkdirSync: (dir: string) => madeDirs.push(dir),
-  readFileSync: () => iconPng,
-  writeFileSync: (file: string, data: Uint8Array) => written.push({ file, data }),
+  mkdirSync: (dir: string) => {
+    failAt("mkdir");
+    madeDirs.push(dir);
+  },
+  readFileSync: () => {
+    failAt("read");
+    return iconPng;
+  },
+  writeFileSync: (file: string, data: Uint8Array) => {
+    failAt("write");
+    written.push({ file, data });
+  },
 }));
 
 import * as vscode from "vscode";
@@ -95,6 +110,7 @@ beforeEach(() => {
   written.length = 0;
   madeDirs.length = 0;
   iconPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  iconFsError = undefined;
   powershell = (child) => child.listeners.get("exit")?.(0);
   originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
   originalExecPath = Object.getOwnPropertyDescriptor(process, "execPath");
@@ -296,6 +312,38 @@ describe("when Windows says no", () => {
     await createMyModsShortcut(context());
 
     expect(state.errors[0]).toBe("Couldn't create the shortcut — Desktop: spawn ENOENT");
+  });
+
+  it.each([
+    ["the storage directory cannot be created", "mkdir" as const, "EROFS: read-only file system"],
+    ["the bundled icon cannot be read", "read" as const, "EACCES: permission denied"],
+    ["the .ico is locked by another process", "write" as const, "EBUSY: resource busy or locked"],
+  ])("says so when %s", async (_label, at, message) => {
+    // This was the one silent failure in the command. It is invoked as
+    // `() => void createMyModsShortcut(...)`, so a rejection out of the icon
+    // step reached nobody: the user picked their locations, confirmed, and
+    // absolutely nothing happened.
+    iconFsError = { at, error: new Error(message) };
+    state.quickPickReplies.push([DESKTOP, START_MENU]);
+    await createMyModsShortcut(context());
+
+    expect(state.errors[0]).toBe(
+      `Couldn't create the shortcut — its icon could not be written: ${message}`,
+    );
+    // And it stops there rather than writing shortcuts pointing at an icon
+    // that was never produced.
+    expect(spawns).toEqual([]);
+    expect(state.info).toEqual([]);
+  });
+
+  it("reports a non-Error thrown by the icon step rather than [object Object]", async () => {
+    iconFsError = { at: "write", error: "disk full" as unknown as Error };
+    state.quickPickReplies.push([DESKTOP]);
+    await createMyModsShortcut(context());
+
+    expect(state.errors[0]).toBe(
+      "Couldn't create the shortcut — its icon could not be written: disk full",
+    );
   });
 
   it("still reports the locations that did succeed", async () => {

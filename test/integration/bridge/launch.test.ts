@@ -9,8 +9,7 @@ import { resetVscode, state, vscodeMock } from "../support/vscode";
 vi.mock("vscode", () => vscodeMock());
 
 import * as vscode from "vscode";
-import { useBridgeFs } from "../../../src/bridge/deploy";
-import { launchCleanup, launchDcs } from "../../../src/bridge/launch";
+import { DcsLauncher } from "../../../src/bridge/launch";
 import {
   builtDllPath,
   dllInstallPath,
@@ -36,14 +35,16 @@ const EXE = "D:\\DCS World\\bin\\DCS.exe";
 
 let root: string;
 let io: MappedBridgeFs;
-let restore: () => void;
 let harness: SpawnHarness;
+// One launcher per test: it owns the "a DCS is already running" state, so a
+// shared one would carry a live sim from one spec into the next.
+let launcher: DcsLauncher;
 
 function context(): vscode.ExtensionContext {
   return { extensionUri: vscode.Uri.file(EXT) } as unknown as vscode.ExtensionContext;
 }
 
-/** The harness's spawn, in the shape launchDcs takes. */
+/** The harness's spawn, in the shape DcsLauncher takes. */
 function fakeSpawn(): typeof nodeSpawn {
   return harness.spawn as unknown as typeof nodeSpawn;
 }
@@ -51,14 +52,14 @@ function fakeSpawn(): typeof nodeSpawn {
 /** Launch with a process that stays alive until the test says otherwise. */
 async function launchLive(): Promise<void> {
   harness.plan(() => undefined);
-  await launchDcs(context(), fakeSpawn());
+  await launcher.launch(context());
 }
 
 beforeEach(() => {
   root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "bridge-launch-"));
   io = mappedBridgeFs(root);
-  restore = useBridgeFs(io);
   harness = createSpawnHarness();
+  launcher = new DcsLauncher(io, fakeSpawn());
   resetVscode({
     config: {
       "dcsStudio.savedGamesPath": WRITE_DIR,
@@ -76,14 +77,13 @@ afterEach(async () => {
   // make the next test look like a double launch.
   for (const child of harness.children) child.emit("exit", 0);
   await new Promise((r) => setTimeout(r, 10));
-  restore();
   fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("preconditions", () => {
   it("asks for the install path when it has not been configured", async () => {
     state.config["dcsStudio.gameInstallPath"] = "";
-    await launchDcs(context(), fakeSpawn());
+    await launcher.launch(context());
     expect(state.errors).toEqual([expect.stringContaining("dcsStudio.gameInstallPath")]);
     expect(harness.calls).toEqual([]);
   });
@@ -92,14 +92,14 @@ describe("preconditions", () => {
     // Usually a path pointing at the Saved Games folder rather than the install
     // — quoting the path is what makes that obvious.
     state.config["dcsStudio.gameInstallPath"] = "D:\\Wrong";
-    await launchDcs(context(), fakeSpawn());
+    await launcher.launch(context());
     expect(state.errors).toEqual([`DCS.exe not found at D:\\Wrong\\bin\\DCS.exe.`]);
     expect(harness.calls).toEqual([]);
   });
 
   it("refuses to start a second DCS", async () => {
     await launchLive();
-    await launchDcs(context(), fakeSpawn());
+    await launcher.launch(context());
     // Two sims writing the same config and log files corrupts both.
     expect(harness.calls).toHaveLength(1);
     expect(state.info).toContain("DCS was already launched by DCS Studio.");
@@ -115,18 +115,17 @@ describe("preconditions", () => {
       releaseCopy = r;
     });
     const copyFile = io.copyFile;
-    restore();
     io = mappedBridgeFs(root, {
       copyFile: async (src, dest) => {
         await held;
         return copyFile(src, dest);
       },
     });
-    restore = useBridgeFs(io);
+    launcher = new DcsLauncher(io, fakeSpawn());
     harness.plan(() => undefined);
 
-    const first = launchDcs(context(), fakeSpawn());
-    const second = launchDcs(context(), fakeSpawn());
+    const first = launcher.launch(context());
+    const second = launcher.launch(context());
     releaseCopy();
     await Promise.all([first, second]);
 
@@ -136,7 +135,7 @@ describe("preconditions", () => {
 
   it("frees the claim when a launch fails, so the next one is not blocked", async () => {
     state.config["dcsStudio.gameInstallPath"] = "";
-    await launchDcs(context(), fakeSpawn());
+    await launcher.launch(context());
     state.config["dcsStudio.gameInstallPath"] = GAME_INSTALL;
 
     await launchLive();
@@ -156,11 +155,10 @@ describe("injecting before launch", () => {
   });
 
   it("aborts when a DLL is locked, because DCS is already running", async () => {
-    restore();
     io = mappedBridgeFs(root, { copyFile: () => Promise.reject(lockedError()) });
-    restore = useBridgeFs(io);
+    launcher = new DcsLauncher(io, fakeSpawn());
 
-    await launchDcs(context(), fakeSpawn());
+    await launcher.launch(context());
 
     expect(state.errors).toEqual(["A bridge DLL is locked — is DCS already running?"]);
     // Fails closed: no second sim on top of the one already holding the DLL.
@@ -168,11 +166,10 @@ describe("injecting before launch", () => {
   });
 
   it("reports any other inject failure and does not launch", async () => {
-    restore();
     io = mappedBridgeFs(root, { mkdir: () => Promise.reject(new Error("EACCES: denied")) });
-    restore = useBridgeFs(io);
+    launcher = new DcsLauncher(io, fakeSpawn());
 
-    await launchDcs(context(), fakeSpawn());
+    await launcher.launch(context());
 
     expect(state.errors).toEqual(["Inject failed before launch: EACCES: denied"]);
     expect(harness.calls).toEqual([]);
@@ -183,14 +180,13 @@ describe("injecting before launch", () => {
     // earlier one succeeded leaves a mixed install, and "close DCS and try
     // again" alone would not tell the user their bridge is now half-replaced.
     const copyFile = io.copyFile;
-    restore();
     io = mappedBridgeFs(root, {
       copyFile: (src, dest) =>
         dest.endsWith(MISSION_DLL) ? Promise.reject(lockedError()) : copyFile(src, dest),
     });
-    restore = useBridgeFs(io);
+    launcher = new DcsLauncher(io, fakeSpawn());
 
-    await launchDcs(context(), fakeSpawn());
+    await launcher.launch(context());
 
     expect(state.errors).toEqual([
       "A bridge DLL is locked — is DCS already running? The install is now mixed: dcs_studio_gui.dll was replaced and the rest were not — inject again once the problem is fixed, because DCS loads them as a set.",
@@ -199,11 +195,10 @@ describe("injecting before launch", () => {
   });
 
   it("reports a non-Error inject failure rather than launching regardless", async () => {
-    restore();
     io = mappedBridgeFs(root, { copyFile: () => Promise.reject("weird") });
-    restore = useBridgeFs(io);
+    launcher = new DcsLauncher(io, fakeSpawn());
 
-    await launchDcs(context(), fakeSpawn());
+    await launcher.launch(context());
 
     expect(state.errors).toEqual(["Inject failed before launch: weird"]);
     expect(harness.calls).toEqual([]);
@@ -285,28 +280,28 @@ describe("the spawn", () => {
   it("uses the real child_process by default", async () => {
     // The seam is for these specs only; the shipped command has to reach the
     // OS. Here that means a genuine ENOENT for a Windows path on this host.
-    await launchDcs(context());
+    await new DcsLauncher(io).launch(context());
     await vi.waitFor(() =>
       expect(state.errors).toEqual([expect.stringContaining("Failed to start DCS")]),
     );
   });
 });
 
-describe("launchCleanup", () => {
+describe("cleanup", () => {
   it("ejects the bridge when the extension shuts down with no DCS running", async () => {
     await launchLive();
     harness.children[0].emit("exit", 0);
     await vi.waitFor(() => expect(io.exists(hookInstallPath(WRITE_DIR))).toBe(false));
     io.seed(hookInstallPath(WRITE_DIR), "-- hook");
 
-    launchCleanup();
+    launcher.cleanup();
 
     await vi.waitFor(() => expect(io.exists(hookInstallPath(WRITE_DIR))).toBe(false));
   });
 
   it("leaves the bridge alone while DCS is still running", async () => {
     await launchLive();
-    launchCleanup();
+    launcher.cleanup();
     // The DLL is locked anyway, and deleting the hook mid-session breaks the
     // mission bridge's boot dispatch for the rest of the run.
     await new Promise((r) => setTimeout(r, 10));

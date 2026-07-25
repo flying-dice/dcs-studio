@@ -18,6 +18,7 @@ import {
   classifyExistingDest,
   sameVolume,
 } from "../../core/domain/linkStrategy";
+import { psArgs, psQuote } from "../../core/domain/powershell";
 import type {
   DisableResult,
   InstalledLink,
@@ -39,35 +40,18 @@ import type { LinkerPort } from "../../core/ports/linker";
 // and a disable removes only our links. enable() rolls all links back if any one
 // fails; disable() removes the link entries, never their targets.
 
-// TODO: clean-code - 0.65 - DRY (#44): byte-identical to `psq` in
-// src/install/shortcut.ts, and the two invocations they feed have already
-// drifted — shortcut.ts passes -NonInteractive, both PowerShell calls below do
-// not, and this is the ELEVATED path, where a host that decides to prompt has
-// no console to prompt on. One escaper in core/domain (it is pure string work)
-// with one argv builder beside `cliArgs.ts` would make the drift impossible.
-function psSingleQuote(s: string): string {
-  return `'${s.replace(/'/g, "''")}'`;
-}
-
 /** Create a symlink elevated (UAC) — the cross-volume file fallback. */
 function createSymlinkElevated(
   link: string,
   target: string,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  const inner = `$ErrorActionPreference='Stop'; New-Item -ItemType SymbolicLink -Path ${psSingleQuote(
+  const script = `$ErrorActionPreference='Stop'; New-Item -ItemType SymbolicLink -Path ${psQuote(
     link,
-  )} -Target ${psSingleQuote(target)} -Force | Out-Null`;
-  const launcher = `Start-Process -FilePath "powershell.exe" -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList @("-NoProfile","-ExecutionPolicy","Bypass","-Command", ${psSingleQuote(
-    inner,
-  )});`;
+  )} -Target ${psQuote(target)} -Force | Out-Null`;
   return new Promise((resolve) => {
-    const p = spawn(
-      "powershell.exe",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", launcher],
-      {
-        windowsHide: true,
-      },
-    );
+    const p = spawn("powershell.exe", psArgs.elevatedCommand(script), {
+      windowsHide: true,
+    });
     let err = "";
     p.stderr.on("data", (d) => (err += d.toString()));
     p.on("error", (e) => resolve({ ok: false, message: e.message }));

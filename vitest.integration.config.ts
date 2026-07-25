@@ -19,7 +19,9 @@ export default defineConfig({
     include: ["test/integration/**/*.test.ts"],
     coverage: {
       provider: "v8",
-      all: true,
+      // No `all` flag: vitest 4 dropped it, and the include globs below already
+      // pull in a file nothing imports — which is the whole point of the gate,
+      // and is verified by adding an unimported file and watching it fail at 0%.
       include: ["src/**"],
       exclude: ["src/core/**"],
       reportsDirectory: "coverage/integration",

@@ -221,6 +221,32 @@ describe("BridgeClient over a scripted transport", () => {
     expect(seen.length).toBe(1); // only the immediate replay
   });
 
+  it("survives a listener that throws, and still serves the ones after it", () => {
+    // Status is emitted from the socket's own close/data handlers — a Node
+    // emitter with no error handler on the path — so an unguarded throw here
+    // is an uncaught exception in the extension host, not a broken panel.
+    const seen: BridgeStatus[] = [];
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Subscribing is itself a delivery — onStatus replays the current status —
+    // so this must not throw out of the constructor of whatever is subscribing.
+    expect(() =>
+      client.onStatus(() => {
+        throw new Error("panel disposed mid-update");
+      }),
+    ).not.toThrow();
+    client.onStatus((s) => seen.push(s));
+
+    expect(() => open()).not.toThrow();
+    // The second listener saw the connect it would otherwise have been starved
+    // of by the first one throwing.
+    expect(seen.at(-1)?.connected).toBe(true);
+    expect(errors).toHaveBeenCalledWith(
+      "bridge: bridge status listener threw",
+      expect.objectContaining({ message: "panel disposed mid-update" }),
+    );
+    errors.mockRestore();
+  });
+
   it("dispose closes the connection, fails pending calls and stops reconnecting", async () => {
     open();
     const p = client.call("eval", {});

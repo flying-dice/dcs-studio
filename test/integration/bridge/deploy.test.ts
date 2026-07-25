@@ -9,14 +9,12 @@ vi.mock("vscode", () => vscodeMock());
 
 import * as vscode from "vscode";
 import {
-  type BridgeFs,
   eject,
   ejectCommand,
   inject,
   injectCommand,
   nodeBridgeFs,
   resolveDll,
-  useBridgeFs,
 } from "../../../src/bridge/deploy";
 import {
   builtDllPath,
@@ -50,23 +48,19 @@ const WRITE_DIR = "D:\\Saved Games\\DCS";
 
 let root: string;
 let io: MappedBridgeFs;
-let restore: () => void;
 
 function context(): vscode.ExtensionContext {
   return { extensionUri: vscode.Uri.file(EXT) } as unknown as vscode.ExtensionContext;
 }
 
-/** Replace the filesystem seam, keeping the mapping but failing one operation. */
+/** Keep the mapping but fail one operation. */
 function failWith(over: BridgeFsOverrides): void {
-  restore();
   io = mappedBridgeFs(root, over);
-  restore = useBridgeFs(io);
 }
 
 beforeEach(() => {
   root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "bridge-deploy-"));
   io = mappedBridgeFs(root);
-  restore = useBridgeFs(io);
   resetVscode({ config: { "dcsStudio.savedGamesPath": WRITE_DIR } });
   // A complete extension install: both prebuilt DLLs and the hook script.
   io.seed(shippedDllPath(EXT, GUI_DLL), "shipped-gui");
@@ -75,7 +69,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  restore();
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -88,34 +81,27 @@ describe("the default filesystem", () => {
     expect(nodeBridgeFs.mkdir).toBe(fs.promises.mkdir);
     expect(nodeBridgeFs.rm).toBe(fs.promises.rm);
   });
-
-  it("is restored when a substitution is undone", () => {
-    const undo = useBridgeFs({} as BridgeFs);
-    undo();
-    // Otherwise one spec's fake filesystem leaks into the next one's.
-    expect(resolveDll(context(), GUI_DLL)).toBe(shippedDllPath(EXT, GUI_DLL));
-  });
 });
 
 describe("resolveDll", () => {
   it("falls back to the DLL shipped with the extension", () => {
-    expect(resolveDll(context(), GUI_DLL)).toBe(shippedDllPath(EXT, GUI_DLL));
+    expect(resolveDll(context(), GUI_DLL, io)).toBe(shippedDllPath(EXT, GUI_DLL));
   });
 
   it("prefers a freshly built workspace DLL over the shipped one", () => {
     // Someone who just ran the build command has to get their own DLL, or every
     // bridge change they make appears to do nothing.
     io.seed(builtDllPath(EXT, GUI_DLL), "built-gui");
-    expect(resolveDll(context(), GUI_DLL)).toBe(builtDllPath(EXT, GUI_DLL));
+    expect(resolveDll(context(), GUI_DLL, io)).toBe(builtDllPath(EXT, GUI_DLL));
     // The choice is per DLL, so a half-finished build cannot pair a new GUI
     // bridge with a stale mission one.
-    expect(resolveDll(context(), MISSION_DLL)).toBe(shippedDllPath(EXT, MISSION_DLL));
+    expect(resolveDll(context(), MISSION_DLL, io)).toBe(shippedDllPath(EXT, MISSION_DLL));
   });
 });
 
 describe("inject", () => {
   it("copies both DLLs and the hook onto the layout DCS loads from", async () => {
-    await inject(context(), WRITE_DIR);
+    await inject(context(), WRITE_DIR, io);
     expect(io.read(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe("shipped-gui");
     expect(io.read(dllInstallPath(WRITE_DIR, MISSION_DLL))).toBe("shipped-mission");
     expect(io.read(hookInstallPath(WRITE_DIR))).toBe("-- hook");
@@ -125,15 +111,15 @@ describe("inject", () => {
     // A DCS write dir that has never had a mod installed has neither directory,
     // and every copy would fail with ENOENT.
     expect(io.exists(path.join(WRITE_DIR, "Mods", "tech", "DcsStudio", "bin"))).toBe(false);
-    await inject(context(), WRITE_DIR);
+    await inject(context(), WRITE_DIR, io);
     expect(io.exists(path.join(WRITE_DIR, "Mods", "tech", "DcsStudio", "bin"))).toBe(true);
     expect(io.exists(path.join(WRITE_DIR, "Scripts", "Hooks"))).toBe(true);
   });
 
   it("overwrites an older install rather than leaving it in place", async () => {
-    await inject(context(), WRITE_DIR);
+    await inject(context(), WRITE_DIR, io);
     io.seed(shippedDllPath(EXT, GUI_DLL), "shipped-gui-v2");
-    await inject(context(), WRITE_DIR);
+    await inject(context(), WRITE_DIR, io);
     // A stale DLL beside a fresh hook script speaks a different protocol.
     expect(io.read(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe("shipped-gui-v2");
   });
@@ -142,13 +128,13 @@ describe("inject", () => {
     // The old dcs_studio.dll binds port 25569 too: left behind, it answers
     // instead of the new GUI bridge and nothing the extension does lands.
     for (const stale of legacyInstallPaths(WRITE_DIR)) io.seed(stale, "old");
-    await inject(context(), WRITE_DIR);
+    await inject(context(), WRITE_DIR, io);
     for (const stale of legacyInstallPaths(WRITE_DIR)) expect(io.exists(stale)).toBe(false);
   });
 
   it("propagates a locked DLL so the caller can explain it", async () => {
     failWith({ copyFile: () => Promise.reject(lockedError()) });
-    await expect(inject(context(), WRITE_DIR)).rejects.toMatchObject({ code: "EBUSY" });
+    await expect(inject(context(), WRITE_DIR, io)).rejects.toMatchObject({ code: "EBUSY" });
   });
 
   it("still succeeds when a legacy artifact cannot be deleted", async () => {
@@ -158,17 +144,17 @@ describe("inject", () => {
     failWith({
       rm: (p, opts) => (p.endsWith("dcs_studio.dll") ? Promise.reject(lockedError()) : rm(p, opts)),
     });
-    await expect(inject(context(), WRITE_DIR)).resolves.toBeUndefined();
+    await expect(inject(context(), WRITE_DIR, io)).resolves.toBeUndefined();
     expect(io.read(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe("shipped-gui");
   });
 });
 
 describe("eject", () => {
   it("removes both DLLs, the hook and the legacy artifacts", async () => {
-    await inject(context(), WRITE_DIR);
+    await inject(context(), WRITE_DIR, io);
     for (const stale of legacyInstallPaths(WRITE_DIR)) io.seed(stale, "old");
 
-    await eject(WRITE_DIR);
+    await eject(WRITE_DIR, io);
 
     expect(io.exists(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe(false);
     expect(io.exists(dllInstallPath(WRITE_DIR, MISSION_DLL))).toBe(false);
@@ -179,13 +165,13 @@ describe("eject", () => {
   it("is safe to run when nothing was ever injected", async () => {
     // Extension shutdown ejects unconditionally; a user who never injected must
     // not see that fail — and nothing was left behind to report.
-    await expect(eject(WRITE_DIR)).resolves.toEqual([]);
+    await expect(eject(WRITE_DIR, io)).resolves.toEqual([]);
   });
 
   it("keeps removing the rest when one file is locked", async () => {
     // DCS holding the GUI DLL must not strand the hook script — the hook is
     // what makes DCS load the DLL again on the next run.
-    await inject(context(), WRITE_DIR);
+    await inject(context(), WRITE_DIR, io);
     const rm = io.rm;
     failWith({
       rm: (p, opts) => (p.endsWith(GUI_DLL) ? Promise.reject(lockedError()) : rm(p, opts)),
@@ -193,7 +179,7 @@ describe("eject", () => {
 
     // The survivor is reported rather than swallowed: the caller has to be able
     // to tell the user the bridge is still installed.
-    await expect(eject(WRITE_DIR)).resolves.toEqual([dllInstallPath(WRITE_DIR, GUI_DLL)]);
+    await expect(eject(WRITE_DIR, io)).resolves.toEqual([dllInstallPath(WRITE_DIR, GUI_DLL)]);
 
     expect(io.exists(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe(true);
     expect(io.exists(hookInstallPath(WRITE_DIR))).toBe(false);
@@ -203,12 +189,12 @@ describe("eject", () => {
   it("still removes the DLLs when the hook script cannot be deleted", async () => {
     // Every file in the rollback is attempted independently, so one that will
     // not go does not strand the others.
-    await inject(context(), WRITE_DIR);
+    await inject(context(), WRITE_DIR, io);
     const hook = hookInstallPath(WRITE_DIR);
     const rm = io.rm;
     failWith({ rm: (p, opts) => (p === hook ? Promise.reject(lockedError()) : rm(p, opts)) });
 
-    await expect(eject(WRITE_DIR)).resolves.toEqual([hookInstallPath(WRITE_DIR)]);
+    await expect(eject(WRITE_DIR, io)).resolves.toEqual([hookInstallPath(WRITE_DIR)]);
 
     expect(io.exists(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe(false);
     expect(io.exists(dllInstallPath(WRITE_DIR, MISSION_DLL))).toBe(false);
@@ -217,7 +203,7 @@ describe("eject", () => {
 
 describe("injectCommand", () => {
   it("injects into the configured write dir and says where it landed", async () => {
-    await injectCommand(context());
+    await injectCommand(context(), io);
     expect(io.exists(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe(true);
     expect(state.info).toEqual([expect.stringContaining(WRITE_DIR)]);
     expect(state.errors).toEqual([]);
@@ -225,7 +211,7 @@ describe("injectCommand", () => {
 
   it("tells the user to close DCS when a DLL is locked", async () => {
     failWith({ copyFile: () => Promise.reject(lockedError()) });
-    await injectCommand(context());
+    await injectCommand(context(), io);
     // A generic IO message would send them hunting a disk problem instead.
     expect(state.errors).toEqual([expect.stringContaining("DCS appears to be running")]);
     // No success toast — nothing was installed.
@@ -242,7 +228,7 @@ describe("injectCommand", () => {
         dest.endsWith(MISSION_DLL) ? Promise.reject(lockedError()) : copyFile(src, dest),
     });
 
-    await injectCommand(context());
+    await injectCommand(context(), io);
 
     expect(state.errors).toEqual([
       "Could not overwrite the bridge DLLs — DCS appears to be running. Close DCS and inject again. The install is now mixed: dcs_studio_gui.dll was replaced and the rest were not — inject again once the problem is fixed, because DCS loads them as a set.",
@@ -261,7 +247,7 @@ describe("injectCommand", () => {
     // build otherwise keeps deploying yesterday's binary in silence.
     io.seed(builtDllPath(EXT, GUI_DLL), "built-gui");
 
-    await injectCommand(context());
+    await injectCommand(context(), io);
 
     expect(state.info).toEqual([
       expect.stringContaining(
@@ -272,22 +258,22 @@ describe("injectCommand", () => {
 
   it("reports any other IO failure with the underlying reason", async () => {
     failWith({ mkdir: () => Promise.reject(new Error("ENOSPC: no space left on device")) });
-    await injectCommand(context());
+    await injectCommand(context(), io);
     expect(state.errors).toEqual(["Inject failed: ENOSPC: no space left on device"]);
     expect(state.info).toEqual([]);
   });
 
   it("reports a non-Error rejection rather than swallowing it", async () => {
     failWith({ copyFile: () => Promise.reject("access denied") });
-    await injectCommand(context());
+    await injectCommand(context(), io);
     expect(state.errors).toEqual(["Inject failed: access denied"]);
   });
 });
 
 describe("ejectCommand", () => {
   it("ejects from the configured write dir and confirms it", async () => {
-    await inject(context(), WRITE_DIR);
-    await ejectCommand();
+    await inject(context(), WRITE_DIR, io);
+    await ejectCommand(io);
     expect(io.exists(dllInstallPath(WRITE_DIR, GUI_DLL))).toBe(false);
     expect(state.info).toEqual([`Bridge ejected from ${WRITE_DIR}.`]);
   });
@@ -296,13 +282,13 @@ describe("ejectCommand", () => {
     // "Bridge ejected" while the GUI DLL is still there sends the user away
     // believing the extension's code is out of their DCS, and the next start
     // loads it again.
-    await inject(context(), WRITE_DIR);
+    await inject(context(), WRITE_DIR, io);
     const rm = io.rm;
     failWith({
       rm: (p, opts) => (p.endsWith(GUI_DLL) ? Promise.reject(lockedError()) : rm(p, opts)),
     });
 
-    await ejectCommand();
+    await ejectCommand(io);
 
     expect(state.warnings).toEqual([
       `Bridge only partly ejected from ${WRITE_DIR} — dcs_studio_gui.dll could not be removed. Close DCS and eject again.`,

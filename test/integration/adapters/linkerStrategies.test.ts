@@ -222,6 +222,16 @@ describe("cross-volume symlink elevation", () => {
     expect(spawner.calls[0].cmd).toBe("powershell.exe");
     const command = spawner.calls[0].args[spawner.calls[0].args.length - 1];
     expect(command).toContain("-Verb RunAs");
+    // The elevated child gets the same base flags as every other invocation.
+    // It used to be missing -NonInteractive — on the one call with no console
+    // to answer a prompt on — because this adapter kept its own flag list.
+    expect(spawner.calls[0].args.slice(0, 4)).toEqual([
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+    ]);
+    expect(command).toContain(`@("-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass"`);
     expect(command).toContain("New-Item -ItemType SymbolicLink");
     expect(command).toContain(link);
     expect(command).toContain(target);

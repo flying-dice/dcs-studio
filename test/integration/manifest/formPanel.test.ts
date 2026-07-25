@@ -10,6 +10,11 @@ import {
 
 vi.mock("vscode", () => vscodeMock());
 vi.mock("os", () => ({ homedir: () => "C:\\Users\\fallback" }));
+// The form resolves its roots through the same helpers the installer uses, and
+// those probe the disk to choose between DCS and DCS.openbeta — so which paths
+// "exist" is part of this panel's input.
+let existing: string[] = [];
+vi.mock("fs", () => ({ existsSync: (p: string) => existing.includes(p) }));
 
 import * as vscode from "vscode";
 import { ManifestFormPanel } from "../../../src/manifest/formPanel";
@@ -52,6 +57,7 @@ beforeEach(() => {
   // resetVscode() drops the panel list, and disposal is what frees the map.
   for (const panel of state.panels) panel.dispose();
   resetVscode();
+  existing = [];
   process.env.USERPROFILE = "C:\\Users\\pilot";
 });
 
@@ -85,6 +91,19 @@ describe("opening", () => {
     // Unset install stays an empty string — the form shows {GameInstall} as
     // unresolvable rather than resolving it against nothing.
     expect(bootstrap.roots.gameInstall).toBe("");
+  });
+
+  it("resolves an OpenBeta-only machine the way the installer will", () => {
+    // The form's resolved-destination line is a promise about where a link
+    // lands. This panel used to resolve {SavedGames} with its own copy of the
+    // rule, which had no DCS.openbeta fallback — so an author on OpenBeta was
+    // shown a folder the installer would never touch.
+    existing = ["C:\\Users\\pilot\\Saved Games\\DCS.openbeta"];
+    const { panel } = open();
+    const bootstrap = JSON.parse(
+      /window\.__BOOTSTRAP__ = (\{.*?\});/s.exec(panel.webview.html)?.[1] ?? "{}",
+    );
+    expect(bootstrap.roots.savedGames).toBe("C:\\Users\\pilot\\Saved Games\\DCS.openbeta");
   });
 
   it("falls back to the OS homedir when USERPROFILE is unset", () => {

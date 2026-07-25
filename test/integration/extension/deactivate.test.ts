@@ -25,7 +25,6 @@ vi.mock("../../../src/adapters/node/wsTransport", () => ({
 }));
 
 import * as vscode from "vscode";
-import { useBridgeFs } from "../../../src/bridge/deploy";
 import { activate, deactivate } from "../../../src/extension";
 
 // Shutdown. `deactivate()` is the last thing VS Code calls, and it is the only
@@ -45,7 +44,6 @@ const HOOK = `${SAVED_GAMES}\\Scripts\\Hooks\\DcsStudio.lua`;
 
 let root: string;
 let io: ReturnType<typeof mappedBridgeFs>;
-let restoreBridgeFs: () => void;
 
 /** The eject is fire-and-forget (nothing may block shutdown), so poll for it. */
 async function until(check: () => boolean, timeoutMs = 2000): Promise<void> {
@@ -63,39 +61,62 @@ function seedInjectedBridge(): void {
 beforeEach(() => {
   root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "dcs-studio-deactivate-"));
   io = mappedBridgeFs(root);
-  restoreBridgeFs = useBridgeFs(io);
   resetVscode({ config: { "dcsStudio.savedGamesPath": SAVED_GAMES } });
   transport.conns.length = 0;
 });
 
 afterEach(() => {
-  restoreBridgeFs();
   fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("deactivate", () => {
   it("ejects the bridge even when activation never got as far as the clients", async () => {
+    // A failed activation still leaves whatever a previous session injected, so
+    // shutdown has to work with nothing wired up. That is why the launcher is
+    // built at module load rather than in activate() — but a launcher built
+    // then can only know about the real filesystem, so drive this one through
+    // the same seam activate() would have used.
     seedInjectedBridge();
+    activate(
+      {
+        subscriptions: [],
+        extensionUri: vscode.Uri.file(EXT),
+        extensionPath: EXT,
+        extensionMode: vscode.ExtensionMode.Production,
+        globalState: { get: () => undefined, update: () => Promise.resolve() },
+        workspaceState: { get: () => undefined, update: () => Promise.resolve() },
+      } as unknown as vscode.ExtensionContext,
+      { bridgeIo: io },
+    );
 
     deactivate();
     await until(() => !io.exists(HOOK));
 
-    // A failed activation still leaves whatever a previous session injected;
-    // shutdown has to be safe to call with nothing wired up.
     expect(io.exists(GUI_DLL)).toBe(false);
     expect(io.exists(HOOK)).toBe(false);
   });
 
+  it("is safe to call when activate() never ran at all", () => {
+    // VS Code calls deactivate() regardless, including after an activation that
+    // threw on its first statement. Nothing is wired up, and it must not throw
+    // on the way out — it falls back to the real filesystem, where the paths
+    // this suite seeds do not exist.
+    expect(() => deactivate()).not.toThrow();
+  });
+
   it("closes the bridge sockets and ejects the DLLs when the window goes away", async () => {
     seedInjectedBridge();
-    activate({
-      subscriptions: [],
-      extensionUri: vscode.Uri.file(EXT),
-      extensionPath: EXT,
-      extensionMode: vscode.ExtensionMode.Production,
-      globalState: { get: () => undefined, update: () => Promise.resolve() },
-      workspaceState: { get: () => undefined, update: () => Promise.resolve() },
-    } as unknown as vscode.ExtensionContext);
+    activate(
+      {
+        subscriptions: [],
+        extensionUri: vscode.Uri.file(EXT),
+        extensionPath: EXT,
+        extensionMode: vscode.ExtensionMode.Production,
+        globalState: { get: () => undefined, update: () => Promise.resolve() },
+        workspaceState: { get: () => undefined, update: () => Promise.resolve() },
+      } as unknown as vscode.ExtensionContext,
+      { bridgeIo: io },
+    );
     expect(transport.conns).toHaveLength(2);
 
     deactivate();

@@ -56,31 +56,13 @@ export const nodeBridgeFs: BridgeFs = {
   rm: fsp.rm,
 };
 
-// TODO: clean-code - 0.7 - COUPLING (#41): module-level mutable state standing in for
-// injection. Every consumer of `bridgeFs()` shares one slot, so a test that
-// swaps it and does not restore leaks into the next, and two features cannot
-// hold different filesystems. The rest of the extension takes its ports as
-// constructor arguments from the composition root; these commands should too —
-// they are functions today only because they register as command handlers.
-let io: BridgeFs = nodeBridgeFs;
-
-/** The filesystem in force. `launch.ts` probes DCS.exe through the same seam. */
-export function bridgeFs(): BridgeFs {
-  return io;
-}
-
-/** Swap the filesystem seam; returns a function that puts the previous one back. */
-export function useBridgeFs(next: BridgeFs): () => void {
-  const previous = io;
-  io = next;
-  return () => {
-    io = previous;
-  };
-}
-
 /** The DLL to install: the freshly built workspace artifact if present, else
  *  the prebuilt one shipped in the extension. */
-export function resolveDll(ctx: vscode.ExtensionContext, name: BridgeDllName): string {
+export function resolveDll(
+  ctx: vscode.ExtensionContext,
+  name: BridgeDllName,
+  io: BridgeFs,
+): string {
   const root = ctx.extensionUri.fsPath;
   return selectDll(root, name, io.existsSync(builtDllPath(root, name)));
 }
@@ -91,7 +73,7 @@ function resolveHook(ctx: vscode.ExtensionContext): string {
 
 /** Delete stale single-DLL-era artifacts (best-effort — a running DCS holds
  * the old DLL just like the new ones). */
-async function cleanupLegacy(writeDir: string): Promise<void> {
+async function cleanupLegacy(writeDir: string, io: BridgeFs): Promise<void> {
   for (const p of legacyInstallPaths(writeDir)) {
     await io.rm(p, { force: true }).catch(() => undefined);
   }
@@ -117,10 +99,14 @@ export class InjectError extends Error {
 
 /** Copy both DLLs + the hook into `writeDir`. Throws an InjectError on any IO
  * failure (incl. a locked DLL), naming what had already been replaced. */
-export async function inject(ctx: vscode.ExtensionContext, writeDir: string): Promise<void> {
+export async function inject(
+  ctx: vscode.ExtensionContext,
+  writeDir: string,
+  io: BridgeFs,
+): Promise<void> {
   const copies = [
     ...BRIDGE_DLLS.map((name) => ({
-      src: resolveDll(ctx, name),
+      src: resolveDll(ctx, name, io),
       dest: dllInstallPath(writeDir, name),
     })),
     { src: resolveHook(ctx), dest: hookInstallPath(writeDir) },
@@ -136,13 +122,13 @@ export async function inject(ctx: vscode.ExtensionContext, writeDir: string): Pr
   } catch (e) {
     throw new InjectError(e, installed);
   }
-  await cleanupLegacy(writeDir);
+  await cleanupLegacy(writeDir, io);
 }
 
 /** The DLLs taken from the workspace build rather than the shipped set. */
-export function builtDlls(ctx: vscode.ExtensionContext): BridgeDllName[] {
+export function builtDlls(ctx: vscode.ExtensionContext, io: BridgeFs): BridgeDllName[] {
   const root = ctx.extensionUri.fsPath;
-  return BRIDGE_DLLS.filter((name) => resolveDll(ctx, name) === builtDllPath(root, name));
+  return BRIDGE_DLLS.filter((name) => resolveDll(ctx, name, io) === builtDllPath(root, name));
 }
 
 /**
@@ -150,7 +136,7 @@ export function builtDlls(ctx: vscode.ExtensionContext): BridgeDllName[] {
  * is attempted independently, so one that will not go does not strand the
  * others; the ones that survived are returned rather than swallowed.
  */
-export async function eject(writeDir: string): Promise<string[]> {
+export async function eject(writeDir: string, io: BridgeFs): Promise<string[]> {
   const left: string[] = [];
   const targets = [
     ...BRIDGE_DLLS.map((name) => dllInstallPath(writeDir, name)),
@@ -164,10 +150,10 @@ export async function eject(writeDir: string): Promise<string[]> {
 }
 
 /** Command: inject into the resolved Saved Games dir, with friendly errors. */
-export async function injectCommand(ctx: vscode.ExtensionContext): Promise<void> {
+export async function injectCommand(ctx: vscode.ExtensionContext, io: BridgeFs): Promise<void> {
   const writeDir = savedGamesDir();
   try {
-    await inject(ctx, writeDir);
+    await inject(ctx, writeDir, io);
   } catch (e) {
     // `inject` wraps everything it can throw, so this is always an InjectError:
     // its message is the underlying failure's, and it names what had landed.
@@ -180,13 +166,13 @@ export async function injectCommand(ctx: vscode.ExtensionContext): Promise<void>
     void showError(`Inject failed: ${failure.message}${note}`, e);
     return;
   }
-  void vscode.window.showInformationMessage(injectedMessage(writeDir, builtDlls(ctx)));
+  void vscode.window.showInformationMessage(injectedMessage(writeDir, builtDlls(ctx, io)));
 }
 
 /** Command: eject the bridge from the resolved Saved Games dir. */
-export async function ejectCommand(): Promise<void> {
+export async function ejectCommand(io: BridgeFs): Promise<void> {
   const writeDir = savedGamesDir();
-  const left = await eject(writeDir);
+  const left = await eject(writeDir, io);
   if (left.length) {
     // A running DCS holds its DLLs open: claiming a clean uninstall would send
     // the user looking for a bridge that is still loaded on the next start.

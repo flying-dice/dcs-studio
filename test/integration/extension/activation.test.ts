@@ -53,7 +53,6 @@ vi.mock("../../../src/install/shortcut", async (importOriginal) => ({
 
 import * as vscode from "vscode";
 import { ConsolePanel } from "../../../src/bridge/consolePanel";
-import { useBridgeFs } from "../../../src/bridge/deploy";
 import { DocsPanel } from "../../../src/docs/docsPanel";
 import { activate } from "../../../src/extension";
 import { MyModsPanel } from "../../../src/install/myModsPanel";
@@ -107,7 +106,6 @@ const dataDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "dcs-studio-activation
 /** The temp root the mapped bridge filesystem writes DCS paths into. */
 let bridgeRoot: string;
 let io: ReturnType<typeof mappedBridgeFs>;
-let restoreBridgeFs: () => void;
 
 let contexts: vscode.ExtensionContext[] = [];
 let globalStore: Map<string, unknown>;
@@ -144,7 +142,7 @@ function makeContext(): vscode.ExtensionContext {
 /** Activate and settle the async work activation kicks off (skills, panels). */
 async function activateExtension(): Promise<vscode.ExtensionContext> {
   const ctx = makeContext();
-  activate(ctx);
+  activate(ctx, { bridgeIo: io });
   await flush();
   return ctx;
 }
@@ -179,7 +177,6 @@ function doc(fsPath: string, scheme = "file") {
 beforeEach(() => {
   bridgeRoot = fs.mkdtempSync(nodePath.join(os.tmpdir(), "dcs-studio-bridge-"));
   io = mappedBridgeFs(bridgeRoot);
-  restoreBridgeFs = useBridgeFs(io);
   // A configured Saved Games path keeps the first-run nudge (asserted on its
   // own further down) out of every other test's message queue.
   resetVscode({
@@ -211,7 +208,6 @@ afterEach(() => {
   // owns the bridge sockets. Both go away with the window in production.
   for (const panel of [...state.panels]) panel.dispose();
   for (const ctx of contexts) for (const d of ctx.subscriptions) d.dispose();
-  restoreBridgeFs();
   vi.unstubAllGlobals();
   fs.rmSync(bridgeRoot, { recursive: true, force: true });
 });

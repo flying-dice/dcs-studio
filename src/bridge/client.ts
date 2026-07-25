@@ -80,7 +80,10 @@ export class BridgeClient {
 
   onStatus(fn: (s: BridgeStatus) => void): vscode.Disposable {
     this.listeners.add(fn);
-    fn(this.status);
+    // The immediate replay goes through the same guard as a live update: a
+    // subscriber that throws on its first status must not take down whatever is
+    // constructing it, which during activation is the extension host itself.
+    this.notify(fn, this.status);
     return new vscode.Disposable(() => this.listeners.delete(fn));
   }
 
@@ -380,14 +383,22 @@ export class BridgeClient {
     this.pending.clear();
   }
 
-  // TODO: clean-code - 0.55 - PANIC (#42): this loop runs from the socket's data,
-  // error and close handlers with no try/catch on the path, which makes it the
-  // one place in the extension where a listener throw becomes an UNCAUGHT
-  // EXCEPTION — the host, not a panel. No listener throws today; the ping path
-  // at the emit() above already wraps the identical call, so the hazard was
-  // seen once and not generalised. Wrap the body and log.
+  // Status reaches the status bar, the sidebar and the console panel from the
+  // socket's own data/error/close handlers — a Node event emitter with no error
+  // handler on the path. So a listener that throws here does not fail one
+  // panel: it is an uncaught exception in the extension host. Each listener is
+  // isolated for the same reason, so a subscriber that breaks cannot starve the
+  // ones after it in the set.
   private emit(patch: Partial<BridgeStatus>): void {
     this.status = { ...this.status, ...patch };
-    for (const l of this.listeners) l(this.status);
+    for (const l of this.listeners) this.notify(l, this.status);
+  }
+
+  private notify(fn: (s: BridgeStatus) => void, status: BridgeStatus): void {
+    try {
+      fn(status);
+    } catch (e) {
+      console.error(`${this.label}: bridge status listener threw`, e);
+    }
   }
 }

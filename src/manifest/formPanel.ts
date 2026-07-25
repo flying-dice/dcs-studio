@@ -1,6 +1,6 @@
 import { win32 as path } from "node:path";
-import * as os from "os";
 import * as vscode from "vscode";
+import { gameInstallDir, savedGamesDir } from "../bridge/paths";
 import { renderWebviewHtml } from "../webview/html";
 
 // The manifest authoring FORM as a companion webview opened beside the normal
@@ -65,19 +65,13 @@ export class ManifestFormPanel {
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
   }
 
-  // TODO: clean-code - 0.6 - DRY (#45): this re-implements savedGamesDir() and
-  // gameInstallDir() from src/bridge/paths.ts, and the copies have already
-  // disagreed: paths.ts falls back to Saved Games\DCS.openbeta when \DCS does
-  // not exist, this one never does. So the dest preview in the manifest form
-  // resolves {SavedGames} to a folder the installer will not use on an
-  // OpenBeta-only machine. Call the shared helpers.
+  // The same resolution the installer uses, not a second copy of it: the form's
+  // resolved-destination preview is a promise about where a link will land, and
+  // a preview that disagrees with the installer is worse than none. The copy
+  // this replaced skipped the Saved Games\DCS.openbeta fallback, so on an
+  // OpenBeta-only machine it showed the author a folder nothing would use.
   private roots(): { savedGames: string; gameInstall: string } {
-    const cfg = vscode.workspace.getConfiguration("dcsStudio");
-    const home = process.env.USERPROFILE || os.homedir();
-    const savedGames =
-      cfg.get<string>("savedGamesPath")?.trim() || path.join(home, "Saved Games", "DCS");
-    const gameInstall = cfg.get<string>("gameInstallPath")?.trim() || "";
-    return { savedGames, gameInstall };
+    return { savedGames: savedGamesDir(), gameInstall: gameInstallDir() ?? "" };
   }
 
   private async onMessage(msg: { type: string; text?: string }): Promise<void> {
