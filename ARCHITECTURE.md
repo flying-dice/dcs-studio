@@ -70,6 +70,7 @@ port files, when they carry behavior.
 | `registry.ts` | `RegistryPort` | Windows registry value queries (reg.exe) |
 | `env.ts` | `EnvPort` | homedir/userProfile/programFiles candidates |
 | `clock.ts` | `ClockPort` | `now()` (Date.now) — inject wherever time feeds logic |
+| `scheduler.ts` | `SchedulerPort` | `setInterval`/`setTimeout` + clears over an opaque `TimerHandle` (node timers) — inject wherever a poll loop, backoff or timeout feeds logic |
 
 Slice work MAY add new port files here when a genuine boundary is missing; never widen
 an existing port with adapter-specific details.
@@ -99,14 +100,43 @@ an existing port with adapter-specific details.
 
 ## Testing & coverage
 
-- Framework: **vitest** + v8 coverage. Tests live in `test/**/*.test.ts` (outside the
-  tsc `src` build). `npm test` runs vitest; `npm run coverage` enforces thresholds.
-- **Coverage gate: 100% lines / functions / statements / branches on `src/core/**`.**
-  Adapters are excluded from the gate (thin, I/O-bound) but may be tested with fakes.
+Three layers, each runnable on its own command, each gating its own coverage at
+**100% per file** over an include set that does not overlap the others'. A gap in
+one layer can therefore never be masked by another layer happening to execute the
+same line.
+
+| Layer | Command | Tests live in | Gates coverage of |
+|---|---|---|---|
+| Unit | `npm run test:unit` | `test/unit/**` | `src/core/**`, `media/*-core.js` |
+| Integration | `npm run test:integration` | `test/integration/**` | `src/**` minus the hexagon |
+| E2E | `npm run test:e2e` | `tests/**` | `media/*.js` in real Chromium |
+
+`npm test` runs all three in sequence; `npm run coverage` does the same with each
+gate enforced. CI runs one job per layer, plus `cargo llvm-cov` for the Rust bridge
+and a Windows job that re-runs the headless layers on the shipping OS.
+
+- **Unit** is pure logic: no filesystem, no child processes, no `vscode`. Anything
+  needing a seam belongs in integration.
+- **Integration** means the seams are real code, not that the OS is. `vscode` is a
+  shared test double (`test/integration/support/vscode.ts`) and process/socket
+  seams are injected, so the layer stays headless — no VS Code, no display, no DCS.
+  Adapters were once excluded from the gate as "thin, I/O-bound"; they had grown
+  well past that, and the panels they sat beside were 86–99% decision logic. They
+  are now gated like everything else.
+- **E2E** drives the real `media/*.js` in Chromium against the `previews/` harness,
+  with V8 coverage merged and gated by `scripts/e2e-coverage.mjs`.
+- Ports with more than one implementation — or with a fake that core is tested
+  against — carry a shared contract suite under `test/support/`, run against every
+  implementation. That is what stops a fake drifting from the adapter it stands in
+  for.
 - Coverage-ignore comments are forbidden except for provably unreachable defensive
   lines, each with a justification comment. Prefer restructuring so the line is
   reachable in a test.
 - The boundary test walks `src/core` and fails on any forbidden import.
+- The domain layer resolves paths with explicit Windows semantics
+  (`import { win32 as path }`) regardless of host, because DCS is Windows-only and
+  bare `node:path` makes those rules change shape with the developer's OS. Code
+  that hands a path straight to a real `node:fs` syscall keeps native paths.
 
 ## Conventions
 
