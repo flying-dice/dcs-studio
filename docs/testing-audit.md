@@ -294,10 +294,15 @@ not overlap the others'.
 
 | Layer | Command | Tests | Coverage | Gate |
 |---|---|---|---|---|
-| Unit | `npm run test:unit` | 777 | **100%** stmts/branch/funcs/lines | ✅ green |
-| Integration | `npm run test:integration` | 71 | 11.2% stmts / 11.7% lines | ❌ red — work outstanding |
+| Unit | `npm run test:unit` | 806 | **100%** stmts/branch/funcs/lines | ✅ green |
+| Integration | `npm run test:integration` | 162 | 18.4% stmts / 18.9% lines | ❌ red — work outstanding |
 | E2E | `npm run test:e2e` | 91 | 80.8% stmts of `media/*.js` | ❌ red — work outstanding |
 | Rust | `cargo llvm-cov --workspace` | 33 | 77.3% lines / 66.9% functions | ❌ red — work outstanding |
+
+Modules already at 100% in the integration layer: `adapters/github/marketplace.ts`,
+`adapters/node/fs.ts`, `adapters/node/clock.ts`, `adapters/node/env.ts`,
+`adapters/node/registry.ts`, `adapters/vscode/installRoots.ts`, `bridge/paths.ts`,
+`install/dataDir.ts`, `webview/html.ts`, `errors.ts`, `marketplace/panel.ts`.
 
 `npm test` runs all three TypeScript layers in sequence; `npm run coverage` does
 the same with each gate enforced.
@@ -338,6 +343,22 @@ the same with each gate enforced.
   covered. `resolveDest`'s dead third branch was removed rather than tested
   around; the UMD preamble and a regex zero-length-match guard carry scoped
   ignores with justifications, per the rule in `ARCHITECTURE.md`.
+- **S1 piloted — presenter extraction.** `MarketplacePanel` was 255 lines of
+  which 16 touched `vscode`; the sign-in state machine, product cache, install
+  guards and error mapping now live in `core/app/marketplacePresenter.ts`,
+  unit-tested to 100%. Editor work is *described* as a typed effect the panel
+  performs, so tests assert on values rather than spying on a mocked API. The
+  panel is down to 129 lines and integration-tested through the double.
+- **S5 generalised — port contract suites.** `productInvariants` now runs
+  against the GitHub backend as well as the mock, and a new
+  `FileSystemPort` contract runs the real node adapter against the clauses core
+  relies on (parent-directory creation on write/copy, recursive and
+  missing-path-tolerant remove). The in-memory fakes core is tested against are
+  now checked claims rather than hopeful ones.
+- **A shared `vscode` test double** (`test/integration/support/vscode.ts`):
+  configuration resolves against a settings map, EventEmitter dispatches, and
+  webview panels record what was posted and expose their message handler. This
+  is what unblocks the rest of the integration layer.
 - The e2e console spec no longer fails on browser-chrome noise (a full Chromium
   requests `/favicon.ico`; the headless shell does not), and the Playwright
   config accepts a `PW_CHROMIUM_PATH` override for images that ship their own
@@ -348,21 +369,23 @@ the same with each gate enforced.
 Ordered as the work should be picked up. The three red gates above are the
 acceptance criteria.
 
-1. **Integration layer to 100% (G5).** The largest remaining piece, ~2,300
-   statements. Needs, in order:
-   - a shared `vscode` test double in `test/integration/support/`, generalising
-     the one-off `vi.mock("vscode")` in `bridge/client.test.ts` — this is what
-     unblocks everything else in the layer;
-   - **S1, presenter extraction**: panels are 86–99% decision logic welded to a
-     thin VS Code shell. Move that logic to pure presenters under the unit gate
-     and leave panels as shells the integration layer covers. Pilot one panel
-     (marketplace or publish) before rolling out;
+1. **Integration layer to 100% (G5).** Still the largest piece, ~1,850
+   statements outstanding. The double and the presenter pattern are in place;
+   what remains is applying them:
+   - roll the presenter extraction out across the other panels, heaviest
+     first — `myModsPanel` (305), `consolePanel` (309), `missionPanel` (187),
+     `logPanel` (165), `setup/panel` (163), `newProjectPanel` (154),
+     `skillsPanel` (143), `publishPanel` (134), `navView` (121),
+     `formPanel` (116), `docsPanel` (75);
    - **S2, a `SchedulerPort`** for `setInterval`/`setTimeout`, so
      `debug/adapter.ts` (512 lines, the largest untested unit in the repo) and
      `BridgeClient` become deterministic. The 30-second breakpoint
      auto-continue is a safety mechanism — if it regresses, a crashed editor
      freezes the user's sim — and nothing tests it;
-   - injected `spawn`/`fs`/`net` seams so the node adapters are coverable.
+   - injected `spawn` seams for `gh.ts`, `git.ts` and `sevenZip.ts`; their argv
+     is already covered in core, so only the spawn/error mapping is left;
+   - `extension.ts` activation, which the contribution contract checks
+     statically but nothing executes.
 2. **E2E layer to 100% (G4).** Harnesses for `publish.js`, `setup.js` and
    `newproject.js`, which sit at 0% — publish performs irreversible GitHub
    operations and setup gates first-run. These three views address elements by
