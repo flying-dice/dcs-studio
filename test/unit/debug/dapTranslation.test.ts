@@ -1,9 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type {
-  DebugFrame,
-  DebugSnapshot,
-  DebugState,
-} from "../../../src/core/domain/bridgeProtocol";
 import {
   actionForResume,
   INITIAL_TRACKING,
@@ -22,6 +17,7 @@ import {
   toStackTraceResponse,
   toVariablesResponse,
 } from "../../../src/core/domain/dapTranslation";
+import type { DebugFrame, DebugSnapshot, DebugState } from "../../../src/core/domain/debugProtocol";
 
 // ── chunkname ↔ path ──
 

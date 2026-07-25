@@ -154,7 +154,7 @@ mod tests {
 
     /// Every type name a manifest can write maps to a JSON-Schema type, and
     /// anything else degrades to the permissive `{}` — a generated document an
-    /// OpenRPC client rejects is worse than one that says "any". `integer` and
+    /// `OpenRPC` client rejects is worse than one that says "any". `integer` and
     /// `object` have no binding in either bridge today; they are part of the
     /// documented vocabulary, so the mapping has to hold when one appears.
     #[test]

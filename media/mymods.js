@@ -153,7 +153,7 @@
             <div class="meta">
               <span>${esc(m.repo)}</span>
               <span>${esc(m.tag)}</span>
-              <span class="pill ${m.enabled ? "on" : "off"}" data-testid="links-pill">${m.enabled ? `${m.links} link${m.links === 1 ? "" : "s"}` : "disabled"}</span>
+              <span class="pill ${m.enabled ? "on" : "off"}" data-testid="links-pill">${m.enabled ? `${m.linkCount} link${m.linkCount === 1 ? "" : "s"}` : "disabled"}</span>
               ${prog ? `<span class="progress" data-testid="mod-progress"><span class="spin">${ICO.refresh}</span> ${esc(prog)}</span>` : ""}
             </div>
           </div>

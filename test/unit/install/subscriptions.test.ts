@@ -18,6 +18,8 @@ const sub = (over: Partial<Subscription> = {}): Subscription => ({
   dir: "D:\\data\\Owner__Repo",
   enabled: false,
   links: [],
+  bundles: [],
+  symlinks: [],
   entrypoints: [],
   missionScripts: [],
   ...over,
@@ -67,7 +69,7 @@ describe("toModDto", () => {
       tag: "v1.0.0",
       enabled: true,
       dir: "D:\\data\\Owner__Repo",
-      links: 2,
+      linkCount: 2,
       entrypoints: [{ id: "srs", name: "SRS", exe: "Server/SR.exe" }],
     });
   });

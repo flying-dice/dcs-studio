@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   destRelative,
@@ -7,19 +5,13 @@ import {
   ROOT_TOKENS,
   staysUnder,
 } from "../../../src/core/domain/pathContainment";
+import { CONTAINMENT_CASES as CASES } from "../../support/pathContainmentCases";
 
 // The containment predicate a hostile dcs-studio.toml is measured against
 // (issue #16). The cases are not written here: all three implementations of the
 // rule — this one, the webview's copy in media/manifest-core.js, and the in-sim
 // bridge's path_guard.rs — read the same table, so a case cannot be added to
 // one guard's tests and forgotten in another's.
-
-export const CASES: {
-  accept: { path: string; why: string }[];
-  reject: { path: string; why: string }[];
-} = JSON.parse(
-  readFileSync(join(resolve(__dirname, "../../.."), "spec", "path-containment.cases.json"), "utf8"),
-);
 
 describe("staysUnder — the shared case table", () => {
   it("carries cases in both directions", () => {

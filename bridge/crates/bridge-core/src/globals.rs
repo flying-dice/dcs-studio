@@ -173,7 +173,10 @@ mod tests {
         // non-UTF-8 byte string. The dump still carries everything else on the
         // same root, which is the point of skipping rather than failing.
         assert!(!out.contains("log[1]") && !out.contains("log.1"), "{out}");
-        assert!(out.is_ascii(), "a raw byte key leaked into the dump:\n{out}");
+        assert!(
+            out.is_ascii(),
+            "a raw byte key leaked into the dump:\n{out}"
+        );
         assert!(out.contains("function log.write() end"), "{out}");
 
         // An absent curated root (no `net`/`Export`/`lfs` here) is skipped.

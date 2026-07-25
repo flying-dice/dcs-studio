@@ -2,12 +2,12 @@ import { readFileSync } from "node:fs";
 import { win32 as path } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
-import DcsManifestCore from "../../../media/manifest-core.js";
+import DcsManifestCore, { type ManifestArraySection } from "../../../media/manifest-core.js";
 import {
   destStaysUnder as domainDestStaysUnder,
   staysUnder as domainStaysUnder,
 } from "../../../src/core/domain/pathContainment";
-import { CASES as CONTAINMENT } from "../core/pathContainment.test";
+import { ALL_CONTAINMENT_PATHS } from "../../support/pathContainmentCases";
 
 const {
   parseVal,
@@ -180,7 +180,10 @@ describe("parseToml — [project] scalars are normalised to text", () => {
   ])("keeps a bare integer %s as its literal text", (key) => {
     const model = parseToml(`[project]\n${key} = 2024\n`);
     expect(model.project[key]).toBe("2024");
-    expect(() => model.project[key].trim()).not.toThrow();
+    // The `as string` is the claim under test: a consumer that believes the
+    // modeled fields are text calls .trim() on them, and this is what would
+    // throw if the parser handed back the integer TOML says it is.
+    expect(() => (model.project[key] as string).trim()).not.toThrow();
   });
 
   it.each([
@@ -220,7 +223,7 @@ describe("parseToml — [project] scalars are normalised to text", () => {
   // splitDest() calls .startsWith() on symlink.dest. render() assigns
   // state.model BEFORE building the HTML, so one numeric row leaves the form
   // permanently blank and every later message re-throws on the same row.
-  it.each([
+  it.each<[ManifestArraySection, string]>([
     ["bundle", "path"],
     ["symlink", "source"],
     ["symlink", "dest"],
@@ -235,8 +238,11 @@ describe("parseToml — [project] scalars are normalised to text", () => {
     ["mission_script", "run_on"],
   ])("keeps a bare integer [[%s]].%s as its literal text", (section, key) => {
     const model = parseToml(`[[${section}]]\n${key} = 2024\n`);
-    expect(model[section][0][key]).toBe("2024");
-    expect(() => model[section][0][key].trim()).not.toThrow();
+    const row = model[section][0];
+    expect(row[key]).toBe("2024");
+    // As above: the cast states what every consumer of a modeled row assumes,
+    // and the assertion is that the runtime value actually honours it.
+    expect(() => (row[key] as string).trim()).not.toThrow();
   });
 
   it("survives a fully numeric manifest without a type error", () => {
@@ -362,7 +368,7 @@ describe("staysUnder (webview copy)", () => {
   // src/core/domain/pathContainment.ts, and the cases come from the table all
   // three implementations of the rule are held to — so this asserts the copy
   // agrees rather than re-litigating (or quietly under-covering) the rules.
-  const CASES = [...CONTAINMENT.accept, ...CONTAINMENT.reject].map((c) => c.path);
+  const CASES = ALL_CONTAINMENT_PATHS;
 
   it("gives the same verdict as the domain predicate for every case", () => {
     for (const c of CASES) {

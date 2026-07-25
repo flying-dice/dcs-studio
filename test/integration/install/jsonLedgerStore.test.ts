@@ -32,6 +32,8 @@ const sub: Subscription = {
   dir: winPath.join("D:", "data", "Owner__Repo"),
   enabled: true,
   links: [{ id: "Owner/Repo:0", dest: "C:\\SG\\DCS\\Scripts\\X" }],
+  bundles: [{ path: "Scripts/X" }],
+  symlinks: [{ source: "Scripts/X", dest: "{SavedGames}/Scripts/X" }],
   entrypoints: [],
   missionScripts: [],
 };

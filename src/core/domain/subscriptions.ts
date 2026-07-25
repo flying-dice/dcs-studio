@@ -40,11 +40,8 @@ export interface ModDto {
   tag: string;
   enabled: boolean;
   dir: string;
-  // TODO: clean-code - 0.6 - NAMING (#47): `links` on the DTO is a COUNT, while
-  // `links` on Subscription is the array itself. Same name, same conceptual
-  // field, two types — `s.links.length` vs `dto.links` is the only thing
-  // telling them apart at a call site. Name this `linkCount`.
-  links: number;
+  /** How many links the mod has in the DCS folders — a count, not the links. */
+  linkCount: number;
   /** Declared executable entrypoints (so the webview can offer Launch/Stop). */
   entrypoints: ManifestEntrypoint[];
 }
@@ -57,7 +54,7 @@ export function toModDto(s: Subscription): ModDto {
     tag: s.tag,
     enabled: s.enabled,
     dir: s.dir,
-    links: s.links.length,
+    linkCount: s.links.length,
     // Defensive: ledgers written before entrypoints existed have no field.
     entrypoints: s.entrypoints ?? [],
   };

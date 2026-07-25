@@ -69,7 +69,7 @@ test.describe("My Mods — entrypoints", () => {
           tag: "v1.0.0",
           enabled: true,
           dir: "D:\\d\\Owner__DCS-SRS",
-          links: 1,
+          linkCount: 1,
           entrypoints: [{ id: "srs-server", name: "SRS Server", exe: "Server/SR-Server.exe" }],
         },
       ],

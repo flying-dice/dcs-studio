@@ -292,7 +292,65 @@ fn an_undrained_request_times_out_instead_of_hanging_the_caller() {
         "an undrained request must fail, got {status}"
     );
 
+    // The same on the WebSocket, where the editor lives: the request expires
+    // on the server's own timeout and is simply never answered, and — the part
+    // that matters — the SESSION survives it, so the editor's next request is
+    // still served once the sim resumes pumping.
+    let mut ws = connect_ws(bridge.port);
+    ws.send(&rpc("expired", "echo", "{}")).expect("send");
+    assert!(
+        ws.await_id("expired", Duration::from_secs(3)).is_none(),
+        "an undrained WS request must expire rather than be answered late"
+    );
+
+    ws.send(&rpc("after", "echo", "{}")).expect("send after");
+    assert!(
+        bridge
+            .pump_until(
+                || ws.await_id("after", Duration::from_millis(50)),
+                Duration::from_secs(10)
+            )
+            .is_some(),
+        "the session must outlive one expired request"
+    );
+
     bridge.shutdown(None);
+}
+
+/// `GET /ws` is only a WebSocket when the client asks for the upgrade. A plain
+/// GET — a browser, a curl, an agent probing the port for `/health` and
+/// mistyping it — must be refused with a status, not take the actix worker
+/// down: this server has one worker, and losing it loses the bridge for the
+/// rest of the DCS session.
+#[test]
+#[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+fn a_plain_get_on_the_websocket_route_is_refused_and_the_bridge_survives() {
+    let _serial = serially();
+    let bridge = Bridge::start(5);
+
+    let (status, _body) = get(bridge.port, "/ws");
+    assert!(
+        status.contains("400"),
+        "a non-upgrade GET /ws must be refused, got {status}"
+    );
+
+    // The bridge is still serving: the refusal cost one request, nothing more.
+    let (health, body) = get(bridge.port, "/health");
+    assert!(health.contains("200"), "{health}");
+    assert!(body.contains(r#""status":"OK""#), "{body}");
+    let mut ws = connect_ws(bridge.port);
+    ws.send(&rpc("still", "echo", "{}")).expect("send");
+    assert!(
+        bridge
+            .pump_until(
+                || ws.await_id("still", Duration::from_millis(50)),
+                Duration::from_secs(10)
+            )
+            .is_some(),
+        "a real upgrade still works after the refusal"
+    );
+
+    bridge.shutdown(Some(false));
 }
 
 /// The WebSocket read loop is the editor's long-lived connection. Requests,
@@ -429,10 +487,16 @@ fn reserving_across_a_mission_reload_reuses_the_server_and_drops_stale_requests(
     assert!(!bridge.reserve(served), "the same port reuses the server");
 
     // Strand a request in that server's queue: the sim never pumps it, which
-    // is exactly what a mission ending mid-request looks like.
+    // is exactly what a mission ending mid-request looks like. Both transports
+    // strand — the editor's WebSocket and an MCP tool's POST — and both callers
+    // have to be let go rather than left waiting on the new mission.
     let mut ws = connect_ws(served);
     ws.send(&rpc("stranded", "echo", "{}")).expect("send");
-    // Give the read loop a moment to enqueue it before the reload.
+    let (posted, post_answer) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = posted.send(post_rpc(served, &rpc("stranded-post", "echo", "{}")));
+    });
+    // Give the read loop a moment to enqueue both before the reload.
     std::thread::sleep(Duration::from_millis(200));
 
     // The next mission's serve reuses the running server — even though it asks
@@ -445,6 +509,15 @@ fn reserving_across_a_mission_reload_reuses_the_server_and_drops_stale_requests(
     assert!(
         ws.await_id("stranded", Duration::from_secs(1)).is_none(),
         "the stranded request must be dropped, not answered later"
+    );
+    // The POSTing caller is told the request died with its mission, promptly —
+    // not left holding the connection until its own timeout.
+    let (status, _body) = post_answer
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the stranded POST must be released, not left hanging");
+    assert!(
+        status.contains("500"),
+        "a request dropped by the reload must fail its caller, got {status}"
     );
 
     // The debugger's pump reaches the running server's queue from this state,

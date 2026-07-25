@@ -245,6 +245,57 @@ mod tests {
         clear();
     }
 
+    /// `read` builds its batch of Lua tables inside the sim's state, and that
+    /// state can genuinely be out of memory — the panel polls this while a
+    /// mission is holding every byte it has. mlua reports exhaustion as an
+    /// ordinary error on each `create_table`/`set`, and the requirement is that
+    /// it stays an error the caller sees (the RPC answers `LuaError`, the panel
+    /// retries on the next poll) rather than a panic, which inside the DLL
+    /// takes the sim down with it.
+    ///
+    /// Driven by squeezing the state's memory ceiling upwards from nothing, so
+    /// the failure lands on a different allocation each pass — the batch table,
+    /// the array, a row, each field — and the pass that finally succeeds proves
+    /// the squeeze was what stopped the earlier ones.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn read_under_an_exhausted_state_errors_instead_of_panicking() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear();
+        push("one".into());
+        push("two".into());
+
+        let mut relaxed_enough_to_answer = false;
+        for headroom in (0..64_000).step_by(8) {
+            let lua = Lua::new();
+            let console = crate::facade::sub_table(&lua, "console", register);
+            let read: Function = console.get("read").expect("read binding");
+            let ceiling = lua.used_memory() + headroom;
+            lua.set_memory_limit(ceiling)
+                .expect("mlua owns this state's allocator");
+            match read.call::<mlua::Table>(0) {
+                Ok(batch) => {
+                    // The successful pass is a real batch, not a husk.
+                    let lines: mlua::Table = batch.get("lines").expect("lines");
+                    assert_eq!(lines.len().expect("len"), 2);
+                    relaxed_enough_to_answer = true;
+                    break;
+                }
+                Err(e) => assert!(
+                    e.to_string().contains("memory"),
+                    "the read must fail on the squeeze, and say so: {e}"
+                ),
+            }
+        }
+        assert!(
+            relaxed_enough_to_answer,
+            "the squeeze never relaxed enough to answer — the test proves nothing"
+        );
+        clear();
+    }
+
     /// The IDE's Console panel tails with `read(after)` and clears with
     /// `clear()`. `read` must hand back `{ lines = { { seq, text }, … }, latest }`
     /// with `latest` usable as the next `after`, or the panel either loses lines

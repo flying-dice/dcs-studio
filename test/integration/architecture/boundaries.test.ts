@@ -111,7 +111,6 @@ const COMPOSITION_ROOT = "extension.ts";
  * boundary violation.
  */
 const KNOWN_CROSSINGS = new Set([
-  "src/install/myModsPanel.ts -> src/adapters/node/jsonLedgerStore",
   "src/install/myModsPanel.ts -> src/adapters/node/processLauncher",
   "src/adapters/vscode/installRoots.ts -> src/bridge/paths",
   "src/adapters/vscode/installRoots.ts -> src/install/dataDir",

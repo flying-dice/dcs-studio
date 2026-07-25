@@ -61,7 +61,7 @@
           tag: "v1.0.0",
           enabled: true,
           dir: "D:\\DCS Studio\\data\\Owner__DCS-SRS",
-          links: 1,
+          linkCount: 1,
           entrypoints: [
             {
               id: "srs-server",
@@ -104,7 +104,7 @@
           tag: "v0.2.0",
           enabled: false,
           dir: "D:\\DCS Studio\\data\\Owner__Disabled-Mod",
-          links: 0,
+          linkCount: 0,
           entrypoints: [{ id: "hidden", name: "Hidden", exe: "app.exe" }],
           // Breakdown shows even for a disabled mod (transparency is independent
           // of the Launch/Stop rows, which only show for enabled mods).
@@ -124,7 +124,7 @@
           tag: "v1.2.3",
           enabled: true,
           dir: "D:\\DCS Studio\\data\\Owner__Inert-Mod",
-          links: 1,
+          linkCount: 1,
           manifest: deriveManifest({}),
         },
         {
@@ -134,7 +134,7 @@
           tag: "v2.0.0",
           enabled: true,
           dir: "D:\\DCS Studio\\data\\Owner__Risky-Mod",
-          links: 3,
+          linkCount: 3,
           // An entrypoint with no display name falls back to its id.
           entrypoints: [{ id: "nameless-tool", exe: "tools/run.exe" }],
           manifest: deriveManifest({
@@ -153,7 +153,7 @@
           tag: "v3.0.0",
           enabled: true,
           dir: "D:\\DCS Studio\\data\\Owner__Plain-Mod",
-          links: 2,
+          linkCount: 2,
           entrypoints: [],
           // Benign: only links files + a sandboxed after-sanitize script.
           manifest: deriveManifest({

@@ -23,6 +23,9 @@ playwright-report/**
 .claude/**
 coverage/**
 test/**
+# Type declarations for the media/*-core.js modules: they exist for the test
+# tree's typechecker and have no runtime role, so they do not ship.
+media/**/*.d.ts
 spec/**
 target/**
 .github/**

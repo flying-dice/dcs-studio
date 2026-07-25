@@ -56,11 +56,11 @@ mod tests {
     );
 
     fn live() -> String {
-        emit_surface_dlua(BridgeKind::Mission, env!("CARGO_PKG_VERSION")).expect("surface")
+        emit_surface_dlua(&Lua::new(), BridgeKind::Mission, env!("CARGO_PKG_VERSION")).expect("surface")
     }
 
     fn live_openrpc() -> String {
-        emit_openrpc_json(BridgeKind::Mission, env!("CARGO_PKG_VERSION")).expect("openrpc")
+        emit_openrpc_json(&Lua::new(), BridgeKind::Mission, env!("CARGO_PKG_VERSION")).expect("openrpc")
     }
 
     /// The checked-in golden matches the live surface — the `.d.lua` facade
@@ -142,5 +142,44 @@ mod tests {
             .eval()
             .expect("the scheduled pump must run and reschedule itself");
         assert!(next > 0.0, "the pump must reschedule itself: {next}");
+    }
+
+    /// Both halves of `luaopen` propagate rather than panic. `require` runs
+    /// inside DCS's mission scripting sandbox, which catches a Lua error and
+    /// logs it — the mission keeps running with no bridge, which is recoverable
+    /// — whereas a panic unwinding out of the DLL takes the whole sim down.
+    ///
+    /// The two failures are the two calls: the shared bootstrap (reading a
+    /// `debug` global whose metatable raises is beyond what the engine's guards
+    /// can catch), and the embedded init (a state missing `timer`, which it
+    /// schedules its queue pump on).
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_state_the_bridge_cannot_be_installed_into_fails_the_require() {
+        let hostile = Lua::new();
+        hostile
+            .load(
+                r#"
+                debug = setmetatable({}, {
+                  __index = function(_, k) error("no debug." .. tostring(k) .. " here", 0) end,
+                })
+                "#,
+            )
+            .exec()
+            .expect("plant a hostile debug global");
+        let err = super::dcs_studio_mission(&hostile).expect_err("bootstrap cannot finish");
+        assert!(
+            err.to_string().contains("no debug."),
+            "the cause reaches the mission log: {err}"
+        );
+
+        // A state with no `timer` at all: the init gets as far as the queue
+        // pump it has nowhere to schedule, and says so.
+        let no_timer = Lua::new();
+        let err = super::dcs_studio_mission(&no_timer).expect_err("the init cannot finish");
+        assert!(
+            err.to_string().contains("timer"),
+            "the cause names what the mission state was missing: {err}"
+        );
     }
 }

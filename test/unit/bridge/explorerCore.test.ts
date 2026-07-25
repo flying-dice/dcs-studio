@@ -101,7 +101,14 @@ describe("pathMatchesFilter — three modes", () => {
 });
 
 describe("annotateMatches — ancestor visibility propagation", () => {
-  function tree() {
+  /** `matched` is what annotateMatches writes onto every node it walks. */
+  interface Node {
+    path: string;
+    children: Node[];
+    matched?: boolean;
+  }
+
+  function tree(): Node {
     return {
       path: "_G",
       children: [

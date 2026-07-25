@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import type { BridgeStatus } from "../../../src/core/domain/bridgeProtocol";
-import type { DebugState } from "../../../src/core/domain/debugProtocol";
+import type { DebugState, DebugValue, ReplVariable } from "../../../src/core/domain/debugProtocol";
 import type { SchedulerPort, TimerHandle } from "../../../src/core/ports/scheduler";
 
 // Doubles shared by the debug specs: a scheduler whose clock only moves when a
@@ -128,8 +128,24 @@ export class FakeBridge {
   debugContinue = vi.fn(async (_mode: string): Promise<unknown> => undefined);
   debugPause = vi.fn(async (): Promise<unknown> => undefined);
   debugStop = vi.fn(async (): Promise<unknown> => undefined);
-  debugExpand = vi.fn(async (_ref: number) => ({ variables: [] }));
-  debugEval = vi.fn(async (_frame: number, _expr: string) => ({ ok: true, value: "nil" }));
-  debugSetBreakpoints = vi.fn(async (_source: string, _bps: unknown[]) => ({ count: 0 }));
+  // Annotated with the client's own result types rather than letting the stub
+  // infer them: a default of `{ variables: [] }` infers `never[]`, and one of
+  // `{ ok, value }` infers away `type`/`ref`/`assigned`/`err` — so a spec
+  // scripting a realistic bridge reply would be rejected by the double while
+  // the real bridge sends exactly that.
+  debugExpand = vi.fn(
+    async (_ref: number): Promise<{ variables: ReplVariable[] }> => ({
+      variables: [],
+    }),
+  );
+  debugEval = vi.fn(
+    async (_frame: number, _expr: string): Promise<DebugValue> => ({ ok: true, value: "nil" }),
+  );
+  debugSetBreakpoints = vi.fn(
+    async (
+      _source: string,
+      _bps: { line: number; condition?: string }[],
+    ): Promise<{ count: number }> => ({ count: 0 }),
+  );
   debugClearBreakpoints = vi.fn(async (): Promise<unknown> => undefined);
 }

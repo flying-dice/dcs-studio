@@ -106,7 +106,7 @@ describe("debug registration", () => {
       expect(state.errors[0]).toContain("defines the mission sandbox");
     });
 
-    it("refuses MissionScripting.lua once ${file} has resolved", () => {
+    it("refuses MissionScripting.lua once the file variable has resolved", () => {
       // The launch.json path: `"program": "${file}"` looks harmless until VS
       // Code substitutes it, which happens after resolveDebugConfiguration and
       // before this hook. Neither the menu `when` clauses nor the command

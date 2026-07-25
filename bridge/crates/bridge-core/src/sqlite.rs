@@ -536,4 +536,62 @@ mod tests {
         .expect("closed handle suite");
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// A query's rows are materialised as Lua tables AFTER `SQLite` has answered,
+    /// inside the sim's state — which can be out of memory while a mission
+    /// holds every byte it has. That is not a query error and has no
+    /// `(nil, err)` form a caller could branch on, so it raises; what it must
+    /// never do is panic, which inside the DLL takes the sim down.
+    ///
+    /// Squeezed from no headroom upwards so the failure lands on each
+    /// allocation in turn — the row array, a record, a TEXT cell, a BLOB cell —
+    /// and the pass that finally succeeds returns the real rows.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn materialising_rows_out_of_memory_raises_instead_of_panicking() {
+        let (lua, root) = state("oom");
+        lua.load(
+            r#"
+            DB = assert(sqlite.open(":memory:"))
+            assert(DB:exec("CREATE TABLE t(txt TEXT, blob BLOB, n INTEGER)"))
+            assert(DB:exec("INSERT INTO t VALUES (?, x'0102', 1)", { "hello" }) == 1)
+            assert(DB:exec("INSERT INTO t VALUES (?, x'0304', 2)", { "world" }) == 1)
+            RUN = function() return DB:query("SELECT txt, blob, n FROM t ORDER BY n") end
+            "#,
+        )
+        .exec()
+        .expect("seed rows");
+        let run: mlua::Function = lua.globals().get("RUN").expect("RUN");
+
+        let mut relaxed_enough_to_answer = false;
+        for headroom in (0..64_000).step_by(8) {
+            let ceiling = lua.used_memory() + headroom;
+            lua.set_memory_limit(ceiling)
+                .expect("mlua owns this state's allocator");
+            match run.call::<mlua::Table>(()) {
+                Ok(rows) => {
+                    // Lift the ceiling before touching the result, so reading it
+                    // back cannot itself run out.
+                    lua.set_memory_limit(0).expect("lift the ceiling");
+                    assert_eq!(rows.len().expect("len"), 2);
+                    let first: mlua::Table = rows.get(1).expect("first row");
+                    assert_eq!(first.get::<String>("txt").expect("txt"), "hello");
+                    relaxed_enough_to_answer = true;
+                    break;
+                }
+                Err(e) => {
+                    lua.set_memory_limit(0).expect("lift the ceiling");
+                    assert!(
+                        e.to_string().contains("memory"),
+                        "the query must fail on the squeeze, and say so: {e}"
+                    );
+                }
+            }
+        }
+        assert!(
+            relaxed_enough_to_answer,
+            "the squeeze never relaxed enough to answer — the test proves nothing"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

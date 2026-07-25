@@ -734,4 +734,51 @@ mod tests {
         clear();
         reset_session();
     }
+
+    /// `breakpoints()` materialises the whole registry as Lua tables inside the
+    /// sim's state — the one binding here that allocates per call, and it is
+    /// called while a mission holds every byte it has. mlua reports exhaustion
+    /// as an ordinary error; the IDE redraws its gutter on the next poll. A
+    /// panic instead would take the sim down, which is the one outcome the
+    /// registry's "never raise into the sim" contract cannot allow.
+    ///
+    /// Squeezed from no headroom upwards so the failure lands on each
+    /// allocation in turn — the outer table, a source's array, a line — with
+    /// the pass that succeeds proving the squeeze was the cause.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn reading_the_registry_out_of_memory_errors_instead_of_panicking() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear();
+        set_breakpoints("=e:\\p\\a.lua", &[10, 30]);
+
+        let mut relaxed_enough_to_answer = false;
+        for headroom in (0..64_000).step_by(8) {
+            let lua = mlua::Lua::new();
+            let dbg = crate::facade::sub_table(&lua, "debug", register);
+            let breakpoints: mlua::Function = dbg.get("breakpoints").expect("breakpoints binding");
+            let ceiling = lua.used_memory() + headroom;
+            lua.set_memory_limit(ceiling)
+                .expect("mlua owns this state's allocator");
+            match breakpoints.call::<mlua::Table>(()) {
+                Ok(by_source) => {
+                    let lines: mlua::Table = by_source.get("e:/p/a.lua").expect("the source");
+                    assert_eq!(lines.len().expect("len"), 2);
+                    relaxed_enough_to_answer = true;
+                    break;
+                }
+                Err(e) => assert!(
+                    e.to_string().contains("memory"),
+                    "the read must fail on the squeeze, and say so: {e}"
+                ),
+            }
+        }
+        assert!(
+            relaxed_enough_to_answer,
+            "the squeeze never relaxed enough to answer — the test proves nothing"
+        );
+        clear();
+    }
 }

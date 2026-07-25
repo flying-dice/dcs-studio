@@ -42,13 +42,13 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      # TODO: clean-code - 0.58 - BOUNDARY (#58): tsconfig.test.json now covers
-      # test/, tests/ and the config files, but its first run surfaced 23 type
-      # errors across 10 test files (and both vitest configs pass a `coverage.all`
-      # option the installed vitest no longer has). Add
-      #   - name: Typecheck tests + configs
-      #     run: npm run typecheck:tests
-      # here once those are fixed — until then it would fail every build.
+      # Covers what `npm run compile` cannot: test/, tests/ and the root config
+      # files. Vitest and Playwright transpile via esbuild and Biome does not
+      # typecheck, so this is the only thing that notices a test double drifting
+      # from the port it stands in for, or a fixture asserting a shape the
+      # domain no longer has.
+      - name: Typecheck tests + configs
+        run: npm run typecheck:tests
       - name: TypeScript compile
         run: npm run compile
       - name: Biome lint + format check (JS/TS)

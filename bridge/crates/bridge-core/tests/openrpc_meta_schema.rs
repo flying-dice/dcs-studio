@@ -33,7 +33,7 @@ fn assert_valid_openrpc(kind: BridgeKind) {
     let validator = jsonschema::validator_for(&schema).expect("compile meta-schema");
 
     let doc_json =
-        emit_openrpc_json(kind, env!("CARGO_PKG_VERSION")).expect("generate openrpc doc");
+        emit_openrpc_json(&mlua::Lua::new(), kind, env!("CARGO_PKG_VERSION")).expect("generate openrpc doc");
     let doc: serde_json::Value =
         serde_json::from_str(&doc_json).expect("openrpc doc is valid JSON");
 

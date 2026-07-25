@@ -272,33 +272,38 @@ fn load_register_methods(lua: &Lua, kind: BridgeKind) -> LuaResult<LuaFunction> 
         .eval::<LuaFunction>()
 }
 
-/// Render the `.d.lua` for `kind`'s surface on a fresh Lua state — the
-/// per-cdylib golden tests pin their checked-in `types/<module>.d.lua` to this.
+/// Render the `.d.lua` for `kind`'s surface on `lua` — the per-cdylib golden
+/// tests pin their checked-in `types/<module>.d.lua` to this.
+///
+/// Takes the state rather than making one, like [`bootstrap`]: the caller owns
+/// the Lua state everywhere else in this crate, and owning it here is also what
+/// lets a test give this one a memory ceiling.
 ///
 /// # Errors
 ///
-/// Returns any `mlua` error raised while building the surface on the fresh state.
-pub fn emit_surface_dlua(kind: BridgeKind, version: &str) -> LuaResult<String> {
-    let lua = Lua::new();
+/// Returns any `mlua` error raised while building the surface on `lua`.
+pub fn emit_surface_dlua(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<String> {
     let exports = lua.create_table()?;
-    let doc = surface::build(&lua, &exports, kind, version)?;
+    let doc = surface::build(lua, &exports, kind, version)?;
     Ok(luadef::emit_dlua(&doc))
 }
 
-/// Render the `OpenRPC` document for `kind`'s bridge as pretty JSON on a fresh
-/// Lua state — the per-cdylib golden tests pin their checked-in
+/// Render the `OpenRPC` document for `kind`'s bridge as pretty JSON on `lua` —
+/// the per-cdylib golden tests pin their checked-in
 /// `openrpc/<module>.openrpc.json` to this, and the meta-schema test validates
 /// it. Runs the SAME `register_methods` chunk the live DLL registers, against a
 /// stub router with an empty `deps` (handlers are created, never called, so no
 /// DCS API is needed to enumerate the method set).
 ///
+/// Takes the state rather than making one, for the same reasons as
+/// [`emit_surface_dlua`].
+///
 /// # Errors
 ///
 /// Returns any `mlua` error raised while running the `register_methods` chunk
 /// against the stub router or serializing the document.
-pub fn emit_openrpc_json(kind: BridgeKind, version: &str) -> LuaResult<String> {
-    let lua = Lua::new();
-    let register = load_register_methods(&lua, kind)?;
+pub fn emit_openrpc_json(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<String> {
+    let register = load_register_methods(lua, kind)?;
     let router = lua.create_userdata(crate::jsonrpc::router::JsonRpcRouter::default())?;
     let deps = lua.create_table()?;
     register.call::<mlua::Value>((&router, deps))?;
@@ -335,7 +340,10 @@ pub(crate) fn get_lfs_writedir(lua: &Lua) -> LuaResult<String> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod bootstrap_tests {
-    use super::{bootstrap, get_lfs_writedir, get_logger_file_path, BridgeKind};
+    use super::{
+        bootstrap, emit_openrpc_json, emit_surface_dlua, get_lfs_writedir, get_logger_file_path,
+        BridgeKind,
+    };
     use mlua::prelude::{LuaFunction, LuaTable};
     use mlua::Lua;
 
@@ -504,6 +512,118 @@ mod bootstrap_tests {
         assert_eq!(engine.get::<i64>("version").expect("version"), 1);
     }
 
+    /// The engine chunk is loaded with `?`, so whatever it raises fails the
+    /// module load. It is written never to raise — it RETURNS a reason string
+    /// when the state cannot host it — but it reads `debug` and `coroutine` out
+    /// of a shared `_G` to decide, and a global whose metatable raises on access
+    /// is beyond what any guard in Lua can catch. The requirement is that this
+    /// stays a reported error (the hook's `pcall(require)` logs it and DCS runs
+    /// on) and never a panic, which inside the DLL would take the sim with it.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_global_that_raises_when_read_fails_the_load_rather_than_the_process() {
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            debug = setmetatable({}, {
+              __index = function(_, k) error("this state refuses debug." .. tostring(k), 0) end,
+            })
+            "#,
+        )
+        .exec()
+        .expect("plant a hostile debug global");
+
+        let err = bootstrap(&lua, BridgeKind::Gui, "test")
+            .expect_err("the engine cannot be installed into this state");
+        assert!(
+            err.to_string().contains("refuses debug."),
+            "the real cause reaches the hook's log: {err}"
+        );
+    }
+
+    /// Every allocation the module load makes can fail for real: the Lua state
+    /// belongs to DCS and is shared with the whole mission, and mlua reports
+    /// exhaustion as an ordinary error on every `create_table`, `create_function`
+    /// and chunk load. What must NOT happen is a panic unwinding out of the
+    /// DLL — inside DCS that aborts the sim. A failed load is recoverable: the
+    /// hook's `pcall(require)` logs it and the game runs on without a bridge.
+    ///
+    /// Driven by squeezing the state's memory ceiling from no headroom at all
+    /// upwards, so the failure lands on a different allocation each pass and the
+    /// whole chain (exports table, binding surface, `emit_dlua`/`dump_globals`,
+    /// the registration chunk, the two embedded Lua chunks) is exercised. The
+    /// pass that finally succeeds is the proof that the squeeze — not something
+    /// else — is what was stopping it.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_state_out_of_memory_fails_the_load_instead_of_panicking() {
+        let mut relaxed_enough_to_load = false;
+        for headroom in (0..2_000_000).step_by(256) {
+            let lua = Lua::new();
+            let ceiling = lua.used_memory() + headroom;
+            lua.set_memory_limit(ceiling)
+                .expect("mlua owns this state's allocator");
+            match bootstrap(&lua, BridgeKind::Gui, "test") {
+                Ok(exports) => {
+                    // The successful pass is a real bridge, not a husk.
+                    exports.get::<LuaTable>("json").expect("json namespace");
+                    relaxed_enough_to_load = true;
+                    break;
+                }
+                Err(e) => assert!(
+                    e.to_string().contains("memory"),
+                    "the load must fail on the squeeze, and say so: {e}"
+                ),
+            }
+        }
+        assert!(
+            relaxed_enough_to_load,
+            "the squeeze never relaxed enough to load — the test proves nothing"
+        );
+    }
+
+    /// The golden generators build their whole surface — and, for `OpenRPC`,
+    /// run the real registration chunk — inside a Lua state, so they allocate
+    /// exactly like the module load does. Same requirement, same squeeze: an
+    /// exhausted state gets an error, never a panic.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn the_golden_generators_report_an_exhausted_state_rather_than_panicking() {
+        for headroom in (0..2_000_000).step_by(256) {
+            let lua = Lua::new();
+            let ceiling = lua.used_memory() + headroom;
+            lua.set_memory_limit(ceiling)
+                .expect("mlua owns this state's allocator");
+            if let Ok(dlua) = emit_surface_dlua(&lua, BridgeKind::Gui, "test") {
+                assert!(dlua.contains("---@meta dcs_studio_gui"), "{dlua}");
+                break;
+            }
+        }
+
+        let mut relaxed_enough_to_render = false;
+        for headroom in (0..2_000_000).step_by(256) {
+            let lua = Lua::new();
+            let ceiling = lua.used_memory() + headroom;
+            lua.set_memory_limit(ceiling)
+                .expect("mlua owns this state's allocator");
+            match emit_openrpc_json(&lua, BridgeKind::Gui, "test") {
+                Ok(doc) => {
+                    assert!(doc.contains("\"openrpc\""), "{doc}");
+                    relaxed_enough_to_render = true;
+                    break;
+                }
+                Err(e) => assert!(
+                    e.to_string().contains("memory"),
+                    "the render must fail on the squeeze, and say so: {e}"
+                ),
+            }
+        }
+        assert!(
+            relaxed_enough_to_render,
+            "the squeeze never relaxed enough to render — the test proves nothing"
+        );
+    }
+
     /// The log file is per DLL and lives under the write root's `Logs`. The two
     /// bridges must never share one: each has its own log4rs instance, and a
     /// shared truncating appender would have them clobber each other's file.
@@ -653,7 +773,7 @@ mod gui_method_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod db_method_tests {
     use super::{composed_methods_source, BridgeKind};
-    use mlua::prelude::{LuaFunction, LuaResult};
+    use mlua::prelude::LuaFunction;
     use mlua::Lua;
 
     // The GUI bridge's db_* handlers, driven against a SYNTHETIC `db` global
@@ -667,12 +787,16 @@ mod db_method_tests {
     // rest of the mlua suite.
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
-    fn db_methods_over_synthetic_db() -> LuaResult<()> {
+    fn db_methods_over_synthetic_db() {
         let lua = Lua::new();
-        let register: LuaFunction = lua.load(composed_methods_source(BridgeKind::Gui)).eval()?;
-        lua.globals().set("register_methods", register)?;
-        lua.load(SUITE).exec()?;
-        Ok(())
+        let register: LuaFunction = lua
+            .load(composed_methods_source(BridgeKind::Gui))
+            .eval()
+            .expect("load register_methods");
+        lua.globals()
+            .set("register_methods", register)
+            .expect("bind register_methods");
+        lua.load(SUITE).exec().expect("db method suite");
     }
 
     const SUITE: &str = r#"

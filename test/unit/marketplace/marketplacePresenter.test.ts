@@ -15,16 +15,22 @@ function product(over: Partial<ProductDetail> = {}): ProductDetail {
   return {
     repo: "Owner/Repo",
     name: "My Mod",
+    author: "Owner",
     description: "",
-    readme_html: "",
+    repo_url: "https://github.com/Owner/Repo",
+    avatar_url: "https://avatars.githubusercontent.com/Owner",
     stars: 0,
-    tags: [],
-    assets: [{ name: "dcs-studio.toml", size: 10, url: "https://x/toml" }],
+    readme: null,
     release_tag: "v1.0.0",
+    release_url: "https://github.com/Owner/Repo/releases/tag/v1.0.0",
+    release_date: "2026-01-02T03:04:05Z",
+    assets: [{ name: "dcs-studio.toml", size: 10, url: "https://x/toml" }],
     download_size: 10,
     installable: true,
-    ...(over as object),
-  } as ProductDetail;
+    installs: [],
+    requires: [],
+    ...over,
+  };
 }
 
 interface Harness {

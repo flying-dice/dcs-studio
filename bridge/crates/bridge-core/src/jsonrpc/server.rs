@@ -780,7 +780,10 @@ mod tests {
             .eval()
             .expect("eval config");
         let err = ServerConfig::from_lua(wrong_types, &lua).expect_err("a port is a number");
-        assert!(err.to_string().contains("port"), "{err}");
+        assert!(
+            err.to_string().contains("invalid type"),
+            "the cause says what the value should have been: {err}"
+        );
 
         // The shape the hook actually writes still reads.
         let good: mlua::Value = lua

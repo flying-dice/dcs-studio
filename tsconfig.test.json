@@ -10,10 +10,14 @@
     // repo and emits nothing, so the constraint has no meaning here.
     "rootDir": ".",
     // The Playwright specs' `page.evaluate` callbacks are authored against the
-    // browser realm and need the DOM lib to typecheck at all. This only widens
-    // the globals visible to this unit — `npm run compile` still holds src/ to
-    // the base's ES2020-only lib.
-    "lib": ["ES2020", "DOM"],
+    // browser realm and need the DOM lib to typecheck at all, and the specs run
+    // on Node 20 rather than the base's conservative ES2020 floor — `.at(-1)`
+    // and `String.replaceAll` are both already relied on across the suite (the
+    // former only worked by way of a transitive `/// <reference lib>` from a
+    // dependency, which is not a guarantee to build on). This only widens the
+    // globals visible to this unit — `npm run compile` still holds src/ to the
+    // base's ES2020-only lib.
+    "lib": ["ES2022", "DOM"],
     // Model the loaders that actually run these files rather than the base's
     // CommonJS, which the extension bundle needs but no test file is: `import.meta`
     // is legal here, and `bundler` reads the same package `exports` maps esbuild

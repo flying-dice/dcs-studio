@@ -42,7 +42,9 @@ function context(): vscode.ExtensionContext {
 }
 
 /** Let the panel's fire-and-forget message handling settle. */
-const flush = (): Promise<void> => vi.advanceTimersByTimeAsync(0);
+const flush = async (): Promise<void> => {
+  await vi.advanceTimersByTimeAsync(0);
+};
 
 /** Deliver a webview message and wait for the work it starts. */
 async function send(msg: Record<string, unknown>): Promise<void> {
