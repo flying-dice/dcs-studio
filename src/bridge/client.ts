@@ -380,6 +380,12 @@ export class BridgeClient {
     this.pending.clear();
   }
 
+  // TODO: clean-code - 0.55 - PANIC: this loop runs from the socket's data,
+  // error and close handlers with no try/catch on the path, which makes it the
+  // one place in the extension where a listener throw becomes an UNCAUGHT
+  // EXCEPTION — the host, not a panel. No listener throws today; the ping path
+  // at the emit() above already wraps the identical call, so the hazard was
+  // seen once and not generalised. Wrap the body and log.
   private emit(patch: Partial<BridgeStatus>): void {
     this.status = { ...this.status, ...patch };
     for (const l of this.listeners) l(this.status);

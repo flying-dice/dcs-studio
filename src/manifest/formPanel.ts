@@ -65,6 +65,12 @@ export class ManifestFormPanel {
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
   }
 
+  // TODO: clean-code - 0.6 - DRY: this re-implements savedGamesDir() and
+  // gameInstallDir() from src/bridge/paths.ts, and the copies have already
+  // disagreed: paths.ts falls back to Saved Games\DCS.openbeta when \DCS does
+  // not exist, this one never does. So the dest preview in the manifest form
+  // resolves {SavedGames} to a folder the installer will not use on an
+  // OpenBeta-only machine. Call the shared helpers.
   private roots(): { savedGames: string; gameInstall: string } {
     const cfg = vscode.workspace.getConfiguration("dcsStudio");
     const home = process.env.USERPROFILE || os.homedir();

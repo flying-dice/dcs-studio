@@ -35,6 +35,11 @@ finally {
     Pop-Location
 }
 
+# TODO: clean-code - 0.5 - BOUNDARY: every Test-Path / Copy-Item / Remove-Item
+# here uses -Path, which treats [ ] and ? in a path as wildcards. -WriteDir
+# exists so a user can point at a non-default folder, and `D:\Games [SSD]\DCS`
+# is a legal Windows path — Test-Path returns $false and the script insists a
+# directory that plainly exists does not. Switch the six sites to -LiteralPath.
 $dlls = @("dcs_studio_gui.dll", "dcs_studio_mission.dll") | ForEach-Object {
     $p = Join-Path $workspace "target\release\$_"
     if (-not (Test-Path $p)) { throw "Build succeeded but '$p' was not found" }

@@ -3,6 +3,16 @@
    by a panel: its stylesheet cascades after this one. Holds the design tokens,
    the reset, and the button / card / header / spinner primitives that were
    previously re-declared near-verbatim across ~11 media/*.css files. */
+/* TODO: clean-code - 0.6 - DRY: this claims to hold "the design tokens" but
+   holds four. The status palette is re-declared per panel and has already
+   drifted: --warn is --vscode-charts-yellow in nav/skills and
+   --vscode-editorWarning-foreground in publish/setup; --accent is
+   --vscode-focusBorder in docs/skills and --vscode-textLink-foreground in nav;
+   error red splits between --vscode-errorForeground and
+   --vscode-editorError-foreground. In Light+/Dark+ those differ, so one product
+   shows two warning yellows. Move --ok/--warn/--err/--info/--accent/--code-bg/
+   --radius here with one source each and delete the per-panel :root blocks
+   (keeping nav.css's documented --border override). */
 :root {
   --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
   --card: var(--vscode-editorWidget-background, var(--vscode-editor-background));

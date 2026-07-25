@@ -103,6 +103,12 @@ function writeLnk(
  * media/icon.png in an ICO container (PNG-in-ICO, supported since Vista) and
  * park it in global storage where it survives extension updates in place.
  */
+// TODO: clean-code - 0.6 - PANIC: three unguarded fs calls in an async function
+// the command registration invokes as `() => void createMyModsShortcut(...)`, so
+// the rejection reaches nobody. Read-only globalStorage, or an AV holding the
+// .ico, means the user picks folders, confirms, and nothing happens at all — no
+// shortcut, no error. Every other failure here is collected into `failures` and
+// reported; wrap this one the same way.
 function ensureIcon(context: vscode.ExtensionContext): string {
   const dir = context.globalStorageUri.fsPath;
   fs.mkdirSync(dir, { recursive: true });

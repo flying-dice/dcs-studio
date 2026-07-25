@@ -146,6 +146,10 @@ export function dcsExePath(gameInstall: string): string {
  * Eject-on-shutdown policy: eject only when no managed DCS process is alive —
  * if DCS is still up, the DLL is locked and stays until DCS exits.
  */
+// TODO: clean-code - 0.6 - NAMING: the parameter reads as "did we launch DCS",
+// past tense, but the policy turns on whether a managed DCS is alive RIGHT NOW —
+// `shouldEjectOnShutdown(true)` at a call site looks like "we launched it, so
+// eject" and means the opposite. Rename to `dcsStillRunning`.
 export function shouldEjectOnShutdown(dcsLaunched: boolean): boolean {
   return !dcsLaunched;
 }

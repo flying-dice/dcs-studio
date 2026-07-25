@@ -34,6 +34,14 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # TODO: clean-code - 0.58 - BOUNDARY: `tsc -p ./` typechecks src/ only —
+      # tsconfig.json's `include` is ["src"], and it is the repo's only
+      # compilation unit. All of test/, tests/, the shared vscode double and the
+      # config files are transpiled by esbuild without ever being typechecked,
+      # so the double and the ports it stands in for can drift apart silently
+      # while this step reads as a repo-wide gate. Add a tsconfig.test.json
+      # (extends the base, noEmit, includes test/ tests/ *.config.ts) and run it
+      # here too.
       - name: TypeScript compile
         run: npm run compile
       - name: Biome lint + format check (JS/TS)

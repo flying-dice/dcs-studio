@@ -214,6 +214,11 @@ export class ConsolePanel {
         .forEnv(env)
         .replExport(env, { ref: msg.ref, expr: msg.expr });
       temp = vscode.Uri.file(path);
+      // TODO: clean-code - 0.6 - DRY: from here to the end of the try block is
+      // the same twenty lines as src/bridge/dbExport.ts — default folder, save
+      // dialog, copy, shouldOpenExport branch, temp cleanup — differing only in
+      // the filename base. Extract one `saveExport(temp, baseName, bytes)`
+      // helper; today a fix to either flow has to be remembered twice.
       const base = exportFileBase(msg.label);
       const folder = vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(os.homedir());
       const target = await vscode.window.showSaveDialog({

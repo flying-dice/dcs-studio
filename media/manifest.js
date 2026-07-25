@@ -42,6 +42,12 @@
     });
   }
 
+  // TODO: clean-code - 0.6 - SRP: this is manifest validation policy living in a
+  // DOM script — it decides what a valid manifest is, formats the message, and
+  // is reachable only by driving a browser. Both the SRP and DRY audits landed
+  // here independently. The rules belong in manifest-core.js beside the parser
+  // (where the unit layer can reach them) with this file rendering the result;
+  // the Rust parser in dcs-studio-project makes the same judgements a third time.
   function issues(m) {
     const out = [];
     if (!m.project.name.trim()) out.push("Project name is required.");

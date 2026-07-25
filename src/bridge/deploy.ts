@@ -56,6 +56,12 @@ export const nodeBridgeFs: BridgeFs = {
   rm: fsp.rm,
 };
 
+// TODO: clean-code - 0.7 - COUPLING: module-level mutable state standing in for
+// injection. Every consumer of `bridgeFs()` shares one slot, so a test that
+// swaps it and does not restore leaks into the next, and two features cannot
+// hold different filesystems. The rest of the extension takes its ports as
+// constructor arguments from the composition root; these commands should too —
+// they are functions today only because they register as command handlers.
 let io: BridgeFs = nodeBridgeFs;
 
 /** The filesystem in force. `launch.ts` probes DCS.exe through the same seam. */

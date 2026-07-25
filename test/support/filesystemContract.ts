@@ -3,6 +3,15 @@ import type { FileSystemPort } from "../../src/core/ports/filesystem";
 
 // The behavioural contract every FileSystemPort implementation must satisfy.
 //
+// TODO: clean-code - 0.6 - KISS: this is parameterised over `create` + a harness
+// but has exactly one caller (NodeFileSystem), so the drift it exists to prevent
+// is not actually prevented — the four hand-written fakes in test/unit
+// (publishService, subscriptionService, missionSanitizeService, detectService)
+// never run through it, and each guesses separately at whether writeText mkdirps
+// and whether remove throws on a missing path. Consolidate them into one
+// MemFileSystem under test/support/ and add a second describe… call; that
+// redeems the parameterisation and deletes three fakes' worth of duplication.
+//
 // Core services are tested against in-memory fakes of this port, so those tests
 // only prove the services work against whatever the fake happens to do. This
 // suite is the other half: run it against the real adapter and against any

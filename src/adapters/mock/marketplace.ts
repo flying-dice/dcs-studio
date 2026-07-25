@@ -8,6 +8,14 @@ import type { MarketplacePort } from "../../core/ports/marketplace";
 // headless Rust sidecar over JSON-RPC. This adapter is static so the
 // mod-consumer experience runs with no DCS install and no network — and proves
 // the marketplace backend swaps behind the port with one composition-root line.
+//
+// TODO: clean-code - 0.55 - DEAD: this is the one module under src/ unreachable
+// from the composition root, so tsc compiles it into out/ and every .vsix ships
+// 400 lines of sample catalog to users who can never reach it. It also has to be
+// covered, because the integration gate includes src/** at 100% per file — which
+// is the only reason its test exists. Moving it under test/support/ keeps the
+// MarketplacePort contract running against two implementations (its actual job)
+// while dropping it from the package and from the gate.
 
 const KB = 1024;
 const MB = 1024 * 1024;

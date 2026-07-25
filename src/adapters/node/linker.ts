@@ -39,6 +39,12 @@ import type { LinkerPort } from "../../core/ports/linker";
 // and a disable removes only our links. enable() rolls all links back if any one
 // fails; disable() removes the link entries, never their targets.
 
+// TODO: clean-code - 0.65 - DRY: byte-identical to `psq` in
+// src/install/shortcut.ts, and the two invocations they feed have already
+// drifted — shortcut.ts passes -NonInteractive, both PowerShell calls below do
+// not, and this is the ELEVATED path, where a host that decides to prompt has
+// no console to prompt on. One escaper in core/domain (it is pure string work)
+// with one argv builder beside `cliArgs.ts` would make the drift impossible.
 function psSingleQuote(s: string): string {
   return `'${s.replace(/'/g, "''")}'`;
 }

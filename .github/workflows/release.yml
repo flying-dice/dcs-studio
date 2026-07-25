@@ -55,6 +55,13 @@ jobs:
           Copy-Item bridge/target/release/dcs_studio_mission.dll bridge/prebuilt/
           Copy-Item bridge/lua5.1/lua.lib bridge/prebuilt/
 
+      # TODO: clean-code - 0.52 - DRY: this guards package.json's version, but
+      # the bridge workspace carries its own independent version (currently
+      # 0.3.0) and that is what the DLLs and both openrpc.json goldens embed.
+      # Nothing gates that it was bumped when bridge/crates/** changed, so two
+      # releases can hand out dcs_studio_gui.dll reporting the same bridge
+      # version with different JSON-RPC surfaces — and the step below attaches
+      # the DLLs separately precisely so a bridge-only deploy can take them.
       - name: Guard - tag matches package.json version
         if: github.ref_type == 'tag'
         shell: pwsh
@@ -63,6 +70,19 @@ jobs:
           $tag = "${{ github.ref_name }}".TrimStart("v")
           if ($pkg -ne $tag) { throw "package.json version ($pkg) != tag ($tag)" }
 
+      # TODO: clean-code - 0.6 - BOUNDARY: @vscode/vsce is neither a
+      # devDependency nor pinned here, so the tool that builds the artefact a
+      # user installs is resolved from the registry at release time. A vsce
+      # major changes packaging defaults with no change on this side, and the
+      # failure surfaces to users as a broken .vsix.
+      #
+      # TODO: clean-code - 0.55 - BOUNDARY: `vscode:prepublish` is just
+      # `npm run compile`. Nothing asserts bridge/prebuilt/ holds the two DLLs
+      # and lua.lib — that staging exists only in the steps above, and the
+      # directory is gitignored. `npx vsce package` run by hand therefore
+      # produces a .vsix that installs and activates cleanly and then fails at
+      # the point of use. A two-line existence check that exits non-zero makes
+      # a mis-staged package fail loudly instead of shipping.
       - name: Package .vsix
         run: npx @vscode/vsce package
 

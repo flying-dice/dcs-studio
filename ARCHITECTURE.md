@@ -12,10 +12,17 @@ src/
     domain/        Pure functions, types, parsers, policies. No ports needed to test.
     app/           Use-case services. Depend only on core/domain and core/ports.
     ports/         Interfaces (TypeScript types only) describing what core needs from the world.
-  adapters/        Implementations of ports + all VS Code UI glue.
+  adapters/        Port implementations that belong to no single feature.
     node/          fs, child_process, net, fetch, os — one file per port implementation.
-    vscode/        Webview panels, config reads, notifications, auth, debug factory.
+    vscode/        auth, config-backed install roots, the manifest asset path.
     github/        GitHub REST marketplace adapter.
+    mock/          The sample-catalog MarketplacePort, for demoing without GitHub.
+  <feature>/       Panels, commands and feature glue: marketplace/, install/, bridge/,
+                   publish/, setup/, skills/, project/, log/, manifest/, mission/,
+                   nav/, docs/, debug/, webview/. These are adapters too — they live
+                   beside their feature rather than under adapters/ because each is
+                   used by exactly one.
+  errors.ts        showError + the prefilled "Report Issue" toast: the notifier path.
   extension.ts     Composition root: constructs adapters, injects them into core services,
                    registers commands/panels. The ONLY place adapters and core are wired.
 ```
@@ -36,8 +43,8 @@ The two motivating cases:
   `<dataDir>/subscriptions.json` (+ derived `uninstall-all.bat`). A future sidecar/DB
   backend implements the same port.
 - **Marketplace backend** — `MarketplacePort`; current adapter is GitHub REST discovery.
-  A Rust sidecar over JSON-RPC (see `marketplace/mockData.ts` provenance) implements the
-  same port. The live Marketplace and My Mods panels receive the port instance from the
+  A Rust sidecar over JSON-RPC implements the same port; `src/adapters/mock/marketplace.ts`
+  is the second implementation that keeps the swap honest. The live Marketplace and My Mods panels receive the port instance from the
   composition root, so swapping backends is literally one line in `extension.ts`:
 
   ```ts
@@ -92,7 +99,7 @@ an existing port with adapter-specific details.
   `core/domain/dcsDetect.ts`.
 - Skills bundled-vs-installed status (frontmatter parse, version compare, modified
   detection) is a pure domain module `core/domain/skillsStatus.ts`, driven by the
-  `skills/manager.ts` adapter — no dedicated app service.
+  `skills/library.ts` adapter (`SkillsLibrary`) — no dedicated app service.
 - Byte formatting shared by publish + bridge console lives in `core/domain/format.ts`.
 - Bridge protocol + DAP session translation logic extracted into `core/domain/` pure
   functions where feasible; live transports stay adapters.
@@ -124,10 +131,16 @@ and a Windows job that re-runs the headless layers on the shipping OS.
   are now gated like everything else.
 - **E2E** drives the real `media/*.js` in Chromium against the `previews/` harness,
   with V8 coverage merged and gated by `scripts/e2e-coverage.mjs`.
-- Ports with more than one implementation — or with a fake that core is tested
-  against — carry a shared contract suite under `test/support/`, run against every
-  implementation. That is what stops a fake drifting from the adapter it stands in
-  for.
+- Ports with more than one implementation carry a shared contract suite under
+  `test/support/`, run against each one. `MarketplacePort` is the worked example:
+  `marketplaceContract.ts` runs the same invariants against the GitHub adapter and
+  against `MockMarketplace`, so the documented one-line swap is a checked claim.
+  `filesystemContract.ts` does NOT yet meet this bar — it runs against
+  `NodeFileSystem` only, while four hand-written `FileSystemPort` fakes in the unit
+  layer each guess separately at whether `writeText` mkdirps and whether `remove`
+  throws on a missing path. Consolidating those into one fake put through the same
+  contract is the open work; until then, a core service can pass every unit test
+  against a fake more permissive than the adapter.
 - Coverage-ignore comments are forbidden except for provably unreachable defensive
   lines, each with a justification comment. Prefer restructuring so the line is
   reachable in a test.

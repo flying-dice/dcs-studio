@@ -5,6 +5,12 @@
    file only supplies the CSS custom properties those stylesheets read, plus
    the toast chrome shared by every fixture's human dev-loop log.
 
+   TODO: clean-code - 0.5 - DEAD: nothing in this repo ever sets data-theme, so
+   both [data-theme] selector sets are dead — and the dark token block is written
+   out twice (once under the media query, once under [data-theme="dark"]), which
+   is a drift trap no test can catch. Keep :root + the media query, drop the
+   forced-theme selectors, and name page.emulateMedia as the one mechanism.
+
    Three ways a preview can be themed, all supported:
    - default (no override): follows the OS via prefers-color-scheme
    - :root[data-theme="light"|"dark"]: forced, for screenshot/test control

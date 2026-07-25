@@ -39,6 +39,10 @@ export interface ModDto {
   tag: string;
   enabled: boolean;
   dir: string;
+  // TODO: clean-code - 0.6 - NAMING: `links` on the DTO is a COUNT, while
+  // `links` on Subscription is the array itself. Same name, same conceptual
+  // field, two types — `s.links.length` vs `dto.links` is the only thing
+  // telling them apart at a call site. Name this `linkCount`.
   links: number;
   /** Declared executable entrypoints (so the webview can offer Launch/Stop). */
   entrypoints: ManifestEntrypoint[];
