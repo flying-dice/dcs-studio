@@ -8,11 +8,20 @@
 // any future ones) are captured VERBATIM into `model.extras` and re-emitted, so
 // editing through the form never drops them. Comments inside modeled sections
 // are not preserved (a v1 limitation — the real app uses toml_edit for that).
+// The UMD preamble is environment-selection boilerplate, and only ever one of
+// its two halves can run in a given host: under Node `module` is always
+// defined, so the browser half is unreachable from the unit layer that owns
+// this file's coverage. It is not untested — manifestCoreValues.test.ts
+// evaluates this source in a module-less vm context and asserts the API lands
+// on the global, which is exactly what a webview <script> tag does. Everything
+// the wrapper returns is covered normally below.
+/* v8 ignore start */
 ((root, factory) => {
   const api = factory();
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.DcsManifestCore = api;
 })(typeof self !== "undefined" ? self : this, () => {
+  /* v8 ignore stop */
   const ROOT_TOKENS = ["{SavedGames}", "{GameInstall}"];
   // The array sections the model stores first-class and re-emits. New array
   // sections (a future one) drop in by adding a name here and a create-case
@@ -54,7 +63,12 @@
     let m;
     // biome-ignore lint/suspicious/noAssignInExpressions: canonical RegExp.exec loop
     while ((m = re.exec(inner)) !== null) {
-      if (m.index === re.lastIndex) re.lastIndex++; // guard against empty matches
+      // Standard defensive guard for a global regex loop. Provably unreachable
+      // with THIS pattern — every alternative in the capture group requires at
+      // least one character, so exec can never return a zero-length match — but
+      // kept so the loop stays safe if the pattern is ever relaxed.
+      /* v8 ignore next */
+      if (m.index === re.lastIndex) re.lastIndex++;
       const tok = m[1].trim();
       if (tok) out.push(parseVal(tok));
     }
@@ -193,10 +207,12 @@
 
   function resolveDest(dest, roots) {
     const { root, rest } = splitDest(dest);
-    if (root === "{SavedGames}") return winJoin(roots.savedGames, rest);
-    if (root === "{GameInstall}")
+    // splitDest is total — it returns {GameInstall} or defaults to
+    // {SavedGames} — so the write dir is the fall-through, not a third case.
+    if (root === "{GameInstall}") {
       return roots.gameInstall ? winJoin(roots.gameInstall, rest) : null;
-    return dest;
+    }
+    return winJoin(roots.savedGames, rest);
   }
 
   return {
