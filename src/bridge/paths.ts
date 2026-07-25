@@ -1,6 +1,6 @@
+import { win32 as path } from "node:path";
 import * as fs from "fs";
 import * as os from "os";
-import * as path from "path";
 import * as vscode from "vscode";
 
 // Shared DCS path resolution, mirroring dcs-studio's detect: the Saved Games
