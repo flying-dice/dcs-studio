@@ -4,6 +4,11 @@ Audit of the test suite and the structural seams that make code testable, taken
 against `main` @ `8c45b98` (v0.16.0). Measurements are reproducible — every
 number below came from running the suites, not from reading them.
 
+> **Status note.** The findings below are the original audit and are kept as the
+> record. Work against them is under way — see
+> [Remediation status](#remediation-status) at the end for what has landed, the
+> current measured numbers per layer, and what is still outstanding.
+
 ## Verdict
 
 The core hexagon is genuinely well tested — not coverage theatre. Mutation
@@ -278,3 +283,105 @@ untested band permanently testable rather than perpetually excluded.
   (a full Chrome build fails it on the `/favicon.ico` 404 that CI's
   headless-shell never requests). Filtering favicon/network noise from the
   collected errors would make the assertion portable.
+
+---
+
+# Remediation status
+
+Measured after the work described below. Each layer now runs on its own command
+against its own config, and gates its own coverage over an include set that does
+not overlap the others'.
+
+| Layer | Command | Tests | Coverage | Gate |
+|---|---|---|---|---|
+| Unit | `npm run test:unit` | 777 | **100%** stmts/branch/funcs/lines | ✅ green |
+| Integration | `npm run test:integration` | 71 | 11.2% stmts / 11.7% lines | ❌ red — work outstanding |
+| E2E | `npm run test:e2e` | 91 | 80.8% stmts of `media/*.js` | ❌ red — work outstanding |
+| Rust | `cargo llvm-cov --workspace` | 33 | 77.3% lines / 66.9% functions | ❌ red — work outstanding |
+
+`npm test` runs all three TypeScript layers in sequence; `npm run coverage` does
+the same with each gate enforced.
+
+## Landed
+
+- **G7 — host-dependent path logic.** `core/**` now resolves with explicit
+  `path.win32` semantics on every host, so the domain layer is deterministic
+  off-Windows. This is what allows the TypeScript layers to gate on Linux CI.
+- **Three separately-runnable layers.** `vitest.unit.config.ts`,
+  `vitest.integration.config.ts` and the Playwright config each own a disjoint
+  include set and an independent 100% per-file threshold. The e2e layer had no
+  coverage story at all; `scripts/e2e-coverage.mjs` now collects V8 coverage
+  through a Playwright fixture, merges it into one Istanbul map, and gates it.
+  A webview that never loads reports 0% rather than the empty-map 100% that
+  `v8-to-istanbul` yields by default — without that, a view with no harness
+  passes the gate silently, which is the exact gap G4 describes.
+- **G1 — Rust tests never ran in CI.** CI is now one job per layer, including a
+  Linux `cargo llvm-cov` job. The stale claim that the tests need DCS's
+  non-redistributable `lua.dll` is gone: `build.rs` already links PUC
+  liblua5.1 off-Windows, so they run as ordinary executables.
+- **G2 — the write-root guard.** `path_guard` went from no tests to 100% lines
+  and functions, and the guard itself was rewritten. It delegated to
+  `std::path::Component`, whose parsing follows the compilation target, so
+  drive-prefixed and backslash-climbing input was accepted off-Windows. The
+  rules are now explicit and host-independent, and additionally reject NTFS
+  alternate-data-stream writes (`notes.txt:hidden`) that the old guard passed
+  even on Windows.
+- **G6 — CLI argument construction.** `gh`/`git`/7-Zip argv now lives in
+  `core/domain/cliArgs.ts` under the unit gate, asserted whole rather than by
+  substring. The adapters keep only the spawn call and its error mapping.
+- **G8 — contribution wiring.** A static contract test asserts every
+  `package.json` command has a `registerCommand`, every menu entry points at a
+  declared command, no id is registered twice, and every settings key read in
+  code is declared. It passes today, so it is a regression guard.
+- **Unit layer to 100%.** `manifest-core.js` entered the gate at 80%; its
+  scalar coercion, dest-token resolution and emit-time optional branches are now
+  covered. `resolveDest`'s dead third branch was removed rather than tested
+  around; the UMD preamble and a regex zero-length-match guard carry scoped
+  ignores with justifications, per the rule in `ARCHITECTURE.md`.
+- The e2e console spec no longer fails on browser-chrome noise (a full Chromium
+  requests `/favicon.ico`; the headless shell does not), and the Playwright
+  config accepts a `PW_CHROMIUM_PATH` override for images that ship their own
+  browser.
+
+## Outstanding
+
+Ordered as the work should be picked up. The three red gates above are the
+acceptance criteria.
+
+1. **Integration layer to 100% (G5).** The largest remaining piece, ~2,300
+   statements. Needs, in order:
+   - a shared `vscode` test double in `test/integration/support/`, generalising
+     the one-off `vi.mock("vscode")` in `bridge/client.test.ts` — this is what
+     unblocks everything else in the layer;
+   - **S1, presenter extraction**: panels are 86–99% decision logic welded to a
+     thin VS Code shell. Move that logic to pure presenters under the unit gate
+     and leave panels as shells the integration layer covers. Pilot one panel
+     (marketplace or publish) before rolling out;
+   - **S2, a `SchedulerPort`** for `setInterval`/`setTimeout`, so
+     `debug/adapter.ts` (512 lines, the largest untested unit in the repo) and
+     `BridgeClient` become deterministic. The 30-second breakpoint
+     auto-continue is a safety mechanism — if it regresses, a crashed editor
+     freezes the user's sim — and nothing tests it;
+   - injected `spawn`/`fs`/`net` seams so the node adapters are coverable.
+2. **E2E layer to 100% (G4).** Harnesses for `publish.js`, `setup.js` and
+   `newproject.js`, which sit at 0% — publish performs irreversible GitHub
+   operations and setup gates first-run. These three views address elements by
+   `getElementById` rather than the repo's `data-testid` convention, so they
+   need testids adding as part of the work. Then close the remaining gaps in
+   `console.js` (76%), `shared.js` (85%) and `console-explorer.js` (90%).
+3. **Rust to 100%.** Currently 77.3% lines. Largest gaps: `file.rs` (39% lines,
+   4 of 29 functions executed), `jsonrpc/server.rs` (49%), `logger.rs` (56%),
+   `lua_utils.rs` (74%), `sqlite.rs` (78%). The Lua-bound modules are testable
+   with in-process `Lua::new()` fixtures, as `path_guard`'s tests now show;
+   `server.rs` needs an actix test-server harness. **S4** — splitting a
+   Lua-free protocol crate — would make the highest-traffic logic testable
+   without any linkage setup, and is worth doing before chasing the last few
+   percent.
+4. **G3 — the webview↔panel message contract.** Deliberately not implemented
+   yet. Deriving the message sets by regex is unreliable: the webviews use
+   several different dispatch shapes (`postMessage` inline, helper wrappers,
+   `case` blocks, `if (m.type === …)`), so an inferred contract produces false
+   failures. It needs an explicit declared contract table per pair, checked
+   against both sides — worth doing alongside the presenter extraction in (1),
+   where a typed `HostMessage`/`WebviewMessage` union makes the table
+   mechanical rather than hand-maintained.
