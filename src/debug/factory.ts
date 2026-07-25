@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { nodeScheduler } from "../adapters/node/scheduler";
 import type { DebugEnv } from "../bridge/client";
 import type { BridgeClients } from "../bridge/clients";
+import { isMissionScriptingFile, MISSION_SCRIPT_REFUSAL } from "../core/domain/debugTarget";
 import type { SchedulerPort } from "../core/ports/scheduler";
 import { showError } from "../errors";
 import { DcsDebugAdapter } from "./adapter";
@@ -29,6 +30,29 @@ export class DcsDebugAdapterFactory implements vscode.DebugAdapterDescriptorFact
 
 /** Fills defaults so F5 on a .lua file works with no launch.json. */
 export class DcsDebugConfigProvider implements vscode.DebugConfigurationProvider {
+  /**
+   * The last gate before a session starts, and the only one that sees the
+   * resolved target: `${file}` is substituted by VS Code between
+   * `resolveDebugConfiguration` and this hook, so a `launch.json` saying
+   * `"program": "${file}"` looks harmless until here.
+   *
+   * F5 and a hand-written launch.json never touch the command handler where
+   * the other refusal lives (issue #30).
+   */
+  resolveDebugConfigurationWithSubstitutedVariables(
+    _folder: vscode.WorkspaceFolder | undefined,
+    config: vscode.DebugConfiguration,
+  ): vscode.ProviderResult<vscode.DebugConfiguration> {
+    if (typeof config.program === "string" && isMissionScriptingFile(config.program)) {
+      void showError(MISSION_SCRIPT_REFUSAL);
+      // `undefined` cancels the session silently; the toast above is what the
+      // user sees. Returning `null` would open launch.json instead, which is
+      // wrong here — the configuration is not malformed, the target is refused.
+      return undefined;
+    }
+    return config;
+  }
+
   resolveDebugConfiguration(
     _folder: vscode.WorkspaceFolder | undefined,
     config: vscode.DebugConfiguration,
@@ -38,6 +62,13 @@ export class DcsDebugConfigProvider implements vscode.DebugConfigurationProvider
       const doc = vscode.window.activeTextEditor?.document;
       if (!doc?.fileName.toLowerCase().endsWith(".lua")) {
         void showError("Open a .lua file to debug it in DCS.");
+        return undefined;
+      }
+      // Refused here as well as after substitution: this branch fabricates a
+      // config from the active editor, so it is the one path where the target
+      // is already known and `${file}` never appears.
+      if (isMissionScriptingFile(doc.fileName)) {
+        void showError(MISSION_SCRIPT_REFUSAL);
         return undefined;
       }
       config = {
@@ -73,14 +104,6 @@ export class DcsDebugConfigProvider implements vscode.DebugConfigurationProvider
   }
 }
 
-/** The file that DEFINES the mission sandbox. Sending it into that sandbox to
- * be evaluated re-runs the sanitization the bridge lives inside — at best a
- * no-op, at worst it tears down the environment the session is talking to. The
- * menu contributions hide the run/debug entries for it, but a `when` clause is
- * only a menu: the Command Palette, a keybinding and `executeCommand` all reach
- * the handler directly, so the refusal has to live here. */
-const MISSION_SCRIPT = "missionscripting.lua";
-
 /** Editor run/debug buttons: start a session for the given (or active) file. */
 async function startSession(
   uri: vscode.Uri | undefined,
@@ -92,13 +115,8 @@ async function startSession(
     void showError("Open a .lua file to run it in DCS.");
     return;
   }
-  // Split on both separators rather than path.basename: an fsPath carries
-  // Windows backslashes whatever the host's own separator is.
-  if (target.fsPath.toLowerCase().split(/[\\/]/).pop() === MISSION_SCRIPT) {
-    void showError(
-      "MissionScripting.lua defines the mission sandbox — it cannot be run or debugged in DCS. " +
-        "Use “DCS Studio: Desanitize MissionScripting.lua” to edit what it allows.",
-    );
+  if (isMissionScriptingFile(target.fsPath)) {
+    void showError(MISSION_SCRIPT_REFUSAL);
     return;
   }
   const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === target.toString());

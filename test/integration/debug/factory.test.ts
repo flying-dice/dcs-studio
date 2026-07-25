@@ -46,9 +46,14 @@ describe("debug registration", () => {
       // reach it too, or every session's poll loop runs on real timers.
       const scheduler = new FakeScheduler();
       const factory = new DcsDebugAdapterFactory(clients, scheduler);
-      const descriptor = (await factory.createDebugAdapterDescriptor({
+      // A DebugSession is a live editor handle no test can build; the factory
+      // reads nothing but `configuration`, so that is all the double declares.
+      const session: Pick<vscode.DebugSession, "configuration"> = {
         configuration: { type: DEBUG_TYPE, name: "s", request: "launch", program: LUA, env: "gui" },
-      } as vscode.DebugSession)) as unknown as { implementation: DcsDebugAdapter };
+      };
+      const descriptor = (await factory.createDebugAdapterDescriptor(
+        session as vscode.DebugSession,
+      )) as vscode.DebugAdapterInlineImplementation & { implementation: DcsDebugAdapter };
 
       expect(descriptor.implementation).toBeInstanceOf(DcsDebugAdapter);
 
@@ -86,6 +91,66 @@ describe("debug registration", () => {
         program: LUA,
         env: "mission",
       });
+    });
+
+    it("refuses a bare F5 on MissionScripting.lua", () => {
+      // This branch fabricates a config from the active editor, so it is the
+      // one path where the target is known and `${file}` never appears.
+      const guarded = "C:\\SG\\DCS\\Scripts\\MissionScripting.lua";
+      (vscode.window as { activeTextEditor: unknown }).activeTextEditor = {
+        document: { fileName: guarded },
+      };
+      expect(
+        new DcsDebugConfigProvider().resolveDebugConfiguration(undefined, {} as never),
+      ).toBeUndefined();
+      expect(state.errors[0]).toContain("defines the mission sandbox");
+    });
+
+    it("refuses MissionScripting.lua once ${file} has resolved", () => {
+      // The launch.json path: `"program": "${file}"` looks harmless until VS
+      // Code substitutes it, which happens after resolveDebugConfiguration and
+      // before this hook. Neither the menu `when` clauses nor the command
+      // handler is anywhere near this route (issue #30).
+      expect(
+        new DcsDebugConfigProvider().resolveDebugConfigurationWithSubstitutedVariables(undefined, {
+          type: DEBUG_TYPE,
+          name: "mine",
+          request: "launch",
+          program: "C:\\SG\\DCS\\Scripts\\MissionScripting.lua",
+          env: "mission",
+        } as never),
+      ).toBeUndefined();
+      expect(state.errors[0]).toContain("defines the mission sandbox");
+    });
+
+    it("passes an ordinary resolved program through untouched", () => {
+      const config = {
+        type: DEBUG_TYPE,
+        name: "mine",
+        request: "launch",
+        program: LUA,
+        env: "mission",
+      };
+      expect(
+        new DcsDebugConfigProvider().resolveDebugConfigurationWithSubstitutedVariables(
+          undefined,
+          config as never,
+        ),
+      ).toEqual(config);
+      expect(state.errors).toEqual([]);
+    });
+
+    it("passes a configuration with no program through rather than guessing", () => {
+      // resolveDebugConfiguration defaults `program`, so a missing one here
+      // means someone built the config another way; refusing it would be this
+      // guard inventing a rule it was not given.
+      const config = { type: DEBUG_TYPE, name: "mine", request: "launch", env: "gui" };
+      expect(
+        new DcsDebugConfigProvider().resolveDebugConfigurationWithSubstitutedVariables(
+          undefined,
+          config as never,
+        ),
+      ).toEqual(config);
     });
 
     it("refuses a bare F5 when the active editor is not Lua", () => {
@@ -139,9 +204,10 @@ describe("debug registration", () => {
     });
 
     it("offers both environments as launch.json snippets", () => {
-      const provided = new DcsDebugConfigProvider().provideDebugConfigurations() as {
-        env: string;
-      }[];
+      // The provider returns the array synchronously; ProviderResult's other
+      // arms (thenable/null) are options it does not take.
+      const provided =
+        new DcsDebugConfigProvider().provideDebugConfigurations() as vscode.DebugConfiguration[];
       expect(provided.map((c) => c.env)).toEqual(["mission", "gui"]);
     });
   });

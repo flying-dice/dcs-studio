@@ -67,6 +67,24 @@ Feature: Run Lua in the sim
       normally
 
   @chaos
+  Scenario: MissionScripting.lua reached by F5, with no launch.json
+    Given MissionScripting.lua is the active editor
+    And there is no launch.json, so F5 builds a configuration from that editor
+    Then the same refusal is shown and no session is started
+    Because this route never passes the command handler at all — it is the
+      debug configuration provider that answers F5
+
+  @chaos
+  Scenario: MissionScripting.lua named by a hand-written launch.json
+    Given a launch.json whose program is MissionScripting.lua, spelled with
+      either separator, or as "${file}" while it is the active editor
+    Then the same refusal is shown and no session is started
+    Because "${file}" is substituted by VS Code after the configuration is
+      resolved, so the target is only knowable at the last gate before launch
+    And launch.json is not opened for editing — the configuration is not
+      malformed, the target is refused
+
+  @chaos
   Scenario: The file cannot be read
     Given the program named by the session is not on disk (deleted, renamed, a dropped share)
     And it is not open in an editor either
