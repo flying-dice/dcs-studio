@@ -295,14 +295,23 @@ not overlap the others'.
 | Layer | Command | Tests | Coverage | Gate |
 |---|---|---|---|---|
 | Unit | `npm run test:unit` | 806 | **100%** stmts/branch/funcs/lines | ✅ green |
-| Integration | `npm run test:integration` | 162 | 18.4% stmts / 18.9% lines | ❌ red — work outstanding |
+| Integration | `npm run test:integration` | 288 | 35.3% stmts / 35.6% lines | ❌ red — work outstanding |
 | E2E | `npm run test:e2e` | 91 | 80.8% stmts of `media/*.js` | ❌ red — work outstanding |
 | Rust | `cargo llvm-cov --workspace` | 33 | 77.3% lines / 66.9% functions | ❌ red — work outstanding |
 
-Modules already at 100% in the integration layer: `adapters/github/marketplace.ts`,
-`adapters/node/fs.ts`, `adapters/node/clock.ts`, `adapters/node/env.ts`,
-`adapters/node/registry.ts`, `adapters/vscode/installRoots.ts`, `bridge/paths.ts`,
-`install/dataDir.ts`, `webview/html.ts`, `errors.ts`, `marketplace/panel.ts`.
+Modules at 100% in the integration layer: `adapters/github/marketplace.ts`,
+`adapters/node/{fs,clock,env,registry}.ts`, `adapters/vscode/{installRoots,manifest}.ts`,
+`bridge/paths.ts`, `install/dataDir.ts`, `webview/html.ts`, `errors.ts`,
+`marketplace/panel.ts`, `nav/navView.ts`, `docs/docsPanel.ts`,
+`skills/skillsPanel.ts`, `publish/{publishPanel,preflight}.ts`,
+`setup/panel.ts`, `manifest/formPanel.ts`, `project/newProjectPanel.ts`.
+
+Remaining integration areas, by size: `src/debug` (0%, 625 lines),
+`src/install` (2.8% — myModsPanel + shortcut), `src/mission` (0%),
+`src/bridge` (25% — consolePanel, deploy, launch, dbExport, build),
+`src/adapters/node` (25% — gh, git, sevenZip, downloader, wsTransport,
+processLauncher), `src/log` (47% — logPanel), `src/skills` (48% — library),
+`src/project` (56% — scaffold), `src/extension.ts` (0%).
 
 `npm test` runs all three TypeScript layers in sequence; `npm run coverage` does
 the same with each gate enforced.
@@ -372,11 +381,12 @@ acceptance criteria.
 1. **Integration layer to 100% (G5).** Still the largest piece, ~1,850
    statements outstanding. The double and the presenter pattern are in place;
    what remains is applying them:
-   - roll the presenter extraction out across the other panels, heaviest
-     first — `myModsPanel` (305), `consolePanel` (309), `missionPanel` (187),
-     `logPanel` (165), `setup/panel` (163), `newProjectPanel` (154),
-     `skillsPanel` (143), `publishPanel` (134), `navView` (121),
-     `formPanel` (116), `docsPanel` (75);
+   - the remaining panels: `consolePanel` (309), `myModsPanel` (305),
+     `missionPanel` (187), `logPanel` (165). Panels covered so far were
+     tested in place against the double rather than presenter-extracted;
+     that is the right call for shells that only translate messages, but
+     `myModsPanel` and `consolePanel` carry enough decision logic to be
+     worth the `marketplacePresenter` treatment;
    - **S2, a `SchedulerPort`** for `setInterval`/`setTimeout`, so
      `debug/adapter.ts` (512 lines, the largest untested unit in the repo) and
      `BridgeClient` become deterministic. The 30-second breakpoint
