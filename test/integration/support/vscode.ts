@@ -34,7 +34,9 @@ export interface VscodeState {
   registeredCommands: Map<string, (...args: unknown[]) => unknown>;
   openedExternal: string[];
   clipboard: string;
-  workspaceFolders: { uri: { fsPath: string }; name: string; index: number }[] | undefined;
+  workspaceFolders:
+    | { uri: { fsPath: string; scheme: string }; name: string; index: number }[]
+    | undefined;
   panels: FakeWebviewPanel[];
   statusBarItems: FakeStatusBarItem[];
   createdTerminals: { name: string; sent: string[] }[];
@@ -108,7 +110,9 @@ export function resetVscode(
   if (seed.existingPaths) state.existingPaths = new Set(seed.existingPaths);
   if (seed.workspaceFolders) {
     state.workspaceFolders = seed.workspaceFolders.map((fsPath, index) => ({
-      uri: { fsPath },
+      // `scheme` matters: callers reject non-file workspaces (remote, virtual)
+      // because they cannot be scaffolded into or linked from.
+      uri: { fsPath, scheme: "file" },
       name: fsPath,
       index,
     }));
