@@ -125,6 +125,11 @@ pub fn register(sub: &mut Sub) -> Result<()> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod tests {
     use super::*;
+    use mlua::Lua;
+
+    /// Every test here mutates the process-wide line ring (and `clear()` wipes
+    /// it), so they must not run concurrently.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     // Pure-logic, but on Windows the dcs-bridge test binary links DCS's
     // lua.dll, so it is gated like the rest (put a lua.dll on PATH and run
@@ -133,6 +138,9 @@ mod tests {
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn ring_sequences_reads_and_caps() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         clear();
         let first = push("one".into());
         let second = push("two".into());
@@ -159,5 +167,78 @@ mod tests {
         clear();
         let (after_clear, _) = read_after(0);
         assert!(after_clear.is_empty());
+    }
+
+    /// `console.print` is Lua's `print`: arguments tostring-ed and tab-joined,
+    /// honouring `__tostring`. The hook redirects the global `print` here during
+    /// editor-driven runs, so anything `print` accepts this must too — a raise
+    /// here would abort the very script the user is debugging.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn print_joins_arguments_with_tabs_and_honours_tostring() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let lua = Lua::new();
+        let console = crate::facade::sub_table(&lua, "console", register).expect("console sub");
+        lua.globals().set("console", console).expect("set console");
+
+        clear();
+        lua.load(
+            r#"
+            console.print("a", 1, true, nil)
+            console.print()                       -- no arguments: an empty line
+            console.print(setmetatable({}, { __tostring = function() return "UNIT#1" end }))
+            "#,
+        )
+        .exec()
+        .expect("print");
+
+        let (lines, _) = read_after(0);
+        let texts: Vec<&str> = lines.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(texts, vec!["a\t1\ttrue\tnil", "", "UNIT#1"]);
+        clear();
+    }
+
+    /// The IDE's Console panel tails with `read(after)` and clears with
+    /// `clear()`. `read` must hand back `{ lines = { { seq, text }, … }, latest }`
+    /// with `latest` usable as the next `after`, or the panel either loses lines
+    /// or replays them forever.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn read_returns_a_resumable_batch_and_clear_empties_it() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let lua = Lua::new();
+        let console = crate::facade::sub_table(&lua, "console", register).expect("console sub");
+        lua.globals().set("console", console).expect("set console");
+
+        clear();
+        lua.load(
+            r#"
+            console.print("one")
+            console.print("two")
+
+            -- A fresh reader (nil `after`) starts from the beginning.
+            local first = console.read()
+            assert(#first.lines == 2, "fresh reader gets everything")
+            assert(first.lines[1].text == "one" and first.lines[2].text == "two")
+            assert(first.latest == first.lines[2].seq, "latest is the newest sequence")
+
+            -- Resuming from `latest` yields only what arrived since.
+            assert(#console.read(first.latest).lines == 0, "caught-up reader gets nothing")
+            console.print("three")
+            local next_batch = console.read(first.latest)
+            assert(#next_batch.lines == 1 and next_batch.lines[1].text == "three")
+
+            -- Clear is the panel's Clear button, mirrored sim-side.
+            console.clear()
+            assert(#console.read(0).lines == 0, "cleared")
+            "#,
+        )
+        .exec()
+        .expect("read/clear");
+        clear();
     }
 }

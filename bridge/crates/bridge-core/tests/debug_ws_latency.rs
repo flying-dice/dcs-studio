@@ -5,8 +5,6 @@
     clippy::indexing_slicing
 )]
 // idiomatic in tests
-// The hand-rolled WS frame codec truncates lengths on purpose: test payloads are tiny.
-#![allow(clippy::cast_possible_truncation)]
 
 //! Regression harness for the F5-to-first-stop latency bug (issue: pressing F5
 //! took ~25-30s to reach the first debug stop, sim frozen the whole time).
@@ -31,12 +29,14 @@
 //! Windows-gated like the rest of the suite: the test binary links DCS's own
 //! lua.dll, so put it on PATH and run with `-- --include-ignored`.
 
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+mod support;
+
+use support::{connect_ws, rpc, Ws};
 
 use dcs_bridge_core::{bootstrap, BridgeKind};
 use mlua::{Function, Lua};
@@ -99,159 +99,6 @@ pump_once = function() server:process_rpc(router) end
     });
 }
 
-/// A tiny blocking WebSocket client (RFC 6455) — masked client frames out,
-/// unmasked frames in — so the test needs no extra dependency. Enough to speak
-/// JSON-RPC text frames to the bridge and read replies as they arrive.
-struct Ws {
-    stream: TcpStream,
-    rx: Vec<u8>,
-}
-
-impl Ws {
-    fn connect(port: u16) -> std::io::Result<Ws> {
-        let mut stream = TcpStream::connect(("127.0.0.1", port))?;
-        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-        let req = format!(
-            "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\n\
-             Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
-             Sec-WebSocket-Version: 13\r\n\r\n"
-        );
-        stream.write_all(req.as_bytes())?;
-
-        let mut buf = Vec::new();
-        let mut tmp = [0u8; 1024];
-        loop {
-            let n = stream.read(&mut tmp)?;
-            if n == 0 {
-                return Err(std::io::Error::other("closed during handshake"));
-            }
-            buf.extend_from_slice(&tmp[..n]);
-            if let Some(pos) = find(&buf, b"\r\n\r\n") {
-                let head = String::from_utf8_lossy(&buf[..pos]);
-                if !head.contains(" 101 ") {
-                    return Err(std::io::Error::other(format!("handshake: {head}")));
-                }
-                let rx = buf[pos + 4..].to_vec(); // any frame bytes past the header
-                return Ok(Ws { stream, rx });
-            }
-        }
-    }
-
-    fn send(&mut self, text: &str) -> std::io::Result<()> {
-        let payload = text.as_bytes();
-        let mut frame = vec![0x81u8]; // FIN + text
-        let len = payload.len();
-        if len < 126 {
-            frame.push(0x80 | len as u8);
-        } else if len < 65536 {
-            frame.push(0x80 | 0x7e); // 126: 16-bit extended payload length
-            frame.extend_from_slice(&(len as u16).to_be_bytes());
-        } else {
-            frame.push(0x80 | 0x7f); // 127: 64-bit extended payload length
-            frame.extend_from_slice(&(len as u64).to_be_bytes());
-        }
-        let mask = [0x12u8, 0x34, 0x56, 0x78];
-        frame.extend_from_slice(&mask);
-        frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
-        self.stream.write_all(&frame)
-    }
-
-    /// Read one text message if one is available within `wait`, else None.
-    fn poll(&mut self, wait: Duration) -> std::io::Result<Option<String>> {
-        if let Some(m) = self.take_frame() {
-            return Ok(Some(m));
-        }
-        self.stream.set_read_timeout(Some(wait))?;
-        let mut tmp = [0u8; 8192];
-        match self.stream.read(&mut tmp) {
-            Ok(0) => Ok(None),
-            Ok(n) => {
-                self.rx.extend_from_slice(&tmp[..n]);
-                Ok(self.take_frame())
-            }
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                Ok(None)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Pull the next complete text frame from the buffer, skipping control
-    /// frames; None when more bytes are needed.
-    fn take_frame(&mut self) -> Option<String> {
-        loop {
-            if self.rx.len() < 2 {
-                return None;
-            }
-            let (b0, b1) = (self.rx[0], self.rx[1]);
-            let opcode = b0 & 0x0f;
-            let masked = b1 & 0x80 != 0;
-            let len7 = (b1 & 0x7f) as usize;
-            let mut off = 2;
-            let payload_len = match len7 {
-                126 => {
-                    if self.rx.len() < 4 {
-                        return None;
-                    }
-                    off = 4;
-                    u16::from_be_bytes([self.rx[2], self.rx[3]]) as usize
-                }
-                127 => {
-                    if self.rx.len() < 10 {
-                        return None;
-                    }
-                    off = 10;
-                    let mut a = [0u8; 8];
-                    a.copy_from_slice(&self.rx[2..10]);
-                    u64::from_be_bytes(a) as usize
-                }
-                n => n,
-            };
-            let mask_len = if masked { 4 } else { 0 };
-            let total = off + mask_len + payload_len;
-            if self.rx.len() < total {
-                return None;
-            }
-            let mask = masked.then(|| {
-                [
-                    self.rx[off],
-                    self.rx[off + 1],
-                    self.rx[off + 2],
-                    self.rx[off + 3],
-                ]
-            });
-            if masked {
-                off += 4;
-            }
-            let mut payload = self.rx[off..off + payload_len].to_vec();
-            if let Some(m) = mask {
-                for (i, b) in payload.iter_mut().enumerate() {
-                    *b ^= m[i % 4];
-                }
-            }
-            self.rx.drain(..total);
-            match opcode {
-                0x1 => return Some(String::from_utf8_lossy(&payload).into_owned()),
-                0x8 => return None, // close
-                _ => {}             // ping/pong/binary: skip and try the next
-            }
-        }
-    }
-}
-
-fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    hay.windows(needle.len()).position(|w| w == needle)
-}
-
-fn rpc(id: &str, method: &str, params: &str) -> String {
-    format!(r#"{{"jsonrpc":"2.0","id":"{id}","method":"{method}","params":{params}}}"#)
-}
-
 #[test]
 #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
 fn first_stop_is_prompt_while_run_blocks_the_sim() {
@@ -263,18 +110,7 @@ fn first_stop_is_prompt_while_run_blocks_the_sim() {
         .expect("sim thread ready");
 
     // The actix server binds asynchronously in its own thread — retry the connect.
-    let mut ws = {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            match Ws::connect(PORT) {
-                Ok(ws) => break ws,
-                Err(_) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Err(e) => panic!("could not connect to bridge: {e}"),
-            }
-        }
-    };
+    let mut ws = connect_ws(PORT);
 
     // The adapter awaits the breakpoint set before firing the run — mirror that.
     ws.send(&rpc(

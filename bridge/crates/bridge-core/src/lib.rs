@@ -12,6 +12,7 @@ mod debug;
 mod facade;
 mod file;
 mod globals;
+pub mod golden;
 mod json;
 mod jsonrpc;
 mod locks;
@@ -27,7 +28,7 @@ mod surface;
 mod toml_codec;
 
 use log::LevelFilter::Warn;
-use log::{error, info, warn, LevelFilter};
+use log::{info, warn, LevelFilter};
 use mlua::prelude::{LuaFunction, LuaResult, LuaTable};
 use mlua::Lua;
 use module_config::ModuleConfig;
@@ -178,10 +179,11 @@ pub fn bootstrap(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<LuaTab
 
     let logger_level: LevelFilter = module_config.logger_level.unwrap_or(Warn);
 
-    match logging::init(get_logger_file_path(lua, kind), logger_level) {
-        Ok(()) => info!("Logger initialized ({})", kind.service_name()),
-        Err(e) => error!("Failed to initialize logger: {e}"),
-    }
+    // Logging is best effort and its outcome is only ever diagnostic: a bridge
+    // that could not open its log file is still a working bridge, and the one
+    // place a failure could be reported is the log we just failed to open.
+    let logging = logging::init(get_logger_file_path(lua, kind), logger_level);
+    info!("{} logging init: {logging:?}", kind.service_name());
 
     let exports = lua.create_table()?;
 
@@ -193,10 +195,8 @@ pub fn bootstrap(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<LuaTab
     // so the IDE can drop a fresh `types/<module>.d.lua` into a project. The
     // text is rendered once at load and handed back verbatim.
     let dlua = crate::luadef::emit_dlua(&doc);
-    exports.set(
-        "emit_dlua",
-        lua.create_function(move |_, ()| Ok(dlua.clone()))?,
-    )?;
+    let emit_dlua = lua.create_function(move |_, ()| Ok(dlua.clone()))?;
+    exports.set("emit_dlua", emit_dlua)?;
 
     // `dump_globals()` introspects the live DCS API in `_G` (the curated roots
     // for this bridge's state) and returns it as dotted `.d.lua` statements
@@ -204,10 +204,8 @@ pub fn bootstrap(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<LuaTab
     // globals as the sim loads, so the dump must reflect the sim's CURRENT
     // surface, not a snapshot taken at module load.
     let roots = kind.globals_roots();
-    exports.set(
-        "dump_globals",
-        lua.create_function(move |lua, ()| Ok(globals::dump_globals(lua, roots)))?,
-    )?;
+    let dump_globals = lua.create_function(move |lua, ()| Ok(globals::dump_globals(lua, roots)))?;
+    exports.set("dump_globals", dump_globals)?;
 
     // Expose `register_methods(router, deps)` — the single source of truth for
     // this bridge's JSON-RPC method set, shared by the live hook/init and the
@@ -239,11 +237,13 @@ fn get_logger_file_path(lua: &Lua, kind: BridgeKind) -> PathBuf {
             .join(kind.log_file_name());
     }
 
-    if let Ok(current_dir) = env::current_dir() {
-        return current_dir.join(kind.log_file_name());
-    }
-
-    format!("./{}", kind.log_file_name()).into()
+    // No write root — a bare state, or a sanitized mission state before the GUI
+    // hook plants `__DCS_STUDIO_WRITEDIR`. Fall back to the process's current
+    // directory, and to a bare relative name if even that is unavailable: a log
+    // path is never worth failing the module load over.
+    env::current_dir()
+        .unwrap_or_default()
+        .join(kind.log_file_name())
 }
 
 /// Compose the `register_methods(router, deps)` source for `kind`: the shared
@@ -329,6 +329,180 @@ pub(crate) fn get_lfs_writedir(lua: &Lua) -> LuaResult<String> {
     match via_lfs {
         Ok(dir) => Ok(dir),
         Err(_) => globals.get::<String>("__DCS_STUDIO_WRITEDIR"),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
+mod bootstrap_tests {
+    use super::{bootstrap, get_lfs_writedir, get_logger_file_path, BridgeKind};
+    use mlua::prelude::{LuaFunction, LuaTable};
+    use mlua::Lua;
+
+    /// A state whose `lfs.writedir()` returns `dir`, as DCS provides it.
+    fn with_writedir(lua: &Lua, dir: &str) {
+        let lfs = lua.create_table().expect("lfs");
+        let dir = dir.to_string();
+        lfs.set(
+            "writedir",
+            lua.create_function(move |_, ()| Ok(dir.clone()))
+                .expect("writedir fn"),
+        )
+        .expect("set writedir");
+        lua.globals().set("lfs", lfs).expect("set lfs");
+    }
+
+    /// `bootstrap` is `luaopen`: whatever it returns is the whole `dcs_studio`
+    /// module a mission script sees. Both kinds must come back fully wired —
+    /// the constants that name the bridge, the sub-namespaces, and the three
+    /// root functions the hook and the editor call.
+    ///
+    /// Windows-ignored like the rest of the crate's mlua tests: there it needs
+    /// DCS's `lua.dll` on the runtime path; on non-Windows the build.rs links
+    /// PUC liblua5.1 so Linux CI runs it as an ordinary test (issue #28).
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn both_bridges_bootstrap_a_complete_module_table() {
+        for (kind, name) in [
+            (BridgeKind::Gui, "dcs-studio-gui"),
+            (BridgeKind::Mission, "dcs-studio-mission"),
+        ] {
+            let lua = Lua::new();
+            let root = std::env::temp_dir().join(format!(
+                "dcs-studio-bootstrap-{}-{}",
+                kind.env_name(),
+                std::process::id()
+            ));
+            with_writedir(&lua, &format!("{}/", root.display()));
+
+            let exports = bootstrap(&lua, kind, "9.9.9").expect("bootstrap");
+            assert_eq!(exports.get::<String>("name").expect("name"), name);
+            assert_eq!(exports.get::<String>("version").expect("version"), "9.9.9");
+            let module = kind.module_name();
+            let missing: Vec<&str> = [
+                "json", "toml", "file", "sqlite", "console", "debug", "logger", "jsonrpc",
+            ]
+            .into_iter()
+            .filter(|sub| exports.get::<LuaTable>(*sub).is_err())
+            .collect();
+            assert!(missing.is_empty(), "{module} is missing {missing:?}");
+
+            // `emit_dlua` hands the editor this module's own type surface.
+            let dlua: String = exports
+                .get::<LuaFunction>("emit_dlua")
+                .expect("emit_dlua")
+                .call(())
+                .expect("call emit_dlua");
+            assert!(
+                dlua.contains(&format!("---@meta {}", kind.module_name())),
+                "{dlua}"
+            );
+
+            // `dump_globals` introspects `_G` at CALL time, so a root that
+            // appears later in the sim's load still shows up.
+            let dump: LuaFunction = exports.get("dump_globals").expect("dump_globals");
+            assert!(!dump.call::<String>(()).expect("dump").contains("net = {}"));
+            lua.load("net = { dostring_in = function() end }")
+                .exec()
+                .expect("seed a late global");
+            let after: String = dump.call(()).expect("dump again");
+            assert!(after.contains("net = {}"), "{after}");
+            assert!(after.contains("function net.dostring_in() end"), "{after}");
+
+            // `register_methods` is the one source of truth behind rpc.discover.
+            exports
+                .get::<LuaFunction>("register_methods")
+                .expect("register_methods");
+
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    /// Without the `debug` library the engine cannot install, and the bridge
+    /// must still load: a sanitized DCS state gets json/file/sqlite/console and
+    /// simply no breakpoints, rather than a failed `require` that takes the
+    /// hook down with it.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_state_without_the_debug_library_still_gets_the_rest_of_the_bridge() {
+        let lua = Lua::new();
+        assert!(
+            lua.globals()
+                .get::<mlua::Value>("debug")
+                .expect("debug")
+                .is_nil(),
+            "the harness state really has no debug library"
+        );
+
+        let exports = bootstrap(&lua, BridgeKind::Gui, "test").expect("bootstrap");
+        exports.get::<LuaTable>("json").expect("json survived");
+        assert!(
+            lua.globals()
+                .get::<mlua::Value>("__DCS_STUDIO_DBG")
+                .expect("dbg")
+                .is_nil(),
+            "the debug engine must not claim to be installed"
+        );
+        // The console runtime is state-local and does install.
+        lua.globals()
+            .get::<LuaTable>("__DCS_STUDIO_RT")
+            .expect("RT installed");
+    }
+
+    /// The log file is per DLL and lives under the write root's `Logs`. The two
+    /// bridges must never share one: each has its own log4rs instance, and a
+    /// shared truncating appender would have them clobber each other's file.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn each_bridge_logs_to_its_own_file_under_the_write_root() {
+        let lua = Lua::new();
+        with_writedir(&lua, "/tmp/dcs-writedir/");
+
+        let gui = get_logger_file_path(&lua, BridgeKind::Gui);
+        let mission = get_logger_file_path(&lua, BridgeKind::Mission);
+        assert!(gui.ends_with("Logs/dcs_studio_gui.log"), "{gui:?}");
+        assert!(
+            mission.ends_with("Logs/dcs_studio_mission.log"),
+            "{mission:?}"
+        );
+        assert_ne!(gui, mission);
+    }
+
+    /// With no write root at all the log falls back beside the process rather
+    /// than failing the load — and the fallback is still per bridge.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_state_with_no_write_root_falls_back_to_the_working_directory() {
+        let lua = Lua::new();
+        assert!(
+            get_lfs_writedir(&lua).is_err(),
+            "no lfs, no fallback global"
+        );
+
+        let path = get_logger_file_path(&lua, BridgeKind::Mission);
+        assert!(path.ends_with("dcs_studio_mission.log"), "{path:?}");
+        assert!(
+            !path.to_string_lossy().contains("Logs"),
+            "the Logs subdirectory belongs to the write root: {path:?}"
+        );
+    }
+
+    /// In the sanitized mission state `lfs` is gone, so the GUI hook's boot
+    /// dispatch passes the write dir through `__DCS_STUDIO_WRITEDIR` instead.
+    /// A regression here silently sends every log and every `file.*` write to
+    /// the DCS install directory.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn the_write_root_falls_back_to_the_global_the_hook_plants() {
+        let lua = Lua::new();
+        lua.globals()
+            .set("__DCS_STUDIO_WRITEDIR", "/tmp/planted/")
+            .expect("plant");
+        assert_eq!(get_lfs_writedir(&lua).expect("writedir"), "/tmp/planted/");
+
+        // A live `lfs.writedir()` wins over the planted global.
+        with_writedir(&lua, "/tmp/live/");
+        assert_eq!(get_lfs_writedir(&lua).expect("writedir"), "/tmp/live/");
     }
 }
 

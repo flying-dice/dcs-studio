@@ -261,17 +261,19 @@ pub fn register(sub: &mut Sub) -> Result<()> {
         &[r_named("table", "bySource")],
         "Return the current breakpoints as a table: source → array of 1-based lines.",
         |lua: &Lua, ()| {
+            // Snapshot under the lock, then build the Lua tables outside it:
+            // allocating in the Lua state can raise, and raising while holding
+            // a process-wide mutex would leave the registry locked for the rest
+            // of the session. The registry is a handful of breakpoints.
+            let snapshot = with_registry(|r| r.clone());
             let t = lua.create_table()?;
-            with_registry(|r| -> Result<()> {
-                for (src, lines) in r.iter() {
-                    let arr = lua.create_table()?;
-                    for (i, line) in lines.iter().enumerate() {
-                        arr.set(i + 1, *line)?;
-                    }
-                    t.set(src.as_str(), arr)?;
+            for (src, lines) in snapshot {
+                let arr = lua.create_table()?;
+                for (i, line) in lines.iter().enumerate() {
+                    arr.set(i + 1, *line)?;
                 }
-                Ok(())
-            })?;
+                t.set(src.as_str(), arr)?;
+            }
             t.into_lua_multi(lua)
         },
     )?;
@@ -483,5 +485,198 @@ mod tests {
             condition_at("@scripts/util.lua", 7).is_none(),
             "clear drops conditions"
         );
+    }
+
+    /// The source-matching rule itself, in isolation: identical keys match, a
+    /// loader-relative spelling matches at a path boundary, and a name that
+    /// merely ends with the same characters does not. `should_pause` reaches it
+    /// only on its slow scan, so testing the predicate directly is what pins
+    /// the boundary rule that keeps `.../otherscripts/util.lua` from stealing
+    /// `.../scripts/util.lua`'s breakpoints.
+    #[test]
+    fn source_matching_is_exact_or_bounded_at_a_path_separator() {
+        assert!(source_matches("e:/p/a.lua", "e:/p/a.lua"), "identical");
+        assert!(source_matches("e:/p/scripts/util.lua", "scripts/util.lua"));
+        assert!(source_matches("scripts/util.lua", "e:/p/scripts/util.lua"));
+
+        assert!(!source_matches(
+            "e:/p/otherscripts/util.lua",
+            "scripts/util.lua"
+        ));
+        assert!(!source_matches("e:/p/a.lua", "e:/p/b.lua"));
+        // An empty query would otherwise suffix-match every registered source.
+        assert!(!source_matches("e:/p/a.lua", ""));
+    }
+
+    /// A condition is per `(source, line)` and an empty or whitespace-only
+    /// expression clears it rather than installing a breakpoint that can never
+    /// evaluate. The editor sends `""` when the user empties the condition box,
+    /// and a stale `" "` left behind would silently stop pausing.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_blank_condition_clears_rather_than_installs() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear();
+
+        set_condition("a.lua", 3, Some("i > 2".into()));
+        assert_eq!(condition_at("a.lua", 3).as_deref(), Some("i > 2"));
+
+        set_condition("a.lua", 3, Some("   ".into()));
+        assert!(condition_at("a.lua", 3).is_none(), "whitespace clears");
+
+        set_condition("a.lua", 3, Some("i > 2".into()));
+        set_condition("a.lua", 3, None);
+        assert!(condition_at("a.lua", 3).is_none(), "nil clears");
+
+        // A condition on another line of the same source is untouched, and a
+        // line with no condition at all reports none rather than the neighbour's.
+        set_condition("a.lua", 9, Some("hp < 10".into()));
+        assert!(condition_at("a.lua", 3).is_none());
+        assert_eq!(condition_at("a.lua", 9).as_deref(), Some("hp < 10"));
+        clear();
+    }
+
+    /// The pause/resume/stop flags are the handshake between the editor and the
+    /// sim's line hook. Each request is *consumed* by the hook: a flag that
+    /// stayed set would re-pause (or re-kill) the next run, and one that never
+    /// arrived would leave the editor's Pause button dead.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn pause_stop_and_resume_requests_are_consumed_once() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset_session();
+
+        assert!(!take_pause(), "no request, no pause");
+        request_pause();
+        assert!(take_pause(), "the hook sees the request");
+        assert!(!take_pause(), "and only once");
+
+        assert!(!take_stop());
+        request_stop();
+        assert!(take_stop());
+        assert!(!take_stop());
+
+        assert!(take_resume().is_none(), "no request means stay paused");
+        request_resume("step_over".into());
+        assert_eq!(take_resume().as_deref(), Some("step_over"));
+        assert!(take_resume().is_none());
+        reset_session();
+    }
+
+    /// `set_paused` publishes the snapshot the editor renders, and drops any
+    /// resume request that arrived while the chunk was still running — without
+    /// that, a Continue clicked a frame before the stop would skip straight
+    /// past the breakpoint the user was waiting for.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn pausing_publishes_the_snapshot_and_drops_a_stale_resume() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reset_session();
+
+        assert!(paused_snapshot().is_none(), "running: no snapshot");
+        request_resume("continue".into());
+        set_paused(r#"{"source":"a.lua","line":3}"#.into());
+        assert!(take_resume().is_none(), "the stale resume was dropped");
+        assert_eq!(
+            paused_snapshot().as_deref(),
+            Some(r#"{"source":"a.lua","line":3}"#)
+        );
+
+        clear_paused();
+        assert!(paused_snapshot().is_none(), "resumed: no snapshot");
+        reset_session();
+    }
+
+    /// `reset_session` runs at the start of every `debug_run`. A manual Pause,
+    /// a Stop, a resume mode or a snapshot left over from the previous session
+    /// must all be gone, or the new run breaks on its first line (or dies
+    /// instantly) for no reason the user can see.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn reset_session_clears_every_leftover_from_the_previous_run() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        request_pause();
+        request_stop();
+        request_resume("step_into".into());
+        set_paused("{}".into());
+
+        reset_session();
+
+        assert!(!take_pause(), "stale break-all");
+        assert!(!take_stop(), "stale stop");
+        assert!(take_resume().is_none(), "stale resume mode");
+        assert!(paused_snapshot().is_none(), "stale snapshot");
+    }
+
+    /// The whole `debug.*` surface as the engine and the editor drive it, from
+    /// Lua. `breakpoints()` is what the IDE reads back to render the gutter, so
+    /// its shape (source → sorted array of 1-based lines) is part of the
+    /// contract, not an implementation detail.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn the_lua_surface_drives_the_registry_and_the_pause_handshake() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear();
+        reset_session();
+
+        let lua = mlua::Lua::new();
+        let dbg = crate::facade::sub_table(&lua, "debug", register).expect("debug sub");
+        lua.globals().set("dbg", dbg).expect("set dbg");
+
+        lua.load(
+            r#"
+            assert(dbg.set_breakpoints("=e:\\p\\a.lua", { 30, 10, 10 }) == 2, "dedups and counts")
+            assert(dbg.should_pause("@e:/p/a.lua", 10), "normalized lookup")
+            assert(not dbg.should_pause("@e:/p/a.lua", 11))
+
+            local bp = dbg.breakpoints()
+            local lines = bp["e:/p/a.lua"]
+            assert(lines and #lines == 2 and lines[1] == 10 and lines[2] == 30, "sorted lines")
+
+            dbg.set_condition("=e:\\p\\a.lua", 10, "i == 3")
+            assert(dbg.condition_at("@e:/p/a.lua", 10) == "i == 3")
+            dbg.set_condition("=e:\\p\\a.lua", 10, nil)
+            assert(dbg.condition_at("@e:/p/a.lua", 10) == nil)
+
+            -- The pause handshake, end to end.
+            assert(dbg.paused() == nil, "running")
+            dbg.set_paused('{"line":10}')
+            assert(dbg.paused() == '{"line":10}')
+            assert(dbg.take_resume() == nil, "no resume requested yet")
+            dbg.request_resume("step_out")
+            assert(dbg.take_resume() == "step_out")
+            dbg.clear_paused()
+            assert(dbg.paused() == nil, "resumed")
+
+            dbg.request_pause();  assert(dbg.take_pause() == true)
+            assert(dbg.take_pause() == false)
+            dbg.request_stop();   assert(dbg.take_stop() == true)
+            assert(dbg.take_stop() == false)
+
+            dbg.request_pause()
+            dbg.reset_session()
+            assert(dbg.take_pause() == false, "reset drops the stale request")
+
+            dbg.clear_breakpoints()
+            assert(next(dbg.breakpoints()) == nil, "cleared")
+            assert(not dbg.should_pause("@e:/p/a.lua", 10))
+            "#,
+        )
+        .exec()
+        .expect("debug surface suite");
+
+        clear();
+        reset_session();
     }
 }

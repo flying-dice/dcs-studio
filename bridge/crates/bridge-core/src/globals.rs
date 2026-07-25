@@ -122,6 +122,12 @@ mod tests {
             log = { write = function() end, ERROR = 4 }
             -- A non-emittable key (not a Lua identifier) is skipped.
             log["bad-key"] = function() end
+            -- Every scalar type DCS actually exposes on these roots, plus a
+            -- coroutine: not indexable, so it types as an opaque handle rather
+            -- than being walked (a walk would raise on it).
+            log.PREFIX = "dcs"
+            log.VERBOSE = true
+            log.pump = coroutine.create(function() end)
             "#,
         )
         .exec()
@@ -137,6 +143,13 @@ mod tests {
         assert!(out.contains("log = {}"), "{out}");
         assert!(out.contains("function log.write() end"), "{out}");
         assert!(out.contains("log.ERROR = 0"), "{out}");
+
+        // Scalars carry their type, not the live build's value — the dump is a
+        // type surface, not a snapshot of this install's constants.
+        assert!(out.contains("log.PREFIX = \"\""), "{out}");
+        assert!(out.contains("log.VERBOSE = false"), "{out}");
+        // A thread is not indexable; typing it opaque keeps the walk total.
+        assert!(out.contains("log.pump = {}"), "{out}");
 
         // The cycle terminated (a finite string is itself the proof) and the
         // self-reference is typed as an opaque table, not re-walked.

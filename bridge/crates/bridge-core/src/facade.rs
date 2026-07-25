@@ -322,3 +322,90 @@ pub fn r(ty: &str) -> Ret {
 pub fn r_named(ty: &str, name: &str) -> Ret {
     Ret::named(ty, name)
 }
+
+/// Register one sub-namespace on a throwaway [`Surface`] and hand back its live
+/// Lua table, so each module's tests can drive the bindings it actually
+/// registers without standing up the whole bridge surface.
+#[cfg(test)]
+pub(crate) fn sub_table(
+    lua: &Lua,
+    name: &str,
+    build: impl FnOnce(&mut Sub) -> Result<()>,
+) -> Result<LuaTable> {
+    let exports = lua.create_table()?;
+    let mut surface = Surface::new(lua, &exports, "test", "");
+    surface.submodule(name, "", build)?;
+    exports.get(name)
+}
+
+/// A table that raises when `refuse` is assigned to it and behaves normally
+/// otherwise.
+///
+/// Registration only fails on a Lua-side allocation error, which no test can
+/// provoke — a refusing `__newindex` is the one lever that reaches the failure
+/// path, and it reaches it for a chosen key so a manifest can be checked
+/// binding by binding.
+#[cfg(test)]
+pub(crate) fn table_refusing(lua: &Lua, refuse: &str) -> Result<LuaTable> {
+    let table = lua.create_table()?;
+    let meta = lua.create_table()?;
+    let refuse = refuse.to_string();
+    let guard = move |_: &Lua, (t, key, value): (LuaTable, String, LuaValue)| {
+        if key == refuse {
+            return Err(mlua::Error::runtime(format!("refused key: {key}")));
+        }
+        t.raw_set(key, value)
+    };
+    let newindex = lua.create_function(guard)?;
+    meta.set("__newindex", newindex)?;
+    table.set_metatable(Some(meta));
+    Ok(table)
+}
+
+/// A [`Sub`] backed by a table that refuses the key `refuse` — see
+/// [`table_refusing`].
+#[cfg(test)]
+pub(crate) fn sub_refusing<'l>(lua: &'l Lua, name: &str, refuse: &str) -> Result<Sub<'l>> {
+    Ok(Sub {
+        lua,
+        table: table_refusing(lua, refuse)?,
+        class: ClassDoc::new(name),
+        full_name: name.to_string(),
+        nested: Vec::new(),
+    })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
+mod tests {
+    use super::LuaType;
+
+    /// The recorded type is the *surface* type, not the Rust one: every
+    /// string-shaped binding collapses to `string`, every numeric one to
+    /// `number`, and a dynamic value to `any`. The editor's completion reads
+    /// these strings straight out of the generated `.d.lua`, so a wrong mapping
+    /// is a wrong hint on every binding that uses the type.
+    #[test]
+    fn rust_binding_types_collapse_to_emmylua_surface_types() {
+        assert_eq!(String::lua_type(), "string");
+        assert_eq!(<Vec<u8>>::lua_type(), "string");
+        assert_eq!(<mlua::String>::lua_type(), "string");
+        assert_eq!(f64::lua_type(), "number");
+        assert_eq!(usize::lua_type(), "number");
+        assert_eq!(bool::lua_type(), "boolean");
+        assert_eq!(<()>::lua_type(), "nil");
+        assert_eq!(<mlua::Value>::lua_type(), "any");
+        assert_eq!(<mlua::Table>::lua_type(), "any");
+    }
+
+    /// An optional binding renders as `T?` — the `EmmyLua` spelling the editor
+    /// needs to stop flagging a nil return as a type error.
+    #[test]
+    fn an_optional_binding_renders_with_the_emmylua_question_mark() {
+        assert_eq!(<Option<String>>::lua_type(), "string?");
+        assert_eq!(<Option<bool>>::lua_type(), "boolean?");
+        // Nesting composes rather than collapsing, so a genuinely doubled
+        // Option is visible in the generated types instead of silently flat.
+        assert_eq!(<Option<Option<f64>>>::lua_type(), "number??");
+    }
+}

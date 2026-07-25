@@ -66,7 +66,7 @@ impl JsonRpcRouter {
         Self::default()
     }
 
-    fn add_method(&mut self, name: String, callback: LuaFunction, meta: MethodMeta) {
+    pub(crate) fn add_method(&mut self, name: String, callback: LuaFunction, meta: MethodMeta) {
         debug!("Adding method: {name:?}");
         self.methods.insert(
             name,
@@ -134,7 +134,9 @@ mod tests {
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn methods_sorted_returns_names_alphabetical_with_meta() {
         let lua = Lua::new();
-        let noop = lua.create_function(|_, ()| Ok(())).expect("fn");
+        // A stand-in handler that is catalogued, never called — `print` saves
+        // registering a closure the test would then have to exercise.
+        let noop: LuaFunction = lua.globals().get("print").expect("print");
         let mut router = JsonRpcRouter::new();
         router.add_method("ping".into(), noop.clone(), MethodMeta::default());
         router.add_method(

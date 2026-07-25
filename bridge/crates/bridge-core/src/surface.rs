@@ -130,9 +130,28 @@ pub fn build(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod tests {
     use super::*;
+    use crate::facade::{sub_refusing, sub_table, table_refusing, Sub};
     use mlua::prelude::LuaValue;
     use mlua::Lua;
     use std::collections::BTreeSet;
+
+    /// A sub-namespace's registration function, as [`build`] passes it to
+    /// [`Surface::submodule`].
+    type Registrar = fn(&mut Sub) -> LuaResult<()>;
+
+    /// Every sub-namespace and the function that registers it — the same list
+    /// [`build`] walks, so a new submodule that forgets to appear here shows up
+    /// as a mismatch in [`every_registered_key_is_documented`]'s sibling checks.
+    const SUBMODULES: [(&str, Registrar); 8] = [
+        ("json", crate::json::register),
+        ("toml", crate::toml_codec::register),
+        ("file", crate::file::register),
+        ("sqlite", crate::sqlite::register),
+        ("console", crate::console::register),
+        ("debug", crate::debug::register),
+        ("logger", crate::logger::register),
+        ("jsonrpc", crate::jsonrpc::register),
+    ];
 
     /// These mlua tests need a real Lua 5.1 at runtime: on Windows that is
     /// DCS's own `lua.dll` (put it on PATH and run with `-- --include-ignored`);
@@ -392,6 +411,64 @@ mod tests {
         )
         .exec()
         .expect("rt degraded (no debug) suite");
+    }
+
+    /// A binding that cannot be registered must abort its whole sub-namespace,
+    /// not leave a half-built one behind. A partially populated `json` table
+    /// would reach mission scripts as a missing function — a `nil` call deep in
+    /// someone's mission, long after the real failure — instead of a load-time
+    /// error the hook reports and the user can act on.
+    ///
+    /// Registration only fails on a Lua allocation error, which no test can
+    /// provoke; a table that refuses one key stands in for it, and every key
+    /// each manifest registers is checked in turn.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_binding_that_cannot_register_aborts_its_whole_submodule() {
+        for (name, register) in SUBMODULES {
+            let lua = Lua::new();
+            let registered: Vec<String> = sub_table(&lua, name, register)
+                .expect("baseline registration")
+                .pairs::<String, LuaValue>()
+                .filter_map(std::result::Result::ok)
+                .map(|(key, _)| key)
+                .collect();
+            assert!(!registered.is_empty(), "{name} registered nothing");
+
+            for key in registered {
+                let lua = Lua::new();
+                let mut sub = sub_refusing(&lua, name, &key).expect("refusing sub");
+                let err =
+                    register(&mut sub).expect_err(&format!("{name}.{key} must abort the manifest"));
+                assert!(
+                    err.to_string().contains("refused key"),
+                    "{name}.{key}: {err}"
+                );
+            }
+        }
+    }
+
+    /// The same all-or-nothing rule one level up: a root key the exports table
+    /// refuses — a constant or a whole sub-namespace — must fail `build`, so
+    /// `bootstrap` reports it out of `luaopen` rather than handing DCS a
+    /// `dcs_studio` table with a hole in it.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_refused_root_key_fails_the_whole_surface_build() {
+        let (_lua, exports, _doc) = built();
+        let root_keys: Vec<String> = exports
+            .pairs::<String, LuaValue>()
+            .filter_map(std::result::Result::ok)
+            .map(|(key, _)| key)
+            .collect();
+
+        for key in root_keys {
+            let lua = Lua::new();
+            let refusing = table_refusing(&lua, &key).expect("refusing exports");
+            let err = build(&lua, &refusing, BridgeKind::Gui, env!("CARGO_PKG_VERSION"))
+                .expect_err(&format!("root key {key} must fail the build"));
+            assert!(err.to_string().contains("refused key"), "{key}: {err}");
+        }
     }
 
     /// Every key registered on the live module table (and each sub-namespace
