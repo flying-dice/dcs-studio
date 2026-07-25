@@ -75,6 +75,9 @@ export interface VscodeState {
   visibleTextEditors: { document: FakeTextDocument; viewColumn?: number }[];
   /** Sessions started via debug.startDebugging, in order. */
   startedDebugSessions: { folder: unknown; config: Record<string, unknown>; options: unknown }[];
+  /** The handler registered via window.registerUriHandler — how a vscode://
+   * deep link (the My Mods desktop shortcut) reaches the extension. */
+  uriHandler: { handleUri(uri: { path: string }): void } | undefined;
 }
 
 /** One mutating workspace.fs call, as tests assert on it. */
@@ -134,6 +137,7 @@ function blankState(): VscodeState {
     textDocuments: [],
     visibleTextEditors: [],
     startedDebugSessions: [],
+    uriHandler: undefined,
   };
 }
 
@@ -207,6 +211,7 @@ export function resetVscode(
   // still reacts and one fire() looks like N.
   workspaceFoldersEmitter.dispose();
   authChangeEmitter.dispose();
+  openDocEmitter.dispose();
   changeDocEmitter.dispose();
   closeDocEmitter.dispose();
   changeConfigEmitter.dispose();
@@ -396,9 +401,15 @@ export class FakeWebviewView {
 }
 
 const workspaceFoldersEmitter = new FakeEventEmitter<unknown>();
+const openDocEmitter = new FakeEventEmitter<unknown>();
 const changeDocEmitter = new FakeEventEmitter<{ document: { uri: { toString(): string } } }>();
 const closeDocEmitter = new FakeEventEmitter<{ uri: { toString(): string } }>();
 const changeConfigEmitter = new FakeEventEmitter<{ affectsConfiguration(s: string): boolean }>();
+
+/** Fire `workspace.onDidOpenTextDocument` for one document. */
+export function fireDocumentOpened(document: unknown): void {
+  openDocEmitter.fire(document);
+}
 
 /** Fire `workspace.onDidChangeTextDocument` for one document. */
 export function fireDocumentChanged(document: unknown): void {
@@ -499,6 +510,7 @@ export function vscodeMock() {
           : full;
       },
       onDidChangeConfiguration: changeConfigEmitter.event,
+      onDidOpenTextDocument: openDocEmitter.event,
       onDidChangeTextDocument: changeDocEmitter.event,
       onDidCloseTextDocument: closeDocEmitter.event,
       onDidSaveTextDocument: new FakeEventEmitter<unknown>().event,
@@ -625,6 +637,12 @@ export function vscodeMock() {
       },
       registerWebviewViewProvider: (_id: string, _provider: unknown) =>
         new FakeDisposable(() => {}),
+      registerUriHandler: (handler: { handleUri(uri: { path: string }): void }) => {
+        state.uriHandler = handler;
+        return new FakeDisposable(() => {
+          state.uriHandler = undefined;
+        });
+      },
       createStatusBarItem: (alignment: number, priority?: number) => {
         const item = new FakeStatusBarItem(alignment, priority);
         state.statusBarItems.push(item);
