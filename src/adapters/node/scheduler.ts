@@ -12,14 +12,6 @@ export class NodeScheduler implements SchedulerPort {
   clearInterval(handle: TimerHandle | undefined): void {
     clearInterval(handle as unknown as NodeJS.Timeout | undefined);
   }
-
-  setTimeout(fn: () => void, ms: number): TimerHandle {
-    return setTimeout(fn, ms) as unknown as TimerHandle;
-  }
-
-  clearTimeout(handle: TimerHandle | undefined): void {
-    clearTimeout(handle as unknown as NodeJS.Timeout | undefined);
-  }
 }
 
 /** The process-wide scheduler call sites default to when nothing is injected. */

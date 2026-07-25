@@ -3,6 +3,11 @@ name: CI
 on:
   push:
     branches: [main, develop]
+    # A tag push matches no branch filter, so without this the full pyramid
+    # never runs for a release — and release.yml runs neither lint, nor e2e,
+    # nor clippy. The DLLs it ships load inside a running flight sim, where the
+    # panic-restriction lints are the whole defence.
+    tags: ["v*"]
   pull_request:
     branches: [main, develop]
   workflow_dispatch:
@@ -107,8 +112,15 @@ jobs:
       - name: Install Lua 5.1 (test-time link target)
         run: sudo apt-get update && sudo apt-get install -y liblua5.1-0-dev
       - uses: taiki-e/install-action@cargo-llvm-cov
+      # Regions is llvm-cov's branch-equivalent metric, and it is the one that
+      # matters most here: a `?` early return or an unexercised match arm can sit
+      # at 100% line coverage, and an unexercised error path in this workspace
+      # panics the user's flight sim. The three TypeScript layers all gate
+      # branches at 100; this is the same promise.
       - name: Rust tests + coverage gate
-        run: cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-functions 100
+        run: >-
+          cargo llvm-cov --workspace
+          --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
         working-directory: bridge
 
   windows:

@@ -85,21 +85,32 @@
     return v;
   }
 
-  // The modeled [project] fields the model guarantees are strings. TOML is
-  // typed, so `name = 2024` is a valid integer and `version = 1` a valid one
-  // too — but every consumer treats these as text and calls .trim() on them
-  // (the form's issues(), publish preflight's computePreflight()), which turns
-  // a number or boolean into a TypeError. Normalise once here at the parse
-  // boundary rather than defending at each use.
-  const PROJECT_TEXT_KEYS = ["name", "version", "author", "description"];
+  // The modeled fields the model guarantees are strings, per section. TOML is
+  // typed, so `name = 2024` is a valid integer and `path = 1` a valid one too —
+  // but every consumer treats these as text and calls .trim() / .startsWith()
+  // on them (the form's issues(), splitDest(), publish preflight's
+  // computePreflight()), which turns a number or boolean into a TypeError.
+  // Normalise once here at the parse boundary rather than defending at each use.
+  //
+  // A throw here is not cosmetic: render() assigns state.model BEFORE building
+  // the HTML, so a poisoned value leaves the form permanently blank and every
+  // later message re-throws on the same row.
+  const TEXT_KEYS = {
+    project: ["name", "version", "author", "description"],
+    bundle: ["path"],
+    symlink: ["source", "dest"],
+    requires_module: ["id", "name"],
+    entrypoint: ["id", "name", "exe"],
+    mission_script: ["name", "purpose", "path", "run_on"],
+  };
 
   /**
-   * A modeled [project] value as text: a quoted string unquotes as usual, and
-   * anything TOML types as a non-string (integer, float, boolean, array) keeps
-   * its literal source text. Unmodeled [project] keys deliberately do NOT go
-   * through this — they keep their parsed type so emitToml round-trips them.
+   * A modeled value as text: a quoted string unquotes as usual, and anything
+   * TOML types as a non-string (integer, float, boolean, array) keeps its
+   * literal source text. Unmodeled keys deliberately do NOT go through this —
+   * they keep their parsed type so emitToml round-trips them.
    */
-  function parseProjectText(raw) {
+  function parseText(raw) {
     const v = parseVal(raw);
     return typeof v === "string" ? v : raw;
   }
@@ -110,6 +121,7 @@
     let cur = null;
     let sec = null;
     let extra = null;
+    let textKeys = [];
     const flush = () => {
       if (extra?.join("").trim()) m.extras.push(extra.join("\n").replace(/\s+$/, ""));
       extra = null;
@@ -141,6 +153,7 @@
               m.requires_module.push(cur);
             }
           } else cur = m.project;
+          textKeys = TEXT_KEYS[name];
           sec = "modeled";
         } else {
           extra = [raw]; // capture the header + body verbatim
@@ -159,10 +172,7 @@
         const kv = line.match(/^([A-Za-z0-9_-]+)\s*=\s*(.+)$/);
         if (kv) {
           const val = kv[2].trim();
-          cur[kv[1]] =
-            cur === m.project && PROJECT_TEXT_KEYS.includes(kv[1])
-              ? parseProjectText(val)
-              : parseVal(val);
+          cur[kv[1]] = textKeys.includes(kv[1]) ? parseText(val) : parseVal(val);
         }
       }
       // Lines before any section (e.g. a leading comment) are dropped in v1.

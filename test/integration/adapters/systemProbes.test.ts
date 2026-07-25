@@ -59,19 +59,6 @@ describe("NodeEnv", () => {
     expect(new NodeEnv().userProfile()).toBeUndefined();
     if (ORIGINAL !== undefined) process.env.USERPROFILE = ORIGINAL;
   });
-
-  it("offers both Program Files variants on each candidate drive", () => {
-    // DCS is commonly installed off the system drive, and a 32-bit-era install
-    // lands in (x86) — missing either shape means detection silently fails.
-    expect(new NodeEnv().programFilesCandidates()).toEqual([
-      "C:\\Program Files",
-      "C:\\Program Files (x86)",
-      "D:\\Program Files",
-      "D:\\Program Files (x86)",
-      "E:\\Program Files",
-      "E:\\Program Files (x86)",
-    ]);
-  });
 });
 
 describe("RegExeRegistry", () => {

@@ -214,12 +214,58 @@ describe("parseToml — [project] scalars are normalised to text", () => {
     expect(out).toContain("beta = true");
   });
 
-  it("does not text-normalise the same key names in other modeled sections", () => {
-    // [[requires_module]].name and [[entrypoint]].id are separate keys on
-    // separate rows — the normalisation must key off the [project] table, not
-    // off the key name alone.
-    const model = parseToml("[[requires_module]]\nid = 50\nname = 42\n");
-    expect(model.requires_module[0]).toEqual({ id: 50, name: 42 });
+  // The array sections need the same protection, and for a worse reason: the
+  // form's issues() calls .trim() on bundle.path and mission_script.name, and
+  // splitDest() calls .startsWith() on symlink.dest. render() assigns
+  // state.model BEFORE building the HTML, so one numeric row leaves the form
+  // permanently blank and every later message re-throws on the same row.
+  it.each([
+    ["bundle", "path"],
+    ["symlink", "source"],
+    ["symlink", "dest"],
+    ["requires_module", "id"],
+    ["requires_module", "name"],
+    ["entrypoint", "id"],
+    ["entrypoint", "name"],
+    ["entrypoint", "exe"],
+    ["mission_script", "name"],
+    ["mission_script", "purpose"],
+    ["mission_script", "path"],
+    ["mission_script", "run_on"],
+  ])("keeps a bare integer [[%s]].%s as its literal text", (section, key) => {
+    const model = parseToml(`[[${section}]]\n${key} = 2024\n`);
+    expect(model[section][0][key]).toBe("2024");
+    expect(() => model[section][0][key].trim()).not.toThrow();
+  });
+
+  it("survives a fully numeric manifest without a type error", () => {
+    // The whole point: every modeled text field written as a TOML integer, and
+    // nothing downstream throws.
+    const model = parseToml(
+      [
+        "[project]",
+        "name = 1",
+        "[[bundle]]",
+        "path = 2",
+        "[[symlink]]",
+        "source = 3",
+        "dest = 4",
+      ].join("\n"),
+    );
+    expect(() => splitDest(model.symlink[0].dest)).not.toThrow();
+    expect(model.bundle[0].path.trim()).toBe("2");
+  });
+
+  it("leaves unmodeled keys in array sections typed so they round-trip", () => {
+    // Same rule as [project]: only the keys the form edits are normalised.
+    const model = parseToml("[[bundle]]\npath = 2\noptional = true\nweight = 3\n");
+    expect(model.bundle[0]).toMatchObject({ path: "2", optional: true, weight: 3 });
+  });
+
+  it("normalises nothing in an unmodeled section", () => {
+    // [lints] and friends are captured verbatim into extras, never parsed.
+    const model = parseToml("[lints]\nname = 2024\n");
+    expect(model.extras).toEqual(["[lints]\nname = 2024"]);
   });
 });
 

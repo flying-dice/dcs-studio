@@ -562,6 +562,12 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
     local function hold_pause()
       local mode = nil
       dbg.last_ping = clock() -- the editor just requested this stop; it's alive
+      -- TODO: clean-code - 0.6 - KISS: this spins with no throttle while the run
+      -- loop below deliberately drains on DRAIN_INTERVAL_SECONDS. Every pause
+      -- pegs a core and takes the process-wide app_data/resume mutexes millions
+      -- of times a second — contending with the very actix worker that must
+      -- enqueue the debug_continue that ends the pause. Gate D.pump() on the
+      -- same clock()-based interval the run loop already uses.
       repeat
         D.pump() -- a debug_state during this drain refreshes last_ping
         mode = bridge.debug.take_resume()
@@ -697,6 +703,13 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
     -- rt.lua's shared print_shim (RT is installed before this engine); the
     -- console ring is the sink.
     local prev_print = _G.print
+    -- TODO: clean-code - 0.55 - PANIC: D.running was set true several statements
+    -- above, and this line indexes a GLOBAL in a state shared with every other
+    -- mod and with the console this bridge serves (`__DCS_STUDIO_RT = nil` typed
+    -- into the REPL is enough). If it raises, D.running stays true and every
+    -- later debug_run answers "a debug session is already running" until DCS
+    -- restarts. Hoist the print_shim lookup above `D.running = true`, or pcall
+    -- from there to the restore block with the restore in the always-run tail.
     _G.print = __DCS_STUDIO_RT.print_shim(bridge.console.print, prev_print)
     debug.sethook(hook, "l") -- line events only; depth is walked, never counted
     local ran_ok, run_err = xpcall(chunk, on_error)

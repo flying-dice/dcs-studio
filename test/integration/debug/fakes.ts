@@ -36,7 +36,6 @@ interface FakeTimer {
   id: number;
   fn: () => void;
   ms: number;
-  repeat: boolean;
   dueAt: number;
 }
 
@@ -55,24 +54,18 @@ export class FakeScheduler implements SchedulerPort {
   private readonly timers = new Map<number, FakeTimer>();
 
   setInterval(fn: () => void, ms: number): TimerHandle {
-    return this.arm(fn, ms, true);
-  }
-
-  setTimeout(fn: () => void, ms: number): TimerHandle {
-    return this.arm(fn, ms, false);
+    const id = this.nextId++;
+    this.timers.set(id, { id, fn, ms, dueAt: this.clock + ms });
+    return { id } as unknown as TimerHandle;
   }
 
   clearInterval(handle: TimerHandle | undefined): void {
-    this.cancel(handle);
-  }
-
-  clearTimeout(handle: TimerHandle | undefined): void {
-    this.cancel(handle);
+    if (handle) this.timers.delete((handle as unknown as { id: number }).id);
   }
 
   /** Cadences of every live timer, ms — empty means nothing is scheduled. */
   get liveIntervals(): number[] {
-    return [...this.timers.values()].filter((t) => t.repeat).map((t) => t.ms);
+    return [...this.timers.values()].map((t) => t.ms);
   }
 
   get liveCount(): number {
@@ -88,22 +81,11 @@ export class FakeScheduler implements SchedulerPort {
         .sort((a, b) => a.dueAt - b.dueAt)[0];
       if (!due) break;
       this.clock = due.dueAt;
-      if (due.repeat) due.dueAt += due.ms;
-      else this.timers.delete(due.id);
+      due.dueAt += due.ms;
       due.fn();
       await flush();
     }
     this.clock = until;
-  }
-
-  private arm(fn: () => void, ms: number, repeat: boolean): TimerHandle {
-    const id = this.nextId++;
-    this.timers.set(id, { id, fn, ms, repeat, dueAt: this.clock + ms });
-    return { id } as unknown as TimerHandle;
-  }
-
-  private cancel(handle: TimerHandle | undefined): void {
-    if (handle) this.timers.delete((handle as unknown as { id: number }).id);
   }
 }
 

@@ -55,7 +55,6 @@ function fakeEnv(overrides?: Partial<EnvPort>): EnvPort {
   return {
     homedir: () => HOME,
     userProfile: () => HOME,
-    programFilesCandidates: () => [],
     ...overrides,
   };
 }

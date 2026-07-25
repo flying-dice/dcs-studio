@@ -30,8 +30,12 @@ jobs:
       - name: TypeScript compile
         run: npm run compile
 
-      - name: Unit tests + coverage gate
-        run: npx vitest run --coverage
+      # The two gates by name, not `vitest run --coverage`: the root
+      # vitest.config.ts is a `projects` config, and vitest treats `coverage` as
+      # a root-only option, so the per-project thresholds are ignored there. That
+      # form computes coverage and gates nothing.
+      - name: Unit + integration coverage gates
+        run: npm run coverage:unit && npm run coverage:integration
 
       - uses: dtolnay/rust-toolchain@stable
 

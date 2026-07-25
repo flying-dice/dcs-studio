@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -137,25 +137,57 @@ describe("configuration contribution contract", () => {
     expect(stray).toEqual([]);
   });
 
+  // Every setting read anywhere under src/, derived rather than enumerated: a
+  // hand-written file list is the classic step that silently stops covering
+  // anything. This one had gone stale in both directions — it named a file with
+  // no config read left in it, and missed four that had one.
+  //
+  // A file that mentions getConfiguration("dcsStudio") is treated as a config
+  // reader, and every string it passes to `.get(` — typed or not, chained or
+  // through a local — is treated as a key. That over-reads (a Map.get in the
+  // same file would be picked up), which is the safe direction: a false key
+  // fails this test loudly rather than letting a real one slip past.
+  function readSettingKeys(): Set<string> {
+    const used = new Set<string>();
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? walk(join(dir, e.name))
+          : e.name.endsWith(".ts")
+            ? [join(dir, e.name)]
+            : [],
+      );
+    for (const file of walk(join(root, "src"))) {
+      const text = readFileSync(file, "utf8");
+      if (!text.includes('getConfiguration("dcsStudio")')) continue;
+      for (const m of text.matchAll(/\.\s*get\s*(?:<[^>]*>)?\s*\(\s*["'`]([^"'`]+)["'`]/g)) {
+        // globalState/workspaceState keys are namespaced with a dot and are not
+        // settings; configuration keys are bare subkeys under dcsStudio.
+        if (!m[1].includes(".")) used.add(`dcsStudio.${m[1]}`);
+      }
+    }
+    return used;
+  }
+
+  const used = readSettingKeys();
+
+  it("finds the settings reads it is meant to police", () => {
+    // Guards the guard: if the scan ever stops matching, both assertions below
+    // would pass vacuously.
+    expect(used.size).toBeGreaterThanOrEqual(Object.keys(properties).length);
+  });
+
   it("reads no configuration key that package.json does not declare", () => {
     // A `getConfiguration("dcsStudio").get("typo")` silently returns undefined
     // and the feature just never works, with nothing to debug.
-    const sources = [
-      "src/extension.ts",
-      "src/marketplace/panel.ts",
-      "src/adapters/vscode/installRoots.ts",
-      "src/setup/panel.ts",
-    ];
-    const used = new Set<string>();
-    for (const rel of sources) {
-      const text = readFileSync(join(root, rel), "utf8");
-      for (const m of text.matchAll(
-        /getConfiguration\(\s*["'`]dcsStudio["'`]\s*\)\s*\.\s*get<[^>]*>\(\s*["'`]([^"'`]+)["'`]/g,
-      )) {
-        used.add(`dcsStudio.${m[1]}`);
-      }
-    }
     const undeclared = [...used].filter((key) => !(key in properties));
     expect(undeclared, `settings read but not declared: ${undeclared.join(", ")}`).toEqual([]);
+  });
+
+  it("declares no configuration key that nothing reads", () => {
+    // The other direction: a setting that stopped being read stays in the
+    // user's settings UI forever, doing nothing.
+    const unread = Object.keys(properties).filter((key) => !used.has(key));
+    expect(unread, `declared but never read: ${unread.join(", ")}`).toEqual([]);
   });
 });

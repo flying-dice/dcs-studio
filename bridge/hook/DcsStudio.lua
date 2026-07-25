@@ -22,6 +22,11 @@
 package.cpath = package.cpath .. ";" .. lfs.writedir() .. "Mods\\tech\\DcsStudio\\bin\\?.dll"
 
 -- Read by the module on require() for configuration.
+-- TODO: clean-code - 0.7 - KISS: at "info" the server logs every RPC response
+-- body, and a debug session polls debug_state every 250ms — each response
+-- carrying the whole pause snapshot — into a non-rolling log file, written on
+-- the sim thread. The DLL default is warn and the mission bridge does not
+-- override it; this should say "warn" too.
 DCS_STUDIO = { logger_level = "info" }
 
 local ok, bridge = pcall(require, "dcs_studio_gui")
@@ -43,6 +48,12 @@ local started, err = pcall(function()
   -- pause the engine drains this server's queue itself through this router,
   -- because onSimulationFrame cannot fire while the paused chunk holds the
   -- sim thread. Mission sessions talk to the mission bridge on 25570.
+  -- TODO: clean-code - 0.75 - PANIC: debug_engine.lua is designed to DECLINE in
+  -- a state without `debug`/`coroutine` (DCS already strips debug.getupvalue
+  -- here), and lib.rs only warns. This assert turns that decline into a total
+  -- bridge failure inside the startup pcall: no server, no methods, no GUI
+  -- bridge at all. mission_init.lua handles the same case with a plain
+  -- `if DBG then` plus need_debugger() guards; the GUI path should match.
   local DBG = assert(__DCS_STUDIO_DBG, "debug engine failed to install in the hooks state")
   DBG.pump = function()
     server:process_rpc(router)
@@ -59,6 +70,12 @@ local started, err = pcall(function()
 
   local cb = {}
 
+  -- TODO: clean-code - 0.5 - PANIC: unprotected, 60x/second, forever. Anything
+  -- raised by mission_boot_tick's live globals (DCS.getModelTime, lfs.writedir,
+  -- net.dostring_in) goes into DCS's callback dispatcher with no bridge-side
+  -- diagnostic and skips the RPC drain, so the editor sees an unexplained dead
+  -- bridge. mission_init.lua pcalls its equivalent pump and reports; so should
+  -- this — with the log line rate-limited so a persistent fault cannot flood.
   function cb.onSimulationFrame()
     server:process_rpc(router) -- drains queued WS/HTTP requests (fires at the menu too)
     reg.mission_boot_tick() -- self-heals the mission bridge boot while a mission runs
