@@ -1,4 +1,4 @@
-import * as path from "path";
+import { win32 as path } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type PublishPorts, PublishService } from "../../src/core/app/publishService";
 import { DEFAULT_VOLUME_BYTES } from "../../src/core/domain/archivePolicy";

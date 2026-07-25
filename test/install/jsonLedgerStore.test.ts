@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { win32 as winPath } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { JsonLedgerStore } from "../../src/adapters/node/jsonLedgerStore";
 import { renderUninstallScript, type Subscription } from "../../src/core/domain/subscriptions";
@@ -25,7 +26,10 @@ const sub: Subscription = {
   repo: "Owner/Repo",
   name: "My Mod",
   tag: "v1.0.0",
-  dir: path.join("D:", "data", "Owner__Repo"),
+  // Ledger `dir` values are produced by SubscriptionService, which resolves
+  // with Windows semantics regardless of host — mirror that here so the
+  // rendered .bat is asserted byte-for-byte the same on any dev machine.
+  dir: winPath.join("D:", "data", "Owner__Repo"),
   enabled: true,
   links: [{ id: "Owner/Repo:0", dest: "C:\\SG\\DCS\\Scripts\\X" }],
   entrypoints: [],

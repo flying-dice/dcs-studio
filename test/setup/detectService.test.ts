@@ -1,4 +1,4 @@
-import * as path from "node:path";
+import { win32 as path } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DetectService } from "../../src/core/app/detectService";
 import type { EnvPort } from "../../src/core/ports/env";

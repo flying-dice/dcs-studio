@@ -4,7 +4,7 @@
 // last location and the home directory; the branching lives here so it's
 // testable without a webview.
 
-import * as path from "node:path";
+import { win32 as path } from "node:path";
 
 /** The default project location when nothing is remembered. */
 export function defaultLocation(homeDir: string): string {

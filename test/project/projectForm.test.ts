@@ -1,4 +1,4 @@
-import * as path from "node:path";
+import { win32 as path } from "node:path";
 import { describe, expect, it } from "vitest";
 import { browseStart, defaultLocation, initialForm } from "../../src/core/domain/projectForm";
 

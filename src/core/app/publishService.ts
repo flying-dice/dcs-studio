@@ -1,4 +1,4 @@
-import * as path from "path";
+import { win32 as path } from "node:path";
 import { payloadBase } from "../domain/archivePolicy";
 import { fmtBytes } from "../domain/format";
 import { DISCOVERY_TOPIC } from "../domain/githubMarketplace";

@@ -4,7 +4,7 @@
 // classification and messaging, launch arguments, eject-on-exit policy — is
 // deterministic path/string math.
 
-import * as path from "path";
+import { win32 as path } from "node:path";
 
 // Install layout inside the DCS write dir (same layout dcs-studio uses).
 // Two DLLs: the GUI bridge (loaded by the GameGUI hook) and the mission bridge

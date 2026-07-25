@@ -4,7 +4,7 @@
 // pause_id dedupe, snapshot→StackFrame/Scope/Variable mapping, and the poll
 // state machine — lives here so it can be characterization-tested without a sim.
 
-import * as path from "path";
+import { win32 as path } from "node:path";
 import type {
   DebugFrame,
   DebugSnapshot,

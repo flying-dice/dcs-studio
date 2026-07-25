@@ -1,4 +1,4 @@
-import * as path from "node:path";
+import { win32 as path } from "node:path";
 
 // Pure DCS path-detection logic — ported from dcs-studio (dcs-studio-project::detect
 // + studio-services::mission probes). Everything here is I/O-free: the `reg query`

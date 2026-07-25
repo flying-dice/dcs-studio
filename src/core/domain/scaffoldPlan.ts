@@ -5,7 +5,7 @@
 // src/project/scaffold.ts probes the filesystem and executes the plan these
 // functions produce, so all the branching logic is trivially testable here.
 
-import * as path from "node:path";
+import { win32 as path } from "node:path";
 import type { TemplateFile } from "./projectTemplates";
 
 /** Windows-invalid folder name characters (also fine to reject everywhere). */
