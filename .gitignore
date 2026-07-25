@@ -19,3 +19,8 @@ bridge/crates/*/dcs_studio_*.log
 coverage/
 test-results/
 playwright-report/
+
+# A test that builds win32 paths and writes them through node:fs creates files
+# whose NAMES contain literal backslashes when it runs on a POSIX host. Real
+# runs are on Windows, where these are ordinary directories under the temp dir.
+\\tmp*
