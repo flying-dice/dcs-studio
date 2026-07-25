@@ -89,13 +89,32 @@ export class LogTailer {
     try {
       size = (await fsp.stat(this.filePath)).size;
     } catch {
-      this.setState("missing");
-      // The next appearance is a fresh open — re-backfill from its new tail.
-      this.backfilled = false;
-      this.offset = 0;
+      this.markMissing();
       return;
     }
     this.setState("ok");
+    try {
+      await this.drain(size);
+    } catch {
+      // The stat succeeded but the open/read did not: the file was deleted
+      // between the two, or the path is not a readable file at all (a bad
+      // savedGamesPath, a dropped network share). Treat it exactly like a
+      // missing file — the poll loop keeps running and recovers on its own.
+      // Letting it escape instead would only surface an unhandled rejection in
+      // the extension host, which the user can neither see nor act on.
+      this.markMissing();
+    }
+  }
+
+  private markMissing(): void {
+    this.setState("missing");
+    // The next appearance is a fresh open — re-backfill from its new tail.
+    this.backfilled = false;
+    this.offset = 0;
+  }
+
+  /** Reads whatever the newly-stat'd `size` implies: first fill, restart, growth. */
+  private async drain(size: number): Promise<void> {
     if (!this.backfilled) {
       await this.backfill(size);
       return;

@@ -196,6 +196,106 @@ describe("LogTailer", () => {
     expect(lines.length).toBe(countAtStop);
   });
 
+  it("reports a path that stats but cannot be read as missing, and recovers when it becomes a real file", async () => {
+    // Everything after the stat is a separate set of syscalls that can fail on
+    // their own: dcs.log deleted between the stat and the open, a savedGamesPath
+    // pointing at something that is not a file, a network share dropping. A
+    // directory reproduces that class deterministically. The loop has to survive
+    // it — an escaping rejection would land as an unhandled error in the
+    // extension host, invisible to the user and fatal to the tail.
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcslog-"));
+    const file = path.join(tmpDir, "dcs.log");
+    fs.mkdirSync(file);
+    const states: string[] = [];
+    const lines: string[] = [];
+    const tailer = makeTailer({
+      filePath: file,
+      pollMs: 20,
+      onLines: (l: string[]) => lines.push(...l),
+      onState: (s: string) => states.push(s),
+      onReset: () => {},
+    });
+    tailer.start();
+    await waitFor(() => states.includes("missing"));
+    fs.rmdirSync(file);
+    fs.writeFileSync(file, "readable at last\n");
+    await waitFor(() => lines.length >= 1);
+    expect(lines).toEqual(["readable at last"]);
+    // Back to "ok" as well, so the viewer's banner clears itself rather than
+    // leaving the log looking permanently gone.
+    expect(states[states.length - 1]).toBe("ok");
+  });
+
+  it("stop() is safe before start and on a second call", async () => {
+    // The log panel calls stop() from its dispose path unconditionally, so a
+    // panel closed before the tailer ever started — or disposed twice — must
+    // not throw on a timer that is not there.
+    const file = tmpFile();
+    fs.writeFileSync(file, "one\n");
+    const tailer = makeTailer({
+      filePath: file,
+      pollMs: 15,
+      onLines: () => {},
+      onState: () => {},
+      onReset: () => {},
+    });
+    expect(() => tailer.stop()).not.toThrow();
+    tailer.start();
+    tailer.stop();
+    expect(() => tailer.stop()).not.toThrow();
+  });
+
+  it("with backfillBytes 0 reads nothing on open and reports only what is appended after", async () => {
+    const file = tmpFile();
+    fs.writeFileSync(file, "history nobody asked for\n");
+    const lines: string[] = [];
+    const tailer = makeTailer({
+      filePath: file,
+      pollMs: 20,
+      backfillBytes: 0, // "start from now": open at EOF, replay none of the file
+      onLines: (l: string[]) => lines.push(...l),
+      onState: () => {},
+      onReset: () => {},
+    });
+    tailer.start();
+    // Nothing to read means the open/read of a zero-length slice is skipped
+    // entirely — a viewer opened mid-session shows an empty log, not the tail.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(lines).toEqual([]);
+    fs.appendFileSync(file, "live line\n");
+    await waitFor(() => lines.length >= 1);
+    expect(lines).toEqual(["live line"]);
+  });
+
+  it("never re-enters a tick that is still reading, so a slow drain cannot duplicate lines", async () => {
+    // dcs.log grows in megabyte bursts during a mission load, and each tick's
+    // read is real async I/O. With the poll interval far shorter than a read,
+    // the next tick fires while the previous one is still in flight — without
+    // the reentrancy guard it would stat, see `backfilled` or `offset` from
+    // before the in-flight read landed, and replay the same bytes twice.
+    const file = tmpFile();
+    const count = 60_000;
+    const all = Array.from(
+      { length: count },
+      (_, i) => `${String(i).padStart(6, "0")} ${"x".repeat(70)}`,
+    );
+    fs.writeFileSync(file, `${all.join("\n")}\n`); // ~4.6 MiB, several 1 MiB slices
+    const lines: string[] = [];
+    const tailer = makeTailer({
+      filePath: file,
+      pollMs: 1, // far shorter than a multi-megabyte read takes
+      backfillBytes: 32 * 1024 * 1024, // no truncation: the whole file backfills
+      onLines: (l: string[]) => lines.push(...l),
+      onState: () => {},
+      onReset: () => {},
+    });
+    tailer.start();
+    await waitFor(() => lines.length >= count, 15000);
+    expect(lines.length).toBe(count);
+    expect(lines[0]).toBe(all[0]);
+    expect(lines[count - 1]).toBe(all[count - 1]);
+  });
+
   it("handles a UTF-8 multi-byte character split across a read boundary", async () => {
     const file = tmpFile();
     // "café" — the é is a 2-byte UTF-8 sequence; pick a slice size that lands

@@ -48,6 +48,19 @@ function lastSent(t: FakeTransport): { method: string; id: string; params?: unkn
   return JSON.parse(t.last.sent[t.last.sent.length - 1]);
 }
 
+/** A promise's outcome as a string, so a test can look at it without awaiting. */
+function outcomeOf(p: Promise<unknown>): Promise<string> {
+  return p.then(
+    () => "resolved",
+    (e: Error) => e.message,
+  );
+}
+
+/** The outcome so far — "pending" while the promise has not settled. */
+function peek(outcome: Promise<string>): Promise<string> {
+  return Promise.race([outcome, Promise.resolve("pending")]);
+}
+
 describe("BridgeClient over a scripted transport", () => {
   let transport: FakeTransport;
   let client: BridgeClient;
@@ -288,5 +301,303 @@ describe("BridgeClient over a scripted transport", () => {
     await vi.advanceTimersByTimeAsync(5000);
     await expect(p).rejects.toThrow("Mission bridge call 'slow' timed out");
     mission.dispose();
+  });
+
+  it("falls back to the real WebSocket transport when none is injected", async () => {
+    // clients.ts constructs both bridges without a transport, so the default arm
+    // is the only one that ships. A suite that always injects a fake would let
+    // it rot unnoticed — this at least proves it still wires up and disposes.
+    const real = new BridgeClient();
+    expect(real.current).toEqual({ connected: false, dcsTime: null });
+    await expect(real.call("ping")).rejects.toThrow("bridge not connected");
+    expect(() => real.dispose()).not.toThrow();
+  });
+
+  it("reconnect() does nothing while the bridge is already connected", async () => {
+    // The command is wired to "Launch DCS" and the console's retry button, both
+    // of which a user can press while the bridge is up. Dropping a healthy
+    // socket to open a second one would fail every call in flight.
+    open();
+    client.reconnect();
+    expect(transport.connections.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(transport.connections.length).toBe(1);
+    expect(client.current.connected).toBe(true);
+  });
+
+  it("does not stack reconnect timers when a socket reports error and close together", async () => {
+    // A refused connection emits both: `ws` fires error then close for the same
+    // socket. Scheduling twice would halve the backoff and, over a long DCS
+    // startup, turn the retry loop into a connect storm.
+    open();
+    transport.last.handlers.onError?.(new Error("ECONNREFUSED"));
+    transport.last.handlers.onClose?.(1006, "");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(transport.connections.length).toBe(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(transport.connections.length).toBe(2); // one retry, not two
+  });
+
+  it("dispose cancels a reconnect already scheduled", async () => {
+    // Deactivating the extension while DCS is down leaves a pending retry; if it
+    // survived, it would open a socket nobody owns after the host tore down.
+    open();
+    transport.last.handlers.onClose?.(1006, "");
+    client.dispose();
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(transport.connections.length).toBe(1);
+  });
+
+  it("a close arriving after dispose does not schedule a reconnect", async () => {
+    // Closing a socket is asynchronous: the transport's close callback lands
+    // after dispose() returned, and must not resurrect the retry loop.
+    open();
+    const stale = transport.last.handlers;
+    client.dispose();
+    stale.onClose?.(1000, "normal");
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(transport.connections.length).toBe(1);
+  });
+
+  it("reconnect() after dispose does not resurrect the client", async () => {
+    open();
+    client.dispose();
+    client.reconnect();
+    expect(transport.connections.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(transport.connections.length).toBe(1);
+  });
+
+  // ── the typed call surface ──
+  //
+  // Every panel reaches the bridge through these wrappers, and the method names
+  // and param keys are a contract with the Rust router's serde structs: a
+  // renamed key does not fail to compile, it fails at runtime against a running
+  // DCS, which no headless test would otherwise catch. So each one is pinned to
+  // the exact frame it puts on the wire.
+  describe("typed wrappers", () => {
+    const wrappers: {
+      what: string;
+      invoke: (c: BridgeClient) => Promise<unknown>;
+      method: string;
+      params: unknown;
+      result: unknown;
+    }[] = [
+      {
+        what: "eval sends the Lua chunk",
+        invoke: (c) => c.eval("return 1 + 1"),
+        method: "eval",
+        params: { code: "return 1 + 1" },
+        result: 2,
+      },
+      {
+        what: "consoleRead asks for lines after a sequence number",
+        invoke: (c) => c.consoleRead(12),
+        method: "console_read",
+        params: { after: 12 },
+        result: { lines: [{ seq: 13, text: "hello" }], latest: 13 },
+      },
+      {
+        what: "replInspect carries the env and the expression",
+        invoke: (c) => c.replInspect("gui", "_G.db"),
+        method: "repl_inspect",
+        params: { env: "gui", expr: "_G.db" },
+        result: { ok: true, value: { type: "table", ref: 4 } },
+      },
+      {
+        what: "replExpand drills into a ref within its env",
+        invoke: (c) => c.replExpand("mission", 4),
+        method: "repl_expand",
+        params: { env: "mission", ref: 4 },
+        result: { variables: [{ name: "id", type: "number", value: "1" }] },
+      },
+      {
+        what: "replClear releases every ref held in one env",
+        invoke: (c) => c.replClear("server"),
+        method: "repl_clear",
+        params: { env: "server" },
+        result: { ok: true },
+      },
+      {
+        what: "dbCategories takes no parameters",
+        invoke: (c) => c.dbCategories(),
+        method: "db_categories",
+        params: {},
+        result: { categories: [{ name: "Planes", entry_key: "Planes", count: 120 }] },
+      },
+      {
+        what: "dbUnitTypes forwards the category and filter",
+        invoke: (c) => c.dbUnitTypes({ category: "Planes", filter: "f-16" }),
+        method: "db_unit_types",
+        params: { category: "Planes", filter: "f-16" },
+        result: { units: [{ type: "F-16C_50", category: "Planes" }], truncated: false },
+      },
+      {
+        what: "dbUnitTypes with no options asks for everything",
+        invoke: (c) => c.dbUnitTypes(),
+        method: "db_unit_types",
+        params: {},
+        result: { units: [], truncated: false },
+      },
+      {
+        what: "dbUnit asks for the curated record by default",
+        invoke: (c) => c.dbUnit("F-16C_50"),
+        method: "db_unit",
+        params: { type: "F-16C_50", raw: false },
+        result: { unit: { type: "F-16C_50" }, category: "Planes" },
+      },
+      {
+        what: "dbUnit can ask for the raw record instead",
+        invoke: (c) => c.dbUnit("F-16C_50", true),
+        method: "db_unit",
+        params: { type: "F-16C_50", raw: true },
+        result: { unit: {}, raw: true },
+      },
+      {
+        what: "dbWeapons without a filter sends no filter key",
+        invoke: (c) => c.dbWeapons(),
+        method: "db_weapons",
+        params: {},
+        result: { weapons: [], truncated: false },
+      },
+      {
+        what: "dbWeapons forwards a filter when there is one",
+        invoke: (c) => c.dbWeapons("aim-120"),
+        method: "db_weapons",
+        params: { filter: "aim-120" },
+        result: { weapons: [{ clsid: "{AIM-120C}" }], truncated: false },
+      },
+      {
+        what: "dbExport dumps everything by default",
+        invoke: (c) => c.dbExport(),
+        method: "db_export",
+        params: { what: "all" },
+        result: { path: "D:\\Saved Games\\DCS\\db.json", bytes: 4096 },
+      },
+      {
+        what: "dbExport can scope the dump to one category",
+        invoke: (c) => c.dbExport("category:Planes"),
+        method: "db_export",
+        params: { what: "category:Planes" },
+        result: { path: "D:\\Saved Games\\DCS\\db.json", bytes: 512 },
+      },
+      {
+        what: "debugRun snake-cases pause_on_error for the Rust router",
+        invoke: (c) => c.debugRun("mission", "=C:\\mod\\a.lua", "print(1)", true),
+        method: "debug_run",
+        params: {
+          env: "mission",
+          source: "=C:\\mod\\a.lua",
+          code: "print(1)",
+          pause_on_error: true,
+        },
+        result: { ran: true, error: null },
+      },
+      {
+        what: "debugState polls with no parameters",
+        invoke: (c) => c.debugState(),
+        method: "debug_state",
+        params: {},
+        result: { state: "paused", frames: [] },
+      },
+      {
+        what: "debugContinue carries the step mode",
+        invoke: (c) => c.debugContinue("step_over"),
+        method: "debug_continue",
+        params: { mode: "step_over" },
+        result: { ok: true },
+      },
+      {
+        what: "debugPause is a break-all with no parameters",
+        invoke: (c) => c.debugPause(),
+        method: "debug_pause",
+        params: {},
+        result: { ok: true },
+      },
+      {
+        what: "debugStop terminates the running chunk",
+        invoke: (c) => c.debugStop(),
+        method: "debug_stop",
+        params: {},
+        result: { ok: true },
+      },
+      {
+        what: "debugExpand drills into a snapshot ref",
+        invoke: (c) => c.debugExpand(9),
+        method: "debug_expand",
+        params: { ref: 9 },
+        result: { variables: [{ name: "n", type: "number", value: "3" }] },
+      },
+      {
+        what: "debugEval targets a 0-based frame",
+        invoke: (c) => c.debugEval(0, "unit.name"),
+        method: "debug_eval",
+        params: { frame: 0, expr: "unit.name" },
+        result: { type: "string", value: "Ford" },
+      },
+      {
+        what: "debugClearBreakpoints takes no parameters",
+        invoke: (c) => c.debugClearBreakpoints(),
+        method: "debug_clear_breakpoints",
+        params: {},
+        result: { ok: true },
+      },
+    ];
+
+    it.each(wrappers)("$what", async ({ invoke, method, params, result }) => {
+      open();
+      const p = invoke(client);
+      const req = lastSent(transport);
+      expect(req.method).toBe(method);
+      expect(req.params).toEqual(params);
+      transport.last.handlers.onMessage?.(JSON.stringify({ id: req.id, result }));
+      await expect(p).resolves.toEqual(result);
+    });
+
+    it("replExport by ref sends no expr key, and by expr sends no ref key", async () => {
+      // The bridge's serde treats the two as alternatives; sending both (or a
+      // null for the unused one) is rejected before the export ever starts.
+      open();
+      const byRef = client.replExport("gui", { ref: 4 });
+      const refReq = lastSent(transport);
+      expect(refReq.method).toBe("repl_export");
+      expect(refReq.params).toEqual({ env: "gui", ref: 4 });
+      expect("expr" in (refReq.params as Record<string, unknown>)).toBe(false);
+      transport.last.handlers.onMessage?.(
+        JSON.stringify({ id: refReq.id, result: { path: "D:\\dump.json", bytes: 10 } }),
+      );
+      await expect(byRef).resolves.toEqual({ path: "D:\\dump.json", bytes: 10 });
+
+      const byExpr = client.replExport("gui", { expr: "db.Units" });
+      const exprReq = lastSent(transport);
+      expect(exprReq.params).toEqual({ env: "gui", expr: "db.Units" });
+      expect("ref" in (exprReq.params as Record<string, unknown>)).toBe(false);
+      transport.last.handlers.onMessage?.(
+        JSON.stringify({ id: exprReq.id, result: { path: "D:\\dump.json", bytes: 20 } }),
+      );
+      await expect(byExpr).resolves.toEqual({ path: "D:\\dump.json", bytes: 20 });
+    });
+
+    it("eval gives the sim 15s by default", async () => {
+      open();
+      const outcome = outcomeOf(client.eval("return 1"));
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(await peek(outcome)).toBe("pending");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await outcome).toBe("bridge call 'eval' timed out");
+    });
+
+    it("debugRun waits out a whole session, not the default call timeout", async () => {
+      // debug_run blocks bridge-side for as long as the user keeps the session
+      // paused. At the 15s default the client would abandon the call — and the
+      // debug adapter would report a dead session — while DCS is still stopped
+      // on a breakpoint the user is reading.
+      open();
+      const outcome = outcomeOf(client.debugRun("mission", "=a.lua", "print(1)", false));
+      await vi.advanceTimersByTimeAsync(599_999);
+      expect(await peek(outcome)).toBe("pending");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await outcome).toBe("bridge call 'debug_run' timed out");
+    });
   });
 });
