@@ -38,8 +38,10 @@ export interface VscodeState {
   panels: FakeWebviewPanel[];
   statusBarItems: FakeStatusBarItem[];
   createdTerminals: { name: string; sent: string[] }[];
-  /** Documents opened via workspace.openTextDocument / window.showTextDocument. */
+  /** Documents opened via workspace.openTextDocument. */
   openedDocuments: string[];
+  /** Documents revealed in an editor via window.showTextDocument. */
+  shownDocuments: string[];
   /** Installed extensions by id, as `extensions.getExtension` sees them. */
   extensions: Record<string, { packageJSON: Record<string, unknown> }>;
   /** Transient status-bar messages set via window.setStatusBarMessage. */
@@ -72,6 +74,7 @@ function blankState(): VscodeState {
     statusBarItems: [],
     createdTerminals: [],
     openedDocuments: [],
+    shownDocuments: [],
     extensions: {},
     statusBarMessages: [],
     existingPaths: new Set(),
@@ -348,6 +351,13 @@ export function vscodeMock() {
         state.openedDocuments.push(fsPath);
         return Promise.resolve({ uri: FakeUri.file(fsPath), getText: () => "" });
       },
+      asRelativePath: (target: { fsPath?: string } | string) => {
+        const full = typeof target === "string" ? target : (target.fsPath ?? "");
+        const folder = state.workspaceFolders?.[0]?.uri.fsPath;
+        return folder && full.startsWith(folder)
+          ? full.slice(folder.length).replace(/^[\\/]+/, "")
+          : full;
+      },
       onDidChangeConfiguration: new FakeEventEmitter<unknown>().event,
       onDidSaveTextDocument: new FakeEventEmitter<unknown>().event,
       onDidChangeWorkspaceFolders: workspaceFoldersEmitter.event,
@@ -386,9 +396,11 @@ export function vscodeMock() {
       },
       showQuickPick: () => Promise.resolve(state.quickPickReplies.shift()),
       showInputBox: () => Promise.resolve(state.inputBoxReplies.shift()),
-      showTextDocument: (doc: { uri?: { fsPath?: string } }) => {
-        if (doc?.uri?.fsPath) state.openedDocuments.push(doc.uri.fsPath);
-        return Promise.resolve({ document: doc });
+      // Accepts either a TextDocument or a Uri, like the real overloads.
+      showTextDocument: (target: { uri?: { fsPath?: string }; fsPath?: string }) => {
+        const fsPath = target?.uri?.fsPath ?? target?.fsPath;
+        if (fsPath) state.shownDocuments.push(fsPath);
+        return Promise.resolve({ document: target });
       },
       createWebviewPanel: (viewType: string, title: string, showOptions: unknown) => {
         const panel = new FakeWebviewPanel(viewType, title, showOptions);
