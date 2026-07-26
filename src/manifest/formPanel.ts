@@ -2,6 +2,7 @@ import { win32 as path } from "node:path";
 import * as vscode from "vscode";
 import type { InstallRootsPort } from "../core/ports/installRoots";
 import { renderWebviewHtml } from "../webview/html";
+import { createPanel } from "../webview/panel";
 
 // The manifest authoring FORM as a companion webview opened beside the normal
 // text editor — a split view: raw dcs-studio.toml (real editor: TOML syntax +
@@ -28,15 +29,11 @@ export class ManifestFormPanel {
       existing.panel.reveal(vscode.ViewColumn.Beside, true);
       return;
     }
-    const panel = vscode.window.createWebviewPanel(
+    const panel = createPanel(
+      context,
       "dcsStudio.manifestForm",
       `Form: ${path.basename(document.uri.fsPath)}`,
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-      },
     );
     ManifestFormPanel.panels.set(key, new ManifestFormPanel(panel, context, document, roots));
   }
@@ -47,7 +44,6 @@ export class ManifestFormPanel {
     private readonly document: vscode.TextDocument,
     private readonly installRoots: InstallRootsPort,
   ) {
-    this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html();
 
     this.disposables.push(

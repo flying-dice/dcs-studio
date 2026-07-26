@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 import { browseStart, initialForm } from "../core/domain/projectForm";
 import { TEMPLATES } from "../core/domain/projectTemplates";
 import { renderWebviewHtml } from "../webview/html";
+import { activeColumn, createPanel } from "../webview/panel";
 import { scaffoldInPlace, scaffoldNewFolder } from "./scaffold";
 
 // The guided New Project experience — the VS Code port of the real app's
@@ -21,21 +22,12 @@ export class NewProjectPanel {
   private readonly disposables: vscode.Disposable[] = [];
 
   static show(context: vscode.ExtensionContext): void {
-    const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+    const column = activeColumn();
     if (NewProjectPanel.current) {
       NewProjectPanel.current.panel.reveal(column);
       return;
     }
-    const panel = vscode.window.createWebviewPanel(
-      NewProjectPanel.viewType,
-      "New Project",
-      column,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-      },
-    );
+    const panel = createPanel(context, NewProjectPanel.viewType, "New Project", column);
     NewProjectPanel.current = new NewProjectPanel(panel, context);
   }
 
@@ -44,7 +36,6 @@ export class NewProjectPanel {
     private readonly context: vscode.ExtensionContext,
   ) {
     this.panel = panel;
-    this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);

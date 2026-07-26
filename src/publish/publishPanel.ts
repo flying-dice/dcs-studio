@@ -5,6 +5,7 @@ import { parseRepoRemote } from "../core/domain/repoRemote";
 import type { ManifestPort } from "../core/ports/manifest";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
+import { activeColumn, createPanel } from "../webview/panel";
 import { preflight, readManifest } from "./preflight";
 
 // The Publish panel: preflight checks, "Share to GitHub" (create repo + push),
@@ -21,16 +22,12 @@ export class PublishPanel {
     publish: PublishService,
     manifest: ManifestPort,
   ): void {
-    const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+    const column = activeColumn();
     if (PublishPanel.current) {
       PublishPanel.current.panel.reveal(column);
       return;
     }
-    const panel = vscode.window.createWebviewPanel(PublishPanel.viewType, "Publish Mod", column, {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-    });
+    const panel = createPanel(context, PublishPanel.viewType, "Publish Mod", column);
     PublishPanel.current = new PublishPanel(panel, context, publish, manifest);
   }
 
@@ -44,7 +41,6 @@ export class PublishPanel {
   ) {
     this.panel = panel;
     this.root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);

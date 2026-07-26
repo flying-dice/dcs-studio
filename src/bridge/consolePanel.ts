@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { exportFileBase } from "../core/domain/bridgeConsole";
 import type { DualBridgeStatus } from "../core/domain/bridgeProtocol";
 import { renderWebviewHtml } from "../webview/html";
+import { activeColumn, createPanel } from "../webview/panel";
 import type { BridgeClient, LuaEnv } from "./client";
 import type { BridgeClients } from "./clients";
 import { saveExport } from "./saveExport";
@@ -31,21 +32,12 @@ export class ConsolePanel {
   private readonly tails = new Map<BridgeClient, ConsoleTail>();
 
   static show(context: vscode.ExtensionContext, clients: BridgeClients): void {
-    const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+    const column = activeColumn();
     if (ConsolePanel.current) {
       ConsolePanel.current.panel.reveal(column);
       return;
     }
-    const panel = vscode.window.createWebviewPanel(
-      ConsolePanel.viewType,
-      "DCS Lua Console",
-      column,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-      },
-    );
+    const panel = createPanel(context, ConsolePanel.viewType, "DCS Lua Console", column);
     ConsolePanel.current = new ConsolePanel(panel, context, clients);
   }
 
@@ -55,7 +47,6 @@ export class ConsolePanel {
     private readonly clients: BridgeClients,
   ) {
     this.panel = panel;
-    this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html(context);
 
     this.tails.set(clients.gui, { lastSeq: 0, wasConnected: false });

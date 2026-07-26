@@ -13,6 +13,7 @@ import type { MarketplacePort } from "../core/ports/marketplace";
 import { showError } from "../errors";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
+import { activeColumn, createPanel } from "../webview/panel";
 
 // The "My Mods" experience: manage subscribed mods — enable/disable the symlinks,
 // update to a newer release, or uninstall (unsubscribe). Everything the host
@@ -37,17 +38,13 @@ export class MyModsPanel {
     roots: InstallRootsPort,
     auth: AuthPort,
   ): void {
-    const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+    const column = activeColumn();
     if (MyModsPanel.current) {
       MyModsPanel.current.panel.reveal(column);
       void MyModsPanel.current.presenter.refresh();
       return;
     }
-    const panel = vscode.window.createWebviewPanel(MyModsPanel.viewType, "My Mods", column, {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-    });
+    const panel = createPanel(context, MyModsPanel.viewType, "My Mods", column);
     MyModsPanel.current = new MyModsPanel(
       panel,
       context,
@@ -88,7 +85,6 @@ export class MyModsPanel {
     });
 
     this.panel = panel;
-    this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage(
       (m: MyModsInbound) => void this.presenter.handle(m),

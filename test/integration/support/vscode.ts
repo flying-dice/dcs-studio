@@ -320,6 +320,14 @@ export class FakeWebviewPanel {
     readonly viewType: string,
     public title: string,
     readonly showOptions: unknown,
+    /**
+     * The capabilities the panel was created with — `enableScripts`,
+     * `retainContextWhenHidden` and `localResourceRoots`. Recorded because it
+     * is a security decision (what a webview may execute, and where it may
+     * read from); the double used to drop this argument, so nothing could
+     * assert it (#51).
+     */
+    readonly options: unknown = {},
   ) {}
 
   reveal(): void {
@@ -628,8 +636,13 @@ export function vscodeMock() {
         if (fsPath) state.shownDocuments.push(fsPath);
         return Promise.resolve({ document: target });
       },
-      createWebviewPanel: (viewType: string, title: string, showOptions: unknown) => {
-        const panel = new FakeWebviewPanel(viewType, title, showOptions);
+      createWebviewPanel: (
+        viewType: string,
+        title: string,
+        showOptions: unknown,
+        options?: unknown,
+      ) => {
+        const panel = new FakeWebviewPanel(viewType, title, showOptions, options);
         state.panels.push(panel);
         return panel;
       },

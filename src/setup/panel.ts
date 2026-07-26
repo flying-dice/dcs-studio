@@ -6,6 +6,7 @@ import type { DetectService } from "../core/app/detectService";
 import { type DcsCandidate, roleProbePath } from "../core/domain/dcsDetect";
 import type { ArchivePort } from "../core/ports/archive";
 import { renderWebviewHtml } from "../webview/html";
+import { activeColumn, createPanel } from "../webview/panel";
 
 // The DCS install selector: pick (or browse to) the userdata (Saved Games) and
 // installation folders, with auto-detected candidates. Saves to the
@@ -18,16 +19,12 @@ export class SetupPanel {
   private readonly disposables: vscode.Disposable[] = [];
 
   static show(context: vscode.ExtensionContext, detect: DetectService, archive: ArchivePort): void {
-    const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+    const column = activeColumn();
     if (SetupPanel.current) {
       SetupPanel.current.panel.reveal(column);
       return;
     }
-    const panel = vscode.window.createWebviewPanel(SetupPanel.viewType, "DCS Setup", column, {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-    });
+    const panel = createPanel(context, SetupPanel.viewType, "DCS Setup", column);
     SetupPanel.current = new SetupPanel(panel, context, detect, archive);
   }
 
@@ -43,7 +40,6 @@ export class SetupPanel {
     private readonly archive: ArchivePort,
   ) {
     this.panel = panel;
-    this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
