@@ -80,8 +80,13 @@ fn walk_table(
     visited: &mut HashSet<*const c_void>,
 ) -> Vec<GlobalNode> {
     let mut members: Vec<GlobalNode> = Vec::new();
-    for pair in table.pairs::<LuaValue, LuaValue>() {
-        let Ok((key, value)) = pair else { continue };
+    // Iterating as `LuaValue`/`LuaValue` makes both conversions the identity, so
+    // a pair can never fail to materialise; taking the ones that do keeps the
+    // walk total, the same way `lua_utils::serialize_lua_table_to_json` does.
+    for (key, value) in table
+        .pairs::<LuaValue, LuaValue>()
+        .filter_map(std::result::Result::ok)
+    {
         let LuaValue::String(key) = key else { continue };
         let Ok(name) = key.to_str() else { continue };
         let name = name.to_owned();
@@ -122,6 +127,19 @@ mod tests {
             log = { write = function() end, ERROR = 4 }
             -- A non-emittable key (not a Lua identifier) is skipped.
             log["bad-key"] = function() end
+            -- Keys that are not emittable NAMES at all: DCS's own tables carry
+            -- array parts (log[1]) and, in the mission state, keys built from
+            -- raw bytes that are not valid UTF-8. Both are skipped rather than
+            -- turned into a broken statement — or, worse, raising mid-dump and
+            -- costing the editor its whole type surface.
+            log[1] = function() end
+            log["\255\254"] = function() end
+            -- Every scalar type DCS actually exposes on these roots, plus a
+            -- coroutine: not indexable, so it types as an opaque handle rather
+            -- than being walked (a walk would raise on it).
+            log.PREFIX = "dcs"
+            log.VERBOSE = true
+            log.pump = coroutine.create(function() end)
             "#,
         )
         .exec()
@@ -138,6 +156,13 @@ mod tests {
         assert!(out.contains("function log.write() end"), "{out}");
         assert!(out.contains("log.ERROR = 0"), "{out}");
 
+        // Scalars carry their type, not the live build's value — the dump is a
+        // type surface, not a snapshot of this install's constants.
+        assert!(out.contains("log.PREFIX = \"\""), "{out}");
+        assert!(out.contains("log.VERBOSE = false"), "{out}");
+        // A thread is not indexable; typing it opaque keeps the walk total.
+        assert!(out.contains("log.pump = {}"), "{out}");
+
         // The cycle terminated (a finite string is itself the proof) and the
         // self-reference is typed as an opaque table, not re-walked.
         assert!(out.contains("DCS.self = {}"), "{out}");
@@ -149,6 +174,15 @@ mod tests {
 
         // A non-identifier key is filtered, not emitted into a broken statement.
         assert!(!out.contains("bad-key"), "{out}");
+        // ... and so are the keys that are not names: an array slot and a
+        // non-UTF-8 byte string. The dump still carries everything else on the
+        // same root, which is the point of skipping rather than failing.
+        assert!(!out.contains("log[1]") && !out.contains("log.1"), "{out}");
+        assert!(
+            out.is_ascii(),
+            "a raw byte key leaked into the dump:\n{out}"
+        );
+        assert!(out.contains("function log.write() end"), "{out}");
 
         // An absent curated root (no `net`/`Export`/`lfs` here) is skipped.
         assert!(!out.contains("net"), "{out}");

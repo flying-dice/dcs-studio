@@ -8,11 +8,20 @@
 // any future ones) are captured VERBATIM into `model.extras` and re-emitted, so
 // editing through the form never drops them. Comments inside modeled sections
 // are not preserved (a v1 limitation — the real app uses toml_edit for that).
+// The UMD preamble is environment-selection boilerplate, and only ever one of
+// its two halves can run in a given host: under Node `module` is always
+// defined, so the browser half is unreachable from the unit layer that owns
+// this file's coverage. It is not untested — manifestCoreValues.test.ts
+// evaluates this source in a module-less vm context and asserts the API lands
+// on the global, which is exactly what a webview <script> tag does. Everything
+// the wrapper returns is covered normally below.
+/* v8 ignore start */
 ((root, factory) => {
   const api = factory();
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.DcsManifestCore = api;
 })(typeof self !== "undefined" ? self : this, () => {
+  /* v8 ignore stop */
   const ROOT_TOKENS = ["{SavedGames}", "{GameInstall}"];
   // The array sections the model stores first-class and re-emits. New array
   // sections (a future one) drop in by adding a name here and a create-case
@@ -54,7 +63,12 @@
     let m;
     // biome-ignore lint/suspicious/noAssignInExpressions: canonical RegExp.exec loop
     while ((m = re.exec(inner)) !== null) {
-      if (m.index === re.lastIndex) re.lastIndex++; // guard against empty matches
+      // Standard defensive guard for a global regex loop. Provably unreachable
+      // with THIS pattern — every alternative in the capture group requires at
+      // least one character, so exec can never return a zero-length match — but
+      // kept so the loop stays safe if the pattern is ever relaxed.
+      /* v8 ignore next */
+      if (m.index === re.lastIndex) re.lastIndex++;
       const tok = m[1].trim();
       if (tok) out.push(parseVal(tok));
     }
@@ -71,12 +85,43 @@
     return v;
   }
 
+  // The modeled fields the model guarantees are strings, per section. TOML is
+  // typed, so `name = 2024` is a valid integer and `path = 1` a valid one too —
+  // but every consumer treats these as text and calls .trim() / .startsWith()
+  // on them (the form's issues(), splitDest(), publish preflight's
+  // computePreflight()), which turns a number or boolean into a TypeError.
+  // Normalise once here at the parse boundary rather than defending at each use.
+  //
+  // A throw here is not cosmetic: render() assigns state.model BEFORE building
+  // the HTML, so a poisoned value leaves the form permanently blank and every
+  // later message re-throws on the same row.
+  const TEXT_KEYS = {
+    project: ["name", "version", "author", "description"],
+    bundle: ["path"],
+    symlink: ["source", "dest"],
+    requires_module: ["id", "name"],
+    entrypoint: ["id", "name", "exe"],
+    mission_script: ["name", "purpose", "path", "run_on"],
+  };
+
+  /**
+   * A modeled value as text: a quoted string unquotes as usual, and anything
+   * TOML types as a non-string (integer, float, boolean, array) keeps its
+   * literal source text. Unmodeled keys deliberately do NOT go through this —
+   * they keep their parsed type so emitToml round-trips them.
+   */
+  function parseText(raw) {
+    const v = parseVal(raw);
+    return typeof v === "string" ? v : raw;
+  }
+
   function parseToml(text) {
     const m = emptyModel();
     if (!text) return m;
     let cur = null;
     let sec = null;
     let extra = null;
+    let textKeys = [];
     const flush = () => {
       if (extra?.join("").trim()) m.extras.push(extra.join("\n").replace(/\s+$/, ""));
       extra = null;
@@ -108,6 +153,7 @@
               m.requires_module.push(cur);
             }
           } else cur = m.project;
+          textKeys = TEXT_KEYS[name];
           sec = "modeled";
         } else {
           extra = [raw]; // capture the header + body verbatim
@@ -124,7 +170,10 @@
         const line = t.replace(/^#.*$/, "");
         if (!line) continue;
         const kv = line.match(/^([A-Za-z0-9_-]+)\s*=\s*(.+)$/);
-        if (kv) cur[kv[1]] = parseVal(kv[2].trim());
+        if (kv) {
+          const val = kv[2].trim();
+          cur[kv[1]] = textKeys.includes(kv[1]) ? parseText(val) : parseVal(val);
+        }
       }
       // Lines before any section (e.g. a leading comment) are dropped in v1.
     }
@@ -178,11 +227,15 @@
     return out;
   }
 
+  // Either separator after the token: DCS is Windows-only, so a backslash is
+  // what an author writes, and leaving it on made staysUnder read the rest as a
+  // rooted path and refuse the whole manifest. Mirror of destRelative in
+  // src/core/domain/pathContainment.ts, which carries the longer note.
   function splitDest(dest) {
     for (const t of ROOT_TOKENS) {
-      if (dest.startsWith(t)) return { root: t, rest: dest.slice(t.length).replace(/^\//, "") };
+      if (dest.startsWith(t)) return { root: t, rest: dest.slice(t.length).replace(/^[/\\]/, "") };
     }
-    return { root: "{SavedGames}", rest: dest.replace(/^\//, "") };
+    return { root: "{SavedGames}", rest: dest.replace(/^[/\\]/, "") };
   }
 
   function winJoin(base, rest) {
@@ -191,12 +244,116 @@
     return r ? `${b}\\${r}` : b;
   }
 
+  /**
+   * True when `p` is a relative path that stays under whatever root it is
+   * joined onto. Mirror of `staysUnder` in src/core/domain/pathContainment.ts,
+   * which is itself a mirror of the bridge's `stays_under` in
+   * bridge-core/src/path_guard.rs — a manifest comes from a stranger's release,
+   * and both halves of the product must agree on what a safe relative path is.
+   * The webview loads this file as a plain <script>, so it cannot import the
+   * TypeScript one; test/unit/manifest/manifestCoreValues.test.ts asserts the
+   * two agree over a shared table so the copies cannot drift.
+   *
+   * Rejects, with Windows semantics on every host: empty input; any `:` (drive
+   * prefix, and NTFS alternate data streams like `notes.txt:hidden`); leading
+   * separators (absolute and UNC); any `..` component on either separator; and
+   * empty components from doubled or trailing separators. A bare `.` is a no-op
+   * segment and normalises away.
+   */
+  function staysUnder(p) {
+    if (!p) return false;
+    if (p.includes(":")) return false;
+    if (p.startsWith("/") || p.startsWith("\\")) return false;
+    let normal = 0;
+    for (const component of p.split(/[/\\]/)) {
+      if (component === "" || component === "..") return false;
+      if (component !== ".") normal++;
+    }
+    return normal > 0;
+  }
+
+  /** True when a manifest dest stays under the DCS root it names. */
+  function destStaysUnder(dest) {
+    return staysUnder(splitDest(dest).rest);
+  }
+
+  /**
+   * Resolve a manifest dest to an absolute path, or null when it cannot be
+   * honoured. Null has two causes, and callers that need to tell them apart ask
+   * destStaysUnder(): the dest reaches outside the DCS roots (refused — the
+   * manifest is untrusted), or it names {GameInstall} on a machine where that
+   * root is not configured (unresolvable — the user can fix it in Settings).
+   */
   function resolveDest(dest, roots) {
     const { root, rest } = splitDest(dest);
-    if (root === "{SavedGames}") return winJoin(roots.savedGames, rest);
-    if (root === "{GameInstall}")
+    // Refused before either root is consulted, so an escaping dest never
+    // resolves against whichever root happens to be set.
+    if (!staysUnder(rest)) return null;
+    // splitDest is total — it returns {GameInstall} or defaults to
+    // {SavedGames} — so the write dir is the fall-through, not a third case.
+    if (root === "{GameInstall}") {
       return roots.gameInstall ? winJoin(roots.gameInstall, rest) : null;
-    return dest;
+    }
+    return winJoin(roots.savedGames, rest);
+  }
+
+  /** A path is covered when it equals or nests inside one of the bundle paths. */
+  function coveredByBundle(source, bundlePaths) {
+    const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+    const s = norm(source);
+    return bundlePaths.some((p) => {
+      const b = norm(p);
+      return b === "" || b === "." || s === b || s.startsWith(`${b}/`);
+    });
+  }
+
+  /**
+   * Every authoring problem in a parsed manifest, as ready-to-show sentences in
+   * document order. This is the policy — what makes a dcs-studio.toml valid —
+   * and it lives here rather than in the form because the form is a DOM script
+   * only a browser can reach, while the same judgements are also made by
+   * publish preflight and (a third time) by the Rust parser in
+   * dcs-studio-project. `roots` is consulted for one message only: an
+   * unconfigured {GameInstall} is about THIS machine's settings, not the file,
+   * which is why it is reported separately from an escaping dest (refused on
+   * every machine).
+   */
+  function issues(m, roots) {
+    const out = [];
+    if (!m.project.name.trim()) out.push("Project name is required.");
+    const bundlePaths = m.bundle.map((b) => b.path);
+    m.bundle.forEach((r, i) => {
+      if (!r.path.trim()) out.push(`Bundle ${i + 1}: path is empty.`);
+    });
+    m.symlink.forEach((r, i) => {
+      if (!r.source.trim()) out.push(`Symlink ${i + 1}: source is empty.`);
+      else if (!coveredByBundle(r.source, bundlePaths))
+        out.push(`Symlink ${i + 1}: source is not inside any bundled path.`);
+      if (!destStaysUnder(r.dest))
+        out.push(`Symlink ${i + 1}: destination reaches outside the DCS folders.`);
+      else if (splitDest(r.dest).root === "{GameInstall}" && !roots.gameInstall)
+        out.push(
+          `Symlink ${i + 1}: {GameInstall} is not configured (set dcsStudio.gameInstallPath).`,
+        );
+    });
+    m.requires_module.forEach((r, i) => {
+      if (!r.id.trim()) out.push(`Required module ${i + 1}: id is empty.`);
+    });
+    const epIds = m.entrypoint.map((e) => e.id);
+    m.entrypoint.forEach((r, i) => {
+      if (!r.id.trim()) out.push(`Executable ${i + 1}: id is empty.`);
+      else if (epIds.indexOf(r.id) !== i) out.push(`Executable ${i + 1}: duplicate id "${r.id}".`);
+      if (!r.exe.trim()) out.push(`Executable ${i + 1}: exe is empty.`);
+      else if (!coveredByBundle(r.exe, bundlePaths))
+        out.push(`Executable ${i + 1}: exe is not inside any bundled path.`);
+    });
+    m.mission_script.forEach((r, i) => {
+      if (!r.name.trim()) out.push(`Mission script ${i + 1}: name is empty.`);
+      if (!r.path.trim()) out.push(`Mission script ${i + 1}: path is empty.`);
+      else if (!coveredByBundle(r.path, bundlePaths))
+        out.push(`Mission script ${i + 1}: path is not inside any bundled path.`);
+    });
+    return out;
   }
 
   return {
@@ -209,6 +366,9 @@
     emitToml,
     splitDest,
     winJoin,
+    staysUnder,
+    destStaysUnder,
     resolveDest,
+    issues,
   };
 });

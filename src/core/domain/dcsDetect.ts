@@ -1,4 +1,4 @@
-import * as path from "node:path";
+import { win32 as path } from "node:path";
 
 // Pure DCS path-detection logic — ported from dcs-studio (dcs-studio-project::detect
 // + studio-services::mission probes). Everything here is I/O-free: the `reg query`
@@ -41,6 +41,28 @@ export const REGISTRY_INSTALL_KEYS: ReadonlyArray<readonly [string, string]> = [
   ["HKCU", "Software\\Eagle Dynamics"],
   ["HKLM", "SOFTWARE\\Eagle Dynamics"],
 ];
+
+/**
+ * The Saved Games write dirs to try, in preference order, when the user has set
+ * no `savedGamesPath`. The caller probes them and takes the first that exists,
+ * falling back to the first regardless — a machine with neither yet is a fresh
+ * DCS install, and `DCS` is where it will appear.
+ *
+ * The OpenBeta fallback is load-bearing, not decoration: it is the whole
+ * difference between the installer and the manifest form agreeing about where
+ * `{SavedGames}` points on an OpenBeta-only machine, and they disagreed for as
+ * long as each resolved it separately (issue #45).
+ */
+export function savedGamesCandidates(home: string): string[] {
+  return [path.join(home, "Saved Games", "DCS"), path.join(home, "Saved Games", "DCS.openbeta")];
+}
+
+/** Where mods are unpacked when the user has set no `dataDir`. */
+export function defaultDataDir(home: string): string {
+  // Deliberately OUTSIDE the DCS install and Saved Games, so DCS never scans the
+  // raw unpacked assets — only the links the installer makes into its folders.
+  return path.join(home, "DCSStudio", "mods");
+}
 
 /** Whether a `Saved Games` entry name is a DCS write dir (`DCS` or `DCS.<variant>`). */
 export function isDcsSavedName(name: string): boolean {

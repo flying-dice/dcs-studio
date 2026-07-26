@@ -46,6 +46,55 @@ Feature: Marketplace discovery and sign-in gate
     Then an error banner shows
       "GitHub rate limit reached. Sign in to raise the limit, or wait a minute."
 
+  Rule: A GitHub failure degrades the storefront, it never breaks it
+
+    @chaos
+    Scenario Outline: Discovery fails against GitHub
+      Given the user is browsing as a guest
+      And listings from an earlier pass are already on screen
+      When the repository search answers with <response>
+      Then an error banner shows "<message>"
+      And the cards already on screen stay — search, tag filter and sort still work
+      And Refresh is offered again rather than the panel going blank
+
+      Examples:
+        | response                                   | message                                                                 |
+        | 403 whose body says "API rate limit exceeded" | GitHub rate limit reached. Sign in to raise the limit, or wait a minute. |
+        | 403 whose body says organization SAML      | GitHub 403: Resource protected by organization SAML                     |
+        | 500 with a JSON body                       | GitHub 500: Internal Server Error                                       |
+        | 500 with an HTML body that is not JSON     | GitHub 500: Internal Server Error                                       |
+        | 422 whose body says "Validation Failed"    | GitHub 422: Validation Failed                                           |
+
+    @chaos
+    Scenario: The very first discovery fails, before anything has loaded
+      Given no listings have ever loaded in this panel
+      When discovery fails against GitHub
+      Then the error banner is shown above the grid area
+      And the grid area still shows the "no repos are tagged … yet" empty state,
+        because the webview has no listings to draw
+      And the two are shown together — the empty state is not suppressed
+        by the error
+
+    @chaos
+    Scenario: GitHub answers the repository search with a 404
+      Given the user is browsing as a guest
+      When the repository search returns 404
+      Then no error banner is shown — a 404 is read as "nothing found", not a failure
+      And the grid explains no repos are tagged with the topic yet
+
+    @chaos
+    Scenario: The GitHub session is revoked while the storefront is open
+      Given the user signed in and listings are on screen
+      When the GitHub session is signed out elsewhere in VS Code
+      Then auth state is re-read and the sign-in wall replaces the grid
+      And "Browse without signing in" gets the user back to the storefront
+
+    @chaos
+    Scenario: More tagged repos than one page of results
+      Given more than 100 public repos carry the discovery topic
+      Then discovery asks GitHub for a single page of 100, sorted by stars descending
+      And only those 100 can ever appear — the storefront does not paginate
+
 Feature: Storefront grid
   A searchable, filterable, sortable grid of mod cards.
 
@@ -99,4 +148,61 @@ Feature: Storefront grid
   Scenario: Jumping to the repo
     When the user clicks "GitHub ↗" on a card
     Then the repository opens in the system browser
+
+  Rule: A card is built from a stranger's repo metadata, so it renders as text
+
+    @chaos
+    Scenario: A search hit with fields missing or null
+      Given a repo has no owner block, a null description, no topics
+        and no star count
+      Then the card still renders, with an empty author, no blurb,
+        no tag chips and 0 stars
+      And when the avatar image fails to load it falls back to generated initials
+
+    @chaos
+    Scenario: A repo name or description containing markup
+      Given a repo description of "<img src=x onerror=alert(1)>"
+      Then it is escaped and shown as literal text in the card blurb
+      And nothing in it executes: the document's CSP is "default-src 'none'"
+        and scripts are allowed only under the document's own nonce
+
+  Rule: The storefront controls stay honest under stress
+
+    @chaos
+    Scenario: Refreshing while a discovery pass is still running
+      When the user clicks Refresh
+      Then the button is disabled and shows a spinner for the duration,
+        so a second pass cannot be queued by a double-click
+
+    @chaos
+    Scenario: A tag filter that the next refresh cannot satisfy
+      Given the user filtered by a tag chip
+      When a refresh returns listings that no longer carry that tag
+      Then the filter is kept and the grid shows "No mods match your search."
+      And picking "All tags" brings the listings back
+
+    @chaos
+    Scenario: Refreshing the Marketplace when it was never opened
+      Given the Marketplace panel is not open
+      When the user runs "DCS Studio: Refresh Marketplace"
+      Then nothing happens — no panel is opened and no request is made
+
+    @chaos
+    Scenario: Opening the Marketplace a second time
+      Given the Marketplace panel is already open
+      When the user runs "DCS Studio: Open Marketplace"
+      Then the existing panel is revealed rather than a second one created
+      And discovery is not re-run
+
+    @chaos
+    Scenario Outline: A discovery topic that carries no usable value
+      Given "dcsStudio.discoveryTopic" is <setting>
+      When discovery runs
+      Then it searches for the topic "dcs-studio"
+
+      Examples:
+        | setting          |
+        | unset            |
+        | an empty string  |
+        | only whitespace  |
 ```

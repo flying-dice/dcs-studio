@@ -9,8 +9,15 @@
   const boot = window.__BOOTSTRAP__;
   const app = document.getElementById("app");
 
-  const { ROOT_TOKENS, MISSION_SCRIPT_RUN_ON, parseToml, emitToml, splitDest } =
-    self.DcsManifestCore;
+  const {
+    ROOT_TOKENS,
+    MISSION_SCRIPT_RUN_ON,
+    parseToml,
+    emitToml,
+    splitDest,
+    destStaysUnder,
+    issues,
+  } = self.DcsManifestCore;
   let roots = boot.roots;
   const resolveDest = (dest) => self.DcsManifestCore.resolveDest(dest, roots);
 
@@ -29,53 +36,6 @@
   function onFormChanged() {
     renderPreview();
     pushEdit();
-  }
-
-  // ── Validation ──
-  /** A symlink source is covered when it equals or nests inside a bundle path. */
-  function coveredByBundle(source, bundlePaths) {
-    const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
-    const s = norm(source);
-    return bundlePaths.some((p) => {
-      const b = norm(p);
-      return b === "" || b === "." || s === b || s.startsWith(`${b}/`);
-    });
-  }
-
-  function issues(m) {
-    const out = [];
-    if (!m.project.name.trim()) out.push("Project name is required.");
-    const bundlePaths = m.bundle.map((b) => b.path);
-    m.bundle.forEach((r, i) => {
-      if (!r.path.trim()) out.push(`Bundle ${i + 1}: path is empty.`);
-    });
-    m.symlink.forEach((r, i) => {
-      if (!r.source.trim()) out.push(`Symlink ${i + 1}: source is empty.`);
-      else if (!coveredByBundle(r.source, bundlePaths))
-        out.push(`Symlink ${i + 1}: source is not inside any bundled path.`);
-      if (splitDest(r.dest).root === "{GameInstall}" && !roots.gameInstall)
-        out.push(
-          `Symlink ${i + 1}: {GameInstall} is not configured (set dcsStudio.gameInstallPath).`,
-        );
-    });
-    m.requires_module.forEach((r, i) => {
-      if (!r.id.trim()) out.push(`Required module ${i + 1}: id is empty.`);
-    });
-    const epIds = m.entrypoint.map((e) => e.id);
-    m.entrypoint.forEach((r, i) => {
-      if (!r.id.trim()) out.push(`Executable ${i + 1}: id is empty.`);
-      else if (epIds.indexOf(r.id) !== i) out.push(`Executable ${i + 1}: duplicate id "${r.id}".`);
-      if (!r.exe.trim()) out.push(`Executable ${i + 1}: exe is empty.`);
-      else if (!coveredByBundle(r.exe, bundlePaths))
-        out.push(`Executable ${i + 1}: exe is not inside any bundled path.`);
-    });
-    m.mission_script.forEach((r, i) => {
-      if (!r.name.trim()) out.push(`Mission script ${i + 1}: name is empty.`);
-      if (!r.path.trim()) out.push(`Mission script ${i + 1}: path is empty.`);
-      else if (!coveredByBundle(r.path, bundlePaths))
-        out.push(`Mission script ${i + 1}: path is not inside any bundled path.`);
-    });
-    return out;
   }
 
   // ── Icons ──
@@ -144,7 +104,7 @@
     return `<label class="field"><span class="lbl">${esc(label)}${hint ? `<span class="hint">${esc(hint)}</span>` : ""}</span>${inner}</label>`;
   }
   function input(sec, idx, key, value, ph) {
-    return `<input class="in" data-testid="manifest-input" data-sec="${sec}" data-idx="${idx}" data-key="${key}" value="${esc(value)}" placeholder="${esc(ph || "")}" spellcheck="false" autocomplete="off" />`;
+    return `<input class="in" data-testid="manifest-input" data-sec="${sec}" data-idx="${idx}" data-key="${key}" value="${esc(value)}" placeholder="${esc(ph)}" spellcheck="false" autocomplete="off" />`;
   }
 
   // data-add -> data-testid, per the previews/ data-testid convention doc.
@@ -190,11 +150,27 @@
       </section>`;
   }
 
+  /**
+   * The body of a symlink row's resolved-destination line. resolveDest returns
+   * null for two very different reasons and the form must not conflate them: a
+   * dest that reaches outside the DCS folders is refused on every machine (an
+   * authoring mistake to fix here), while an unresolvable {GameInstall} is only
+   * about this machine's settings. Shared by the full render and the live
+   * per-keystroke update so the two can never disagree.
+   */
+  function resolvedDestHtml(dest) {
+    if (!destStaysUnder(dest))
+      return `<span class="warn-text" data-testid="escaping-dest-warning">${I.warn} Reaches outside the DCS folders</span>`;
+    const resolved = resolveDest(dest);
+    return resolved
+      ? esc(resolved)
+      : `<span class="warn-text" data-testid="unresolved-warning">${I.warn} {GameInstall} not configured</span>`;
+  }
+
   function sectionSymlink(m) {
     const rows = m.symlink
       .map((r, i) => {
         const { root, rest } = splitDest(r.dest);
-        const resolved = resolveDest(r.dest);
         return `
         <div class="row" data-testid="symlink-row" data-row="symlink-${i}">
           <div class="row-grid">
@@ -209,7 +185,7 @@
               </span>
             </label>
           </div>
-          <div class="resolved mono" data-testid="resolved-dest">${I.arrow}${resolved ? esc(resolved) : `<span class="warn-text" data-testid="unresolved-warning">${I.warn} {GameInstall} not configured</span>`}</div>
+          <div class="resolved mono" data-testid="resolved-dest">${I.arrow}${resolvedDestHtml(r.dest)}</div>
           <button class="rm" data-testid="remove-row-btn" data-rm="symlink" data-idx="${i}" title="Remove link">${I.x}</button>
         </div>`;
       })
@@ -343,13 +319,6 @@
         onFormChanged();
       });
     });
-    app.querySelectorAll('input[type="checkbox"]').forEach((el) => {
-      el.addEventListener("change", () => {
-        const { sec, idx, key } = el.dataset;
-        state.model[sec][parseInt(idx, 10)][key] = el.checked;
-        onFormChanged();
-      });
-    });
     app.querySelectorAll("[data-add]").forEach((el) => {
       el.addEventListener("click", () => {
         const sec = el.dataset.add;
@@ -381,15 +350,12 @@
   function updateResolved(i) {
     const row = app.querySelector(`[data-row="symlink-${i}"] .resolved`);
     if (!row) return;
-    const resolved = resolveDest(state.model.symlink[i].dest);
-    row.innerHTML = resolved
-      ? I.arrow + esc(resolved)
-      : `<span class="warn-text" data-testid="unresolved-warning">${I.warn} {GameInstall} not configured</span>`;
+    row.innerHTML = I.arrow + resolvedDestHtml(state.model.symlink[i].dest);
   }
 
   function renderPreview() {
     document.getElementById("toml").textContent = emitToml(state.model);
-    const probs = issues(state.model);
+    const probs = issues(state.model, roots);
     const box = document.getElementById("issues");
     box.innerHTML = probs.length
       ? `<ul class="issues" data-testid="validation-issues">${probs.map((p) => `<li>${I.warn}${esc(p)}</li>`).join("")}</ul>`

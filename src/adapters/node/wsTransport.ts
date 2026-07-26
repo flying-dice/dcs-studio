@@ -23,8 +23,36 @@ export interface WsHandlers {
   onError?: (err: Error) => void;
 }
 
+/**
+ * The socket surface this transport uses — `net.Socket` satisfies it.
+ *
+ * Narrowing it to these five members is what makes the transport's defensive
+ * behaviour testable. Everything this class does when the connection misbehaves
+ * (a write that throws mid-frame, a destroy that throws while already failing,
+ * a close arriving after we closed) is reachable only from a socket that is
+ * uncooperative on demand, which a real TCP socket cannot be asked to be.
+ */
+export interface WsSocket {
+  on(event: "data", listener: (data: Buffer) => void): unknown;
+  on(event: "error", listener: (err: Error) => void): unknown;
+  on(event: "close", listener: () => void): unknown;
+  write(data: string | Uint8Array): unknown;
+  end(): unknown;
+  destroy(): unknown;
+}
+
+/** Opens the connection and calls `onConnect` once it is established. */
+export type WsSocketFactory = (
+  endpoint: { host: string; port: number },
+  onConnect: () => void,
+) => WsSocket;
+
+/** The real thing: a raw TCP connection to the in-DCS bridge. */
+const connectTcp: WsSocketFactory = (endpoint, onConnect) =>
+  net.createConnection(endpoint, onConnect);
+
 export class MiniWebSocket {
-  private readonly socket: net.Socket;
+  private readonly socket: WsSocket;
   private handshakeDone = false;
   private buffer = Buffer.alloc(0);
   private closed = false;
@@ -37,8 +65,9 @@ export class MiniWebSocket {
     private readonly port: number,
     private readonly path: string,
     private readonly h: WsHandlers,
+    connect: WsSocketFactory = connectTcp,
   ) {
-    this.socket = net.createConnection({ host, port }, () => this.sendHandshake());
+    this.socket = connect({ host, port }, () => this.sendHandshake());
     this.socket.on("data", (d) => this.onData(d));
     this.socket.on("error", (e) => this.fail(e.message));
     this.socket.on("close", () => {
@@ -156,13 +185,22 @@ export class MiniWebSocket {
 
 /** `BridgeTransportPort` over `MiniWebSocket`. */
 export class WsBridgeTransport implements BridgeTransportPort {
+  /** `openSocket` defaults to a real TCP connection; injectable for tests. */
+  constructor(private readonly openSocket: WsSocketFactory = connectTcp) {}
+
   connect(endpoint: BridgeEndpoint, handlers: BridgeHandlers): BridgeConnection {
-    const ws = new MiniWebSocket(endpoint.host, endpoint.port, endpoint.path, {
-      onOpen: handlers.onOpen?.bind(handlers),
-      onMessage: handlers.onMessage?.bind(handlers),
-      onClose: handlers.onClose?.bind(handlers),
-      onError: handlers.onError?.bind(handlers),
-    });
+    const ws = new MiniWebSocket(
+      endpoint.host,
+      endpoint.port,
+      endpoint.path,
+      {
+        onOpen: handlers.onOpen?.bind(handlers),
+        onMessage: handlers.onMessage?.bind(handlers),
+        onClose: handlers.onClose?.bind(handlers),
+        onError: handlers.onError?.bind(handlers),
+      },
+      this.openSocket,
+    );
     return {
       send: (text) => ws.send(text),
       close: () => ws.close(),

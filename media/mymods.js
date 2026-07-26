@@ -142,10 +142,10 @@
     const busy = state.busy[m.repo];
     const prog = state.progress[m.repo];
     return `
-      <div class="mod-wrap">
+      <div class="mod-wrap" data-testid="mod-row" data-repo="${esc(m.repo)}">
         <div class="mod">
           <label class="switch" title="${m.enabled ? "Enabled — symlinked into DCS" : "Disabled — unpacked but not linked"}">
-            <input type="checkbox" data-toggle="${esc(m.repo)}" ${m.enabled ? "checked" : ""} ${busy ? "disabled" : ""} />
+            <input type="checkbox" data-testid="enable-toggle" data-toggle="${esc(m.repo)}" ${m.enabled ? "checked" : ""} ${busy ? "disabled" : ""} />
             <span class="slider"></span>
           </label>
           <div class="info">
@@ -153,15 +153,15 @@
             <div class="meta">
               <span>${esc(m.repo)}</span>
               <span>${esc(m.tag)}</span>
-              <span class="pill ${m.enabled ? "on" : "off"}">${m.enabled ? `${m.links} link${m.links === 1 ? "" : "s"}` : "disabled"}</span>
-              ${prog ? `<span class="progress"><span class="spin">${ICO.refresh}</span> ${esc(prog)}</span>` : ""}
+              <span class="pill ${m.enabled ? "on" : "off"}" data-testid="links-pill">${m.enabled ? `${m.linkCount} link${m.linkCount === 1 ? "" : "s"}` : "disabled"}</span>
+              ${prog ? `<span class="progress" data-testid="mod-progress"><span class="spin">${ICO.refresh}</span> ${esc(prog)}</span>` : ""}
             </div>
           </div>
           <div class="actions">
-            <button class="btn secondary" data-update="${esc(m.repo)}" ${busy ? "disabled" : ""} title="Check for and install a newer release">${ICO.update} Update</button>
-            <button class="btn secondary icon-btn" data-dir="${esc(m.repo)}" title="Open the unpacked folder">${ICO.folder}</button>
-            <button class="btn secondary icon-btn" data-gh="${esc(m.repo)}" title="View on GitHub">${ICO.gh}</button>
-            <button class="btn secondary icon-btn danger" data-uninstall="${esc(m.repo)}" ${busy ? "disabled" : ""} title="Uninstall (remove links + unpacked files)">${ICO.trash}</button>
+            <button class="btn secondary" data-testid="update-btn" data-update="${esc(m.repo)}" ${busy ? "disabled" : ""} title="Check for and install a newer release">${ICO.update} Update</button>
+            <button class="btn secondary icon-btn" data-testid="open-dir-btn" data-dir="${esc(m.repo)}" title="Open the unpacked folder">${ICO.folder}</button>
+            <button class="btn secondary icon-btn" data-testid="github-btn" data-gh="${esc(m.repo)}" title="View on GitHub">${ICO.gh}</button>
+            <button class="btn secondary icon-btn danger" data-testid="uninstall-btn" data-uninstall="${esc(m.repo)}" ${busy ? "disabled" : ""} title="Uninstall (remove links + unpacked files)">${ICO.trash}</button>
           </div>
         </div>
         ${entrypointsBlock(m)}
@@ -174,24 +174,24 @@
       <header>
         <div style="display:flex;flex-direction:column;line-height:1.2"><span class="kicker">DCS&nbsp;Studio</span><span class="title">My Mods</span></div>
         <span class="spacer"></span>
-        <button class="btn secondary" id="shortcut" title="Add a Desktop / Start Menu shortcut that opens My Mods in its own window">${ICO.desktop} Add shortcut</button>
-        <button class="btn secondary" id="refresh">Refresh</button>
+        <button class="btn secondary" id="shortcut" data-testid="shortcut-btn" title="Add a Desktop / Start Menu shortcut that opens My Mods in its own window">${ICO.desktop} Add shortcut</button>
+        <button class="btn secondary" id="refresh" data-testid="refresh-btn">Refresh</button>
       </header>
       <div class="wrap">
         <div class="datadir">Data dir: ${esc(state.dataDir)}</div>
         ${
           state.mods.length === 0
-            ? `<div class="empty"><div class="big">No mods installed yet</div>Browse Mods and install one — it'll appear here to enable, update, or remove.</div>`
+            ? `<div class="empty" data-testid="mods-empty"><div class="big">No mods installed yet</div>Browse Mods and install one — it'll appear here to enable, update, or remove.</div>`
             : state.mods.map(modRow).join("")
         }
         <div class="mod" style="margin-top:8px">
           <div class="info">
             <div class="name">Clean uninstall</div>
-            <div class="meta"><span>A script that removes every mod link + unpacked data, in one go.</span><span class="mono">${esc(state.uninstallBat)}</span></div>
+            <div class="meta"><span>A script that removes every mod link + unpacked data, in one go.</span><span class="mono" data-testid="uninstall-bat-path">${esc(state.uninstallBat)}</span></div>
           </div>
           <div class="actions">
-            <button class="btn secondary" id="revealBat">Reveal script</button>
-            <button class="btn secondary danger" id="cleanBtn">Run clean uninstall</button>
+            <button class="btn secondary" id="revealBat" data-testid="reveal-bat-btn">Reveal script</button>
+            <button class="btn secondary danger" id="cleanBtn" data-testid="clean-uninstall-btn">Run clean uninstall</button>
           </div>
         </div>
       </div>`;

@@ -8,7 +8,18 @@ import { showError } from "../errors";
 // dcs_studio_mission.dll (one `cargo build --release` produces both).
 // Requires the user's Rust toolchain + MSVC. The extension ships prebuilt
 // DLLs too, so this is only needed when the bridge source is changed.
-export async function buildBridge(ctx: vscode.ExtensionContext): Promise<void> {
+//
+// `bridgeDir` is inside the extension's own install directory, so the native
+// `path`/`fs` are right here — unlike the DCS write dir, it is a real local
+// path on whatever OS is running.
+//
+// `spawnProcess` is a seam: a successful `cargo build --release` takes minutes
+// and needs a toolchain, and the "cargo is not installed" path cannot be
+// reproduced on a machine that has it.
+export async function buildBridge(
+  ctx: vscode.ExtensionContext,
+  spawnProcess: typeof spawn = spawn,
+): Promise<void> {
   const bridgeDir = path.join(ctx.extensionUri.fsPath, "bridge");
   if (!fs.existsSync(path.join(bridgeDir, "Cargo.toml"))) {
     void showError("Bridge source (bridge/) is not present in this build.");
@@ -26,7 +37,10 @@ export async function buildBridge(ctx: vscode.ExtensionContext): Promise<void> {
     },
     () =>
       new Promise<void>((resolve) => {
-        const proc = spawn("cargo", ["build", "--release"], { cwd: bridgeDir, shell: true });
+        const proc = spawnProcess("cargo", ["build", "--release"], {
+          cwd: bridgeDir,
+          shell: true,
+        });
         proc.stdout.on("data", (d) => out.append(d.toString()));
         proc.stderr.on("data", (d) => out.append(d.toString()));
         proc.on("error", (e) => {

@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { BridgeClients } from "../bridge/clients";
 import { type DualBridgeStatus, displayTime } from "../core/domain/bridgeProtocol";
+import { MANIFEST_FILE } from "../core/domain/manifestFile";
 import type { SkillsLibrary } from "../skills/library";
 import { mediaUri, renderWebviewHtml } from "../webview/html";
 
@@ -77,7 +78,7 @@ export class NavViewProvider implements vscode.WebviewViewProvider {
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (folder) {
       const watcher = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(folder, "dcs-studio.toml"),
+        new vscode.RelativePattern(folder, MANIFEST_FILE),
       );
       watcher.onDidCreate(() => void this.postManifestState());
       watcher.onDidDelete(() => void this.postManifestState());
@@ -93,7 +94,7 @@ export class NavViewProvider implements vscode.WebviewViewProvider {
     let hasManifest = false;
     if (folder) {
       hasManifest = await vscode.workspace.fs
-        .stat(vscode.Uri.joinPath(folder.uri, "dcs-studio.toml"))
+        .stat(vscode.Uri.joinPath(folder.uri, MANIFEST_FILE))
         .then(
           () => true,
           () => false,

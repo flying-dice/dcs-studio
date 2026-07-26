@@ -65,6 +65,15 @@ export interface PreflightFacts {
   gh: GhFacts;
 }
 
+/**
+ * The first check that must stop a publish, or null when none does. Used to
+ * re-gate an action at the moment it is taken: the rendered check list is a
+ * snapshot from the last run, and the project can change under it.
+ */
+export function firstBlocker(checks: readonly Check[]): Check | null {
+  return checks.find((c) => c.level === "error") ?? null;
+}
+
 /** GitHub CLI presence + auth as a Check (used standalone and inside preflight). */
 export function computeGhCheck(gh: GhFacts): Check {
   if (!gh.present)
@@ -92,7 +101,15 @@ export function computePreflight(facts: PreflightFacts): Check[] {
       detail: "dcs-studio.toml not found in the workspace root.",
     });
   } else if (!facts.manifest) {
-    checks.push({ label: "Manifest", level: "error", detail: "Could not parse dcs-studio.toml." });
+    // Reached when the file is there but reading it threw — deleted between the
+    // existence check and the read, or unreadable by this process. It is NOT a
+    // parse failure: the manifest parser is tolerant by design and answers
+    // garbage with an empty model, which fails the [project] name check below.
+    checks.push({
+      label: "Manifest",
+      level: "error",
+      detail: "dcs-studio.toml could not be read.",
+    });
   } else {
     const m = facts.manifest;
     checks.push(

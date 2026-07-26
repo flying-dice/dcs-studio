@@ -1,11 +1,10 @@
-import * as os from "os";
 import * as vscode from "vscode";
-import { exportFileBase, shouldOpenExport } from "../core/domain/bridgeConsole";
+import { exportFileBase } from "../core/domain/bridgeConsole";
 import type { DualBridgeStatus } from "../core/domain/bridgeProtocol";
-import { fmtBytes } from "../core/domain/format";
 import { renderWebviewHtml } from "../webview/html";
 import type { BridgeClient, LuaEnv } from "./client";
 import type { BridgeClients } from "./clients";
+import { saveExport } from "./saveExport";
 
 // The Lua console: a REPL against the live sim over the bridges, with a target
 // environment picker (GUI/hooks, mission scripting env, or another net state).
@@ -26,10 +25,10 @@ export class ConsolePanel {
 
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
-  private pollTimer: ReturnType<typeof setInterval> | undefined;
+  private readonly pollTimer: ReturnType<typeof setInterval>;
   /** Per-bridge tail state. A reconnect means the server (and its ring)
    * restarted — reset the cursor so the fresh ring is read from the start. */
-  private readonly tails = new Map<BridgeClient, { lastSeq: number; wasConnected: boolean }>();
+  private readonly tails = new Map<BridgeClient, ConsoleTail>();
 
   static show(context: vscode.ExtensionContext, clients: BridgeClients): void {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
@@ -205,46 +204,37 @@ export class ConsolePanel {
     env: LuaEnv,
     msg: { ref?: number; expr?: string; label?: string; reqId?: number },
   ): Promise<void> {
+    // Tracked outside the try so the tidy-up runs on EVERY path out of it: a
+    // copy the user's disk refuses would otherwise leave a multi-megabyte
+    // dcs-studio-export-*.json in the DCS write dir forever.
+    let temp: vscode.Uri | undefined;
     try {
       const { path, bytes } = await this.clients
         .forEnv(env)
         .replExport(env, { ref: msg.ref, expr: msg.expr });
-      const temp = vscode.Uri.file(path);
-      const base = exportFileBase(msg.label);
-      const folder = vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(os.homedir());
-      const target = await vscode.window.showSaveDialog({
-        defaultUri: vscode.Uri.joinPath(folder, `${base}.json`),
-        filters: { JSON: ["json"] },
-      });
-      if (target) {
-        await vscode.workspace.fs.copy(temp, target, { overwrite: true });
-        if (shouldOpenExport(bytes)) {
-          const doc = await vscode.workspace.openTextDocument(target);
-          await vscode.window.showTextDocument(doc, { preview: true });
-        } else {
-          void vscode.window.showInformationMessage(
-            `Exported ${fmtBytes(bytes)} to ${target.fsPath}`,
-          );
-        }
-      }
-      try {
-        await vscode.workspace.fs.delete(temp);
-      } catch {
-        /* best-effort tidy of the sim-side temp file */
-      }
-      this.post({ type: "exportDone", reqId: msg.reqId, saved: !!target });
+      temp = vscode.Uri.file(path);
+      const saved = await saveExport(temp, exportFileBase(msg.label), bytes);
+      this.post({ type: "exportDone", reqId: msg.reqId, saved });
     } catch (e) {
       this.post({ type: "exportDone", reqId: msg.reqId, saved: false, error: errText(e) });
+    } finally {
+      if (temp) {
+        try {
+          await vscode.workspace.fs.delete(temp);
+        } catch {
+          /* best-effort tidy of the sim-side temp file */
+        }
+      }
     }
   }
 
   private async poll(): Promise<void> {
-    await Promise.all([this.pollOne(this.clients.gui), this.pollOne(this.clients.mission)]);
+    // Driven off the tail map itself, so every bridge with tail state is
+    // polled and none can be polled without it.
+    await Promise.all([...this.tails].map(([client, tail]) => this.pollOne(client, tail)));
   }
 
-  private async pollOne(client: BridgeClient): Promise<void> {
-    const tail = this.tails.get(client);
-    if (!tail) return;
+  private async pollOne(client: BridgeClient, tail: ConsoleTail): Promise<void> {
     const connected = client.current.connected;
     if (!connected) {
       tail.wasConnected = false;
@@ -287,7 +277,7 @@ export class ConsolePanel {
 
   private dispose(): void {
     ConsolePanel.current = undefined;
-    if (this.pollTimer) clearInterval(this.pollTimer);
+    clearInterval(this.pollTimer);
     this.panel.dispose();
     while (this.disposables.length) this.disposables.pop()?.dispose();
   }
@@ -302,6 +292,13 @@ export class ConsolePanel {
       csp: { font: true },
     });
   }
+}
+
+/** Where a bridge's output ring has been read up to, and whether it was
+ * connected on the previous tick. */
+interface ConsoleTail {
+  lastSeq: number;
+  wasConnected: boolean;
 }
 
 function errText(e: unknown): string {

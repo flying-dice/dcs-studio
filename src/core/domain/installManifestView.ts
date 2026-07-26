@@ -14,7 +14,15 @@
 // render without its warnings: the risks derive from the same surface as the
 // sections, so if the surface is known the flags are present, and if it is not
 // known the UI shows the unknown state instead of a clean (warning-free) page.
+//
+// The same surface also decides whether the mod may be installed at all. Every
+// declared path is measured against the shared containment predicate
+// (./pathContainment), and each one that reaches outside its root is listed in
+// `unsafePaths` with the row it came from flagged `escapes`. That is what lets
+// the product page refuse the mod with a reason at plan time — before anything
+// is downloaded — rather than discovering it halfway through linking.
 
+import { destStaysUnder, staysUnder } from "./pathContainment";
 import type { ManifestEntrypoint, ManifestMissionScript, MissionScriptRunOn } from "./types";
 
 /** The raw parsed manifest surface fed to the view-model. */
@@ -39,6 +47,8 @@ export interface SymlinkView {
   source: string;
   dest: string;
   resolved: string | null;
+  /** True when this row's source or dest reaches outside its root. */
+  escapes: boolean;
 }
 
 /** A normalized entrypoint row for display. */
@@ -48,6 +58,8 @@ export interface EntrypointView {
   exe: string;
   args: string[];
   cwd: string | null;
+  /** True when this row's exe or cwd reaches outside the unpacked mod dir. */
+  escapes: boolean;
 }
 
 /** A normalized mission-script row for display. */
@@ -58,6 +70,87 @@ export interface MissionScriptView {
   run_on: MissionScriptRunOn;
   /** True for `run_on = "before-sanitize"` — the unsandboxed, privileged case. */
   beforeSanitize: boolean;
+  /** True when this row's path reaches outside the unpacked mod dir. */
+  escapes: boolean;
+}
+
+/** Which declared path failed containment — decides how it is described. */
+export type UnsafePathKind =
+  | "symlink-dest"
+  | "symlink-source"
+  | "entrypoint-exe"
+  | "entrypoint-cwd"
+  | "mission-script-path";
+
+/** One declared path that reaches outside the root it would be joined onto. */
+export interface UnsafePath {
+  kind: UnsafePathKind;
+  /** The path exactly as the manifest declared it — never normalized away. */
+  value: string;
+  /** A one-line, user-facing explanation naming the offending path. */
+  reason: string;
+}
+
+/** How each kind of offending path is named to the user. */
+const UNSAFE_SUBJECT: Record<UnsafePathKind, string> = {
+  "symlink-dest": "Link destination",
+  "symlink-source": "Link source",
+  "entrypoint-exe": "Executable",
+  "entrypoint-cwd": "Executable working directory",
+  "mission-script-path": "Mission script",
+};
+
+/**
+ * Describe one containment failure. A dest is joined onto a DCS root; every
+ * other declared path is joined onto the mod's own unpacked directory, so the
+ * two get different wording for what they escaped.
+ */
+function unsafePath(kind: UnsafePathKind, value: string): UnsafePath {
+  const root = kind === "symlink-dest" ? "the configured DCS folders" : "the mod's own folder";
+  return { kind, value, reason: `${UNSAFE_SUBJECT[kind]} "${value}" reaches outside ${root}.` };
+}
+
+function symlinkEscapePaths(s: { source: string; dest: string }): UnsafePath[] {
+  const out: UnsafePath[] = [];
+  if (!destStaysUnder(s.dest)) out.push(unsafePath("symlink-dest", s.dest));
+  if (!staysUnder(s.source)) out.push(unsafePath("symlink-source", s.source));
+  return out;
+}
+
+function entrypointEscapePaths(e: ManifestEntrypoint): UnsafePath[] {
+  const out: UnsafePath[] = [];
+  if (!staysUnder(e.exe)) out.push(unsafePath("entrypoint-exe", e.exe));
+  // `cwd` is optional and defaults to the exe's own directory; only a declared
+  // one can escape.
+  if (e.cwd && !staysUnder(e.cwd)) out.push(unsafePath("entrypoint-cwd", e.cwd));
+  return out;
+}
+
+function missionScriptEscapePaths(m: ManifestMissionScript): UnsafePath[] {
+  return staysUnder(m.path) ? [] : [unsafePath("mission-script-path", m.path)];
+}
+
+/**
+ * Every declared path in the surface that reaches outside its root, in the
+ * order the sections are declared. Empty means the manifest is safe to act on.
+ *
+ * This is the gate the install path shares with the product page: the page
+ * refuses to offer the mod, and the subscription service refuses to record or
+ * link it, from this one list.
+ */
+export function unsafeManifestPaths(input: InstallManifestInput): UnsafePath[] {
+  return [
+    ...input.symlinks.flatMap(symlinkEscapePaths),
+    ...input.entrypoints.flatMap(entrypointEscapePaths),
+    ...input.missionScripts.flatMap(missionScriptEscapePaths),
+  ];
+}
+
+/** The refusal message for a manifest that failed containment. */
+export function unsafeManifestMessage(unsafe: UnsafePath[]): string {
+  return `This mod's manifest asks to write outside your DCS folders. ${unsafe
+    .map((u) => u.reason)
+    .join(" ")}`;
 }
 
 /** Per-section item counts (drive the section-header badges). */
@@ -87,6 +180,12 @@ export interface InstallManifestView {
   missionScripts: MissionScriptView[];
   counts: InstallManifestCounts;
   risks: RiskFlag[];
+  /**
+   * Declared paths that reach outside their root. Non-empty means the mod must
+   * not be offered for install — the UI shows these reasons in place of the
+   * install action.
+   */
+  unsafePaths: UnsafePath[];
 }
 
 /** The explicit "manifest could not be read" view — empty, `known:false`. */
@@ -99,6 +198,7 @@ function unknownView(): InstallManifestView {
     missionScripts: [],
     counts: { bundles: 0, symlinks: 0, entrypoints: 0, missionScripts: 0, beforeSanitize: 0 },
     risks: [],
+    unsafePaths: [],
   };
 }
 
@@ -115,6 +215,7 @@ export function deriveInstallManifestView(input: InstallManifestInput | null): I
     source: s.source,
     dest: s.dest,
     resolved: s.resolved ?? null,
+    escapes: symlinkEscapePaths(s).length > 0,
   }));
   const entrypoints: EntrypointView[] = input.entrypoints.map((e) => ({
     id: e.id,
@@ -122,6 +223,7 @@ export function deriveInstallManifestView(input: InstallManifestInput | null): I
     exe: e.exe,
     args: e.args ?? [],
     cwd: e.cwd ?? null,
+    escapes: entrypointEscapePaths(e).length > 0,
   }));
   const missionScripts: MissionScriptView[] = input.missionScripts.map((m) => ({
     name: m.name,
@@ -129,6 +231,7 @@ export function deriveInstallManifestView(input: InstallManifestInput | null): I
     path: m.path,
     run_on: m.run_on,
     beforeSanitize: m.run_on === "before-sanitize",
+    escapes: missionScriptEscapePaths(m).length > 0,
   }));
 
   const beforeSanitize = missionScripts.filter((m) => m.beforeSanitize).length;
@@ -145,5 +248,14 @@ export function deriveInstallManifestView(input: InstallManifestInput | null): I
   if (entrypoints.length > 0) risks.push("runs-executable");
   if (beforeSanitize > 0) risks.push("pre-sanitize-script");
 
-  return { known: true, bundles, symlinks, entrypoints, missionScripts, counts, risks };
+  return {
+    known: true,
+    bundles,
+    symlinks,
+    entrypoints,
+    missionScripts,
+    counts,
+    risks,
+    unsafePaths: unsafeManifestPaths(input),
+  };
 }

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { expectSent, hostSend, openPreview } from "./helpers";
 
 test.describe("skills preview", () => {
@@ -74,6 +74,71 @@ test.describe("skills preview", () => {
     });
     await expect(page.getByTestId("no-workspace-note")).toBeVisible();
     await expect(page.getByTestId("empty-note")).toHaveCount(0);
+  });
+
+  test("a status the panel does not know falls back to 'Not installed'", async ({ page }) => {
+    // The status string comes from the host's on-disk comparison; a value this
+    // build has no pill for must still render an actionable card rather than
+    // an "undefined" pill with no Install button.
+    const errors = await openPreview(page, "skills");
+    await hostSend(page, {
+      type: "skills",
+      installDir: ".claude/skills",
+      hasWorkspace: true,
+      skills: [
+        {
+          id: "s1",
+          name: "s1",
+          description: "d",
+          bundledVersion: "1.0.0",
+          status: "who-knows",
+        },
+      ],
+    });
+    await expect(page.getByTestId("status-pill")).toHaveText("Not installed");
+    // The pill falls back but the action buttons key off the raw status, so
+    // the card is left read-only: safer than offering an Install whose effect
+    // on an unknown state nobody has reasoned about.
+    await expect(page.getByTestId("install-btn")).toHaveCount(0);
+    await expect(page.getByTestId("view-bundled-btn")).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test("a version already written with a leading v is not double-prefixed", async ({ page }) => {
+    // The version comes from author-written SKILL.md frontmatter, where both
+    // "2.0.0" and "v2.0.0" turn up. Prefixing blindly rendered the second as
+    // "installed vv2.0.0".
+    await openPreview(page, "skills");
+    await hostSend(page, {
+      type: "skills",
+      installDir: ".claude/skills",
+      hasWorkspace: true,
+      skills: [
+        {
+          id: "s1",
+          name: "s1",
+          description: "d",
+          bundledVersion: "v2.0.0",
+          installedVersion: "v1.0.0",
+          status: "outdated",
+        },
+        {
+          id: "s2",
+          name: "s2",
+          description: "d",
+          bundledVersion: "V3.0",
+          status: "not-installed",
+        },
+      ],
+    });
+    const outdated = page.locator('[data-testid="skill-card"][data-id="s1"]');
+    await expect(outdated.getByTestId("version-line")).toHaveText(
+      "installed v1.0.0 → bundled v2.0.0",
+    );
+    await expect(outdated.getByTestId("install-btn")).toHaveText("Update to v2.0.0");
+
+    const fresh = page.locator('[data-testid="skill-card"][data-id="s2"]');
+    await expect(fresh.getByTestId("version-line")).toHaveText("v3.0");
   });
 
   test("empty skills list shows empty-note", async ({ page }) => {

@@ -1,12 +1,18 @@
-import * as path from "node:path";
+import { win32 as path } from "node:path";
 import { selectPayloadVolumes } from "../domain/archivePolicy";
+import { errorText } from "../domain/errorText";
+import {
+  type InstallManifestInput,
+  unsafeManifestMessage,
+  unsafeManifestPaths,
+} from "../domain/installManifestView";
 import {
   AFTER_SANITIZE_FILE,
   type AggregatorEntry,
   BEFORE_SANITIZE_FILE,
   generateAggregator,
 } from "../domain/missionScriptAggregator";
-import { dataDirName, ledgerKey, MANIFEST, sortedByName } from "../domain/subscriptions";
+import { dataDirName, ledgerKey, MANIFEST_FILE, sortedByName } from "../domain/subscriptions";
 import type {
   InstallRoots,
   InstallTarget,
@@ -98,12 +104,12 @@ export class SubscriptionService {
 
   /** Parse a release's dcs-studio.toml asset into the resolved plan (for display). */
   async fetchPlan(assets: ProductAsset[], token: string | undefined): Promise<InstallPlan | null> {
-    const manifestAsset = assets.find((a) => a.name === MANIFEST);
+    const manifestAsset = assets.find((a) => a.name === MANIFEST_FILE);
     if (!manifestAsset) return null;
     const tmp = path.join(
       this.ports.roots.dataDir(),
       ".tmp",
-      `${this.ports.clock.now()}-${MANIFEST}`,
+      `${this.ports.clock.now()}-${MANIFEST_FILE}`,
     );
     await this.ports.downloader.download(manifestAsset.url, tmp, token);
     const m = this.ports.manifest.parseToml(await this.ports.fs.readText(tmp));
@@ -122,7 +128,25 @@ export class SubscriptionService {
     };
   }
 
-  /** Download the payload volumes and unpack them into the mod's data dir. */
+  /**
+   * Download the payload volumes and unpack them into the mod's data dir.
+   *
+   * Extraction never writes into the live directory: it lands in a sibling
+   * staging dir which is swapped in once 7-Zip has succeeded. A truncated
+   * download, a corrupt archive, a full disk or a missing archiver therefore
+   * leaves the previously unpacked payload — and the ledger entry describing it
+   * — exactly as they were, instead of clearing the files first and reporting a
+   * healthy install over a hole.
+   *
+   * The swap itself gets the same treatment, and needs it more. Renaming a
+   * directory on the shipping OS fails with EPERM/EBUSY whenever anything holds
+   * a handle underneath it — DCS itself, an AV scanner, an open editor — which
+   * makes this the step most likely to fail of the whole install. So the old
+   * payload is moved aside rather than deleted, and put back if the new one
+   * cannot take its place; the staged copy is kept in that case too, because
+   * once the live directory is empty deleting the only other copy is how a
+   * failed update turns into a mod that exists in the ledger and nowhere else.
+   */
   private async downloadAndUnpack(
     target: InstallTarget,
     token: string | undefined,
@@ -147,14 +171,88 @@ export class SubscriptionService {
       );
     }
     onProgress({ phase: "extract", label: "Extracting payload…" });
-    // Clear prior unpacked content but keep the .download dir until extraction done.
-    const entries = (await this.ports.fs.exists(dir)) ? await this.ports.fs.readDir(dir) : [];
-    for (const entry of entries) {
-      if (entry !== ".download") await this.ports.fs.remove(path.join(dir, entry));
+    // A sibling of `dir` (same volume, so the swap is a rename) with a fixed
+    // name, so leftovers from an interrupted run are cleared by the next one.
+    const staging = `${dir}.unpacking`;
+    try {
+      await this.ports.fs.remove(staging);
+      await this.ports.fs.mkdirp(staging);
+      await this.ports.archive.extract(path.join(dl, volumes[0].name), staging);
+    } catch (e) {
+      // Nothing was extracted, and the live payload has not been touched: bin
+      // the staged copy so a retry starts clean and report the real failure.
+      await this.ports.fs.remove(staging);
+      throw e;
     }
-    await this.ports.archive.extract(path.join(dl, volumes[0].name), dir);
+    // The payload is complete: the volumes have served their purpose and the
+    // previous unpacked content can now be replaced.
     await this.ports.fs.remove(dl);
+    await this.swapIntoPlace(staging, dir);
     return dir;
+  }
+
+  /**
+   * Replace `dir` with `staging`, keeping a complete payload on disk at every
+   * point in between.
+   *
+   * The old payload goes to a sibling `.previous` rather than to the bin, so
+   * the window in which the live directory does not exist is bounded by one
+   * rename and is recoverable from both sides. On failure the caller sees the
+   * error that actually happened and the mod is left as it was, which is what
+   * the ledger entry — untouched, since this runs before `save` — still says.
+   */
+  private async swapIntoPlace(staging: string, dir: string): Promise<void> {
+    const previous = `${dir}.previous`;
+    // A fixed name, like staging: leftovers from a run that died mid-swap are
+    // cleared by the next attempt rather than accumulating one per update.
+    await this.ports.fs.remove(previous);
+    // `move` requires its source to exist. `dir` does by now — the download
+    // folder was created inside it — but that is an invariant from another
+    // method, so make it locally true instead of inheriting it. On a first
+    // install this is the empty directory that download left behind.
+    await this.ports.fs.mkdirp(dir);
+    await this.ports.fs.move(dir, previous);
+    try {
+      await this.ports.fs.move(staging, dir);
+    } catch (e) {
+      try {
+        await this.ports.fs.move(previous, dir);
+      } catch {
+        // Both renames failed, so the live directory is empty and the only two
+        // copies are the ones this method made. Neither is deleted, and the
+        // message names them: the recovery is a manual rename, and it is not
+        // discoverable without being told where to look.
+        throw new Error(
+          `Update failed while swapping the new payload into place, and the previous payload could not be put back. ` +
+            `Nothing has been lost: the previous payload is at ${previous} and the new one at ${staging}. ` +
+            `Close DCS, rename either one to ${dir}, and try again. Cause: ${errorText(e)}`,
+        );
+      }
+      // The staged copy is deliberately left where it is. Deleting a complete
+      // payload is this method's one forbidden move, and there is no branch
+      // here that knows enough to make an exception: the next attempt clears
+      // the fixed staging name before it extracts anything.
+      throw e;
+    }
+    // Past this point the update HAS happened: `dir` holds the new payload and
+    // `previous` is a copy nobody needs. Letting a failed delete propagate
+    // would turn a completed swap into a reported failure — `subscribe` would
+    // never reach `ledger.save`, so the ledger would keep describing the old
+    // version while the links resolve into a directory now serving the new one.
+    // The user is told it failed, My Mods shows the old tag, and DCS loads the
+    // new files: worse than the failure being reported, on the one path where
+    // nothing actually went wrong.
+    //
+    // And it is the likely failure, not an exotic one. `previous` is the
+    // directory DCS was reading from until one rename ago, so a surviving
+    // handle under it is exactly what a recursive delete on Windows meets. The
+    // next attempt clears the fixed `.previous` name before it does anything
+    // else, so a leftover copy costs disk and nothing more.
+    try {
+      await this.ports.fs.remove(previous);
+    } catch {
+      // Deliberately swallowed — see above. Nothing here can fail the update.
+    }
   }
 
   /**
@@ -170,7 +268,7 @@ export class SubscriptionService {
   }> {
     try {
       const model = this.ports.manifest.parseToml(
-        await this.ports.fs.readText(path.join(dir, MANIFEST)),
+        await this.ports.fs.readText(path.join(dir, MANIFEST_FILE)),
       );
       return {
         bundles: model.bundle.map((b) => ({ path: b.path })),
@@ -181,6 +279,23 @@ export class SubscriptionService {
     } catch {
       return { bundles: [], symlinks: [], entrypoints: [], missionScripts: [] };
     }
+  }
+
+  /**
+   * Refuse a manifest surface that declares a path reaching outside its root.
+   *
+   * The manifest came from a stranger's release, so `..`, a drive prefix or an
+   * NTFS stream suffix in a `dest` is an arbitrary-write primitive and the same
+   * in a `source`/`exe`/mission-script `path` reads (or runs) whatever the mod
+   * points at. The product page refuses such a mod from the same predicate at
+   * plan time; these two calls are what make the refusal true even when the
+   * page was never opened, or the manifest changed after it was.
+   *
+   * @throws when any declared path fails containment, naming every one.
+   */
+  private refuseUnsafeManifest(surface: InstallManifestInput): void {
+    const unsafe = unsafeManifestPaths(surface);
+    if (unsafe.length) throw new Error(unsafeManifestMessage(unsafe));
   }
 
   /**
@@ -231,6 +346,12 @@ export class SubscriptionService {
     // Snapshot declared entrypoints + mission scripts so My Mods can launch and
     // the aggregators can regenerate without re-fetching manifests.
     const snapshot = await this.readSnapshot(dir);
+    // The snapshot is what every later action reads — enable links from it, the
+    // aggregators dofile from it, My Mods launches from it — so a path that
+    // reaches outside its root must never enter the ledger in the first place.
+    // The unpacked payload is left on disk (inert, and a retry overwrites it);
+    // what is refused is the record that would let the rest of the app act on it.
+    this.refuseUnsafeManifest(snapshot);
     const sub: Subscription = {
       repo: target.repo,
       name: target.name,
@@ -256,8 +377,18 @@ export class SubscriptionService {
     if (!sub) throw new Error("Not subscribed.");
     if (sub.enabled) return;
     const model = this.ports.manifest.parseToml(
-      await this.ports.fs.readText(path.join(sub.dir, MANIFEST)),
+      await this.ports.fs.readText(path.join(sub.dir, MANIFEST_FILE)),
     );
+    // Re-checked here rather than trusted from subscribe: enable reads the
+    // manifest off disk, and that file can have been replaced (or recorded by a
+    // build of DCS Studio that predates the guard) since the ledger entry was
+    // written. This is the last point before real paths reach the linker.
+    this.refuseUnsafeManifest({
+      bundles: model.bundle,
+      symlinks: model.symlink,
+      entrypoints: model.entrypoint ?? [],
+      missionScripts: model.mission_script ?? [],
+    });
     const r = this.roots();
     const defs: LinkDefinition[] = [];
     model.symlink.forEach((rule, i) => {
@@ -274,16 +405,36 @@ export class SubscriptionService {
     await this.regenerateAggregators();
   }
 
-  /** Disable: remove the links (keep the unpacked files). */
+  /**
+   * Disable: remove the links (keep the unpacked files).
+   *
+   * The linker attempts every link independently and reports which ones it
+   * could not remove — a link DCS is holding open is still on disk, so it stays
+   * in the ledger (and therefore in `uninstall-all.bat`, the escape hatch that
+   * exists for exactly this situation) and the mod stays enabled. Disabling
+   * again once DCS is closed finishes the job. Throws when anything survived,
+   * naming it, so the panel reports the truth rather than a clean disable.
+   */
   async disable(repo: string): Promise<void> {
     const subs = await this.ports.ledger.load();
     const sub = subs[ledgerKey(repo)];
     if (!sub?.enabled) return;
-    this.ports.linker.disable(sub.links.map((l) => ({ id: l.id, installedPath: l.dest })));
-    sub.enabled = false;
-    sub.links = [];
+    const total = sub.links.length;
+    const { failed } = this.ports.linker.disable(
+      sub.links.map((l) => ({ id: l.id, installedPath: l.dest })),
+    );
+    const reasons = new Map(failed.map((f) => [f.id, f.message]));
+    const survivors = sub.links.filter((l) => reasons.has(l.id));
+    sub.links = survivors;
+    sub.enabled = survivors.length > 0;
     await this.ports.ledger.save(subs);
     await this.regenerateAggregators();
+    if (survivors.length) {
+      const detail = survivors.map((l) => `${l.dest} (${reasons.get(l.id)})`).join("; ");
+      throw new Error(
+        `${survivors.length} of ${total} link(s) could not be removed — close DCS and try again. Still linked: ${detail}`,
+      );
+    }
   }
 
   /** One-click install: subscribe + enable (the Marketplace action). */
@@ -315,13 +466,46 @@ export class SubscriptionService {
     onProgress({ phase: "done", label: `Updated to ${target.tag}.` });
   }
 
-  /** Unsubscribe: disable + delete the unpacked files + drop the ledger entry. */
+  /**
+   * Remove a mod entirely: its links, then its unpacked payload, then its
+   * ledger entry.
+   *
+   * Links come out FIRST and the rest only happens if every one of them went.
+   * Uninstalling while DCS is running is an ordinary thing to do, and DCS holds
+   * its loaded files open — so a link surviving is the expected failure, not an
+   * exotic one. Deleting the entry anyway loses the record of what is still on
+   * disk, including from `uninstall-all.bat`, which exists for exactly this
+   * situation; and deleting the payload anyway leaves those surviving links
+   * pointing at nothing.
+   *
+   * So a partial uninstall leaves a coherent, retryable state: the surviving
+   * links, the payload they point into, and a ledger entry naming both. Closing
+   * DCS and running it again finishes the job.
+   */
   async unsubscribe(repo: string): Promise<void> {
     const subs = await this.ports.ledger.load();
     const sub = subs[ledgerKey(repo)];
     if (!sub) return;
-    if (sub.enabled)
-      this.ports.linker.disable(sub.links.map((l) => ({ id: l.id, installedPath: l.dest })));
+
+    const total = sub.links.length;
+    const { failed } = sub.enabled
+      ? this.ports.linker.disable(sub.links.map((l) => ({ id: l.id, installedPath: l.dest })))
+      : { failed: [] as { id: string; message: string }[] };
+    const reasons = new Map(failed.map((f) => [f.id, f.message]));
+    const survivors = sub.links.filter((l) => reasons.has(l.id));
+
+    if (survivors.length) {
+      sub.links = survivors;
+      // Still enabled, because links of ours are still in the user's DCS.
+      sub.enabled = true;
+      await this.ports.ledger.save(subs);
+      await this.regenerateAggregators();
+      const detail = survivors.map((l) => `${l.dest} (${reasons.get(l.id)})`).join("; ");
+      throw new Error(
+        `${survivors.length} of ${total} link(s) could not be removed — close DCS and try again. Still linked: ${detail}`,
+      );
+    }
+
     await this.ports.fs.remove(sub.dir);
     delete subs[ledgerKey(repo)];
     await this.ports.ledger.save(subs);

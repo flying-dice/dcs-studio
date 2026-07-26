@@ -253,10 +253,16 @@
 
     function copyNode(node) {
       const text = JSON.stringify(core.childrenToJson(node), null, 2);
+      // Two distinct clipboard failures, and only one of them is a throw: a
+      // locked-down host can block the API outright, but the routine case is
+      // writeText REJECTING with NotAllowedError because the webview is not the
+      // focused document. A bare try/catch misses that one entirely and leaves
+      // an unhandled rejection in the console. The check icon confirms the
+      // attempt either way — nothing here can recover the copy.
       try {
-        if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text);
+        navigator.clipboard?.writeText(text)?.catch(() => {});
       } catch {
-        /* clipboard may be unavailable; the check icon still confirms the attempt */
+        /* API blocked outright */
       }
       const btn = node.el.copy;
       btn.innerHTML = svg("check");
@@ -278,7 +284,10 @@
         type: "export",
         env: node.env,
         ref: node.ref > 0 ? node.ref : undefined,
-        expr: node.ref > 0 ? undefined : node.path,
+        // No ref (the sim's ref ceiling, or the state was reset): fall back to
+        // naming the value, which means a real Lua expression — the tree path
+        // itself parses as arithmetic below the root.
+        expr: node.ref > 0 ? undefined : core.pathToExpr(node.path),
         label: node.path,
         reqId,
       });

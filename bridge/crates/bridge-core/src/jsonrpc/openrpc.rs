@@ -152,10 +152,20 @@ mod tests {
         }
     }
 
+    /// Every type name a manifest can write maps to a JSON-Schema type, and
+    /// anything else degrades to the permissive `{}` — a generated document an
+    /// `OpenRPC` client rejects is worse than one that says "any". `integer` and
+    /// `object` have no binding in either bridge today; they are part of the
+    /// documented vocabulary, so the mapping has to hold when one appears.
     #[test]
     fn schema_maps_known_types_and_defaults_to_any() {
         assert_eq!(schema_for_type(Some("string")), json!({"type": "string"}));
+        assert_eq!(schema_for_type(Some("number")), json!({"type": "number"}));
+        assert_eq!(schema_for_type(Some("integer")), json!({"type": "integer"}));
+        assert_eq!(schema_for_type(Some("boolean")), json!({"type": "boolean"}));
+        assert_eq!(schema_for_type(Some("array")), json!({"type": "array"}));
         assert_eq!(schema_for_type(Some("table")), json!({"type": "object"}));
+        assert_eq!(schema_for_type(Some("object")), json!({"type": "object"}));
         assert_eq!(schema_for_type(Some("mystery")), json!({}));
         assert_eq!(schema_for_type(None), json!({}));
     }
@@ -187,6 +197,27 @@ mod tests {
         assert_eq!(p["name"], "code");
         assert_eq!(p["required"], true);
         assert_eq!(p["schema"], json!({})); // absent type → permissive schema
+
+        // A manifest that says nothing about requiredness must OMIT the key
+        // rather than emit `required: false`: OpenRPC treats absent as
+        // "unspecified", and asserting false would be a claim the binding
+        // never made.
+        let unstated = param_descriptor(&ParamMeta {
+            name: "ref".into(),
+            ty: Some("integer".into()),
+            required: None,
+            description: None,
+        });
+        assert_eq!(unstated["name"], "ref");
+        assert!(
+            unstated.get("required").is_none(),
+            "unstated requiredness must not be invented: {unstated}"
+        );
+        assert!(
+            unstated.get("description").is_none(),
+            "and neither must a description: {unstated}"
+        );
+        assert_eq!(unstated["schema"], json!({"type": "integer"}));
     }
 
     #[test]
@@ -212,8 +243,9 @@ mod tests {
         assert_eq!(names, vec!["eval", "ping", "rpc.discover"]);
         // Every method carries params + result content descriptors.
         for m in doc["methods"].as_array().expect("methods") {
-            assert!(m["params"].is_array(), "params array on {}", m["name"]);
-            assert!(m["result"]["name"].is_string(), "result on {}", m["name"]);
+            let name = &m["name"];
+            assert!(m["params"].is_array(), "params array on {name}");
+            assert!(m["result"]["name"].is_string(), "result on {name}");
         }
     }
 }

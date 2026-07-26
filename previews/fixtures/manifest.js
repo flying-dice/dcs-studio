@@ -14,16 +14,25 @@
 // normalized into bundle/symlink, kept here only to prove it passes through
 // extras like any other unknown section) and [[dependencies]] — both proving
 // the extras round-trip is preserved through emit.
+const FULL =
+  '[project]\nname = "f16-weapons-expansion"\nversion = "2.3.1"\nauthor = "viper-drivers"\ndescription = "Extra A/G stores for the F-16C, wired into the rearm menu."\n\n[[bundle]]\npath = "Mods/tech/F16Weapons"\n\n[[symlink]]\nsource = "Mods/tech/F16Weapons/entry.lua"\ndest = "{SavedGames}/Mods/tech/F16Weapons/entry.lua"\n\n[[entrypoint]]\nid = "f16-tool"\nname = "F16 Config Tool"\nexe = "Mods/tech/F16Weapons/tool.exe"\nargs = ["--quiet"]\ncwd = "Mods/tech/F16Weapons"\n\n[[mission_script]]\nname = "F16 Weapons init"\npurpose = "Registers the extra stores at mission start"\npath = "Mods/tech/F16Weapons/init.lua"\nrun_on = "after-sanitize"\n\n[[install]]\nsource = "dist/scripts"\ndest = "{SavedGames}/Scripts/WeaponsExpansion"\n\n[[dependencies]]\nid = "utils/dcs-lua-common"\nversion = "*"\n\n[[requires_module]]\nid = "F-16C_50"\nname = "F-16C Viper"\n';
+
+// `?project=numeric` — a [project] block whose scalars are written as bare
+// TOML numbers rather than quoted strings. Valid TOML that used to reach the
+// form as JS numbers and throw out of the validation pass, leaving the form
+// drawn but inert (issue #22).
+const NUMERIC = '[project]\nname = 2024\nversion = 3\n\n[[bundle]]\npath = "Scripts"\n';
+
 window.__BOOTSTRAP__ = {
-  rawText:
-    '[project]\nname = "f16-weapons-expansion"\nversion = "2.3.1"\nauthor = "viper-drivers"\ndescription = "Extra A/G stores for the F-16C, wired into the rearm menu."\n\n[[bundle]]\npath = "Mods/tech/F16Weapons"\n\n[[symlink]]\nsource = "Mods/tech/F16Weapons/entry.lua"\ndest = "{SavedGames}/Mods/tech/F16Weapons/entry.lua"\n\n[[entrypoint]]\nid = "f16-tool"\nname = "F16 Config Tool"\nexe = "Mods/tech/F16Weapons/tool.exe"\nargs = ["--quiet"]\ncwd = "Mods/tech/F16Weapons"\n\n[[mission_script]]\nname = "F16 Weapons init"\npurpose = "Registers the extra stores at mission start"\npath = "Mods/tech/F16Weapons/init.lua"\nrun_on = "after-sanitize"\n\n[[install]]\nsource = "dist/scripts"\ndest = "{SavedGames}/Scripts/WeaponsExpansion"\n\n[[dependencies]]\nid = "utils/dcs-lua-common"\nversion = "*"\n\n[[requires_module]]\nid = "F-16C_50"\nname = "F-16C Viper"\n',
-  targetPath: "E:\\projects\\f16-weapons-expansion\\dcs-studio.toml",
+  rawText: new URLSearchParams(location.search).get("project") === "numeric" ? NUMERIC : FULL,
+  // `?target=unsaved` drops the path entirely — the shape the form gets when
+  // the document it's bound to has no file on disk yet.
+  targetPath:
+    new URLSearchParams(location.search).get("target") === "unsaved"
+      ? ""
+      : "E:\\projects\\f16-weapons-expansion\\dcs-studio.toml",
   roots: { savedGames: "C:\\Users\\jonat\\Saved Games\\DCS", gameInstall: "" },
 };
 
-window.__host.onPost((m) => {
-  if (!m) return;
-  if (m.type === "openExternal" && m.url) window.__toast(`Opening ${m.url} &hellip;`);
-  // m.type === "edit": the real host applies this as a WorkspaceEdit to the
-  // open document. Nothing to simulate here — the form is its own preview.
-});
+// The form posts only {edit}, which the real host applies as a WorkspaceEdit to
+// the open document. Nothing to simulate here — the form is its own preview.

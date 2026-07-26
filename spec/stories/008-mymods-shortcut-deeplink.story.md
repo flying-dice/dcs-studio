@@ -43,6 +43,53 @@ Feature: Creating the My Mods shortcut
     Then an error lists each failed location and reason:
       "Couldn't create the shortcut — <Location>: <reason>"
 
+  @chaos
+  Scenario Outline: Sessions where a shortcut cannot be created
+    Given the session is <session>
+    When they run "DCS Studio: Add My Mods Shortcut (Desktop / Start Menu)"
+    Then no picker opens
+    And an error notification shows
+      "My Mods shortcuts are only supported on a local Windows install."
+      with a "Report Issue" button
+
+    Examples:
+      | session                   |
+      | macOS or Linux            |
+      | a Remote-SSH window       |
+      | a WSL window              |
+      | a dev container/Codespace |
+
+  @chaos
+  Scenario: One chosen location succeeds and the other fails
+    Given both "Desktop" and "Start Menu" were chosen
+    And writing the Start Menu shortcut fails
+    Then the error names only the failed location:
+      "Couldn't create the shortcut — Start Menu: <reason>"
+    And no success toast is shown for the Desktop shortcut that WAS created,
+      so nothing tells the user which half worked
+
+  @chaos
+  Scenario: PowerShell cannot be started or refuses to run
+    Given "powershell.exe" is missing, or blocked by execution policy
+    When the user confirms a location
+    Then that location is reported with the spawn failure's message,
+      or with "exit <code>" when PowerShell ran but returned non-zero
+    And no partially written .lnk is left claimed as successful
+
+  @chaos
+  Scenario: Adding the shortcut a second time
+    When the user runs the command again with the same locations chosen
+    Then the same "DCS Studio - My Mods.lnk" path is written again in each
+      location, overwriting the previous one
+    And no numbered duplicate is created
+
+  @chaos
+  Scenario: The icon cannot be written to global storage
+    Given the extension's global storage is not writable
+    When the user confirms a location
+    Then the command aborts before any .lnk is written, and no shortcut appears
+    And the user is told why # UNVERIFIED: the icon write is unguarded and the command is invoked fire-and-forget, so today the rejection escapes as an unhandled promise rejection with no notification at all
+
 Feature: The mymods deep link
   vscode://dcs-studio.dcs-studio/mymods always lands in a clean,
   project-free window.
@@ -68,4 +115,42 @@ Feature: The mymods deep link
   Scenario: Unknown deep link paths
     When a vscode:// URI with any other path arrives
     Then it is ignored
+
+  @chaos
+  Scenario Outline: Deep links whose path is not exactly the My Mods path
+    When a "vscode://dcs-studio.dcs-studio<path>" URI arrives
+    Then it is ignored: no panel opens, no window is spawned
+      and no hand-off is recorded
+
+    Examples:
+      | path                   |
+      | /MyMods                |
+      | /mymods/               |
+      | /mymods/../marketplace |
+      | /mymodsX               |
+      | /                      |
+      | (empty)                |
+
+  @chaos
+  Scenario: A deep link carrying extra query or fragment data
+    When "vscode://dcs-studio.dcs-studio/mymods?repo=../../evil&x=1#frag" arrives
+    Then only the URI path is inspected, so My Mods opens as normal
+    And the query and fragment are ignored — nothing from them reaches
+      the panel or the ledger
+
+  @chaos
+  Scenario: Two deep links fired before the first hand-off completes
+    Given the receiving window has a workspace folder open
+    When the shortcut is double-clicked and two deep links arrive
+    Then two fresh empty windows are spawned
+    And the single hand-off breadcrumb is overwritten by the second link,
+      so the first empty window to activate consumes it and opens My Mods
+    And the other empty window finds no breadcrumb and opens nothing
+
+  @chaos
+  Scenario: A deep link arriving before the extension has activated
+    Given VS Code was launched by the shortcut with "--open-url"
+    When the URI is delivered
+    Then the extension activates on the "onUri" activation event
+      and the handler is registered in time to receive it
 ```

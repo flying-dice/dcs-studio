@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { expectSent, hostSend, openPreview } from "./helpers";
 
 function fillerEntries(startSeq: number, count: number) {
@@ -196,5 +196,129 @@ test.describe("DCS Log preview", () => {
     await hostSend(page, { type: "append", entries: [], cont: [], dropped: 3 });
     await expect(page.getByTestId("dropped-badge")).toBeVisible();
     await expect(page.getByTestId("dropped-badge")).toHaveText("3 dropped");
+  });
+});
+
+test.describe("DCS Log — sparse and bulk input", () => {
+  test("an entry missing level, subsystem, cont and a dated time still renders", async ({
+    page,
+  }) => {
+    // DCS writes plenty of lines the parser can only partially classify; a
+    // half-parsed line must still reach the grid rather than be dropped.
+    const errors = await openPreview(page, "log");
+    await hostSend(page, {
+      type: "init",
+      mod: { slug: "my-mod", name: "My Mod" },
+      file: "C:\\dcs.log",
+      state: "ok",
+      entries: [{ seq: 1, time: "12:00:00.001", message: "bare line", mine: false }],
+    });
+
+    const row = page.locator('[data-testid="log-row"][data-seq="1"]');
+    await expect(row.locator(".message")).toHaveText("bare line");
+    await expect(row.locator(".level")).toHaveText("");
+    await expect(row.locator(".subsystem")).toHaveText("");
+    // A time with no date part is used as-is rather than truncated to nothing.
+    await expect(row.locator(".time")).toHaveText("12:00:00.001");
+    await expect(row).toHaveAttribute("data-level", "");
+    expect(errors).toEqual([]);
+  });
+
+  test("an init with no entries clears the grid", async ({ page }) => {
+    await openPreview(page, "log");
+    await expect(page.getByTestId("log-row")).toHaveCount(5);
+    await hostSend(page, { type: "init", mod: null, file: "C:\\dcs.log", state: "ok" });
+    await expect(page.getByTestId("log-row")).toHaveCount(0);
+    await expect(page.getByTestId("entry-count")).toHaveText("0");
+  });
+
+  test("an empty append batch changes nothing", async ({ page }) => {
+    // The tailer polls on a timer, so most batches are empty; each one must not
+    // disturb the count, the dropped badge or the scroll position.
+    const errors = await openPreview(page, "log");
+    await hostSend(page, { type: "append" });
+    await expect(page.getByTestId("log-row")).toHaveCount(5);
+    await expect(page.getByTestId("dropped-badge")).toBeHidden();
+    expect(errors).toEqual([]);
+  });
+
+  test("a continuation batch attaches stack lines to an entry already on screen", async ({
+    page,
+  }) => {
+    // The tailer sees an ERROR line before the stack frames beneath it, so the
+    // frames arrive in a later batch keyed by the entry's seq.
+    await openPreview(page, "log");
+    const boom = page.locator('[data-testid="log-row"][data-seq="3"]');
+    await expect(boom.locator(".cont-line")).toHaveCount(2);
+
+    await hostSend(page, {
+      type: "append",
+      entries: [],
+      cont: [
+        { seq: 3, cont: ["    at a.lua:1", "    at b.lua:2", "    at c.lua:3"] },
+        // A seq that has already been evicted or never arrived must be ignored.
+        { seq: 9999, cont: ["orphan frame"] },
+      ],
+      dropped: 0,
+    });
+    await expect(boom.locator(".cont-line")).toHaveCount(3);
+    await expect(page.getByTestId("log-row")).toHaveCount(5);
+  });
+
+  test("a log restart clears the grid and marks the break", async ({ page }) => {
+    // DCS truncates dcs.log on launch; without the divider the first lines of
+    // the new session look like a continuation of the old one.
+    await openPreview(page, "log");
+    await expect(page.getByTestId("log-row")).toHaveCount(5);
+
+    await hostSend(page, { type: "reset" });
+    await expect(page.getByTestId("restart-divider")).toBeVisible();
+    await expect(page.getByTestId("log-row")).toHaveCount(0);
+    await expect(page.getByTestId("entry-count")).toHaveText("0");
+  });
+
+  test("the grid is capped so a long session cannot grow without bound", async ({ page }) => {
+    // dcs.log runs to hundreds of thousands of lines; the panel keeps the most
+    // recent 5000 and drops the oldest rather than the newest.
+    await openPreview(page, "log");
+    await page.evaluate(() => {
+      const entries = Array.from({ length: 5200 }, (_, i) => ({
+        seq: 1000 + i,
+        time: "2026-07-13 12:02:00.000",
+        level: "INFO",
+        subsystem: "flood",
+        thread: "Main",
+        message: `flood ${i}`,
+        mine: false,
+        cont: [],
+      }));
+      (window as unknown as { __host: { receive(m: unknown): void } }).__host.receive({
+        type: "append",
+        entries,
+        cont: [],
+        dropped: 0,
+      });
+    });
+
+    await expect(page.getByTestId("entry-count")).toHaveText("5000", { timeout: 20000 });
+    await expect(page.getByTestId("log-row")).toHaveCount(5000);
+    // The five seeded rows and the first floods are gone; the newest survives.
+    await expect(page.locator('[data-testid="log-row"][data-seq="3"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="log-row"][data-seq="6199"]')).toHaveCount(1);
+  });
+
+  test("a missing file with no path still shows the hint pane", async ({ page }) => {
+    const errors = await openPreview(page, "log");
+    await hostSend(page, { type: "fileState", state: "missing" });
+    await expect(page.getByTestId("missing-pane")).toBeVisible();
+    await expect(page.getByTestId("missing-pane")).toContainText("");
+    expect(errors).toEqual([]);
+  });
+
+  test("ignores an empty host message", async ({ page }) => {
+    const errors = await openPreview(page, "log");
+    await hostSend(page, null);
+    await expect(page.getByTestId("log-row")).toHaveCount(5);
+    expect(errors).toEqual([]);
   });
 });

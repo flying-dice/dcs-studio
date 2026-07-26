@@ -130,9 +130,28 @@ pub fn build(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod tests {
     use super::*;
+    use crate::facade::{sub_refusing, sub_table, table_refusing, Sub};
     use mlua::prelude::LuaValue;
     use mlua::Lua;
     use std::collections::BTreeSet;
+
+    /// A sub-namespace's registration function, as [`build`] passes it to
+    /// [`Surface::submodule`].
+    type Registrar = fn(&mut Sub) -> LuaResult<()>;
+
+    /// Every sub-namespace and the function that registers it — the same list
+    /// [`build`] walks, so a new submodule that forgets to appear here shows up
+    /// as a mismatch in [`every_registered_key_is_documented`]'s sibling checks.
+    const SUBMODULES: [(&str, Registrar); 8] = [
+        ("json", crate::json::register),
+        ("toml", crate::toml_codec::register),
+        ("file", crate::file::register),
+        ("sqlite", crate::sqlite::register),
+        ("console", crate::console::register),
+        ("debug", crate::debug::register),
+        ("logger", crate::logger::register),
+        ("jsonrpc", crate::jsonrpc::register),
+    ];
 
     /// These mlua tests need a real Lua 5.1 at runtime: on Windows that is
     /// DCS's own `lua.dll` (put it on PATH and run with `-- --include-ignored`);
@@ -351,6 +370,46 @@ mod tests {
             local st = RT.signature_json(999999)
             assert(st:find('"ok":false') and st:find('stale ref'), "stale ref err: " .. st)
 
+            -- The probe must never RUN the function, and must keep working when
+            -- it is asked from inside a hook — which is where the console lives
+            -- whenever the debug engine holds the sim thread (the pause pump and
+            -- the run-loop drain both call out from the engine's line hook).
+            -- Lua 5.1 refuses to fire a hook from inside a hook, so a probe on
+            -- the current thread would silently run the body instead: arbitrary
+            -- DCS side effects, reported back as "takes no parameters".
+            side_effects = 0
+            G.effectful = function(alpha, beta) side_effects = side_effects + 1 end
+            local eref = tonumber(RT.inspect_json("G.effectful"):match('"ref"%s*:%s*(%d+)'))
+            local from_hook
+            debug.sethook(function()
+              debug.sethook() -- one shot: this probe is all we need from the hook
+              from_hook = RT.signature_json(eref)
+            end, "l")
+            local fire_the_hook = 1
+            debug.sethook()
+            assert(from_hook, "the hook ran")
+            assert(from_hook:find('"params":"alpha, beta"'), "probed from inside a hook: " .. from_hook)
+            assert(side_effects == 0, "the probe ran the function body")
+
+            -- Without coroutines there is no thread with its own hook slot, so
+            -- the probe refuses rather than falling back to running the body.
+            local saved_coroutine = coroutine
+            coroutine = nil
+            local nocoro = RT.signature_json(eref)
+            coroutine = saved_coroutine
+            assert(nocoro:find('"ok":false') and nocoro:find("coroutine library not present"), nocoro)
+            assert(side_effects == 0, "a refusal must not run the body either")
+
+            -- Same again when the host's debug library will not carry the hook
+            -- onto the probe thread: resuming an unhooked coroutine would run
+            -- the body for real, so the missing hook is detected up front.
+            local real_sethook = debug.sethook
+            debug.sethook = function() end
+            local nohook = RT.signature_json(eref)
+            debug.sethook = real_sethook
+            assert(nohook:find('"ok":false') and nohook:find("probe hook could not be installed"), nohook)
+            assert(side_effects == 0, "an uninstallable hook must not run the body")
+
             -- Expanding a table lists function children with their type + ref.
             local gref = tonumber(RT.inspect_json("G"):match('"ref"%s*:%s*(%d+)'))
             local ex = RT.expand_json(gref)
@@ -392,6 +451,63 @@ mod tests {
         )
         .exec()
         .expect("rt degraded (no debug) suite");
+    }
+
+    /// A binding that cannot be registered must abort its whole sub-namespace,
+    /// not leave a half-built one behind. A partially populated `json` table
+    /// would reach mission scripts as a missing function — a `nil` call deep in
+    /// someone's mission, long after the real failure — instead of a load-time
+    /// error the hook reports and the user can act on.
+    ///
+    /// Registration only fails on a Lua allocation error, which no test can
+    /// provoke; a table that refuses one key stands in for it, and every key
+    /// each manifest registers is checked in turn.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_binding_that_cannot_register_aborts_its_whole_submodule() {
+        for (name, register) in SUBMODULES {
+            let lua = Lua::new();
+            let registered: Vec<String> = sub_table(&lua, name, register)
+                .pairs::<String, LuaValue>()
+                .filter_map(std::result::Result::ok)
+                .map(|(key, _)| key)
+                .collect();
+            assert!(!registered.is_empty(), "{name} registered nothing");
+
+            for key in registered {
+                let lua = Lua::new();
+                let mut sub = sub_refusing(&lua, name, &key);
+                let err =
+                    register(&mut sub).expect_err(&format!("{name}.{key} must abort the manifest"));
+                assert!(
+                    err.to_string().contains("refused key"),
+                    "{name}.{key}: {err}"
+                );
+            }
+        }
+    }
+
+    /// The same all-or-nothing rule one level up: a root key the exports table
+    /// refuses — a constant or a whole sub-namespace — must fail `build`, so
+    /// `bootstrap` reports it out of `luaopen` rather than handing DCS a
+    /// `dcs_studio` table with a hole in it.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_refused_root_key_fails_the_whole_surface_build() {
+        let (_lua, exports, _doc) = built();
+        let root_keys: Vec<String> = exports
+            .pairs::<String, LuaValue>()
+            .filter_map(std::result::Result::ok)
+            .map(|(key, _)| key)
+            .collect();
+
+        for key in root_keys {
+            let lua = Lua::new();
+            let refusing = table_refusing(&lua, &key);
+            let err = build(&lua, &refusing, BridgeKind::Gui, env!("CARGO_PKG_VERSION"))
+                .expect_err(&format!("root key {key} must fail the build"));
+            assert!(err.to_string().contains("refused key"), "{key}: {err}");
+        }
     }
 
     /// Every key registered on the live module table (and each sub-namespace

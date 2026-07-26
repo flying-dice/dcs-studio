@@ -17,7 +17,7 @@
 //   inject host pushes directly.
 // - window.__toast(html): tiny visual log for the human dev-loop preview;
 //   a no-op if the page has no #toast element.
-(function () {
+(() => {
   const sent = [];
   window.__sentMessages = sent;
 
@@ -32,24 +32,42 @@
   };
 
   // Per-page-load state store (mirrors vscode.getState()/setState() — a
-  // fresh object every navigation, which is what gives tests isolation for
+  // fresh value every navigation, which is what gives tests isolation for
   // free without needing to clear anything between specs).
-  let state = {};
+  //
+  // Held as JSON *text*, because the real pair serialises across the webview
+  // boundary: a panel that persists a live array it keeps mutating (console.js
+  // does exactly that with `history`) must not see later mutations in what it
+  // stored, or a dropped/mis-ordered persist() is invisible to the suite and a
+  // non-cloneable value passes here and throws in VS Code.
+  //
+  // Starts *undefined*, like a real webview that has never called setState:
+  // every panel guards with `vscode.getState() || {}` precisely because of
+  // that first load, and a harness that handed back `{}` would never exercise
+  // it. `?state=<url-encoded JSON>` seeds a restored session instead — that's
+  // the reload path where a panel re-opens on the page/tab/history it left
+  // off at, and it arrives already serialised. See
+  // tests/helpers.ts#openPreview({ state }).
+  let state = new URLSearchParams(location.search).get("state") || undefined;
 
-  window.acquireVsCodeApi = function () {
-    return {
-      getState: () => state,
-      setState: (v) => {
-        state = v;
-      },
-      postMessage: (m) => {
-        sent.push(m);
-        for (const fn of postHandlers) fn(m);
-      },
-    };
-  };
+  window.acquireVsCodeApi = () => ({
+    getState: () => (state === undefined ? undefined : JSON.parse(state)),
+    setState: (v) => {
+      state = JSON.stringify(v);
+    },
+    postMessage: (m) => {
+      sent.push(m);
+      // Fan out in a LATER task. A real host cannot reply re-entrantly — the
+      // reply crosses the webview boundary — so a panel that mutates state
+      // after posting (a request-id counter, a busy flag, a pending-map
+      // insert) must be observed post-mutation here too, or a
+      // reply-correlation bug passes green in the suite and fails in VS Code.
+      // sent[] stays synchronous, so expectSent is unaffected.
+      for (const fn of postHandlers) setTimeout(() => fn(m), 0);
+    },
+  });
 
-  window.__toast = function (html) {
+  window.__toast = (html) => {
     const wrap = document.getElementById("toast");
     if (!wrap) return;
     const el = document.createElement("div");

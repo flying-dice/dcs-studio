@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DCS Studio preview — New Project</title>
+<!-- Load order is load-bearing: harness -> fixture -> CSS -> mounts -> real
+     media/newproject.js. newproject.js reads dcsUi.iconPaths at load (so
+     shared.js must precede it) and renders nothing until the host pushes
+     {type:"init"}, which NewProjectPanel does unprompted from its constructor;
+     the fixture mirrors that on DOMContentLoaded. -->
+<script src="harness.js"></script>
+<script src="fixtures/newproject.js"></script>
+<link rel="stylesheet" href="theme.css" />
+<link rel="stylesheet" href="../media/base.css" />
+<link rel="stylesheet" href="../media/newproject.css" />
+</head>
+<body>
+<div id="app"></div>
+<div id="toast"></div>
+<script src="../media/shared.js"></script>
+<script src="../media/newproject.js"></script>
+</body>
+</html>

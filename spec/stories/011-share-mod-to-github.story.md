@@ -24,7 +24,7 @@ Feature: Publish preflight
     When the Publish panel opens
     Then it runs and displays these checks with ok/warn/error dots:
       | Check           | Error condition and message                                          |
-      | Manifest        | "dcs-studio.toml not found in the workspace root." / "Could not parse dcs-studio.toml." / rejects a manifest still using the legacy single-array install format — replace each rule with [[bundle]] + [[symlink]]. |
+      | Manifest        | "dcs-studio.toml not found in the workspace root." / "dcs-studio.toml could not be read." / rejects a manifest still using the legacy single-array install format — replace each rule with [[bundle]] + [[symlink]]. |
       | Project name    | "[project] name is required."                                        |
       | Bundle paths    | warn: "No [[bundle]] paths — the release will ship only the manifest." |
       | Bundle paths    | "N of M bundle path(s) missing — build the project first." or "N bundle path(s) are symlinks (refused by the packager)." |
@@ -41,6 +41,52 @@ Feature: Publish preflight
   Scenario: Re-checking
     When the user clicks "Re-check"
     Then all preflight checks re-run
+
+  @chaos
+  Scenario: A manifest that is garbage blocks on the name, not on a parse error
+    Given "dcs-studio.toml" contains no recognisable TOML at all
+    Then the Manifest check is still green, because the parser is tolerant
+      by design and yields an empty model rather than throwing
+    And what blocks publishing is "[project] name is required." instead
+    And the check no longer claims a parse failure it cannot detect: the
+      message for a manifest that exists but yields no model reads
+      "dcs-studio.toml could not be read.", which is the only way to reach
+      it — deleted between the existence check and the read, or unreadable
+      by this process
+
+  @chaos
+  Scenario: A [project] name written as a TOML number breaks preflight
+    Given the manifest carries name = 2024 — a valid TOML integer,
+      not a quoted string
+    Then computing the checks throws, because the name check calls trim()
+      on a number
+    And the panel never receives its checks, so it renders nothing
+      the user can act on # UNVERIFIED: the TypeError from computePreflight is confirmed by direct evaluation; the resulting panel state follows from pushInit() rejecting under `void`, and was not observed
+
+  @chaos
+  Scenario: A bundle path that exists but is a symlink
+    Given a [[bundle]] path resolves to a symbolic link
+    Then the Bundle paths check is error-level with
+      "N bundle path(s) are symlinks (refused by the packager)."
+    And each offending path is listed under the detail line as
+      "symlink: <path>"
+    And the missing-path failure takes priority — a run with both
+      missing and symlinked paths reports the missing ones first
+
+  @chaos
+  Scenario: The rendered checks are a snapshot, but the action is gated
+    Given every check passed when the panel last ran them
+    When the manifest is deleted, or a [[bundle]] path is removed,
+      without the user clicking "Re-check"
+    Then both buttons still look enabled — the disabled state comes from the
+      last results, which nothing invalidates
+    But pressing either one re-runs preflight in the host first, and the
+      action is refused before it touches git, gh or the archiver
+    And the log names the blocking check, e.g.
+      "✖ Manifest: dcs-studio.toml not found in the workspace root."
+    And the re-run results are pushed back to the panel, so the red items
+      appear without the user asking for them
+    And the busy latch clears, so the button is usable again
 
 Feature: Step 1 — Share to GitHub
 
@@ -80,4 +126,84 @@ Feature: Step 1 — Share to GitHub
     When any step fails
     Then the log shows "✖ <message>" and the button re-enables
     And no blocking modal appears
+
+  @chaos
+  Scenario: Not signed in — nothing local is touched
+    Given "gh" has no authenticated session
+    When the user clicks "Share to GitHub"
+    Then the flow fails with "Not signed in to gh — run `gh auth login`."
+      before any git command runs
+    And no repo is initialised, no .gitignore is written, nothing is committed
+
+  @chaos
+  Scenario: The repo is created but the push is rejected
+    Given the GitHub repo is created and the push then fails —
+      a rejected push, a dropped network, a mid-upload disconnect
+    Then the log shows "✖ gh repo create: <stderr>" and the button re-enables
+    But the user is left half-published: the local folder is now a git repo
+      on branch main with a "Publish with DCS Studio" commit,
+      an empty public repository exists on GitHub,
+      and the discovery topic was never applied
+      # UNVERIFIED: that `gh repo create --source --push` leaves the repository behind when only its push fails was not exercised; the local git state and the missing topic follow directly from the ordering in publishService.share()
+    And the documented recovery is to click "Share to GitHub" again —
+      the second attempt takes the already-exists path, wires the origin
+      remote and pushes "HEAD:main"
+    And nothing is rolled back automatically
+
+  @chaos
+  Scenario: Tagging the discovery topic fails
+    Given the repo was created and pushed
+    When adding the "dcs-studio" topic fails — no permission, rate limited,
+      or the network drops
+    Then the failure still does not block the publish: topics are a nicety,
+      and the repo and its push are already done
+    But the log is written after the attempt and reports what happened —
+      "⚠ Could not tag topic dcs-studio — the mod stays invisible to
+      Marketplace discovery until it is tagged."
+    And a successful tagging reads "Tagged topic: dcs-studio" instead, so
+      the two outcomes are never confusable
+    And re-running "Share to GitHub" retries the tagging
+
+  @chaos
+  Scenario: The commit step fails
+    Given "git commit" fails — an empty tree, a hook rejecting the commit,
+      a locked index
+    Then the failure is swallowed by design and the flow continues
+    And any real problem surfaces at the push instead
+
+  @chaos
+  Scenario: Sharing twice does not churn .gitignore
+    Given ".gitignore" already contains a ".dcs-studio/" line
+    When the user shares again
+    Then the file is not rewritten
+    And a ".gitignore" with no trailing newline gains one before the entry,
+      rather than gluing the entry onto the last line
+
+  @chaos
+  Scenario: A repository name that GitHub will not accept verbatim
+    Given the Repository name is prefilled from the manifest's [project] name,
+      which for a scaffolded project is a human-readable name like "My Mod"
+    When the user shares without editing it
+    Then the reported owner/name comes from the "origin" remote that
+      "gh repo create --source --remote" wired up, which is the repository
+      GitHub actually created — not the name that was typed
+    And the log says "GitHub named it <owner>/<name>." whenever the two differ
+    And the repo URL, the discovery topic and the release step's prefill all
+      address that same repository
+    And a remote that is missing or is not a GitHub URL falls back to the
+      requested name, which is the only answer left
+
+  @chaos
+  Scenario: Sharing while the panel has no workspace folder
+    Given no workspace folder is open
+    When a share or release message reaches the host anyway
+    Then it is ignored — no busy state is posted and nothing runs
+    And a late "busy" push arriving at the folderless panel is a no-op,
+      not a crash
+
+  @chaos
+  Scenario: A failure the flow cannot describe
+    Given a step throws a value that is not an Error
+    Then the log still shows "✖ <the value as text>"
+    And the busy latch is always cleared, so the button is never left dead
 ```

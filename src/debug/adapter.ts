@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
+import { nodeScheduler } from "../adapters/node/scheduler";
 import type { BridgeClient, DebugEnv, DebugState } from "../bridge/client";
 import type { BridgeClients } from "../bridge/clients";
 import { missionStartFailure } from "../core/domain/bridgeStatusView";
@@ -24,6 +25,8 @@ import {
   toVariablesResponse,
 } from "../core/domain/dapTranslation";
 import { scanItems } from "../core/domain/missionSanitize";
+import type { InstallRootsPort } from "../core/ports/installRoots";
+import type { SchedulerPort, TimerHandle } from "../core/ports/scheduler";
 import { showError } from "../errors";
 import { missionScriptPath } from "../mission/missionPanel";
 
@@ -47,9 +50,25 @@ import { missionScriptPath } from "../mission/missionPanel";
 // a new snapshot pause_id ⇒ emit `stopped`; running true→false ⇒ emit
 // `terminated`. Console output rides the shared console ring (console_read),
 // polled alongside and emitted as `output` events.
+//
+// The poll is also a LIVENESS HEARTBEAT, not just a query: debug_state stamps
+// the engine's last_ping, and a held pause with no polling client auto-continues
+// after 30 seconds so a crashed editor can never freeze the sim. That cuts both
+// ways — the loop has to keep ticking for the whole time a user sits on a
+// breakpoint, and it has to stop the moment the session ends. Timers therefore
+// come from an injected `SchedulerPort` rather than the globals, so both halves
+// of that contract are assertable.
 
 const POLL_MS = 250;
 const CONSOLE_POLL_MS = 500;
+
+/** The one thing to say when the bridge serving this session simply isn't there. */
+const BRIDGE_OFFLINE =
+  "The DCS bridge is not connected. Launch DCS with the bridge (command: “DCS Studio: Launch DCS (with bridge)”) and wait for the status bar to show DCS online.";
+
+/** The engine runs one session at a time, and they would share one registry. */
+const SESSION_BUSY =
+  "A debug session is already running in DCS — stop it (or let it finish) before starting another. The sim runs one at a time, and both would share the same breakpoints.";
 
 interface DapRequest {
   seq: number;
@@ -81,18 +100,28 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
 
   private started = false;
   private finished = false;
+  /** This session owns the engine — it cleared the shared breakpoint registry
+   * and is the one that must clear it again on the way out. False while another
+   * session holds the engine, and for run-without-debugging. */
+  private owns = false;
 
   /** Pure poll-machine state (pause dedupe, live snapshot, stop-reason bookkeeping). */
   private tracking: SessionTracking = { ...INITIAL_TRACKING };
 
-  private pollTimer: ReturnType<typeof setInterval> | undefined;
-  private consoleTimer: ReturnType<typeof setInterval> | undefined;
+  private pollTimer: TimerHandle | undefined;
+  private consoleTimer: TimerHandle | undefined;
   private consoleAfter = 0;
   private polling = false;
 
   constructor(
     private readonly clients: BridgeClients,
     config: vscode.DebugConfiguration,
+    private readonly scheduler: SchedulerPort = nodeScheduler,
+    // Required, unlike `scheduler`: this decides whether the mission bridge's
+    // silence is explained by a sanitized MissionScripting.lua, and any default
+    // stub would resolve to a path that never exists and answer "not
+    // sanitized" for every user. The factory supplies it.
+    private readonly roots: InstallRootsPort,
   ) {
     this.config = config as DcsLaunchConfig;
     this.env = this.config.env === "gui" ? "gui" : "mission";
@@ -220,7 +249,7 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
           break;
       }
     } catch (e) {
-      this.fail(req, e instanceof Error ? e.message : String(e));
+      this.fail(req, errText(e));
     }
   }
 
@@ -237,27 +266,32 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
       return;
     }
 
-    if (!this.client.current.connected) {
-      // env=mission gets the precise reason (no mission running vs sanitized
-      // MissionScripting.lua vs DCS down); env=gui the generic launch nudge.
-      const message =
-        this.env === "mission"
-          ? (missionStartFailure(this.clients.current, missionSanitizedOnDisk()) ??
-            "The mission bridge is not connected.")
-          : "The DCS bridge is not connected. Launch DCS with the bridge (command: “DCS Studio: Launch DCS (with bridge)”) and wait for the status bar to show DCS online.";
-      this.abort(message);
+    // env=mission gets the precise reason (no mission running vs sanitized
+    // MissionScripting.lua vs DCS down); env=gui the generic launch nudge.
+    // missionStartFailure answers null exactly when the mission bridge is up,
+    // so for that env it IS the connectivity check — and the disk probe behind
+    // the "sanitized" reason is only paid for when there is a failure to
+    // explain.
+    const status = this.clients.current;
+    const blocked =
+      this.env === "mission"
+        ? missionStartFailure(
+            status,
+            status.mission.connected ? undefined : missionSanitizedOnDisk(this.roots),
+          )
+        : this.client.current.connected
+          ? null
+          : BRIDGE_OFFLINE;
+    if (blocked) {
+      this.abort(blocked);
       return;
     }
 
     let code: string;
     try {
-      // Prefer the live buffer (unsaved edits run as seen), else disk.
-      const open = vscode.workspace.textDocuments.find(
-        (d) => d.uri.scheme === "file" && samePath(d.uri.fsPath, program),
-      );
-      code = open ? open.getText() : await fs.promises.readFile(program, "utf8");
+      code = await this.readSource(program);
     } catch (e) {
-      this.abort(`Cannot read ${program}: ${e instanceof Error ? e.message : String(e)}`);
+      this.abort(`Cannot read ${program}: ${errText(e)}`);
       return;
     }
 
@@ -269,19 +303,41 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
     } catch {
       this.consoleAfter = 0;
     }
-    this.consoleTimer = setInterval(() => void this.drainConsole(), CONSOLE_POLL_MS);
+    this.consoleTimer = this.scheduler.setInterval(() => void this.drainConsole(), CONSOLE_POLL_MS);
 
     if (this.config.noDebug) {
       await this.runWithoutDebugging(code, program);
       return;
     }
 
+    // Ask before touching anything shared. The breakpoint registry is
+    // process-wide DLL state and the engine runs one session at a time: a
+    // second session that cleared the registry and then had its run refused
+    // would leave the FIRST one attached with no breakpoints at all.
+    try {
+      const engine = await this.client.debugState();
+      if (engine.running || engine.paused) {
+        this.abort(SESSION_BUSY);
+        return;
+      }
+    } catch (e) {
+      // No answer means no way to know whether the engine is free — and the
+      // poll loop this session depends on speaks the same call. Refuse rather
+      // than clear a registry that may belong to somebody else.
+      this.abort(`Cannot start the debug session: ${errText(e)}`);
+      return;
+    }
+
+    // Past here the shared registry is ours: it has to be cleared again when
+    // this session ends, and nobody else may clear it meanwhile.
+    this.owns = true;
+
     // Fresh registry, then the full current breakpoint set.
     try {
       await this.client.debugClearBreakpoints();
       await this.pushAllBreakpoints();
     } catch (e) {
-      this.abort(`Failed to set breakpoints: ${e instanceof Error ? e.message : String(e)}`);
+      this.abort(`Failed to set breakpoints: ${errText(e)}`);
       return;
     }
 
@@ -301,7 +357,7 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
         this.tracking.runSettled = true;
       });
 
-    this.pollTimer = setInterval(() => void this.poll(), POLL_MS);
+    this.pollTimer = this.scheduler.setInterval(() => void this.poll(), POLL_MS);
   }
 
   /** Run (no debugger): plain repl_eval in the target env, then terminate. */
@@ -314,7 +370,7 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
       if (d.output) this.output(d.output, "console");
       this.finish(d.error);
     } catch (e) {
-      this.finish(e instanceof Error ? e.message : String(e));
+      this.finish(errText(e));
     }
   }
 
@@ -335,20 +391,25 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
     });
   }
 
+  /** Drop the heartbeat. Past this point the sim's own idle timer is what
+   * releases a still-held pause, so nothing may re-arm these. */
   private stopTimers(): void {
-    if (this.pollTimer) clearInterval(this.pollTimer);
-    if (this.consoleTimer) clearInterval(this.consoleTimer);
+    this.scheduler.clearInterval(this.pollTimer);
+    this.scheduler.clearInterval(this.consoleTimer);
     this.pollTimer = this.consoleTimer = undefined;
   }
 
   // ── Polling ──
 
   private async poll(): Promise<void> {
-    if (this.polling || this.finished) return; // never overlap slow polls
+    if (this.polling) return; // never overlap slow polls
     this.polling = true;
     try {
       const st = await this.client.debugState();
-      this.onState(st);
+      // The session can end while a poll is in flight (the run call settling,
+      // the user disconnecting) — a snapshot that arrives afterwards is stale
+      // and must not resurrect the UI with a `stopped` on a dead session.
+      if (!this.finished) this.onState(st);
     } catch {
       if (!this.client.current.connected) {
         this.finish("The DCS bridge disconnected — the debug session was abandoned.");
@@ -418,13 +479,32 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
         await this.pushSource(fsPath, bps);
       } catch (e) {
         this.output(
-          `Could not update breakpoints in ${path.basename(fsPath)}: ${e instanceof Error ? e.message : String(e)}`,
+          `Could not update breakpoints in ${path.basename(fsPath)}: ${errText(e)}`,
           "stderr",
         );
       }
     }
 
-    this.respond(req, toBreakpointsResponse(bps));
+    // Answer against the file itself: a breakpoint on a blank line, a comment
+    // or past the end of the file is reported unbound rather than drawn as a
+    // breakpoint that will never be hit. An unreadable file simply carries no
+    // information, and nothing is claimed.
+    let text: string | undefined;
+    try {
+      text = await this.readSource(fsPath);
+    } catch {
+      /* not on disk and not open — no lines to judge against */
+    }
+    this.respond(req, toBreakpointsResponse(bps, text));
+  }
+
+  /** The file's text as the user sees it: the live buffer (unsaved edits
+   * included) wins over what is on disk. Throws when it is neither. */
+  private async readSource(fsPath: string): Promise<string> {
+    const open = vscode.workspace.textDocuments.find(
+      (d) => d.uri.scheme === "file" && samePath(d.uri.fsPath, fsPath),
+    );
+    return open ? open.getText() : await fs.promises.readFile(fsPath, "utf8");
   }
 
   private pushSource(fsPath: string, bps: StoredBreakpoint[]): Promise<unknown> {
@@ -483,14 +563,26 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
         /* already gone */
       }
     }
-    try {
-      await this.client.debugClearBreakpoints();
-    } catch {
-      /* best effort — cleared again at next session start */
+    // Only the session that took the registry may drop it. A session that was
+    // refused (another one is live) or that never used it must leave the
+    // breakpoints of whoever does own it exactly where they are.
+    if (this.owns) {
+      try {
+        await this.client.debugClearBreakpoints();
+      } catch {
+        /* best effort — cleared again at next session start */
+      }
     }
     this.finish(undefined, /*quiet*/ true);
     this.respond(req);
   }
+}
+
+/** A thrown value as a message. Bridge rejections are Errors; anything raised
+ * out of a Lua-facing call may not be, and the text still has to reach the
+ * Debug Console. */
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 /** Case-insensitive path equality (Windows drive letters, separators). */
@@ -500,8 +592,8 @@ function samePath(a: string, b: string): boolean {
 
 /** Whether MissionScripting.lua on disk still has its lockdown active (the
  * mission bridge can't boot then). undefined when the file can't be read. */
-function missionSanitizedOnDisk(): boolean | undefined {
-  const p = missionScriptPath();
+function missionSanitizedOnDisk(roots: InstallRootsPort): boolean | undefined {
+  const p = missionScriptPath(roots);
   if (!p) return undefined;
   try {
     const items = scanItems(fs.readFileSync(p, "utf8"));

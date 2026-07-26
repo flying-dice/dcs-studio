@@ -172,20 +172,22 @@ return function(router, deps)
     params = { REPL_ENV_META },
   })
 
+  -- Write the export through the DLL's guarded writer, like db_export and the
+  -- mission bridge's repl_export: raw io.open reports success on a write or
+  -- close that failed (a full disk leaves a truncated JSON file the editor then
+  -- fails to parse), and the guarded writer creates the directory, checks both,
+  -- and keeps the path inside the write root.
   local export_n = 0
   local function finalize_export(res)
     local json = RT.decode_export(res)
-    local dir = lfs.writedir() .. "Temp\\"
-    pcall(lfs.mkdir, dir)
     export_n = export_n + 1
-    local path = dir .. "dcs-studio-export-" .. os.time() .. "-" .. export_n .. ".json"
-    local fh, ferr = io.open(path, "wb")
-    if not fh then
-      error("cannot write " .. path .. ": " .. tostring(ferr), 0)
+    local rel = "Temp/dcs-studio-export-" .. os.time() .. "-" .. export_n .. ".json"
+    local ok, werr = bridge.file.write_text(rel, json)
+    if not ok then
+      error("cannot write export: " .. tostring(werr), 0)
     end
-    fh:write(json)
-    fh:close()
-    return { path = path, bytes = #json }
+    local writedir = (type(lfs) == "table" and lfs.writedir and lfs.writedir()) or ""
+    return { path = writedir .. string.gsub(rel, "/", "\\"), bytes = #json }
   end
 
   router:add_method("repl_export", function(params)
@@ -264,11 +266,17 @@ end
     description = "Re-dispatch the mission-bridge boot into the mission scripting state (fire-and-forget; needs a running mission and a desanitized MissionScripting.lua). Success = port 25570 answering; failures land in dcs.log.",
   })
 
-  -- Debugger for GUI sessions. The engine (__DCS_STUDIO_DBG) is installed
-  -- into this state by the DLL; the hook wires its RPC pump — during a
-  -- pause the engine drains this server's queue itself through this router,
-  -- because onSimulationFrame cannot fire while the paused chunk holds the
-  -- sim thread. Mission sessions talk to the mission bridge on 25570.
+  -- Debugger: drives __DCS_STUDIO_DBG in THIS state. The engine declines to
+  -- install in a state without debug/coroutine, so every handler goes through
+  -- this guard — a clear error on the one method the user asked for, rather
+  -- than indexing a nil engine (which the DLL would report as an opaque
+  -- "attempt to index a nil value"). Mirrors mission_methods.lua.
+  local function need_debugger()
+    if not DBG then
+      error("the debug library is not available in the GUI/hooks state - breakpoints cannot work here", 0)
+    end
+    return DBG
+  end
 
   router:add_method("debug_run", function(params)
     local envname = (params and params.env) or "gui"
@@ -278,7 +286,7 @@ end
         0
       )
     end
-    return DBG.run(
+    return need_debugger().run(
       (params and params.code) or "",
       (params and params.source) or "=debug",
       params and params.pause_on_error == true
@@ -294,22 +302,22 @@ end
   })
 
   router:add_method("debug_state", function()
-    return DBG.state()
+    return need_debugger().state()
   end, SHARED_META.debug_state)
 
   router:add_method("debug_expand", function(params)
-    return DBG.expand((params and params.ref) or 0)
+    return need_debugger().expand((params and params.ref) or 0)
   end, SHARED_META.debug_expand)
 
   router:add_method("debug_eval", function(params)
-    return DBG.eval((params and params.frame) or 0, (params and params.expr) or "")
+    return need_debugger().eval((params and params.frame) or 0, (params and params.expr) or "")
   end, SHARED_META.debug_eval)
 
   -- Replace one source's breakpoints (+ per-line conditions). The registry
   -- lives in THIS DLL's statics: it applies to GUI sessions only — mission
   -- breakpoints go to the mission bridge.
   router:add_method("debug_set_breakpoints", function(params)
-    return DBG.set_breakpoints(params)
+    return need_debugger().set_breakpoints(params)
   end, {
     description = "Replace one source's breakpoints (+ per-line conditions) for GUI sessions: { source, breakpoints = { { line, condition? }, ... } }.",
     params = {
@@ -319,7 +327,7 @@ end
   })
 
   router:add_method("debug_clear_breakpoints", function()
-    return DBG.clear_breakpoints()
+    return need_debugger().clear_breakpoints()
   end, SHARED_META.debug_clear_breakpoints)
 
   router:add_method("debug_continue", function(params)

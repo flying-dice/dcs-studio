@@ -7,10 +7,17 @@ out/
 bridge/target/
 bridge/prebuilt/
 target/
-coverage/
 .playwright-mcp/
-test-results/
-playwright-report/
 # Bridge logger output written to the crate dir when a test bootstraps a state
 # without lfs (e.g. tests/debug_ws_latency.rs).
 bridge/crates/*/dcs_studio_*.log
+
+# Per-layer coverage output and Playwright run artefacts
+coverage/
+test-results/
+playwright-report/
+
+# A test that builds win32 paths and writes them through node:fs creates files
+# whose NAMES contain literal backslashes when it runs on a POSIX host. Real
+# runs are on Windows, where these are ordinary directories under the temp dir.
+\\tmp*

@@ -4,18 +4,20 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>DCS Studio preview — Documentation</title>
+<!-- Load order is load-bearing: harness -> the real content script -> fixture
+     -> CSS -> mounts -> real media/docs.js. Content comes straight from
+     media/docs-content.js (window.__DOCS__); the fixture loads after it so it
+     can swap in an alternative doc set, and before media/docs.js because that
+     snapshots __DOCS__ and __INITIAL_PAGE__ at the top of its IIFE. -->
 <script src="harness.js"></script>
-<!-- No fixtures/docs.js: content comes straight from the real
-     media/docs-content.js (window.__DOCS__) — only the initial page needs
-     setting before media/docs.js reads it. -->
+<script src="../media/docs-content.js"></script>
+<script src="fixtures/docs.js"></script>
 <script>
-  window.__INITIAL_PAGE__ = "";
   window.__host.onPost((m) => {
     if (m && m.type === "run") window.__toast("&rarr; runs command <b>" + m.command + "</b>");
     if (m && m.type === "openExternal") window.__toast("&rarr; opens <b>" + m.url + "</b>");
   });
 </script>
-<script src="../media/docs-content.js"></script>
 <link rel="stylesheet" href="theme.css" />
 <link rel="stylesheet" href="../media/base.css" />
 <link rel="stylesheet" href="../media/docs.css" />

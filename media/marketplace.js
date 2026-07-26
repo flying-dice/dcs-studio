@@ -117,7 +117,7 @@
       ? manifest.symlinks
           .map(
             (s) =>
-              `<div class="plan-item" data-testid="symlink-item"><div>${esc(s.source)}</div><div class="plan-dest">${I.arrow}${esc(
+              `<div class="plan-item" data-testid="symlink-item" data-escapes="${s.escapes}"><div>${esc(s.source)}</div><div class="plan-dest">${I.arrow}${esc(
                 s.resolved || s.dest,
               )}</div></div>`,
           )
@@ -133,7 +133,7 @@
     const items = manifest.entrypoints
       .map(
         (e) =>
-          `<div class="plan-item warn-item" data-testid="executable-item"><div>${I.terminal} <strong>${esc(
+          `<div class="plan-item warn-item" data-testid="executable-item" data-escapes="${e.escapes}"><div>${I.terminal} <strong>${esc(
             e.name,
           )}</strong></div><div class="plan-dest mono">${esc(e.exe)}${
             e.args?.length ? ` ${esc(e.args.join(" "))}` : ""
@@ -153,7 +153,7 @@
     const items = manifest.missionScripts
       .map((s) => {
         const b = s.beforeSanitize;
-        return `<div class="plan-item${b ? " warn-item" : ""}" data-testid="mission-script-item" data-run="${esc(s.run_on)}">
+        return `<div class="plan-item${b ? " warn-item" : ""}" data-testid="mission-script-item" data-run="${esc(s.run_on)}" data-escapes="${s.escapes}">
           <div>${I.script} <strong>${esc(s.name)}</strong>${
             b
               ? ` <span class="badge warn" data-testid="before-sanitize-tag">before-sanitize</span>`
@@ -218,7 +218,7 @@
         <span class="brand-kicker">DCS&nbsp;Studio</span>
         <span class="brand-title">Marketplace</span>
         <span class="spacer"></span>
-        <span class="who mono">${state.signedIn ? esc(state.login || "signed in") : "browsing as guest"}</span>
+        <span class="who mono" data-testid="who">${state.signedIn ? esc(state.login || "signed in") : "browsing as guest"}</span>
       </header>
       <div class="toolbar">
         <div class="search">
@@ -233,7 +233,7 @@
           <option value="stars" ${state.sort === "stars" ? "selected" : ""}>Most stars</option>
           <option value="name" ${state.sort === "name" ? "selected" : ""}>Name</option>
         </select>
-        <button class="btn secondary" id="refresh" ${state.listBusy ? "disabled" : ""}>${state.listBusy ? `<span class="spin">${I.refresh}</span>` : I.refresh} Refresh</button>
+        <button class="btn secondary" id="refresh" data-testid="refresh-btn" ${state.listBusy ? "disabled" : ""}>${state.listBusy ? `<span class="spin">${I.refresh}</span>` : I.refresh} Refresh</button>
       </div>
       ${state.listError ? `<div class="market-error" data-testid="list-error">${I.warn} ${esc(state.listError)}</div>` : ""}
       <div id="gridwrap">${grid}</div>
@@ -321,13 +321,16 @@
           m.labels.length
             ? `<div class="tags">${m.labels
                 .slice(0, 6)
-                .map((l) => `<button class="tag" data-tag="${esc(l)}">${I.tag}${esc(l)}</button>`)
+                .map(
+                  (l) =>
+                    `<button class="tag" data-testid="card-tag" data-tag="${esc(l)}">${I.tag}${esc(l)}</button>`,
+                )
                 .join("")}</div>`
             : ""
         }
         <div class="card-foot">
-          <button class="link" data-open="${esc(m.repo)}">Details</button>
-          <button class="link muted" data-github="${esc(m.repo_url)}">GitHub ${I.ext}</button>
+          <button class="link" data-testid="card-details-btn" data-open="${esc(m.repo)}">Details</button>
+          <button class="link muted" data-testid="card-github-link" data-github="${esc(m.repo_url)}">GitHub ${I.ext}</button>
         </div>
       </div>`;
   }
@@ -381,7 +384,7 @@
     }
     if (state.productError) {
       app.innerHTML = productShell(
-        `<div class="empty"><p class="market-error" style="border:none;background:none">${I.warn} ${esc(state.productError)}</p><button class="btn secondary" id="retry">Try again</button></div>`,
+        `<div class="empty"><p class="market-error" data-testid="product-error" style="border:none;background:none">${I.warn} ${esc(state.productError)}</p><button class="btn secondary" id="retry" data-testid="retry-btn">Try again</button></div>`,
       );
       wireBack();
       const r = document.getElementById("retry");
@@ -394,13 +397,23 @@
       return renderList();
     }
 
+    // A manifest that names a path outside the DCS folders is not offered for
+    // install at all — the host refuses it too, so an install click here could
+    // only ever fail. An already-installed mod still gets its Uninstall action.
+    const escaping = state.manifest?.unsafePaths.length ? state.manifest.unsafePaths : null;
+
     let action = "";
     if (!p.installable) {
-      action = `<p class="note warn">${I.warn} Not installable — the latest release ships no <span class="mono">dcs-studio.toml</span>${p.release_tag ? "" : " (no release yet)"}.</p>`;
+      action = `<p class="note warn" data-testid="not-installable-note">${I.warn} Not installable — the latest release ships no <span class="mono">dcs-studio.toml</span>${p.release_tag ? "" : " (no release yet)"}.</p>`;
     } else if (state.installed) {
       action = `<div class="installed-row" data-testid="installed-row">${I.check} Installed</div>
         <button class="btn secondary block" id="uninstall" data-testid="uninstall-btn" style="margin-top:10px">${I.trash} Uninstall</button>
         <p class="note">Enable/disable/update it under <b>My Mods</b>.</p>`;
+    } else if (escaping) {
+      action = `<p class="note warn" data-testid="unsafe-manifest-note">${I.warn} Not installable — this mod's manifest asks to write outside your DCS folders.</p>
+        <ul class="unsafe-reasons" data-testid="unsafe-reasons">${escaping
+          .map((u) => `<li>${esc(u.reason)}</li>`)
+          .join("")}</ul>`;
     } else if (state.installing) {
       const pct = Math.round((state.installing.pct || 0) * 100);
       action = `<div class="progress" data-testid="install-progress"><div style="font-size:12px;display:flex;gap:6px;align-items:center"><span class="spin">${I.refresh}</span> ${esc(state.installing.label)}</div>
@@ -455,7 +468,7 @@
                 : `<p class="note">No release assets.</p>`
             }
           </div>
-          <button class="btn secondary block" id="viewgh" style="margin-top:14px">View on GitHub ${I.ext}</button>
+          <button class="btn secondary block" id="viewgh" data-testid="view-github-btn" style="margin-top:14px">View on GitHub ${I.ext}</button>
         </aside>
       </div>`;
 
@@ -536,6 +549,11 @@
         }
         break;
       case "product":
+        // Read the payload BEFORE touching state: every sibling case guards on
+        // the repo first, and a {product} that ever arrived without one would
+        // otherwise leave the page un-busy with a null product — a permanent
+        // blank card rather than the error the host meant to send.
+        if (!m.product) break;
         state.productBusy = false;
         state.product = m.product;
         state.repo = m.product.repo;
@@ -584,7 +602,11 @@
   });
 
   // ── Boot ──
+  // The repo to re-open has to be read before render(): nothing has been
+  // fetched yet, so renderProduct() finds no product and drops the view back
+  // to the list, erasing the very intent the persisted state carried.
+  const restoreRepo = state.view === "product" ? state.repo : null;
   render();
   post({ type: "ready" });
-  if (state.view === "product" && state.repo) openProduct(state.repo);
+  if (restoreRepo) openProduct(restoreRepo);
 })();

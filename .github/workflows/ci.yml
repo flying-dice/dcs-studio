@@ -6,61 +6,205 @@ on:
   pull_request:
     branches: [main, develop]
   workflow_dispatch:
+  # release.yml calls this workflow and will not publish unless it passes. A
+  # tag push matches no branch filter, so a release used to run neither lint,
+  # nor e2e, nor clippy — and adding `tags: ["v*"]` here was not enough on its
+  # own: two workflows triggered by the same tag start concurrently and neither
+  # gates the other, so the release published whatever this said. Being *called*
+  # is what makes it a gate. The DLLs a release ships load inside a running
+  # flight sim, where the panic-restriction lints below are the whole defence.
+  workflow_call:
+
+# A push to an open PR supersedes the commit before it, but without this every
+# one of those pushes runs the full six-job matrix — a Windows runner and two
+# Rust builds included — against a commit nobody will merge. Tag and branch
+# pushes are never cancelled: those are the ones that gate a release.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# One job per layer of the testing pyramid, so a failure names the layer that
+# broke rather than "tests failed", and so the layers run concurrently instead
+# of serially behind one another. Each vitest layer gates its own coverage at
+# 100% against its own disjoint include set (see vitest.*.config.ts); the e2e
+# layer does the same for media/*.js via scripts/e2e-coverage.mjs.
+#
+# The three TypeScript layers run on Linux: the domain layer resolves paths
+# with explicit Windows semantics regardless of host, so they are deterministic
+# off-Windows. The `windows` job keeps the shipping target honest — it compiles
+# and builds the bridge DLLs on the OS the extension actually runs on.
 
 jobs:
-  gates:
-    name: Quality gates
-    runs-on: windows-latest
+  static:
+    name: Compile + lint
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
+      - run: npm ci
+      # Covers what `npm run compile` cannot: test/, tests/ and the root config
+      # files. Vitest and Playwright transpile via esbuild and Biome does not
+      # typecheck, so this is the only thing that notices a test double drifting
+      # from the port it stands in for, or a fixture asserting a shape the
+      # domain no longer has.
+      - name: Typecheck tests + configs
+        run: npm run typecheck:tests
       - name: TypeScript compile
         run: npm run compile
-
       - name: Biome lint + format check (JS/TS)
         run: npm run lint
 
-      - name: Unit tests + coverage gate (100% per-file on src/core)
-        run: npx vitest run --coverage
+  unit:
+    name: Unit layer (100% gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Unit tests + coverage gate
+        run: npm run coverage:unit
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-unit
+          path: coverage/unit
 
+  integration:
+    name: Integration layer (100% gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Integration tests + coverage gate
+        run: npm run coverage:integration
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-integration
+          path: coverage/integration
+
+  e2e:
+    name: E2E layer (100% gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
       - name: Install Playwright browser
-        run: npx playwright install chromium
+        run: npx playwright install --with-deps chromium
+      - name: Webview e2e + coverage gate
+        run: npm run coverage:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-e2e
+          path: coverage/e2e
+      # `trace: "on-first-retry"` with retries: 2 means a CI-only failure is the
+      # one case that produces a trace — and it is written to test-results/,
+      # which nothing above collects. Without this the only artefact of a flake
+      # that does not reproduce locally is a one-line "list" reporter summary.
+      - name: Upload Playwright traces
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: test-results/
+          if-no-files-found: ignore
 
-      - name: Webview e2e (previews harness)
-        run: npm run test:e2e
-
+  rust:
+    name: Rust bridge tests (100% gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-
+        with:
+          components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: bridge
+      # bridge-core/build.rs links PUC liblua5.1 on non-Windows so the unit
+      # tests — which create real Lua states — run as ordinary executables
+      # here. Same 5.1 ABI DCS ships; DCS's own lua.dll is not redistributable.
+      - name: Install Lua 5.1 (test-time link target)
+        run: sudo apt-get update && sudo apt-get install -y liblua5.1-0-dev
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      # Regions is llvm-cov's branch-equivalent metric, and the one that matters
+      # most here: a `?` early return or an unexercised match arm can sit at 100%
+      # line coverage, and an unexercised error path in this workspace panics the
+      # user's flight sim.
+      #
+      # Lines and functions are held at 100. Regions are not, and the floor is
+      # honest rather than aspirational: 21 regions of 7590 are unreachable from
+      # a test, each measured rather than assumed — serde_json infallible on a
+      # struct of String/i32/Option<Value>, and rusqlite's FromSql total over
+      # all five storage classes.
+      #
+      # An earlier version of this comment blamed the OOM-during-registration
+      # path (#62) and said a test reaching it would take the runner with it.
+      # That was wrong, and disproven rather than argued: sweeping the surface
+      # generator over ~15,000 memory ceilings never once killed the runner.
+      # mlua wraps the offending `lua_pushcfunction` in `relax_limit_with`, so
+      # an mlua-owned state cannot fail there at all. The failure is real in
+      # DCS — where the allocator is DCS's and that guard does nothing — and
+      # simply not reachable through `set_memory_limit` in this harness.
+      #
+      # 99.5 rather than the 99.72 measured, deliberately. This runner has
+      # twice seen a couple more misses than a dev machine does, and a floor
+      # with no headroom turns an infrastructure difference into a red build
+      # that says "coverage regression". 99.5 still catches a ~15-region
+      # regression. Raise it when the number rises; do not lower it.
+      - name: Rust tests + coverage gate
+        run: >-
+          cargo llvm-cov --workspace
+          --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 99.5
+        working-directory: bridge
 
+  windows:
+    name: Shipping target (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: TypeScript compile
+        run: npm run compile
+      # The layers already gated on Linux; re-run the two headless ones here to
+      # prove the Windows path semantics the domain layer assumes are the real
+      # ones, not just the ones path.win32 emulates.
+      - name: Unit + integration on the shipping OS
+        run: npm run test:unit && npm run test:integration
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bridge
       - name: Rust format check
         run: cargo fmt --check
         working-directory: bridge
-
       # -D warnings promotes the workspace lint policy (clippy pedantic +
       # panic-path restriction lints, see bridge/Cargo.toml) into a hard gate.
       - name: Rust clippy (pedantic workspace policy)
         run: cargo clippy --all-targets -- -D warnings
         working-directory: bridge
-
-      # Build gate only: the lua-runtime-gated unit tests need DCS's own
-      # lua.dll on PATH at process load (not redistributable to CI). Run them
-      # locally per .claude/skills/dcs-dev:
-      #   cd bridge; cargo test --workspace -- --include-ignored --skip regenerate_dlua_golden
       - name: Rust workspace builds (both bridge DLLs)
         run: cargo build --release --workspace
         working-directory: bridge
-
       - name: Upload bridge DLLs artifact
         uses: actions/upload-artifact@v4
         with:

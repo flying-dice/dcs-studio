@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { expectSent, hostSend, openPreview, sentMessages } from "./helpers";
 
 test.describe("manifest preview", () => {
@@ -156,6 +156,26 @@ test.describe("manifest preview", () => {
     expect(last.text).toContain('name = "renamed-mod"');
   });
 
+  test("a [project] written with bare TOML numbers still validates and still edits", async ({
+    page,
+  }) => {
+    // `name = 2024` is valid TOML. Parsed as a JS number it made the validation
+    // pass throw, and because that pass runs before the debounced edit is
+    // queued, the form went on accepting keystrokes while writing nothing back.
+    const errors = await openPreview(page, "manifest", { query: { project: "numeric" } });
+    await expect(page.locator('[data-sec="project"][data-key="name"]')).toHaveValue("2024");
+    await expect(page.locator('[data-sec="project"][data-key="version"]')).toHaveValue("3");
+    await expect(page.getByTestId("validation-ok")).toBeVisible();
+    await expect(page.getByTestId("toml-preview")).toContainText('name = "2024"');
+
+    // The form is live, not just drawn: an edit still reaches the host.
+    await page.locator('[data-sec="project"][data-key="author"]').fill("viper-drivers");
+    await expectSent(page, { type: "edit" });
+    const messages = await sentMessages(page);
+    expect(messages[messages.length - 1].text).toContain('author = "viper-drivers"');
+    expect(errors).toEqual([]);
+  });
+
   test("clearing the name shows a validation issue", async ({ page }) => {
     await openPreview(page, "manifest");
     const nameInput = page.locator('[data-sec="project"][data-key="name"]');
@@ -224,5 +244,154 @@ test.describe("manifest preview", () => {
     await expect(nameInput).toHaveValue("from-outside");
     await expect(page.getByTestId("bundle-row")).toHaveCount(0);
     await expect(page.getByTestId("symlink-row")).toHaveCount(0);
+  });
+});
+
+test.describe("manifest — validation and host pushes", () => {
+  // A manifest that trips every validation rule the form owns, plus one
+  // unmodeled section and a symlink under the unconfigured {GameInstall} root.
+  const EDGE_TOML = [
+    "[project]",
+    'name = "edge-case"',
+    'version = "1.0.0"',
+    "",
+    "[[bundle]]",
+    'path = "Mods/x"',
+    "",
+    "[[symlink]]",
+    'source = "Mods/x/entry.lua"',
+    'dest = "{GameInstall}/Mods/x/entry.lua"',
+    "",
+    "[[entrypoint]]",
+    'id = "dup"',
+    'exe = "Mods/x/a.exe"',
+    "",
+    "[[entrypoint]]",
+    'id = "dup"',
+    'exe = "Mods/x/b.exe"',
+    "",
+    "[[requires_module]]",
+    'id = ""',
+    "",
+    "[[dependencies]]",
+    'id = "utils/dcs-lua-common"',
+    "",
+  ].join("\n");
+
+  test("names every problem it finds rather than just refusing to save", async ({ page }) => {
+    await openPreview(page, "manifest");
+    await hostSend(page, { type: "external", rawText: EDGE_TOML });
+
+    const issues = page.getByTestId("validation-issues");
+    // A blank module id would emit an entry that matches no DCS module.
+    await expect(issues).toContainText("Required module 1: id is empty.");
+    // Two entrypoints sharing an id collide in My Mods' running-process map.
+    await expect(issues).toContainText('Executable 2: duplicate id "dup".');
+    await expect(issues).toContainText("{GameInstall} is not configured");
+  });
+
+  test("a symlink under an unconfigured root is flagged as soon as the form draws", async ({
+    page,
+  }) => {
+    // The warning must survive a re-render, not only appear when the root
+    // dropdown is changed by hand.
+    await openPreview(page, "manifest");
+    await hostSend(page, { type: "external", rawText: EDGE_TOML });
+    await expect(
+      page.getByTestId("symlink-row").first().getByTestId("unresolved-warning"),
+    ).toBeVisible();
+  });
+
+  test("the preserved-sections note counts a single section in the singular", async ({ page }) => {
+    await openPreview(page, "manifest");
+    // The bootstrap has two unmodeled sections.
+    await expect(page.locator(".muted-card")).toContainText("2 sections");
+
+    await hostSend(page, { type: "external", rawText: EDGE_TOML });
+    await expect(page.locator(".muted-card")).toContainText("1 section the form");
+  });
+
+  test("configuring the roots clears the unresolved warning without a reload", async ({ page }) => {
+    // Setup writes dcsStudio.gameInstallPath while this form is open; the host
+    // pushes the new roots so the form stops warning about a path that is now
+    // configured.
+    await openPreview(page, "manifest");
+    await hostSend(page, { type: "external", rawText: EDGE_TOML });
+    await expect(page.getByTestId("unresolved-warning")).toBeVisible();
+
+    await hostSend(page, {
+      type: "roots",
+      roots: { savedGames: "C:\\SG\\DCS", gameInstall: "C:\\DCS World" },
+    });
+    await expect(page.getByTestId("unresolved-warning")).toHaveCount(0);
+    await expect(page.getByTestId("resolved-dest")).toContainText(
+      "C:\\DCS World\\Mods\\x\\entry.lua",
+    );
+    await expect(page.getByTestId("validation-issues")).not.toContainText(
+      "{GameInstall} is not configured",
+    );
+  });
+
+  test("a document with no file on disk is titled by the default manifest name", async ({
+    page,
+  }) => {
+    const errors = await openPreview(page, "manifest", { query: { target: "unsaved" } });
+    await expect(page.locator("header .title")).toContainText("dcs-studio.toml");
+    await expect(page.locator(".preview-head .target")).toHaveText("dcs-studio.toml");
+    expect(errors).toEqual([]);
+  });
+
+  test("ignores an empty host message", async ({ page }) => {
+    const errors = await openPreview(page, "manifest");
+    await hostSend(page, null);
+    await expect(page.getByTestId("bundle-row")).toHaveCount(1);
+    expect(errors).toEqual([]);
+  });
+});
+
+test.describe("manifest — a destination reaching outside the DCS folders (#16)", () => {
+  // resolveDest returns null for two unrelated reasons, and the form must not
+  // conflate them: an escaping dest is refused on every machine (fix it here),
+  // an unconfigured {GameInstall} is only about this machine's settings.
+  const ESCAPING = [
+    "[project]",
+    'name = "shady"',
+    "",
+    "[[bundle]]",
+    'path = "payload"',
+    "",
+    "[[symlink]]",
+    'source = "payload/evil.dll"',
+    'dest = "{SavedGames}/../../Windows/System32/evil.dll"',
+    "",
+  ].join("\n");
+
+  test("says the destination leaves the DCS folders instead of blaming the roots", async ({
+    page,
+  }) => {
+    const errors = await openPreview(page, "manifest");
+    await hostSend(page, { type: "external", rawText: ESCAPING });
+
+    await expect(page.getByTestId("escaping-dest-warning")).toBeVisible();
+    await expect(page.getByTestId("unresolved-warning")).toHaveCount(0);
+    await expect(page.getByTestId("validation-issues")).toContainText(
+      "Symlink 1: destination reaches outside the DCS folders.",
+    );
+    expect(errors).toEqual([]);
+  });
+
+  test("warns as the author types, not only on a full redraw", async ({ page }) => {
+    // The per-keystroke update and the full render share one renderer, so the
+    // warning has to appear without the row being rebuilt.
+    await openPreview(page, "manifest");
+    const rest = page.locator('[data-sec="symlink"][data-idx="0"][data-key="__rest"]');
+    await rest.fill("../../Windows/System32/evil.dll");
+
+    await expect(page.getByTestId("escaping-dest-warning")).toBeVisible();
+    await rest.fill("Scripts/ok.lua");
+    await expect(page.getByTestId("escaping-dest-warning")).toHaveCount(0);
+    await expect(page.getByTestId("resolved-dest")).toContainText(
+      "Saved Games\\DCS\\Scripts\\ok.lua",
+    );
   });
 });

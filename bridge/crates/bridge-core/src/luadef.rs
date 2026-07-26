@@ -369,6 +369,115 @@ fn emit_global_node(out: &mut String, prefix: &str, node: &GlobalNode) {
     }
 }
 
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
+mod emitter_tests {
+    use super::{
+        emit_dlua, emit_globals_dlua, is_emittable_segment, ClassDoc, FieldDoc, GlobalKind,
+        GlobalNode, ModuleDoc, ScalarTy,
+    };
+
+    /// The DLL-side `_G` walk filters every key through this before emitting a
+    /// dotted statement. A key that slipped past would land in the generated
+    /// file as a syntax error, and `LuaLS` rejects a definition file *whole* —
+    /// one bad global would silently kill completion for the entire DCS API.
+    #[test]
+    fn only_plain_lua_identifiers_survive_the_segment_filter() {
+        assert!(is_emittable_segment("getModelTime"));
+        assert!(is_emittable_segment("_private"));
+        assert!(is_emittable_segment("ERROR_2"));
+
+        assert!(!is_emittable_segment(""), "an empty key names nothing");
+        assert!(!is_emittable_segment("2fast"), "a leading digit");
+        assert!(!is_emittable_segment("-dash"), "a leading punctuation");
+        assert!(!is_emittable_segment("weird-key"), "an interior dash");
+        assert!(!is_emittable_segment("has space"));
+        // `function DCS.end() end` would not parse.
+        assert!(!is_emittable_segment("end"));
+        assert!(!is_emittable_segment("function"));
+    }
+
+    /// Each scalar renders as a canonical placeholder *of its type* rather than
+    /// the live build's value, so the member hovers as the right type without
+    /// baking this install's sim data into the checked-in definitions.
+    #[test]
+    fn scalars_render_as_a_placeholder_of_their_own_type() {
+        let out = emit_globals_dlua(&[GlobalNode::new(
+            "log",
+            GlobalKind::Table(vec![
+                GlobalNode::new("ERROR", GlobalKind::Scalar(ScalarTy::Number)),
+                GlobalNode::new("NAME", GlobalKind::Scalar(ScalarTy::String)),
+                GlobalNode::new("DEBUG", GlobalKind::Scalar(ScalarTy::Boolean)),
+                GlobalNode::new("write", GlobalKind::Function),
+                GlobalNode::new("handle", GlobalKind::Opaque),
+            ]),
+        )]);
+
+        assert!(
+            out.ends_with(concat!(
+                "log = {}\n",
+                "log.ERROR = 0\n",
+                "log.NAME = \"\"\n",
+                "log.DEBUG = false\n",
+                "function log.write() end\n",
+                "log.handle = {}\n",
+            )),
+            "{out}"
+        );
+    }
+
+    /// The backing `local` is derived from the class name, which contains dots.
+    /// A name that would start the local with a digit gets an underscore, since
+    /// `local 3d = {}` is not parseable — and an unparseable definition file is
+    /// rejected whole.
+    #[test]
+    fn the_backing_local_is_always_a_valid_lua_identifier() {
+        let doc = ModuleDoc {
+            root: "3d.api".to_string(),
+            classes: vec![ClassDoc::new("3d.api")],
+        };
+        let out = emit_dlua(&doc);
+        assert!(out.contains("local _3d_api = {}"), "{out}");
+        assert!(out.trim_end().ends_with("return _3d_api"), "{out}");
+    }
+
+    /// A field with no documentation emits the bare `@field`, and a blank line
+    /// inside a doc body emits a bare `---` — both are how `LuaLS` renders a
+    /// paragraph break in hover text. Dropping the blank line would run two
+    /// paragraphs of a binding's docs together in the editor.
+    #[test]
+    fn documentation_renders_bare_fields_and_paragraph_breaks() {
+        let mut class = ClassDoc::new("m");
+        class.doc = "First paragraph.\n\nSecond paragraph.".to_string();
+        class.fields = vec![
+            FieldDoc {
+                name: "undocumented".to_string(),
+                ty: "string".to_string(),
+                doc: String::new(),
+            },
+            FieldDoc {
+                name: "documented".to_string(),
+                ty: "number".to_string(),
+                doc: "Why it exists.".to_string(),
+            },
+        ];
+        let out = emit_dlua(&ModuleDoc {
+            root: "m".to_string(),
+            classes: vec![class],
+        });
+
+        assert!(
+            out.contains("--- First paragraph.\n---\n--- Second paragraph.\n"),
+            "{out}"
+        );
+        assert!(out.contains("---@field undocumented string\n"), "{out}");
+        assert!(
+            out.contains("---@field documented number # Why it exists.\n"),
+            "{out}"
+        );
+    }
+}
+
 // These round-trip tests need the `dcs-lua-syntax` parser crate from the
 // original dcs-studio workspace, which is not ported into this repo — without
 // the gate they break compilation of EVERY test in the crate. Enable with

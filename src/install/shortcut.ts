@@ -1,7 +1,8 @@
+import { win32 as path } from "node:path";
 import { spawn } from "child_process";
 import * as fs from "fs";
-import * as path from "path";
 import * as vscode from "vscode";
+import { psArgs, psQuote } from "../core/domain/powershell";
 import { buildIco, MYMODS_URI_PATH, myModsUri } from "../core/domain/shortcut";
 import { showError } from "../errors";
 
@@ -11,6 +12,12 @@ import { showError } from "../errors";
 // it to the panel. Windows-only, like DCS itself. The pure pieces — the deep-link
 // URI and the PNG-in-ICO byte assembly — live in core/domain/shortcut.ts; this
 // module owns the PowerShell + filesystem glue.
+//
+// Paths are joined with `path.win32` even though this writes to the real local
+// filesystem: every path here (the hosting Code.exe, global storage, the
+// extension dir) is a Windows path because the feature refuses to run anywhere
+// else, so win32 semantics are what production already gets — and pinning them
+// keeps the generated .lnk identical when the suite runs on a non-Windows host.
 
 export { MYMODS_URI_PATH };
 
@@ -39,7 +46,20 @@ export async function createMyModsShortcut(context: vscode.ExtensionContext): Pr
   );
   if (!picked?.length) return;
 
-  const icon = ensureIcon(context);
+  // The icon is the one step whose failure had nowhere to go: this command is
+  // registered as `() => void createMyModsShortcut(...)`, so a rejection here
+  // reached nobody and the user saw their confirmed pick do absolutely nothing.
+  // Read-only globalStorage and an AV holding the .ico both land here.
+  let icon: string;
+  try {
+    icon = ensureIcon(context);
+  } catch (e) {
+    void showError(
+      `Couldn't create the shortcut — its icon could not be written: ${e instanceof Error ? e.message : String(e)}`,
+    );
+    return;
+  }
+
   const failures: string[] = [];
   for (const p of picked) {
     const r = await writeLnk(p.folder, context, icon);
@@ -65,24 +85,20 @@ function writeLnk(
   const args = `--new-window --open-url -- ${myModsDeepLink(context)}`;
   const script = [
     `$ErrorActionPreference='Stop'`,
-    `$dir = [Environment]::GetFolderPath(${psq(specialFolder)})`,
+    `$dir = [Environment]::GetFolderPath(${psQuote(specialFolder)})`,
     `$ws = New-Object -ComObject WScript.Shell`,
     `$s = $ws.CreateShortcut((Join-Path $dir 'DCS Studio - My Mods.lnk'))`,
-    `$s.TargetPath = ${psq(exe)}`,
-    `$s.Arguments = ${psq(args)}`,
-    `$s.WorkingDirectory = ${psq(path.dirname(exe))}`,
-    `$s.IconLocation = ${psq(`${icon},0`)}`,
+    `$s.TargetPath = ${psQuote(exe)}`,
+    `$s.Arguments = ${psQuote(args)}`,
+    `$s.WorkingDirectory = ${psQuote(path.dirname(exe))}`,
+    `$s.IconLocation = ${psQuote(`${icon},0`)}`,
     `$s.Description = 'Enable, update & remove your installed DCS mods'`,
     `$s.Save()`,
   ].join("; ");
   return new Promise((resolve) => {
-    const p = spawn(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
-      {
-        windowsHide: true,
-      },
-    );
+    const p = spawn("powershell.exe", psArgs.command(script), {
+      windowsHide: true,
+    });
     let err = "";
     p.stderr.on("data", (d) => (err += d.toString()));
     p.on("error", (e) => resolve({ ok: false, message: e.message }));
@@ -104,8 +120,4 @@ function ensureIcon(context: vscode.ExtensionContext): string {
   const png = fs.readFileSync(path.join(context.extensionPath, "media", "icon.png"));
   fs.writeFileSync(ico, buildIco(png));
   return ico;
-}
-
-function psq(s: string): string {
-  return `'${s.replace(/'/g, "''")}'`;
 }

@@ -4,7 +4,7 @@
 // adapter performs the actual syscall and maps failures to messages; this module
 // only decides, so the matrix is trivially testable.
 
-import { parse } from "node:path";
+import { win32 as path } from "node:path";
 
 /**
  * The link primitive to use:
@@ -29,7 +29,7 @@ export interface LinkFacts {
 
 /** Whether `link` and `target` sit on the same volume root (case-insensitive). */
 export function sameVolume(link: string, target: string): boolean {
-  return parse(link).root.toLowerCase() === parse(target).root.toLowerCase();
+  return path.parse(link).root.toLowerCase() === path.parse(target).root.toLowerCase();
 }
 
 /** Choose the link primitive for the probed facts. */

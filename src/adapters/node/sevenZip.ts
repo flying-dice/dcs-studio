@@ -10,6 +10,7 @@ import {
   shouldSplit,
   volumeLimit,
 } from "../../core/domain/archivePolicy";
+import { sevenZipArgs } from "../../core/domain/cliArgs";
 import type { PackagedPayload } from "../../core/domain/types";
 import type { ArchivePort } from "../../core/ports/archive";
 
@@ -72,7 +73,7 @@ function run7z(cmd: string, cwd: string, args: string[]): Promise<void> {
 /** Extract an archive family (first volume) into `outDir`. */
 function extract7z(cmd: string, archive: string, outDir: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, ["x", "-y", `-o${outDir}`, archive], { windowsHide: true });
+    const p = spawn(cmd, sevenZipArgs.extract(archive, outDir), { windowsHide: true });
     let err = "";
     p.stderr.on("data", (d) => (err += d.toString()));
     p.on("error", (e) => reject(new Error(`7z: ${e.message}`)));
@@ -110,14 +111,14 @@ export async function packagePayload(
   const archive = path.join(outDir, `${base}.7z`);
 
   // First pass: a single archive (no -v, so small payloads stay one clean .7z).
-  await run7z(cmd, root, ["a", "-t7z", "-mx=5", "-y", archive, ...files]);
+  await run7z(cmd, root, sevenZipArgs.pack(archive, files));
   const size = fs.statSync(archive).size;
   if (!shouldSplit(size, volumeBytes))
     return { volumes: [archive], totalBytes: size, split: false };
 
   // Too big for one asset: repack into numbered volumes.
   fs.rmSync(archive, { force: true });
-  await run7z(cmd, root, ["a", "-t7z", "-mx=5", "-y", `-v${limit}b`, archive, ...files]);
+  await run7z(cmd, root, sevenZipArgs.packSplit(archive, files, limit));
   const volumes = selectSplitVolumes(fs.readdirSync(outDir), base).map((f) => path.join(outDir, f));
   const totalBytes = volumes.reduce((s, v) => s + fs.statSync(v).size, 0);
   return { volumes, totalBytes, split: true };

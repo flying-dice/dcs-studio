@@ -73,7 +73,7 @@ pub fn register(sub: &mut Sub) -> LuaResult<()> {
          while a paused chunk holds the sim thread. Returns false when no \
          server is running.",
         |lua, router: UserDataRef<JsonRpcRouter>| {
-            server::process_global_queue(lua, &router)?.into_lua_multi(lua)
+            server::process_global_queue(lua, &router).into_lua_multi(lua)
         },
     )?;
 

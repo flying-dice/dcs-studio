@@ -32,6 +32,27 @@ Feature: Product page
       And "This repo has no README." when none exists
       And a "View on GitHub ↗" footer button
 
+    @chaos
+    Scenario Outline: GitHub fails while the product page loads
+      Given the page is loading "<owner/repo>"
+      When <request> fails with <failure>
+      Then the error card shows "<message>" with a "Try again" button
+      And "Try again" re-runs the same product load from the start
+
+      Examples:
+        | request             | failure                             | message                                                                 |
+        | the repo lookup     | 404 Not Found                       | Repository <owner/repo> was not found.                                  |
+        | the README fetch    | 500 Internal Server Error           | GitHub 500: Internal Server Error                                       |
+        | the latest release  | 403 "API rate limit exceeded"       | GitHub rate limit reached. Sign in to raise the limit, or wait a minute. |
+
+    @chaos
+    Scenario: A slow load that finishes after the user moved on
+      Given the user pressed Back and opened a different mod
+      When the first mod's load finally fails
+      Then the failure is discarded — a product error is only rendered when it
+        names the mod currently on screen
+      And the second mod's page is left untouched
+
   Rule: The action card reflects the mod's install state
 
     Scenario: Installable mod, not yet installed
@@ -50,6 +71,24 @@ Feature: Product page
         "Not installable — the latest release ships no dcs-studio.toml"
       And when the repo has no release at all, "(no release yet)" is appended
 
+    @chaos
+    Scenario: The manifest asset is listed but cannot be read
+      Given the latest release ships a "dcs-studio.toml" the host cannot
+        download or parse
+      Then the page still renders — this is not treated as a load failure
+      And an "Install actions unknown" warning replaces the whole install
+        breakdown, saying the manifest could not be read and to proceed
+        only if the source is trusted
+      And the "Install" button is still offered, because installability is
+        decided by the asset being listed on the release, not by it being readable
+
+    @chaos
+    Scenario: A release that ships a manifest but no payload
+      Given the latest release ships a "dcs-studio.toml" and no .7z volume
+      Then the card offers "Install" exactly as it would for a complete release
+      And the missing payload is only reported after the click, as
+        "This release has no .7z payload to install."
+
   Rule: The aside states the install facts
 
     Scenario: Install plan
@@ -65,6 +104,61 @@ Feature: Product page
       Then a "Download" card shows the humanized total size
       And lists each release asset with its size
       Or shows "No release assets." when there are none
+
+    @chaos
+    Scenario: A destination that cannot be resolved on this machine
+      Given the manifest installs under {GameInstall}
+      And "dcsStudio.gameInstallPath" is not configured
+      Then the plan row falls back to the declared token destination
+        instead of an absolute path
+      And the page does not warn that this install cannot succeed —
+        the unresolvable destination is only reported when Install is clicked
+        (see story 006)
+
+    @chaos
+    Scenario: A release with no assets at all
+      Then the "Download" card shows "—" as the total size
+      And shows "No release assets."
+
+  Rule: A third party's release content is untrusted input
+
+    @chaos
+    Scenario: A README carrying markup, a script block or a javascript: link
+      Given the repo README contains raw HTML and a "javascript:" link
+      Then the README is escaped before any markdown formatting is applied,
+        so the markup is shown as text
+      And nothing in it executes: the document's CSP is "default-src 'none'"
+        with scripts allowed only under the document's own nonce
+
+    @chaos
+    Scenario: A manifest declaring a before-sanitize mission script
+      Given the manifest declares a [[mission_script]] with
+        run_on = "before-sanitize"
+      Then a "Script Execution Notice" alert leads the mission-script section,
+        warning of full os/io/lfs/require access
+      And a "pre-sanitize-script" risk badge is shown above the fold,
+        before the "Install" action
+      And the mission-script row itself is tagged "before-sanitize"
+      And "Learn more about script sanitization" opens the sandbox docs page
+
+    @chaos
+    Scenario: A manifest whose destination walks out of the DCS roots
+      Given a [[symlink]] rule with dest "{SavedGames}/../../Windows/System32"
+      Then the install plan still enumerates every rule, so the user can see
+        what the mod wanted to do
+      And the offending rule is flagged, and only that one
+      And the "Install" action is replaced by "Not installable — this mod's
+        manifest asks to write outside your DCS folders", listing each path
+        and what it reaches outside of
+      And an install message arriving anyway — from a page rendered before the
+        manifest was re-read — is refused before anything is downloaded
+
+    @chaos
+    Scenario: A mod already installed before its manifest started escaping
+      Given the mod is installed
+      And its latest release's manifest now names a path outside the DCS roots
+      Then the page still offers "Uninstall" — refusing the install must not
+        take away the way out of one done earlier
 ```
 
 ## Design intent (not yet implemented)

@@ -19,15 +19,15 @@
 
   function candList(items, current, which) {
     if (!items.length) {
-      return `<div class="none">Nothing detected automatically — use Browse to point at the folder.</div>`;
+      return `<div class="none" data-testid="cand-empty" data-which="${which}">Nothing detected automatically — use Browse to point at the folder.</div>`;
     }
     return items
       .map(
         (c) => `
-      <button class="cand ${c.path.toLowerCase() === (current || "").toLowerCase() ? "selected" : ""}" data-pick="${which}" data-path="${esc(c.path)}">
-        <span class="cname">${esc(c.name)}</span>
+      <button class="cand ${c.path.toLowerCase() === (current || "").toLowerCase() ? "selected" : ""}" data-testid="cand-row" data-pick="${which}" data-path="${esc(c.path)}">
+        <span class="cname" data-testid="cand-name">${esc(c.name)}</span>
         <span class="cpath" title="${esc(c.path)}">${esc(c.path)}</span>
-        <span class="pill ${c.valid ? "ok" : "warn"}">${esc(c.detail)}</span>
+        <span class="pill ${c.valid ? "ok" : "warn"}" data-testid="cand-pill">${esc(c.detail)}</span>
       </button>`,
       )
       .join("");
@@ -40,7 +40,7 @@
     const list = which === "install" ? state.installCandidates : state.savedCandidates;
     const hit = list.find((c) => c.path.toLowerCase() === p.toLowerCase());
     if (hit) {
-      return `<div class="status-line ${hit.valid ? "ok" : "warn"}">${hit.valid ? `✔ ${hit.detail}` : `⚠ ${hit.detail}`}</div>`;
+      return `<div class="status-line ${hit.valid ? "ok" : "warn"}" data-testid="validity-line" data-which="${which}">${hit.valid ? `✔ ${hit.detail}` : `⚠ ${hit.detail}`}</div>`;
     }
     return "";
   }
@@ -53,7 +53,7 @@
           <span class="title">DCS Setup</span>
         </div>
         <span class="spacer"></span>
-        <button class="btn secondary" id="redetect">Re-detect</button>
+        <button class="btn secondary" id="redetect" data-testid="redetect-btn">Re-detect</button>
       </header>
       <div class="wrap">
         <p class="intro">Point DCS Studio at your DCS folders. <b>Userdata</b> (Saved Games) is where the bridge hook + mods install; <b>Installation</b> is where <span class="mono">DCS.exe</span> lives (used to launch DCS). Both are saved to your user settings.</p>
@@ -62,8 +62,8 @@
           <h2>DCS userdata (Saved Games)</h2>
           <p class="sub">e.g. <span class="mono">%USERPROFILE%\\Saved Games\\DCS</span> — a valid one has a <span class="mono">Config</span> folder.</p>
           <div class="pathrow">
-            <input id="savedInput" value="${esc(state.savedGames)}" placeholder="Path to your DCS Saved Games folder" spellcheck="false" />
-            <button class="btn secondary" data-browse="saved">Browse…</button>
+            <input id="savedInput" data-testid="saved-input" value="${esc(state.savedGames)}" placeholder="Path to your DCS Saved Games folder" spellcheck="false" />
+            <button class="btn secondary" data-testid="browse-btn" data-browse="saved">Browse…</button>
           </div>
           ${validity("saved", state.savedGames)}
           <div class="detected-label">Detected</div>
@@ -74,8 +74,8 @@
           <h2>DCS installation</h2>
           <p class="sub">The folder containing <span class="mono">bin\\DCS.exe</span> — e.g. <span class="mono">C:\\Program Files\\Eagle Dynamics\\DCS World</span>.</p>
           <div class="pathrow">
-            <input id="installInput" value="${esc(state.gameInstall)}" placeholder="Path to your DCS install folder" spellcheck="false" />
-            <button class="btn secondary" data-browse="install">Browse…</button>
+            <input id="installInput" data-testid="install-input" value="${esc(state.gameInstall)}" placeholder="Path to your DCS install folder" spellcheck="false" />
+            <button class="btn secondary" data-testid="browse-btn" data-browse="install">Browse…</button>
           </div>
           ${validity("install", state.gameInstall)}
           <div class="detected-label">Detected</div>
@@ -86,25 +86,25 @@
           <h2>DCS Studio data dir</h2>
           <p class="sub">Where subscribed mods are downloaded and unpacked. Symlinks are maintained from here into the DCS folders. Keep it off the DCS install/Saved Games.</p>
           <div class="pathrow">
-            <input id="dataInput" value="${esc(state.dataDir)}" placeholder="${esc(state.dataDirDefault)}" spellcheck="false" />
-            <button class="btn secondary" data-browse="data">Browse…</button>
+            <input id="dataInput" data-testid="data-input" value="${esc(state.dataDir)}" placeholder="${esc(state.dataDirDefault)}" spellcheck="false" />
+            <button class="btn secondary" data-testid="browse-btn" data-browse="data">Browse…</button>
           </div>
-          <div class="status-line">Default: <span class="mono">${esc(state.dataDirDefault)}</span></div>
+          <div class="status-line" data-testid="data-default">Default: <span class="mono">${esc(state.dataDirDefault)}</span></div>
         </section>
 
         <section class="card">
           <h2>7-Zip</h2>
           <p class="sub">Used to package and unpack mod payloads. Leave empty to auto-detect on PATH or under <span class="mono">Program Files\\7-Zip</span>.</p>
           <div class="pathrow">
-            <input id="sevenInput" value="${esc(state.sevenZip)}" placeholder="Path to 7z.exe (auto-detect if empty)" spellcheck="false" />
-            <button class="btn secondary" data-browse="sevenzip">Browse…</button>
+            <input id="sevenInput" data-testid="sevenzip-input" value="${esc(state.sevenZip)}" placeholder="Path to 7z.exe (auto-detect if empty)" spellcheck="false" />
+            <button class="btn secondary" data-testid="browse-btn" data-browse="sevenzip">Browse…</button>
           </div>
-          <div class="status-line ${state.sevenZipDetected ? "ok" : "warn"}">${state.sevenZipDetected ? `✔ Detected: ${esc(state.sevenZipDetected)}` : "⚠ 7z not found — set it here or install 7-Zip"}</div>
+          <div class="status-line ${state.sevenZipDetected ? "ok" : "warn"}" data-testid="sevenzip-status">${state.sevenZipDetected ? `✔ Detected: ${esc(state.sevenZipDetected)}` : "⚠ 7z not found — set it here or install 7-Zip"}</div>
         </section>
 
         <div class="actions">
-          <button class="btn" id="save">Save DCS paths</button>
-          <span class="saved-note" id="savedNote" style="display:none">Saved ✓</span>
+          <button class="btn" id="save" data-testid="save-btn">Save DCS paths</button>
+          <span class="saved-note" id="savedNote" data-testid="saved-note" style="display:none">Saved ✓</span>
         </div>
       </div>
     `;
@@ -167,6 +167,7 @@
     } else if (m.type === "browsed") {
       if (m.which === "saved") state.savedGames = m.path;
       else if (m.which === "data") state.dataDir = m.path;
+      else if (m.which === "sevenzip") state.sevenZip = m.path;
       else state.gameInstall = m.path;
       render();
     } else if (m.type === "saved") {

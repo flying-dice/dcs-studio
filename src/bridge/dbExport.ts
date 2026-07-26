@@ -1,10 +1,9 @@
-import * as os from "os";
 import * as vscode from "vscode";
-import { dbExportFileBase, shouldOpenExport } from "../core/domain/bridgeConsole";
-import { fmtBytes } from "../core/domain/format";
+import { dbExportFileBase } from "../core/domain/bridgeConsole";
 import { showError } from "../errors";
 import type { BridgeClients } from "./clients";
 import type { DbExportWhat } from "./dbTypes";
+import { saveExport } from "./saveExport";
 
 // "DCS Studio: Export DCS Unit Database (JSON)…" — a quick-pick over the GUI
 // bridge's db_export method. Mirrors the console export flow: the sim writes the
@@ -70,6 +69,10 @@ export async function dbExportCommand(clients: BridgeClients): Promise<void> {
     return;
   }
 
+  // Tracked outside the try so the tidy-up runs on EVERY path out of it: a copy
+  // the user's disk refuses would otherwise leave a tens-of-megabytes dump in
+  // the DCS write dir forever.
+  let temp: vscode.Uri | undefined;
   try {
     const what = await pickWhat(clients);
     if (!what) return;
@@ -82,31 +85,17 @@ export async function dbExportCommand(clients: BridgeClients): Promise<void> {
       () => clients.gui.dbExport(what),
     );
 
-    const temp = vscode.Uri.file(path);
-    const folder = vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file(os.homedir());
-    const target = await vscode.window.showSaveDialog({
-      defaultUri: vscode.Uri.joinPath(folder, `${dbExportFileBase(what)}.json`),
-      filters: { JSON: ["json"] },
-    });
-
-    if (target) {
-      await vscode.workspace.fs.copy(temp, target, { overwrite: true });
-      if (shouldOpenExport(bytes)) {
-        const doc = await vscode.workspace.openTextDocument(target);
-        await vscode.window.showTextDocument(doc, { preview: true });
-      } else {
-        void vscode.window.showInformationMessage(
-          `Exported ${fmtBytes(bytes)} to ${target.fsPath}`,
-        );
-      }
-    }
-
-    try {
-      await vscode.workspace.fs.delete(temp);
-    } catch {
-      /* best-effort tidy of the sim-side temp file */
-    }
+    temp = vscode.Uri.file(path);
+    await saveExport(temp, dbExportFileBase(what), bytes);
   } catch (e) {
     void showError(`DCS database export failed: ${e instanceof Error ? e.message : String(e)}`, e);
+  } finally {
+    if (temp) {
+      try {
+        await vscode.workspace.fs.delete(temp);
+      } catch {
+        /* best-effort tidy of the sim-side temp file */
+      }
+    }
   }
 }

@@ -22,11 +22,11 @@ $ErrorActionPreference = "Stop"
 
 # deploy.ps1 lives at <repo>\bridge\deploy\ -> the cargo workspace is one up at
 # <repo>\bridge (its .cargo/config.toml supplies LUA_LIB/LUA_LIB_NAME).
-$workspace = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$workspace = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 
 # 1. Build both DLLs.
 Write-Host "Building the bridge workspace (release) in $workspace ..."
-Push-Location $workspace
+Push-Location -LiteralPath $workspace
 try {
     cargo build --release -p dcs-bridge-gui -p dcs-bridge-mission
     if ($LASTEXITCODE -ne 0) { throw "cargo build --release failed (exit $LASTEXITCODE)" }
@@ -35,28 +35,32 @@ finally {
     Pop-Location
 }
 
+# Every path here goes through -LiteralPath. The default -Path parameter treats
+# [ ], ? and * as wildcards, and `D:\Games [SSD]\DCS` is a legal Windows path a
+# user can legitimately pass as -WriteDir: Test-Path would return $false and the
+# script would insist a directory that plainly exists does not.
 $dlls = @("dcs_studio_gui.dll", "dcs_studio_mission.dll") | ForEach-Object {
     $p = Join-Path $workspace "target\release\$_"
-    if (-not (Test-Path $p)) { throw "Build succeeded but '$p' was not found" }
+    if (-not (Test-Path -LiteralPath $p)) { throw "Build succeeded but '$p' was not found" }
     $p
 }
 
 # 2. Locate the DCS write dir.
 if ($WriteDir) {
-    if (-not (Test-Path $WriteDir)) { throw "Specified -WriteDir '$WriteDir' does not exist" }
+    if (-not (Test-Path -LiteralPath $WriteDir)) { throw "Specified -WriteDir '$WriteDir' does not exist" }
 }
 else {
     $candidates = @(
         (Join-Path $env:USERPROFILE "Saved Games\DCS"),
         (Join-Path $env:USERPROFILE "Saved Games\DCS.openbeta")
-    ) | Where-Object { Test-Path $_ }
+    ) | Where-Object { Test-Path -LiteralPath $_ }
     if (-not $candidates) {
         throw "No DCS write dir found under '$env:USERPROFILE\Saved Games'. Pass -WriteDir to override."
     }
     # Both stable and openbeta dirs can coexist; the LIVE one is the dir whose
     # dcs.log was written most recently — first-existing would guess wrong.
     $WriteDir = $candidates |
-        Sort-Object { $log = Join-Path $_ "Logs\dcs.log"; if (Test-Path $log) { (Get-Item $log).LastWriteTime } else { [datetime]::MinValue } } -Descending |
+        Sort-Object { $log = Join-Path $_ "Logs\dcs.log"; if (Test-Path -LiteralPath $log) { (Get-Item -LiteralPath $log).LastWriteTime } else { [datetime]::MinValue } } -Descending |
         Select-Object -First 1
 }
 Write-Host "Using DCS write dir: $WriteDir"
@@ -77,7 +81,7 @@ New-Item -ItemType Directory -Force -Path $hooksDir | Out-Null
 foreach ($dll in $dlls) {
     $target = Join-Path $binDir (Split-Path $dll -Leaf)
     try {
-        Copy-Item -Path $dll -Destination $target -Force -ErrorAction Stop
+        Copy-Item -LiteralPath $dll -Destination $target -Force -ErrorAction Stop
     }
     catch {
         throw "Cannot overwrite $target - DCS appears to be running (it locks the loaded DLLs). Close DCS and re-run. ($_)"
@@ -93,8 +97,8 @@ $stale = @(
     (Join-Path $WriteDir "Scripts\DcsStudioMission.lua")
 )
 foreach ($p in $stale) {
-    if (Test-Path $p) {
-        Remove-Item -Path $p -Force
+    if (Test-Path -LiteralPath $p) {
+        Remove-Item -LiteralPath $p -Force
         Write-Host "Removed stale $p"
     }
 }
@@ -102,7 +106,7 @@ foreach ($p in $stale) {
 # The canonical hook lives in bridge\hook (what the extension ships).
 $hookSource = Join-Path $workspace "hook\DcsStudio.lua"
 $hookTarget = Join-Path $hooksDir "DcsStudio.lua"
-Copy-Item -Path $hookSource -Destination $hookTarget -Force
+Copy-Item -LiteralPath $hookSource -Destination $hookTarget -Force
 Write-Host "Copied $hookSource -> $hookTarget"
 
 # 4. Note the MissionScripting.lua prerequisite for the mission bridge.

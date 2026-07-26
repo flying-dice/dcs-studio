@@ -14,15 +14,15 @@ import { RegExeRegistry } from "./adapters/node/registry";
 import { SevenZipArchive } from "./adapters/node/sevenZip";
 import { WsBridgeTransport } from "./adapters/node/wsTransport";
 import { VsCodeGitHubAuth } from "./adapters/vscode/auth";
-import { VsCodeInstallRoots } from "./adapters/vscode/installRoots";
+import { installRoots } from "./adapters/vscode/installRoots";
 import { VsCodeManifest } from "./adapters/vscode/manifest";
 import { buildBridge } from "./bridge/build";
 import { BridgeClient } from "./bridge/client";
 import { BridgeClients } from "./bridge/clients";
 import { ConsolePanel } from "./bridge/consolePanel";
 import { dbExportCommand } from "./bridge/dbExport";
-import { ejectCommand, injectCommand } from "./bridge/deploy";
-import { launchCleanup, launchDcs } from "./bridge/launch";
+import { type BridgeFs, ejectCommand, injectCommand, nodeBridgeFs } from "./bridge/deploy";
+import { DcsLauncher } from "./bridge/launch";
 import { DetectService } from "./core/app/detectService";
 import { MissionSanitizeService } from "./core/app/missionSanitizeService";
 import { PublishService } from "./core/app/publishService";
@@ -35,6 +35,7 @@ import {
   statusBarClickAction,
   statusBarView,
 } from "./core/domain/bridgeStatusView";
+import { MANIFEST_FILE } from "./core/domain/manifestFile";
 import {
   DcsDebugAdapterFactory,
   DcsDebugConfigProvider,
@@ -43,7 +44,6 @@ import {
 } from "./debug/factory";
 import { setupDevReload } from "./devReload";
 import { DocsPanel } from "./docs/docsPanel";
-import { dataDir } from "./install/dataDir";
 import { MyModsPanel } from "./install/myModsPanel";
 import { createMyModsShortcut, MYMODS_URI_PATH } from "./install/shortcut";
 import { LogPanel } from "./log/logPanel";
@@ -61,10 +61,8 @@ import { NavViewProvider } from "./nav/navView";
 import { NewProjectPanel, PENDING_OPEN_KEY } from "./project/newProjectPanel";
 import { PublishPanel } from "./publish/publishPanel";
 import { SetupPanel } from "./setup/panel";
-import { SkillsLibrary } from "./skills/library";
-import { SkillsPanel } from "./skills/skillsPanel";
-
-const MANIFEST_FILE = "dcs-studio.toml";
+import { type SkillInfo, SkillsLibrary } from "./skills/library";
+import { SkillsPanel, showInstallFailed } from "./skills/skillsPanel";
 
 // A My Mods deep link that arrived in a window with a project open: the handler
 // spawns a fresh empty window and stamps this key so that window finishes the
@@ -72,14 +70,41 @@ const MANIFEST_FILE = "dcs-studio.toml";
 const PENDING_MYMODS_KEY = "dcs.pendingMyMods";
 
 let bridge: BridgeClients | undefined;
+// The one managed DCS process. Held here rather than inside launch.ts because
+// `deactivate()` takes no arguments — VS Code's shape, not ours — so the
+// composition root is the only place that can hand it to the shutdown path.
+// Initialised eagerly, not on activation: `deactivate()` must still eject a
+// bridge a PREVIOUS session injected even if this activation threw before it got
+// here, and at that point the real filesystem is the only sensible guess.
+// `activate()` replaces it with one built from its injected dependencies.
+let dcsLauncher: DcsLauncher = new DcsLauncher(nodeBridgeFs, installRoots);
 
 function isManifest(doc: vscode.TextDocument): boolean {
   return doc.uri.scheme === "file" && doc.uri.path.endsWith(`/${MANIFEST_FILE}`);
 }
 
-export function activate(context: vscode.ExtensionContext): void {
+/**
+ * What the composition root builds the extension out of. VS Code only ever
+ * passes the context, so the defaults are the real thing; the parameter exists
+ * so a test can drive activation against a substitute without a mutable slot
+ * that leaks from one spec into the next.
+ */
+export interface ExtensionDeps {
+  /** Filesystem for bridge inject/eject/launch. */
+  bridgeIo: BridgeFs;
+}
+
+export function activate(
+  context: vscode.ExtensionContext,
+  deps: ExtensionDeps = { bridgeIo: nodeBridgeFs },
+): void {
   // Dev-host only: reload the window when out/ or media/ changes.
   setupDevReload(context);
+
+  // Held in a module slot as well as locally, because `deactivate()` takes no
+  // arguments and still has to eject the bridge.
+  const dcs = new DcsLauncher(deps.bridgeIo, installRoots);
+  dcsLauncher = dcs;
 
   // The live in-sim bridges (created early so the sidebar nav can show their
   // status): the GUI bridge is up whenever DCS runs; the mission bridge only
@@ -119,7 +144,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // authoring form beside it (a split view). The document is the source of truth;
   // form and code editor are two-way bound.
   const openFormFor = (doc: vscode.TextDocument | undefined) => {
-    if (doc && isManifest(doc)) ManifestFormPanel.openBeside(context, doc);
+    if (doc && isManifest(doc)) ManifestFormPanel.openBeside(context, doc, installRoots);
   };
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument(openFormFor),
@@ -142,8 +167,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.getConfiguration("dcsStudio").get<string>("sevenZipPath"),
   );
   const manifestPort = new VsCodeManifest(context);
-  const ledger = new JsonLedgerStore(dataDir);
-  const installRoots = new VsCodeInstallRoots();
+  // One resolver for the three DCS roots, shared by everything that needs them.
+  const ledger = new JsonLedgerStore(() => installRoots.dataDir());
   // Tracks mod entrypoint processes launched from My Mods. A single shared
   // instance so running state survives closing/reopening the panel. On IDE exit
   // its children are deliberately left running (see deactivate()).
@@ -175,9 +200,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // marketplace backend sources its own token through it; the panels receive it
   // to read the session (token + account label) they surface.
   const auth = new VsCodeGitHubAuth();
-  // The marketplace backend (MarketplacePort). To demo against the static
-  // sample catalog, swap this single line for:
-  //   const marketplace = new MockMarketplace();   // from ./adapters/mock/marketplace
+  // The marketplace backend (MarketplacePort). The port has a second
+  // implementation — the sample catalog in test/support/mockMarketplace.ts,
+  // which the shared contract suite runs against alongside this one — so the
+  // swap below is a checked claim rather than an aspiration.
   const marketplace = new GithubMarketplace(auth);
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -203,27 +229,27 @@ export function activate(context: vscode.ExtensionContext): void {
       MarketplacePanel.current?.refresh();
     }),
     vscode.commands.registerCommand("dcs.mission.open", () => {
-      void openMissionScripting(missionSanitize);
+      void openMissionScripting(missionSanitize, installRoots);
     }),
     vscode.commands.registerCommand(
       "dcs.mission.desanitize",
-      () => void desanitizeMission(missionSanitize),
+      () => void desanitizeMission(missionSanitize, installRoots),
     ),
     vscode.commands.registerCommand(
       "dcs.mission.sanitize",
-      () => void sanitizeMission(missionSanitize),
+      () => void sanitizeMission(missionSanitize, installRoots),
     ),
     vscode.commands.registerCommand(
       "dcs.mission.restore",
-      () => void restoreMission(missionSanitize),
+      () => void restoreMission(missionSanitize, installRoots),
     ),
     vscode.commands.registerCommand(
       "dcs.mission.hooks.install",
-      () => void installMissionHooks(missionSanitize),
+      () => void installMissionHooks(missionSanitize, installRoots),
     ),
     vscode.commands.registerCommand(
       "dcs.mission.hooks.remove",
-      () => void removeMissionHooks(missionSanitize),
+      () => void removeMissionHooks(missionSanitize, installRoots),
     ),
   );
 
@@ -260,7 +286,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("dcs.bridge.console", () =>
       ConsolePanel.show(context, clients),
     ),
-    vscode.commands.registerCommand("dcs.log.open", () => LogPanel.show(context, manifestPort)),
+    vscode.commands.registerCommand("dcs.log.open", () =>
+      LogPanel.show(context, manifestPort, installRoots),
+    ),
     // The status bar item's click handler: not palette-contributed, it's only
     // reachable by clicking "DCS: offline"/"at menu"/"mission" in the footer.
     vscode.commands.registerCommand("dcs.bridge.statusBarClick", async () => {
@@ -281,10 +309,14 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       if (picked) void vscode.commands.executeCommand(picked.command);
     }),
-    vscode.commands.registerCommand("dcs.bridge.inject", () => injectCommand(context)),
-    vscode.commands.registerCommand("dcs.bridge.eject", () => ejectCommand()),
+    vscode.commands.registerCommand("dcs.bridge.inject", () =>
+      injectCommand(context, deps.bridgeIo, installRoots),
+    ),
+    vscode.commands.registerCommand("dcs.bridge.eject", () =>
+      ejectCommand(deps.bridgeIo, installRoots),
+    ),
     vscode.commands.registerCommand("dcs.bridge.launch", async () => {
-      await launchDcs(context);
+      await dcs.launch(context);
       clients.reconnect();
     }),
     vscode.commands.registerCommand("dcs.bridge.build", () => buildBridge(context)),
@@ -295,7 +327,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterDescriptorFactory(
       DEBUG_TYPE,
-      new DcsDebugAdapterFactory(clients),
+      new DcsDebugAdapterFactory(clients, installRoots),
     ),
     vscode.debug.registerDebugConfigurationProvider(DEBUG_TYPE, new DcsDebugConfigProvider()),
   );
@@ -353,28 +385,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // Installed skill files older than what this build ships: nudge once per
   // skill per bundled version (a workspaceState key remembers the nudge, so
   // updating the extension re-alerts but reloading the window doesn't).
-  void skills.updatesAvailable().then(async (outdated) => {
+  void skills.updatesAvailable().then((outdated) => {
     for (const s of outdated) {
-      const key = `dcs.skillUpdateNudged.${s.id}.${s.bundledVersion}`;
-      if (context.workspaceState.get(key)) continue;
-      await context.workspaceState.update(key, true);
-      void vscode.window
-        .showInformationMessage(
-          `The "${s.name}" agent skill in this repo is outdated (v${s.installedVersion} installed, v${s.bundledVersion} bundled).`,
-          "Update",
-          "Manage Skills",
-        )
-        .then((choice) => {
-          if (choice === "Update") {
-            void skills.install(s.id).then(() => {
-              void vscode.window.showInformationMessage(
-                `"${s.name}" skill updated to v${s.bundledVersion} — commit the change.`,
-              );
-            });
-          } else if (choice === "Manage Skills") {
-            SkillsPanel.show(context, skills);
-          }
-        });
+      if (context.workspaceState.get(nudgeKey(s))) continue;
+      void nudgeSkillUpdate(context, skills, s);
     }
   });
 
@@ -395,6 +409,45 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 }
 
+/** workspaceState key remembering that one skill was nudged at one version. */
+function nudgeKey(s: SkillInfo): string {
+  return `dcs.skillUpdateNudged.${s.id}.${s.bundledVersion}`;
+}
+
+/**
+ * Offer one outdated skill's update. The nudge is marked as delivered only
+ * once it has been dealt with — dismissed, deferred to the panel, or installed
+ * successfully. A failed install (a read-only repo is the usual cause) reports
+ * through the Skills panel's own error surface and leaves the key unwritten,
+ * so the next activation offers it again instead of the failure being both
+ * silent and permanent.
+ */
+async function nudgeSkillUpdate(
+  context: vscode.ExtensionContext,
+  skills: SkillsLibrary,
+  s: SkillInfo,
+): Promise<void> {
+  const choice = await vscode.window.showInformationMessage(
+    `The "${s.name}" agent skill in this repo is outdated (v${s.installedVersion} installed, v${s.bundledVersion} bundled).`,
+    "Update",
+    "Manage Skills",
+  );
+  if (choice === "Update") {
+    try {
+      await skills.install(s.id);
+    } catch (err) {
+      showInstallFailed(err);
+      return;
+    }
+    void vscode.window.showInformationMessage(
+      `"${s.name}" skill updated to v${s.bundledVersion} — commit the change.`,
+    );
+  } else if (choice === "Manage Skills") {
+    SkillsPanel.show(context, skills);
+  }
+  await context.workspaceState.update(nudgeKey(s), true);
+}
+
 /**
  * Create a Mod: if the workspace already has a dcs-studio.toml, open it as a
  * split view (text editor + authoring form beside it). Otherwise open the
@@ -411,7 +464,7 @@ async function openManifest(context: vscode.ExtensionContext): Promise<void> {
     if (exists) {
       const doc = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
-      ManifestFormPanel.openBeside(context, doc);
+      ManifestFormPanel.openBeside(context, doc, installRoots);
       return;
     }
   }
@@ -425,8 +478,9 @@ function samePath(a: string, b: string): boolean {
 
 export function deactivate(): void {
   bridge?.dispose();
-  // Best-effort cleanup: eject the bridge if DCS isn't holding the DLL.
-  launchCleanup();
+  // Best-effort cleanup: eject the bridge if DCS isn't holding the DLL. Nothing
+  // to do if no launcher was ever built — that means no DCS was launched here.
+  dcsLauncher.cleanup();
   // Mod entrypoint processes (ProcessLauncher) are deliberately LEFT RUNNING on
   // IDE exit — matching the DCS launcher's policy of not killing DCS when the
   // extension shuts down. The tracking map simply goes away with the process; a

@@ -1,4 +1,4 @@
-import * as path from "node:path";
+import { win32 as path } from "node:path";
 import {
   compareInstallNames,
   compareSavedNames,

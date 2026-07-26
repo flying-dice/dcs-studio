@@ -34,6 +34,35 @@ Feature: My Mods panel
       Then the panel shows "No mods installed yet"
         and "Browse Mods and install one — it'll appear here to enable, update, or remove."
 
+    @chaos
+    Scenario: The subscriptions ledger is corrupt or truncated
+      Given "<dataDir>\subscriptions.json" is not valid JSON, or holds JSON
+        that is not a ledger object at all
+      When the user opens My Mods
+      Then the unreadable file is preserved as "subscriptions.json.corrupt"
+      And a warning names that file, because it is the only remaining record
+        of the links still in the DCS folders
+      And "uninstall-all.bat" is NOT regenerated from the empty read, so it
+        still removes every link it listed before
+      And the panel shows the "No mods installed yet" empty state, which the
+        warning has already explained
+      And the warning is shown once, not on every redraw
+
+    @chaos
+    Scenario: The ledger file is simply not there yet
+      Given no mod has ever been installed
+      When the user opens My Mods
+      Then the empty state is shown with no warning — a missing ledger is the
+        normal first run, not a failure
+      And nothing is preserved as "subscriptions.json.corrupt"
+
+    @chaos
+    Scenario: A row acted on after the mod was removed elsewhere
+      Given the panel still shows a mod that is no longer in the ledger
+      When the user switches its toggle on
+      Then it fails with "Enabled failed: Not subscribed."
+      And the list is re-read either way, so the stale row disappears
+
   Rule: Enable and disable toggle the links, never the files
 
     Scenario: Disabling a mod
@@ -49,6 +78,44 @@ Feature: My Mods panel
       Then links are created per the mod's [[symlink]] rules
       And a toast confirms "Enabled <repo>."
       And if any link fails, all links created so far are rolled back
+
+    @chaos
+    Scenario: A link that cannot be removed while disabling
+      Given DCS is running and holds one of the mod's links open
+      When the user switches the toggle off
+      Then every other link is still attempted — one failure does not stop the rest
+      And it fails with "Disabled failed: <n> of <m> link(s) could not be
+        removed — close DCS and try again. Still linked: <dest> (<reason>)"
+      And the surviving link stays in the ledger, and therefore in
+        "uninstall-all.bat", which is the escape hatch for exactly this case
+      And the mod stays enabled, because a link of its is still in place
+      And switching the toggle off again once DCS is closed removes what is
+        left and completes the disable
+
+    @chaos
+    Scenario: Enabling a mod whose unpacked files were deleted by hand
+      Given the mod's "dcs-studio.toml" is gone from its data dir
+      When the user switches its toggle on
+      Then it fails with "Enabled failed: <the file-not-found error>"
+      And an error notification with a "Report Issue" button is shown
+      And the mod stays disabled and the list is redrawn
+
+    @chaos
+    Scenario: Toggling a mod into the state it is already in
+      When the user enables a mod that is already enabled
+      Then nothing is linked and nothing is written to the ledger
+      And the toast still confirms "Enabled <repo>."
+
+    @chaos
+    Scenario: The ledger cannot be saved after the links were created
+      Given the data dir became read-only after the mod was unpacked
+      When the user switches the toggle on
+      Then the links have already been created in the DCS folders
+      And saving the ledger fails, so the mod is still recorded as disabled
+        with no links, and the mission-script aggregators are never regenerated
+      And an "Enabled failed: <reason>" notification is shown
+      # UNVERIFIED: nothing removes the links that were created before the save
+      # failed — they are now untracked, and disable has no record to act on.
 
   Rule: Updating fetches the newest release
 
@@ -69,6 +136,49 @@ Feature: My Mods panel
       Given the repo has no release anymore
       Then the update fails with "No release found on GitHub."
 
+    @chaos
+    Scenario Outline: Update cannot reach a usable release
+      When the user clicks "Update" and <situation>
+      Then an error notification shows "Update failed: <message>"
+        with a "Report Issue" button
+      And the mod is left exactly as it was — the lookup happens before
+        anything is disabled or downloaded
+      And the list is redrawn
+
+      Examples:
+        | situation                          | message                                                                 |
+        | the repo has no release            | No release found on GitHub.                                             |
+        | GitHub rate limits the lookup      | GitHub rate limit reached. Sign in to raise the limit, or wait a minute. |
+        | the repo was deleted or made private | Repository <owner/repo> was not found.                                |
+        | the request fails as a non-Error   | socket hang up                                                          |
+
+    @chaos
+    Scenario: The update fails after the mod was disabled
+      Given an enabled mod with a newer release available
+      When the update disables it, and the download or extraction then fails
+      Then the mod is left DISABLED with no links, still on its old tag
+      And "Update failed: <reason>" is shown with a "Report Issue" button
+      And the list is redrawn so the row honestly shows "disabled"
+        rather than the enabled state it had a moment earlier
+
+    @chaos
+    Scenario: The mod cannot be unlinked before the update
+      Given DCS is running and holds one of the mod's links open
+      When the user clicks "Update"
+      Then the update stops at the disable step, before anything is downloaded,
+        so files something else is still holding are never overwritten
+      And "Update failed: <n> of <m> link(s) could not be removed — close DCS
+        and try again. …" is shown with a "Report Issue" button
+      And the mod is still on its old tag
+
+    @chaos
+    Scenario: Updating a mod that was uninstalled in another window
+      Given the panel still shows a mod that is no longer in the ledger
+      When the user clicks "Update" on that stale row
+      Then there is no installed tag to compare against, so the latest release
+        is downloaded and installed fresh
+      And the mod reappears in the list as a new subscription
+
   Rule: Per-mod utilities
 
     Scenario: Opening the unpacked folder
@@ -84,6 +194,73 @@ Feature: My Mods panel
       Then links are removed, the unpacked files deleted,
         and the ledger entry dropped
       And a toast confirms "Uninstalled <repo>."
+
+    @chaos
+    Scenario: A link that cannot be removed while uninstalling
+      Given DCS is running and holds one of the mod's links open
+      When the user clicks the trash icon
+      Then it fails with "<n> of <m> link(s) could not be removed — close DCS
+        and try again. Still linked: <dest> (<reason>)"
+      And the surviving link stays in the ledger, and therefore in
+        "uninstall-all.bat", which is the escape hatch for exactly this case
+      And the unpacked files are NOT deleted, because that would leave the
+        surviving link pointing at nothing
+      And the mod stays listed and enabled — a link of its is still in the
+        user's DCS, so saying it was uninstalled would be untrue
+      And clicking the trash icon again once DCS is closed removes what is
+        left and completes the uninstall
+
+    @chaos
+    Scenario: Opening the folder of a mod whose directory was deleted
+      Given the mod's unpacked folder was deleted outside the extension
+      When the user clicks the folder icon
+      Then the recorded path is still handed to the OS file manager —
+        the row acts on the ledger entry, not on what is on disk
+
+  Rule: Entrypoints run a stranger's executable, so the path is always shown
+
+    @chaos
+    Scenario: Launching an entrypoint whose exe is missing
+      Given the mod's payload no longer contains the declared exe
+      When the user clicks Launch
+      Then nothing is spawned, and it fails with
+        "Launch failed: Executable not found: <resolved path>"
+      And the row falls back out of "running", so Stop is not the only
+        button left for a process that never started
+
+    @chaos
+    Scenario: An entrypoint exe declared as an absolute path
+      Given "[[entrypoint]] exe" is "C:\Windows\System32\calc.exe"
+      Then the mod never reaches My Mods to be launched: an exe that is not a
+        contained relative path is refused when the mod is installed, so no
+        ledger entry naming it is ever written (see story 006)
+
+    @chaos
+    Scenario: An entrypoint exe that walks out of the mod folder
+      Given "[[entrypoint]] exe" is "..\..\..\Windows\System32\calc.exe"
+      Then the mod is refused at install time for the same reason, so there is
+        no Launch button to press — the containment check runs before the exe
+        is recorded, not in front of the confirmation modal
+
+    @chaos
+    Scenario: Declining the launch prompt
+      When the user dismisses the "Launch <name> from <repo>?" modal
+      Then nothing is spawned and no consent is remembered
+      And the next Launch asks again
+
+    @chaos
+    Scenario: A tracked executable exits or fails to start on its own
+      Given the user launched an entrypoint
+      When that process exits, or spawning it errors after the fact
+      Then the panel re-reads the list without the user pressing Refresh
+      And the row goes back to offering Launch
+
+    @chaos
+    Scenario: Disabling or uninstalling a mod with a running executable
+      Given one of the mod's entrypoints is running
+      When the user disables or uninstalls the mod
+      Then its executables are stopped first, killing the process tree,
+        before any link is removed
 
 Feature: Clean uninstall escape hatch
   A self-contained batch script that removes every DCS Studio link
@@ -106,4 +283,23 @@ Feature: Clean uninstall escape hatch
   Scenario: The script is always current
     Given mods are installed, updated or removed
     Then the script is regenerated from the ledger on every change
+
+  @chaos
+  Scenario: Dismissing the clean-uninstall warning
+    When the user dismisses the modal instead of confirming
+    Then no terminal is created and nothing is removed
+
+  @chaos
+  Scenario: The data dir cannot be written
+    Given "<dataDir>" is read-only, or on a drive that is no longer mounted
+    When the panel is drawn
+    Then regenerating "uninstall-all.bat" fails silently — a read-only data dir
+      must never break a subscription write
+    And "Reveal script" still reveals the path, with no file at it
+
+  @chaos
+  Scenario: A link destination containing a double quote
+    Given a mod link destination contains a '"' character
+    Then the generated script strips the quote when quoting the path,
+      so the batch file cannot be broken out of
 ```

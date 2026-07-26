@@ -1,27 +1,60 @@
 import * as vscode from "vscode";
+import { nodeScheduler } from "../adapters/node/scheduler";
 import type { DebugEnv } from "../bridge/client";
 import type { BridgeClients } from "../bridge/clients";
+import { isMissionScriptingFile, MISSION_SCRIPT_REFUSAL } from "../core/domain/debugTarget";
+import type { InstallRootsPort } from "../core/ports/installRoots";
+import type { SchedulerPort } from "../core/ports/scheduler";
 import { showError } from "../errors";
 import { DcsDebugAdapter } from "./adapter";
 
 export const DEBUG_TYPE = "dcs-lua";
 
 /** Inline adapter: runs in the extension host and shares the extension's two
- * bridge clients (the adapter picks the one serving the session's env). */
+ * bridge clients (the adapter picks the one serving the session's env). The
+ * scheduler is threaded through so a session's poll loop can be driven by a
+ * test; the extension leaves it at the real timers. */
 export class DcsDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory {
-  constructor(private readonly clients: BridgeClients) {}
+  constructor(
+    private readonly clients: BridgeClients,
+    private readonly roots: InstallRootsPort,
+    private readonly scheduler: SchedulerPort = nodeScheduler,
+  ) {}
 
   createDebugAdapterDescriptor(
     session: vscode.DebugSession,
   ): vscode.ProviderResult<vscode.DebugAdapterDescriptor> {
     return new vscode.DebugAdapterInlineImplementation(
-      new DcsDebugAdapter(this.clients, session.configuration),
+      new DcsDebugAdapter(this.clients, session.configuration, this.scheduler, this.roots),
     );
   }
 }
 
 /** Fills defaults so F5 on a .lua file works with no launch.json. */
 export class DcsDebugConfigProvider implements vscode.DebugConfigurationProvider {
+  /**
+   * The last gate before a session starts, and the only one that sees the
+   * resolved target: `${file}` is substituted by VS Code between
+   * `resolveDebugConfiguration` and this hook, so a `launch.json` saying
+   * `"program": "${file}"` looks harmless until here.
+   *
+   * F5 and a hand-written launch.json never touch the command handler where
+   * the other refusal lives (issue #30).
+   */
+  resolveDebugConfigurationWithSubstitutedVariables(
+    _folder: vscode.WorkspaceFolder | undefined,
+    config: vscode.DebugConfiguration,
+  ): vscode.ProviderResult<vscode.DebugConfiguration> {
+    if (typeof config.program === "string" && isMissionScriptingFile(config.program)) {
+      void showError(MISSION_SCRIPT_REFUSAL);
+      // `undefined` cancels the session silently; the toast above is what the
+      // user sees. Returning `null` would open launch.json instead, which is
+      // wrong here — the configuration is not malformed, the target is refused.
+      return undefined;
+    }
+    return config;
+  }
+
   resolveDebugConfiguration(
     _folder: vscode.WorkspaceFolder | undefined,
     config: vscode.DebugConfiguration,
@@ -31,6 +64,13 @@ export class DcsDebugConfigProvider implements vscode.DebugConfigurationProvider
       const doc = vscode.window.activeTextEditor?.document;
       if (!doc?.fileName.toLowerCase().endsWith(".lua")) {
         void showError("Open a .lua file to debug it in DCS.");
+        return undefined;
+      }
+      // Refused here as well as after substitution: this branch fabricates a
+      // config from the active editor, so it is the one path where the target
+      // is already known and `${file}` never appears.
+      if (isMissionScriptingFile(doc.fileName)) {
+        void showError(MISSION_SCRIPT_REFUSAL);
         return undefined;
       }
       config = {
@@ -75,6 +115,10 @@ async function startSession(
   const target = uri ?? vscode.window.activeTextEditor?.document.uri;
   if (target?.scheme !== "file" || !target.fsPath.toLowerCase().endsWith(".lua")) {
     void showError("Open a .lua file to run it in DCS.");
+    return;
+  }
+  if (isMissionScriptingFile(target.fsPath)) {
+    void showError(MISSION_SCRIPT_REFUSAL);
     return;
   }
   const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === target.toString());

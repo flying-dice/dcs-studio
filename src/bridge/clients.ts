@@ -10,6 +10,14 @@ import type { BridgeClient } from "./client";
 // while DCS runs) and the mission bridge (port 25570, up only during a
 // mission). Thin shell — env routing is the pure `bridgeForEnv` rule, and the
 // merged status stream just re-emits whenever either client's status changes.
+//
+// TODO: clean-code - 0.7 - COUPLING (#32): "a mission is running" is inferred from
+// `mission.connected` — a TCP socket's state — everywhere downstream (the debug
+// adapter's sanitize prompt, the nav status). Transport liveness and mission
+// liveness are different facts, and a socket can outlive the mission that
+// justified it, so the editor can offer mission actions against a bridge whose
+// mission has ended. Tracked as issue #32; it needs confirming against a live
+// DCS before anyone changes the inference.
 export class BridgeClients {
   constructor(
     readonly gui: BridgeClient,

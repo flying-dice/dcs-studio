@@ -2,14 +2,37 @@
    src/webview/html.ts (and previews/*.html). Every rule here can be overridden
    by a panel: its stylesheet cascades after this one. Holds the design tokens,
    the reset, and the button / card / header / spinner primitives that were
-   previously re-declared near-verbatim across ~11 media/*.css files. */
+   previously re-declared near-verbatim across ~11 media/*.css files.
+
+   The tokens live here and ONLY here (nav.css's tighter --border is the one
+   documented exception). Panels used to re-declare the status palette
+   themselves and it drifted: two different warning yellows and two different
+   error reds shipped inside one product, because VS Code's Light+/Dark+ give
+   the chart, editor-decoration and message colour families different values. */
 :root {
   --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
   --card: var(--vscode-editorWidget-background, var(--vscode-editor-background));
   --muted: var(--vscode-descriptionForeground);
   --mono: var(--vscode-editor-font-family, monospace);
+
+  /* Status palette. One source each, chosen for what the colour MEANS to the
+     theme author: the --vscode-charts-* family is for data series (no contrast
+     contract against the editor background), and --vscode-editorError-foreground
+     is the squiggle under misparsed text — neither is a message colour. */
+  --ok: var(--vscode-testing-iconPassed, #3fb950);
+  --warn: var(--vscode-editorWarning-foreground, #cca700);
+  --err: var(--vscode-errorForeground, #f14c4c);
+  --info: var(--vscode-charts-blue, #4a90d9);
+  /* Decoration accent (rails, left borders, active markers). Deliberately NOT
+     --vscode-focusBorder: that is the keyboard-focus ring, so borrowing it means
+     a theme restyling focus silently restyles unrelated marks. */
+  --accent: var(--vscode-textLink-foreground, #4a90d9);
+  --code-bg: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
+  --radius: 10px;
 }
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 body {
   margin: 0;
   font-family: var(--vscode-font-family);
@@ -17,7 +40,9 @@ body {
   color: var(--vscode-foreground);
   background: var(--vscode-editor-background);
 }
-.mono { font-family: var(--mono); }
+.mono {
+  font-family: var(--mono);
+}
 
 /* Buttons */
 .btn {
@@ -32,17 +57,29 @@ body {
   background: var(--vscode-button-background);
   color: var(--vscode-button-foreground);
 }
-.btn:hover { background: var(--vscode-button-hoverBackground); }
-.btn:disabled { opacity: 0.5; cursor: default; }
+.btn:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .btn.secondary {
   background: var(--vscode-button-secondaryBackground, transparent);
   color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
   border-color: var(--border);
 }
-.btn.secondary:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground)); }
+.btn.secondary:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
+}
 
 /* Card surface */
-.card { border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: 16px; }
+.card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  padding: 16px;
+}
 
 /* Page header — kicker + title + right-aligned spacer */
 header {
@@ -63,9 +100,21 @@ header {
   letter-spacing: 0.28em;
   color: var(--muted);
 }
-.title { font-weight: 600; font-size: 15px; }
-.spacer { margin-left: auto; }
+.title {
+  font-weight: 600;
+  font-size: 15px;
+}
+.spacer {
+  margin-left: auto;
+}
 
 /* Spinner */
-.spin { display: inline-block; animation: spin 0.9s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
+.spin {
+  display: inline-block;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

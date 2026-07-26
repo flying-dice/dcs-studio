@@ -21,8 +21,11 @@
 
 package.cpath = package.cpath .. ";" .. lfs.writedir() .. "Mods\\tech\\DcsStudio\\bin\\?.dll"
 
--- Read by the module on require() for configuration.
-DCS_STUDIO = { logger_level = "info" }
+-- Read by the module on require() for configuration. Kept at the DLL's own
+-- default (and the mission bridge's): anything chattier logs every RPC response
+-- body on the sim thread into a non-rolling file, and a paused debug session
+-- polls debug_state four times a second carrying the whole snapshot each time.
+DCS_STUDIO = { logger_level = "warn" }
 
 local ok, bridge = pcall(require, "dcs_studio_gui")
 if not ok then
@@ -43,9 +46,18 @@ local started, err = pcall(function()
   -- pause the engine drains this server's queue itself through this router,
   -- because onSimulationFrame cannot fire while the paused chunk holds the
   -- sim thread. Mission sessions talk to the mission bridge on 25570.
-  local DBG = assert(__DCS_STUDIO_DBG, "debug engine failed to install in the hooks state")
-  DBG.pump = function()
-    server:process_rpc(router)
+  --
+  -- nil when the engine DECLINED to install (a state without debug/coroutine —
+  -- it is designed to, and the DLL only warns). That must cost the user
+  -- breakpoints here, nothing else: insisting on it inside this startup pcall
+  -- would cost them the server, the methods and the whole GUI bridge. The
+  -- individual debug_* methods answer a clear error instead (need_debugger in
+  -- gui_methods.lua), exactly as the mission side does.
+  local DBG = __DCS_STUDIO_DBG
+  if DBG then
+    DBG.pump = function()
+      server:process_rpc(router)
+    end
   end
 
   -- Register every JSON-RPC method (ping/eval/console/repl/debug/db/…) — the
@@ -59,9 +71,31 @@ local started, err = pcall(function()
 
   local cb = {}
 
+  -- Seconds between repeats of the frame-callback error; the callback runs 60x
+  -- a second forever, so an unthrottled report of a persistent fault would
+  -- write ~200k lines a minute into dcs.log.
+  local FRAME_ERROR_INTERVAL = 10
+  local reported_at = nil
+
+  -- Protected like mission_init.lua's pump, and for the same reason: a raise
+  -- from the live globals this touches (DCS.getModelTime, lfs.writedir,
+  -- net.dostring_in) would otherwise vanish into DCS's callback dispatcher with
+  -- no bridge-side diagnostic, and would skip the RPC drain — the editor sees
+  -- an unexplained dead bridge.
   function cb.onSimulationFrame()
-    server:process_rpc(router) -- drains queued WS/HTTP requests (fires at the menu too)
-    reg.mission_boot_tick() -- self-heals the mission bridge boot while a mission runs
+    local drained, frame_err = pcall(function()
+      server:process_rpc(router) -- drains queued WS/HTTP requests (fires at the menu too)
+      reg.mission_boot_tick() -- self-heals the mission bridge boot while a mission runs
+    end)
+    if not drained then
+      -- os.clock, like the boot-dispatch rate limit in gui_methods.lua: this
+      -- runs at the main menu too, where there is no model time to measure.
+      local now = os.clock()
+      if not reported_at or (now - reported_at) > FRAME_ERROR_INTERVAL then
+        reported_at = now
+        log.write("DCS-STUDIO", log.ERROR, "simulation frame error: " .. tostring(frame_err))
+      end
+    end
   end
 
   function cb.onSimulationStart()

@@ -4,7 +4,7 @@
 // pause_id dedupe, snapshot→StackFrame/Scope/Variable mapping, and the poll
 // state machine — lives here so it can be characterization-tested without a sim.
 
-import * as path from "path";
+import { win32 as path } from "node:path";
 import type {
   DebugFrame,
   DebugSnapshot,
@@ -55,11 +55,66 @@ export function toBridgeBreakpoints(
   );
 }
 
-/** DAP setBreakpoints response body: everything verified at its requested line. */
-export function toBreakpointsResponse(bps: readonly StoredBreakpoint[]): {
-  breakpoints: { verified: boolean; line: number }[];
-} {
-  return { breakpoints: bps.map((b) => ({ verified: true, line: b.line })) };
+export interface DapBreakpoint {
+  verified: boolean;
+  line: number;
+  message?: string;
+  reason?: string;
+}
+
+/** Why the sim's line hook can never stop on a line, or undefined if it can.
+ *
+ * Deliberately conservative: only what a plain read of the file proves. A line
+ * inside a `--[[ ]]` block comment is NOT detected — telling those apart from a
+ * string containing "--[[" needs a Lua lexer, and wrongly greying out a
+ * breakpoint on real code is worse than missing one that cannot bind. */
+function unbindableReason(lines: readonly string[], line: number): string | undefined {
+  const text = lines[line - 1];
+  if (text === undefined) return "Past the end of the file — nothing here for the sim to execute.";
+  const trimmed = text.trim();
+  if (!trimmed) return "Blank line — nothing here for the sim to execute.";
+  if (trimmed.startsWith("--")) return "Comment — nothing here for the sim to execute.";
+  return undefined;
+}
+
+/**
+ * DAP setBreakpoints response body.
+ *
+ * The engine's line hook only fires on lines the running chunk actually
+ * executes, so a breakpoint on a blank line, on a comment or past the end of
+ * the file never stops anything. Where the source text is known those are
+ * answered `verified: false` with the reason, rather than drawn as a bound
+ * breakpoint that silently never hits.
+ *
+ * With no source text (the file could not be read) nothing is claimed either
+ * way and the requested line is verified, as before — the alternative is
+ * greying out breakpoints on a file that is very likely fine.
+ *
+ * A breakpoint in a file this session is not running is still reported
+ * verified: the running chunk can `dofile` other sources, and the registry is
+ * matched by chunkname at stop time, so the editor cannot tell.
+ */
+export function toBreakpointsResponse(
+  bps: readonly StoredBreakpoint[],
+  source?: string,
+): { breakpoints: DapBreakpoint[] } {
+  const lines = source === undefined ? undefined : sourceLines(source);
+  return {
+    breakpoints: bps.map((b) => {
+      const why = lines && unbindableReason(lines, b.line);
+      return why
+        ? { verified: false, line: b.line, message: why, reason: "failed" }
+        : { verified: true, line: b.line };
+    }),
+  };
+}
+
+/** A file's text as editor lines — a trailing newline ends the last line
+ * rather than starting an empty one. */
+function sourceLines(source: string): string[] {
+  const lines = source.split(/\r?\n/);
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
 }
 
 // ── Snapshot → DAP shapes ──

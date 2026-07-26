@@ -1,4 +1,4 @@
-import * as path from "node:path";
+import { win32 as path } from "node:path";
 import type { InstallRoots, ManifestEntrypoint } from "./types";
 
 // Pure launch-decision policy for executable entrypoints: resolve an entrypoint's
@@ -37,8 +37,8 @@ export function resolveEntrypointLaunch(
   unpackedDir: string,
   roots: InstallRoots,
 ): EntrypointLaunchPlan {
-  const exe = path.win32.join(unpackedDir, ep.exe);
-  const cwd = ep.cwd ? path.win32.join(unpackedDir, ep.cwd) : path.win32.dirname(exe);
+  const exe = path.join(unpackedDir, ep.exe);
+  const cwd = ep.cwd ? path.join(unpackedDir, ep.cwd) : path.dirname(exe);
   const args = (ep.args ?? []).map((a) => expandArgTokens(a, roots));
   return { exe, cwd, args };
 }

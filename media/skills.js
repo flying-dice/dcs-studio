@@ -17,11 +17,18 @@
 
   const { esc } = dcsUi;
 
+  // Frontmatter versions are author-written, so "2.1.0" and "v2.1.0" both turn
+  // up; prefixing blindly renders the second as "vv2.1.0". One leading v is
+  // dropped so every version reads the same however it was written.
+  function ver(v) {
+    return `v${esc(String(v).replace(/^[vV]/, ""))}`;
+  }
+
   function versionLine(s) {
-    if (!s.installedVersion) return `v${esc(s.bundledVersion)}`;
+    if (!s.installedVersion) return ver(s.bundledVersion);
     if (s.status === "outdated")
-      return `installed v${esc(s.installedVersion)} → bundled v${esc(s.bundledVersion)}`;
-    return `installed v${esc(s.installedVersion)}`;
+      return `installed ${ver(s.installedVersion)} → bundled ${ver(s.bundledVersion)}`;
+    return `installed ${ver(s.installedVersion)}`;
   }
 
   // data-act -> data-testid, per the previews/ data-testid convention doc.
@@ -40,7 +47,7 @@
       );
     if (s.status === "outdated")
       b.push(
-        `<button class="btn primary" data-act="install" data-testid="${ACT_TESTID.install}" data-id="${s.id}">Update to v${esc(s.bundledVersion)}</button>`,
+        `<button class="btn primary" data-act="install" data-testid="${ACT_TESTID.install}" data-id="${s.id}">Update to ${ver(s.bundledVersion)}</button>`,
       );
     if (s.status === "modified")
       b.push(

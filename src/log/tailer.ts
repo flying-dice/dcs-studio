@@ -4,12 +4,17 @@
 // desktop app uses.
 //
 // Responsibilities kept here (deliberately NOT in src/core/domain/dcsLog.ts,
-// which stays pure): missing-file detection, truncation (DCS restarts
-// truncate dcs.log — a rename/rotate would look identical from a size check
-// alone; unrecoverable without an OS-level rotation signal, which Windows
-// doesn't give us — noted as an accepted limitation), backfilling the tail of
-// a huge file without ever reading it whole, and carrying incomplete UTF-8
-// byte sequences across per-tick read slices.
+// which stays pure): missing-file detection, truncation (DCS restarts truncate
+// dcs.log) and rotation (a fresh file behind the same name, told apart by its
+// inode rather than by a size comparison that a regrown file defeats),
+// backfilling the tail of a huge file without ever reading it whole, and
+// carrying incomplete UTF-8 byte sequences across per-tick read slices.
+//
+// Every one of those breaks the continuity of the tail, and every one of them
+// therefore reports `onReset` before the lines that follow — the viewer appends
+// what it is given, so a re-opened tail that arrives unannounced is duplicated
+// on screen rather than replacing what it repeats.
+import type { Stats } from "fs";
 import * as fsp from "fs/promises";
 import { StringDecoder } from "string_decoder";
 import { LineDecoder } from "../core/domain/dcsLog";
@@ -21,7 +26,13 @@ export interface LogTailerCallbacks {
   onLines(lines: string[]): void;
   /** Fires only on a missing<->ok transition (not every tick). */
   onState(state: FileState): void;
-  /** The file shrank since we last read it — DCS restarted and truncated it. */
+  /**
+   * Our place in the file is gone and the next lines start a fresh tail: DCS
+   * truncated dcs.log on restart, the file was rotated away, or it disappeared
+   * for a while. Fires exactly once per such break, always BEFORE the lines
+   * that follow it, so the viewer can divide (and drop what it had) instead of
+   * appending a re-read tail underneath the same lines it already shows.
+   */
   onReset(): void;
 }
 
@@ -51,6 +62,9 @@ export class LogTailer {
   private state: FileState | undefined;
   /** False until the first successful backfill; a missing-file gap resets it. */
   private backfilled = false;
+  /** The inode of the file we are holding an offset into — a different one
+   * behind the same path is a rotation, not growth. */
+  private inode = 0;
   private lineDecoder = new LineDecoder();
   private strDecoder = new StringDecoder("utf8");
   /** Reentrancy guard: a slow read must not overlap the next tick's stat. */
@@ -85,22 +99,65 @@ export class LogTailer {
   }
 
   private async tickOnce(): Promise<void> {
-    let size: number;
+    let stat: Stats;
     try {
-      size = (await fsp.stat(this.filePath)).size;
+      stat = await fsp.stat(this.filePath);
     } catch {
-      this.setState("missing");
-      // The next appearance is a fresh open — re-backfill from its new tail.
-      this.backfilled = false;
-      this.offset = 0;
+      this.markMissing();
       return;
     }
+    try {
+      await this.drain(stat);
+    } catch {
+      // The stat succeeded but the open/read did not: the file was deleted
+      // between the two, or the path is not a readable file at all (a bad
+      // savedGamesPath, a dropped network share). Report it as missing — the
+      // poll loop keeps running and recovers on its own. Letting it escape
+      // instead would only surface an unhandled rejection in the extension
+      // host, which the user can neither see nor act on.
+      //
+      // Crucially our PLACE in the file is kept: a single failed tick on an
+      // otherwise unchanged file must resume where it left off, not re-backfill
+      // the last 256 KiB as a fresh tail. A file that really went away fails
+      // its next stat, and that is what discards the offset.
+      this.setState("missing");
+      return;
+    }
+    // Only announced once a read actually worked, so a path that stats but
+    // cannot be read reports "missing" steadily instead of flapping every tick.
     this.setState("ok");
+  }
+
+  private markMissing(): void {
+    this.setState("missing");
+    // The next appearance is a fresh open — re-backfill from its new tail, and
+    // tell the viewer, or those lines land as new entries under the ones they
+    // repeat. Guarded on `backfilled` so a file that stays missing for a
+    // hundred ticks still breaks the tail exactly once.
+    if (this.backfilled) {
+      this.backfilled = false;
+      this.offset = 0;
+      this.cb.onReset();
+    }
+  }
+
+  /** Reads whatever the fresh `stat` implies: first fill, restart, growth. */
+  private async drain(stat: Stats): Promise<void> {
+    const size = stat.size;
     if (!this.backfilled) {
+      this.inode = stat.ino;
       await this.backfill(size);
       return;
     }
-    if (size < this.offset) {
+    // A different file behind the same name (dcs.log rotated away and
+    // recreated), or one that shrank (DCS truncates it on restart) — either way
+    // the offset we hold points into a file that is no longer there. The inode
+    // check also catches a rotation that regrew past the old offset, which a
+    // size comparison alone cannot see; where the filesystem reports no usable
+    // inode (0 on some Windows shares) it simply never differs and the size
+    // check remains the only signal.
+    if (stat.ino !== this.inode || size < this.offset) {
+      this.inode = stat.ino;
       this.resetDecoders();
       this.cb.onReset();
       await this.backfill(size);
@@ -127,6 +184,15 @@ export class LogTailer {
     const start = Math.max(0, size - this.backfillBytes);
     this.offset = start;
     this.backfilled = true;
+    // Nothing to read, so nothing is opened. That is right for the common case
+    // — DCS truncates dcs.log on restart, and a 0-byte log is healthy, not
+    // missing — but it does mean a path that stats as 0 and could not be read
+    // anyway is reported "ok". On Windows a DIRECTORY stats as size 0, so a
+    // savedGamesPath pointing at one reads as fine rather than missing; on
+    // POSIX the same directory stats non-zero, fails the open, and is correctly
+    // reported missing. Opening every 0-byte file just to prove it is readable
+    // would cost a syscall per poll to catch a misconfiguration the Setup panel
+    // already refuses.
     if (size === 0) return;
     // Opening mid-file (start > 0) means the very first line read is a
     // fragment of whatever line straddles the backfill boundary — drop it.

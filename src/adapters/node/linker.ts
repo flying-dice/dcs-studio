@@ -18,6 +18,7 @@ import {
   classifyExistingDest,
   sameVolume,
 } from "../../core/domain/linkStrategy";
+import { psArgs, psQuote } from "../../core/domain/powershell";
 import type {
   DisableResult,
   InstalledLink,
@@ -39,34 +40,36 @@ import type { LinkerPort } from "../../core/ports/linker";
 // and a disable removes only our links. enable() rolls all links back if any one
 // fails; disable() removes the link entries, never their targets.
 
-function psSingleQuote(s: string): string {
-  return `'${s.replace(/'/g, "''")}'`;
-}
-
 /** Create a symlink elevated (UAC) — the cross-volume file fallback. */
 function createSymlinkElevated(
   link: string,
   target: string,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  const inner = `$ErrorActionPreference='Stop'; New-Item -ItemType SymbolicLink -Path ${psSingleQuote(
+  const script = `$ErrorActionPreference='Stop'; New-Item -ItemType SymbolicLink -Path ${psQuote(
     link,
-  )} -Target ${psSingleQuote(target)} -Force | Out-Null`;
-  const launcher = `Start-Process -FilePath "powershell.exe" -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList @("-NoProfile","-ExecutionPolicy","Bypass","-Command", ${psSingleQuote(
-    inner,
-  )});`;
+  )} -Target ${psQuote(target)} -Force | Out-Null`;
   return new Promise((resolve) => {
-    const p = spawn(
-      "powershell.exe",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", launcher],
-      {
-        windowsHide: true,
-      },
-    );
+    const p = spawn("powershell.exe", psArgs.elevatedCommand(script), {
+      windowsHide: true,
+    });
+    // Only the LAUNCHER's stderr arrives here — a declined UAC prompt, or a
+    // failure to dispatch at all. The elevated child gets its own console, so
+    // whatever `New-Item` said about the actual failure is never readable from
+    // this side; its exit code (propagated by psArgs.elevatedCommand) is the
+    // only thing that crosses. Hence the fallback naming the operation rather
+    // than a bare `exit 1`, which reads as if the code were the whole story.
     let err = "";
     p.stderr.on("data", (d) => (err += d.toString()));
     p.on("error", (e) => resolve({ ok: false, message: e.message }));
     p.on("exit", (c) =>
-      c === 0 ? resolve({ ok: true }) : resolve({ ok: false, message: err.trim() || `exit ${c}` }),
+      c === 0
+        ? resolve({ ok: true })
+        : resolve({
+            ok: false,
+            message:
+              err.trim() ||
+              `elevated symlink creation failed (exit ${c}) — the elevated window reports no detail back`,
+          }),
     );
   });
 }

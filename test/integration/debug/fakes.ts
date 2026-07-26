@@ -1,0 +1,151 @@
+import { vi } from "vitest";
+import type { BridgeStatus } from "../../../src/core/domain/bridgeProtocol";
+import type { DebugState, DebugValue, ReplVariable } from "../../../src/core/domain/debugProtocol";
+import type { SchedulerPort, TimerHandle } from "../../../src/core/ports/scheduler";
+
+// Doubles shared by the debug specs: a scheduler whose clock only moves when a
+// test says so, and a bridge whose every RPC is a spy the test scripts.
+
+/** Let queued microtasks and `.finally` chains run to completion. */
+export function flush(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * Let everything in flight settle, including the real `fs.promises.readFile`s
+ * the adapter uses to load the program and to judge which lines can hold a
+ * breakpoint. Those complete on the threadpool and are only picked up in a loop
+ * iteration that actually waits, so draining immediates alone never sees them —
+ * hence the real-timer rounds.
+ *
+ * `done` says what the caller is waiting for, and ends the wait the moment it
+ * has happened. A fixed round count instead is a race the loser only ever loses
+ * under load: too small and a busy threadpool makes the spec flap, too large
+ * and every request in the suite pays for the worst case.
+ */
+export async function settle(done: () => boolean = () => false, rounds = 300): Promise<void> {
+  for (let i = 0; i < rounds; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flush();
+    if (done()) break;
+  }
+  await flush();
+}
+
+interface FakeTimer {
+  id: number;
+  fn: () => void;
+  ms: number;
+  dueAt: number;
+}
+
+/**
+ * A `SchedulerPort` with a hand-cranked clock.
+ *
+ * `advance` fires timers in due order and drains the microtask queue after each
+ * one, so an async tick (`() => void this.poll()`) has finished its awaits
+ * before the next tick starts — which is exactly the interleaving the real
+ * event loop produces, and the only way the poll loop's overlap guard can be
+ * observed.
+ */
+export class FakeScheduler implements SchedulerPort {
+  private clock = 0;
+  private nextId = 1;
+  private readonly timers = new Map<number, FakeTimer>();
+
+  setInterval(fn: () => void, ms: number): TimerHandle {
+    const id = this.nextId++;
+    this.timers.set(id, { id, fn, ms, dueAt: this.clock + ms });
+    return { id } as unknown as TimerHandle;
+  }
+
+  clearInterval(handle: TimerHandle | undefined): void {
+    if (handle) this.timers.delete((handle as unknown as { id: number }).id);
+  }
+
+  /** Cadences of every live timer, ms — empty means nothing is scheduled. */
+  get liveIntervals(): number[] {
+    return [...this.timers.values()].map((t) => t.ms);
+  }
+
+  get liveCount(): number {
+    return this.timers.size;
+  }
+
+  /** Move the clock forward, running everything that comes due on the way. */
+  async advance(ms: number): Promise<void> {
+    const until = this.clock + ms;
+    for (;;) {
+      const due = [...this.timers.values()]
+        .filter((t) => t.dueAt <= until)
+        .sort((a, b) => a.dueAt - b.dueAt)[0];
+      if (!due) break;
+      this.clock = due.dueAt;
+      due.dueAt += due.ms;
+      due.fn();
+      await flush();
+    }
+    this.clock = until;
+  }
+}
+
+/**
+ * One in-DCS bridge, as the debug adapter uses it. Every method is a spy with a
+ * benign default, so a spec overrides only the RPC its scenario is about.
+ */
+export class FakeBridge {
+  status: BridgeStatus = { connected: true, dcsTime: 1 };
+
+  get current(): BridgeStatus {
+    return this.status;
+  }
+
+  consoleRead = vi.fn(
+    async (
+      _after: number,
+    ): Promise<{ lines: { seq: number; text: string }[]; latest: number }> => ({
+      lines: [],
+      latest: 0,
+    }),
+  );
+  replEval = vi.fn(
+    async (
+      _env: string,
+      _code: string,
+    ): Promise<{ ok: boolean; result?: unknown; err?: string }> => ({ ok: true }),
+  );
+  debugRun = vi.fn(
+    async (
+      _env: string,
+      _source: string,
+      _code: string,
+      _pauseOnError: boolean,
+    ): Promise<{ ran?: boolean; error?: string | null; dispatched?: boolean }> => ({ ran: true }),
+  );
+  /** Idle by default — an engine with no session, which is what a starting
+   * session's "is anyone else running?" probe has to see to proceed. */
+  debugState = vi.fn(async (): Promise<DebugState> => ({ paused: false, running: false }));
+  debugContinue = vi.fn(async (_mode: string): Promise<unknown> => undefined);
+  debugPause = vi.fn(async (): Promise<unknown> => undefined);
+  debugStop = vi.fn(async (): Promise<unknown> => undefined);
+  // Annotated with the client's own result types rather than letting the stub
+  // infer them: a default of `{ variables: [] }` infers `never[]`, and one of
+  // `{ ok, value }` infers away `type`/`ref`/`assigned`/`err` — so a spec
+  // scripting a realistic bridge reply would be rejected by the double while
+  // the real bridge sends exactly that.
+  debugExpand = vi.fn(
+    async (_ref: number): Promise<{ variables: ReplVariable[] }> => ({
+      variables: [],
+    }),
+  );
+  debugEval = vi.fn(
+    async (_frame: number, _expr: string): Promise<DebugValue> => ({ ok: true, value: "nil" }),
+  );
+  debugSetBreakpoints = vi.fn(
+    async (
+      _source: string,
+      _bps: { line: number; condition?: string }[],
+    ): Promise<{ count: number }> => ({ count: 0 }),
+  );
+  debugClearBreakpoints = vi.fn(async (): Promise<unknown> => undefined);
+}

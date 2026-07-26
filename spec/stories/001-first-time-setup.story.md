@@ -38,6 +38,37 @@ Feature: DCS path setup
       When the extension activates again with no paths configured
       Then no nudge is shown
 
+    @chaos
+    Scenario: Dismissing the nudge still spends it
+      Given neither "dcsStudio.savedGamesPath" nor "dcsStudio.gameInstallPath" is set
+      And the user has never been prompted before
+      When the extension activates
+      And the user dismisses the message without clicking "Set DCS Paths"
+      Then the "DCS Setup" panel does not open
+      And no nudge is shown on any later activation, because the prompted flag
+        is written before the message is shown
+
+    @chaos
+    Scenario Outline: Only the userdata and install paths suppress the nudge
+      Given the only DCS Studio setting with a non-blank value is "<setting>"
+      And the user has never been prompted before
+      When the extension activates
+      Then the nudge is <shown>
+
+      Examples:
+        | setting                   | shown     |
+        | dcsStudio.savedGamesPath  | not shown |
+        | dcsStudio.gameInstallPath | not shown |
+        | dcsStudio.dataDir         | shown     |
+        | dcsStudio.sevenZipPath    | shown     |
+
+    @chaos
+    Scenario: A whitespace-only path counts as unconfigured
+      Given "dcsStudio.savedGamesPath" is "   " and "dcsStudio.gameInstallPath" is "   "
+      And the user has never been prompted before
+      When the extension activates
+      Then the nudge is shown, because both values are trimmed before they are tested
+
   Rule: The Setup panel auto-detects likely folders
 
     Scenario: Opening the Setup panel
@@ -80,6 +111,60 @@ Feature: DCS path setup
       When the user clicks the "Re-detect" button in the panel header
       Then all candidate lists and detection statuses refresh
 
+    @chaos
+    Scenario: The Saved Games folder does not exist at all
+      Given the user's profile has no "Saved Games" folder,
+        or it cannot be read
+      When the panel detects candidates
+      Then the userdata card lists no candidates
+      And it shows
+        "Nothing detected automatically — use Browse to point at the folder."
+      And no error notification is raised — a fresh machine is not a failure
+
+    @chaos
+    Scenario Outline: Entries in Saved Games that are not DCS write dirs
+      Given the user's profile has a "Saved Games\<entry>" <kind>
+      When the panel detects candidates
+      Then it is not offered as a userdata candidate
+
+      Examples:
+        | entry          | kind   |
+        | DCSX           | folder |
+        | dcs            | folder |
+        | Diablo IV      | folder |
+        | DCS.stray-file | file   |
+
+    @chaos
+    Scenario: A registry entry pointing at an install that is gone
+      Given an Eagle Dynamics registry key holds an empty "Path" value,
+        or names a folder that has since been deleted
+      When the panel detects candidates
+      Then that entry is dropped entirely
+      And it is not listed as an invalid candidate the user could pick
+
+    @chaos
+    Scenario: The same install is registered more than once
+      Given the same folder appears under both the HKCU and HKLM Eagle Dynamics
+        keys, differing only in letter case
+      When the panel detects candidates
+      Then it is listed once
+      And the name from the first (registry) hit is the one shown
+
+    @chaos
+    Scenario: A configured path that differs only in case still matches
+      Given "dcsStudio.savedGamesPath" is "c:\users\pilot\saved games\dcs"
+      And "C:\Users\pilot\Saved Games\DCS" was detected as a candidate
+      When the panel opens
+      Then that candidate is shown as the selected one
+      And the field shows "✔ has Config"
+
+    @chaos
+    Scenario: Re-detect discards unsaved edits
+      Given the user has typed a path into a card but has not clicked "Save DCS paths"
+      When the user clicks "Re-detect"
+      Then every field is re-seeded from the saved settings
+      And the typed path is lost without warning
+
   Rule: Browsing uses native pickers with contextual labels
 
     Scenario Outline: Browsing for a path
@@ -92,6 +177,40 @@ Feature: DCS path setup
         | DCS installation | folder picker | Use as DCS install   |
         | data dir         | folder picker | Use as data dir      |
         | 7-Zip            | .exe picker   | Use this 7z.exe      |
+
+    @chaos
+    Scenario: A browsed 7z.exe never lands in the DCS install field
+      Given the "DCS installation" field already holds a path
+      When the user clicks "Browse…" on the 7-Zip card and picks "E:\Tools\7z.exe"
+      Then the 7-Zip field holds "E:\Tools\7z.exe"
+      And the "DCS installation" field is unchanged
+
+    @chaos
+    Scenario: Cancelling the picker changes nothing
+      When the user clicks "Browse…" on any card and cancels the native dialog
+      Then no path is sent back to the panel
+      And that card's field keeps its previous value
+
+    @chaos
+    Scenario Outline: A browsed path that fails its role probe is still accepted
+      When the user browses to <path> for the <card> card
+      Then the path is placed in that card's field
+      And no validity line is shown for it, because the panel only claims
+        validity for paths it detected itself
+      And "Save DCS paths" stays available
+
+      Examples:
+        | card             | path                                              |
+        | DCS userdata     | a folder with no "Config" subfolder               |
+        | DCS installation | a folder with no "bin\DCS.exe"                    |
+        | DCS userdata     | "\\fileserver\share\DCS" on a share that is down  |
+
+    @chaos
+    Scenario: A path Windows refuses to probe
+      When the user browses to a path the OS rejects at the syscall level —
+        illegal characters, or longer than MAX_PATH
+      Then the panel treats it as invalid rather than throwing
+      And the panel stays usable
 
   Rule: Saving writes global settings and confirms
 
@@ -107,4 +226,42 @@ Feature: DCS path setup
       When the user clicks "Save DCS paths"
       Then the value is saved anyway
       And features that need the path surface their own errors later
+
+    @chaos
+    Scenario: Clearing a path saves the empty string
+      Given "dcsStudio.sevenZipPath" currently holds a value
+      When the user empties the 7-Zip field and clicks "Save DCS paths"
+      Then "" is written to "dcsStudio.sevenZipPath" in global settings
+      And 7-Zip auto-detection resumes, because an empty setting means
+        "look on PATH and under Program Files\7-Zip"
+
+    @chaos
+    Scenario: Saving with every field empty clears all four settings
+      When the user clicks "Save DCS paths" with nothing filled in
+      Then all four settings are written as ""
+      And the old values do not survive, so a clear is never silently ignored
+
+    @chaos
+    Scenario: Paths are trimmed before they are saved
+      Given the user pastes "  D:\SG\DCS  " into the userdata field
+      When the user clicks "Save DCS paths"
+      Then "D:\SG\DCS" is saved, because a trailing space is invisible in the UI
+        but breaks every path join downstream
+      And a field holding only whitespace is saved as ""
+
+    @chaos
+    Scenario: Paths are always user settings, never workspace settings
+      Given a folder is open in the editor
+      When the user clicks "Save DCS paths"
+      Then all four values are written with the Global configuration target
+      And no workspace-level override is created, because these paths describe
+        the machine's DCS install rather than the project
+
+    @chaos
+    Scenario: Opening Setup twice reveals the panel without re-detecting
+      Given the "DCS Setup" panel is already open
+      When the user runs "DCS Studio: Set DCS Paths…" again
+      Then the existing panel is revealed
+      And no second panel opens
+      And detection does not re-run — "Re-detect" is the only way to refresh it
 ```

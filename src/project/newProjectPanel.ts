@@ -1,5 +1,5 @@
+import { win32 as path } from "node:path";
 import * as os from "os";
-import * as path from "path";
 import * as vscode from "vscode";
 import { browseStart, initialForm } from "../core/domain/projectForm";
 import { TEMPLATES } from "../core/domain/projectTemplates";

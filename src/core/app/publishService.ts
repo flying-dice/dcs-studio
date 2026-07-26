@@ -1,21 +1,28 @@
-import * as path from "path";
-import { payloadBase } from "../domain/archivePolicy";
+import { win32 as path } from "node:path";
+import { payloadBase, stalePayloadVolumes } from "../domain/archivePolicy";
 import { fmtBytes } from "../domain/format";
 import { DISCOVERY_TOPIC } from "../domain/githubMarketplace";
+import { MANIFEST_FILE } from "../domain/manifestFile";
 import type { GhFacts } from "../domain/publishChecks";
 import { gitignoreNeedsEntry, gitignoreWithEntry } from "../domain/publishPolicy";
+import { parseRepoRemote, type RepoRef } from "../domain/repoRemote";
 import type { ManifestModel, PackagedPayload } from "../domain/types";
 import type { ArchivePort } from "../ports/archive";
 import type { FileSystemPort } from "../ports/filesystem";
-import type { GhPort } from "../ports/gh";
+import type { GhPort, GhReleaseCreateOptions } from "../ports/gh";
 import type { GitPort } from "../ports/git";
 import type { ManifestPort } from "../ports/manifest";
 
 // Publish orchestration, mirroring dcs-studio's Publisher, driven through ports:
 // git (local), gh (repo + release), archive (payload). Share creates the GitHub
 // repo and pushes; cutRelease packages the manifest + every [[bundle]] path into
-// a 7z payload (volume-split when large), then creates a release with the
+// a 7z payload (volume-split when large), then publishes a release with the
 // standalone dcs-studio.toml sitting alongside every payload volume.
+//
+// The ordering rules in cutRelease are the point of this file. Nothing a user
+// already has may be removed before its replacement is in place: a release that
+// exists is overwritten asset-by-asset, and only a release this run created
+// itself is ever deleted (to undo a create that died half-way).
 
 /** Streaming progress callback — one human-readable line per step. */
 export type Log = (line: string) => void;
@@ -101,6 +108,19 @@ export class PublishService {
     }
   }
 
+  /**
+   * The repository `gh` actually created, read back from the `origin` remote it
+   * wired up. GitHub rewrites names it will not take verbatim — the prefilled
+   * `[project] name` of a scaffolded mod is a human-readable "My Mod", which
+   * lands as "My-Mod" — so the requested name is a guess and the remote is the
+   * only authoritative answer. Falls back to the guess when there is no usable
+   * remote to read.
+   */
+  private async createdRepo(root: string, fallback: RepoRef): Promise<RepoRef> {
+    const url = await this.ports.git.getRemoteUrl(root, "origin");
+    return (url && parseRepoRemote(url)) || fallback;
+  }
+
   /** Create (or reuse) the GitHub repo, push, and tag its discovery topics. */
   async share(root: string, opts: ShareOpts, log: Log): Promise<ShareResult> {
     const { git, gh } = this.ports;
@@ -127,33 +147,53 @@ export class PublishService {
       remote: "origin",
       push: true,
     });
+    const requested: RepoRef = { owner, name: opts.name };
+    let ref = requested;
     if (create.alreadyExists) {
       log("Repo already exists — pushing to it.");
       await git.setRemote(root, "origin", `https://github.com/${owner}/${opts.name}.git`);
       await git.push(root, "origin", "HEAD:main");
+    } else {
+      ref = await this.createdRepo(root, requested);
+      if (ref.name !== requested.name || ref.owner !== requested.owner)
+        log(`GitHub named it ${ref.owner}/${ref.name}.`);
     }
+    const repo = `${ref.owner}/${ref.name}`;
 
     const topics = [DISCOVERY_TOPIC];
     for (const t of topics) {
-      log(`Tagging topic: ${t}`);
-      await gh.repoTopicAdd(`${owner}/${opts.name}`, t);
+      // Logged after the attempt: the topic is what Marketplace discovery
+      // searches on, so a share that reports success while the tagging failed
+      // leaves a mod nobody can find and nothing said so.
+      const tagged = await gh.repoTopicAdd(repo, t);
+      log(
+        tagged
+          ? `Tagged topic: ${t}`
+          : `⚠ Could not tag topic ${t} — the mod stays invisible to Marketplace discovery until it is tagged.`,
+      );
     }
-    return { owner, name: opts.name, url: `https://github.com/${owner}/${opts.name}` };
+    return { owner: ref.owner, name: ref.name, url: `https://github.com/${repo}` };
   }
 
-  /** Package the payload (volume-split when large) and create a GitHub release with
-   *  the standalone manifest alongside every payload volume. */
+  /** Package the payload (volume-split when large) and publish it as a GitHub
+   *  release with the standalone manifest alongside every payload volume —
+   *  replacing an existing release for the tag in place rather than deleting it. */
   async cutRelease(root: string, opts: ReleaseOpts, log: Log): Promise<ReleaseResult> {
     const { gh, archive, fs, manifest } = this.ports;
+    const tag = opts.tag.trim();
+    // Guarded here and not only in the panel: an empty tag packages under a
+    // base name ending in a bare hyphen and then fails at the CLI, after the
+    // work is done.
+    if (!tag) throw new Error("A release tag is required (e.g. v1.0.0).");
     let m: ManifestModel;
     try {
-      m = manifest.parseToml(await fs.readText(path.join(root, "dcs-studio.toml")));
+      m = manifest.parseToml(await fs.readText(path.join(root, MANIFEST_FILE)));
     } catch {
       throw new Error("Cannot read dcs-studio.toml.");
     }
     if (!(await archive.available())) throw new Error("7z not found.");
 
-    const files = ["dcs-studio.toml"];
+    const files = [MANIFEST_FILE];
     const seen = new Set<string>();
     for (const b of m.bundle) {
       if (seen.has(b.path)) continue; // dedupe: one archive entry per path
@@ -165,14 +205,9 @@ export class PublishService {
     }
 
     const outDir = path.join(root, ".dcs-studio", "release");
+    const base = payloadBase(opts.name, tag);
     log("Packaging payload with 7-Zip…");
-    const packaged = await archive.packagePayload(
-      root,
-      files,
-      outDir,
-      payloadBase(opts.name, opts.tag),
-      opts.volumeBytes,
-    );
+    const packaged = await archive.packagePayload(root, files, outDir, base, opts.volumeBytes);
     log(
       packaged.split
         ? `Split into ${packaged.volumes.length} volumes (${fmtBytes(packaged.totalBytes)} total).`
@@ -181,26 +216,74 @@ export class PublishService {
 
     // The standalone manifest sits next to the release so the Marketplace reads the
     // install plan without downloading the payload.
-    const manifestAsset = path.join(outDir, "dcs-studio.toml");
-    await fs.copy(path.join(root, "dcs-studio.toml"), manifestAsset);
+    const manifestAsset = path.join(outDir, MANIFEST_FILE);
+    await fs.copy(path.join(root, MANIFEST_FILE), manifestAsset);
     const assets = [manifestAsset, ...packaged.volumes];
+    const repo = `${opts.owner}/${opts.name}`;
+    const notes = opts.notes || `Release ${tag}`;
 
-    // Idempotent re-publish: drop any prior release + tag for this tag first.
-    await gh.releaseDelete(`${opts.owner}/${opts.name}`, opts.tag);
-
-    log(`Creating release ${opts.tag} and uploading ${assets.length} assets…`);
-    await gh.releaseCreate({
-      repo: `${opts.owner}/${opts.name}`,
-      tag: opts.tag,
-      title: opts.tag,
-      notes: opts.notes || `Release ${opts.tag}`,
-      assets,
-    });
+    // Publishing is the least reversible thing this product does, so the two
+    // cases are kept apart rather than collapsed into "delete, then create":
+    // an existing release is REPLACED IN PLACE (upload over it, retitle, then
+    // prune what the old payload left behind), so there is no moment where the
+    // repository has no release and no tag for this version. A first release
+    // has nothing to protect, so it is created outright — and if that create
+    // dies mid-upload, the partial release and its tag are rolled back to the
+    // state the repository was in before.
+    if (await gh.releaseView(repo, tag)) {
+      log(`Release ${tag} already exists — uploading ${assets.length} assets over it…`);
+      await gh.releaseUpload(repo, tag, assets);
+      await gh.releaseEdit({ repo, tag, title: tag, notes });
+      await this.pruneStaleVolumes(repo, tag, base, assets, log);
+      log(`Replaced release ${tag} in place — the tag was never removed.`);
+    } else {
+      log(`Creating release ${tag} and uploading ${assets.length} assets…`);
+      await this.createOrRollBack({ repo, tag, title: tag, notes, assets }, log);
+    }
 
     return {
       assets: assets.map((a) => path.basename(a)),
-      url: `https://github.com/${opts.owner}/${opts.name}/releases/tag/${opts.tag}`,
+      url: `https://github.com/${repo}/releases/tag/${tag}`,
       packaged,
     };
+  }
+
+  /** Drop volumes of the previous payload that this run did not overwrite — a
+   *  stale `.7z.003` left riding along would corrupt the volume set. Runs only
+   *  after the replacement assets are up. */
+  private async pruneStaleVolumes(
+    repo: string,
+    tag: string,
+    base: string,
+    assets: string[],
+    log: Log,
+  ): Promise<void> {
+    const attached = await this.ports.gh.releaseAssetNames(repo, tag);
+    const stale = stalePayloadVolumes(
+      attached,
+      base,
+      assets.map((a) => path.basename(a)),
+    );
+    for (const name of stale) {
+      const removed = await this.ports.gh.releaseAssetDelete(repo, tag, name);
+      log(
+        removed
+          ? `Removed stale asset ${name}.`
+          : `⚠ Could not remove stale asset ${name} — delete it by hand before anyone installs.`,
+      );
+    }
+  }
+
+  /** Create a release that did not exist before, undoing a half-finished one.
+   *  Because nothing existed for this tag, deleting the remains restores the
+   *  repository rather than destroying anything. */
+  private async createOrRollBack(opts: GhReleaseCreateOptions, log: Log): Promise<void> {
+    try {
+      await this.ports.gh.releaseCreate(opts);
+    } catch (e) {
+      log(`Release ${opts.tag} failed — removing the half-created release and tag.`);
+      await this.ports.gh.releaseDelete(opts.repo, opts.tag);
+      throw e;
+    }
   }
 }

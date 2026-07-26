@@ -4,7 +4,7 @@
 // stack-trace continuation, all visible by default. Tests that need other
 // shapes (missing file, empty log, more append batches) push fresh messages
 // directly via hostSend().
-(function () {
+(() => {
   window.__FIXTURE__ = {
     init: {
       type: "init",
@@ -40,7 +40,10 @@
           thread: "Main",
           message: "boom: nil value",
           mine: true,
-          cont: ["    at my-mod/init.lua:42: in function 'start'", "    at my-mod/init.lua:7: in main chunk"],
+          cont: [
+            "    at my-mod/init.lua:42: in function 'start'",
+            "    at my-mod/init.lua:7: in main chunk",
+          ],
         },
         {
           seq: 4,

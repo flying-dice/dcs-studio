@@ -41,4 +41,9 @@ export class NodeFileSystem implements FileSystemPort {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.copyFileSync(src, dest);
   }
+
+  async move(src: string, dest: string): Promise<void> {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.renameSync(src, dest);
+  }
 }

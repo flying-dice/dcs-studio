@@ -15,6 +15,11 @@
 -- In Lua 5.1 the hook is disabled while it runs, so the pump's own lines
 -- never re-trigger it.
 --
+-- Two things turn that 30s release from a hope into a guarantee, and both are
+-- deliberate: the deadline is measured on the DLL's own monotonic clock (see
+-- `clock` below), and every expression the engine evaluates is itself bounded
+-- (see `call_bounded`), so no watch or condition can outlast the release.
+--
 -- Returns nil on success, or an error string the installer logs (never raises:
 -- a state without the debug library still gets the rest of the bridge).
 
@@ -25,23 +30,46 @@ if type(debug) ~= "table" or type(debug.sethook) ~= "function"
   return "the debug library is not available in this Lua state - breakpoints cannot work here"
 end
 
-if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
-  local DEBUG_IDLE_SECONDS = 30 -- auto-continue after this long with no client polling
+-- Every expression the engine evaluates (a watch, a hover, a breakpoint
+-- condition) runs on its own coroutine so an instruction-count hook can cut it
+-- off — see call_bounded. Without coroutines there is no way to bound one, and
+-- a debugger that can wedge the sim thread on a typo is worse than none, so
+-- decline the whole engine rather than install a half-safe one. Nothing DCS
+-- ships removes the coroutine library; this guards a state we have never seen.
+if type(coroutine) ~= "table" or type(coroutine.create) ~= "function" then
+  return "the coroutine library is not available in this Lua state - an evaluation could not be bounded, "
+    .. "so the debugger would risk freezing the sim"
+end
+
+-- `type(...) == "table"` rather than a plain truth test: the global belongs to a
+-- state shared with every other mod, and indexing a non-table one raises at
+-- CHUNK LOAD — which the DLL propagates with `?`, so the whole module fails to
+-- require and the header's "never raises" promise breaks. A non-table means no
+-- engine is installed, so install ours over it.
+if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
   local DRAIN_INTERVAL_SECONDS = 0.05 -- max sim stall between RPC drains during a run
   local MAX_TABLE_CHILDREN = 1000 -- cap children returned/previewed for one table
   local MAX_REFS = 100000 -- per-pause ref ceiling so a cyclic/huge tree can't pin unbounded memory
+  local EVAL_CHECK_INSTRUCTIONS = 2000 -- VM instructions between deadline checks in a bounded call
 
-  -- os.clock (CPU time) keeps ticking while a chunk holds the sim thread;
-  -- timer.getTime (model time) does NOT, so under that fallback the throttled
-  -- in-run drain and the idle auto-continue degrade (breakpoints still work).
-  -- Captured at install time — in the mission state that is whatever survived
-  -- sanitization as an upvalue here.
-  local clock = (type(os) == "table" and os.clock)
-    or (type(timer) == "table" and timer.getTime)
-    or function() return 0 end
+  -- THE clock, and the reason the sim-safety guarantees hold. It comes from the
+  -- bridge DLL (a monotonic wall clock over std::time::Instant), never from the
+  -- Lua state: `os` is one of the libraries MissionScripting.lua removes, and
+  -- DCS's timer.getTime is MODEL time, frozen for exactly as long as a paused
+  -- chunk holds the sim thread — the one interval the idle release exists to
+  -- measure. Either of those would leave a vanished editor's pause held until
+  -- the user killed DCS. The engine is embedded in the DLL that exports this,
+  -- so the two are always the same build and there is nothing to fall back to.
+  local clock = bridge.debug.monotonic
 
   local D = { version = 1, running = false, error = nil }
   D.pump = function() end -- the installer wires the env-specific RPC drain
+
+  -- The pause-safety budgets. Fields rather than locals so they can be retuned
+  -- on a live state — which is also how the tests drive these paths without
+  -- sitting out the real 30 seconds.
+  D.idle_seconds = 30 -- auto-continue this long after the last client poll
+  D.eval_timeout_seconds = 2 -- ceiling on ONE watch / hover / console / condition evaluation
 
   -- The per-pause handle registry: ref → captured value/scope, inspected lazily
   -- via expand(). Snapshot fills `vars`, resume clears it — every ref is scoped
@@ -147,12 +175,54 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
     return list, map, present
   end
 
+  -- Call `f` with a wall-clock ceiling, returning (ok, result) like pcall.
+  --
+  -- The call gets its OWN coroutine, and that is the whole trick. Lua 5.1
+  -- refuses to fire a hook while a hook is running, and every evaluation this
+  -- engine performs happens inside one: a breakpoint condition is evaluated in
+  -- the line hook itself, and a watch, hover or console eval is served by the
+  -- RPC pump that hold_pause drives from that same hook. A count hook set on
+  -- the sim thread there would simply never be called, so `while true do end`
+  -- in a watch expression would hold the sim thread past the idle release that
+  -- is supposed to save it — with no Stop to press, because Stop is delivered
+  -- by the very pump that is now stuck. A fresh coroutine starts with hooks
+  -- enabled and its own hook slot, so the budget hook there can interrupt the
+  -- loop and hand the error back as an ordinary failed evaluation.
+  --
+  -- The ceiling is wall time, not an instruction count: what has to stay true
+  -- is that one evaluation cannot eat the idle window, and only a clock can say
+  -- that on a machine of unknown speed. A C function that never returns is
+  -- still beyond reach — no Lua hook can preempt one — but no Lua loop is.
+  local function call_bounded(f)
+    local co = coroutine.create(f)
+    local deadline = clock() + D.eval_timeout_seconds
+    debug.sethook(co, function()
+      if clock() > deadline then
+        error("evaluation timed out after " .. D.eval_timeout_seconds
+          .. "s and was cut off, so the sim could be released", 0)
+      end
+    end, "count", EVAL_CHECK_INSTRUCTIONS)
+    local ok, res = coroutine.resume(co)
+    local suspended = ok and coroutine.status(co) ~= "dead"
+    -- Lua 5.1 keeps per-thread hooks in a registry table keyed by the thread
+    -- itself, and a dead coroutine's entry is not collected with it. Clearing
+    -- the hook drops that entry, so a session's worth of watch evaluations
+    -- doesn't accumulate one apiece.
+    debug.sethook(co)
+    if suspended then
+      -- It yielded, so it never produced a value; resuming again could block
+      -- for another full budget. Report it rather than pretend it returned nil.
+      return false, "evaluation yielded instead of returning a value"
+    end
+    return ok, res
+  end
+
   -- Evaluate `expr` (an expression, else a statement) against an environment
   -- that resolves names through the frame's captured locals → upvalues → _G,
   -- using setfenv (Lua 5.1, present in both hosted states). `env` is { locals,
   -- locals_present, upvals, upvals_present } from collect_locals/collect_upvalues.
   -- Returns (ok, value-or-error) — the real loadstring/runtime error, never a
-  -- generic one.
+  -- generic one — with the run itself bounded by call_bounded.
   local function eval_expr(env, expr)
     local f, err = loadstring("return " .. expr)
     if not f then
@@ -180,7 +250,7 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
       end,
     })
     setfenv(f, proxy)
-    return pcall(f)
+    return call_bounded(f)
   end
 
   -- Write `value` into `name` in paused frame `frame_idx`, for real: a local
@@ -258,7 +328,7 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
   -- The editor's poll: paused/running/error + the pause snapshot. SIDE EFFECT:
   -- although it reads as a getter, it WRITES dbg.last_ping = clock() on every
   -- call — this is the liveness heartbeat that keeps a held pause alive (hold_pause
-  -- auto-continues DEBUG_IDLE_SECONDS after the last poll). Its name is the RPC
+  -- auto-continues D.idle_seconds after the last poll). Its name is the RPC
   -- surface `debug_state`, so it stays `state`; the write is intentional.
   function D.state()
     dbg.last_ping = clock()
@@ -491,17 +561,29 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
     end
 
     -- Hold a pause: pump RPC so the editor can inspect/step while the world is
-    -- frozen; auto-continue after DEBUG_IDLE_SECONDS with no client polling (a
+    -- frozen; auto-continue after D.idle_seconds with no client polling (a
     -- vanished editor must never freeze the sim forever). Returns the resume
     -- mode, with the pause cleared and the per-pause refs released.
     local function hold_pause()
       local mode = nil
       dbg.last_ping = clock() -- the editor just requested this stop; it's alive
+      -- Drain on the SAME interval the run loop uses, rather than as fast as the
+      -- CPU allows. The resume that ends this pause can only arrive through
+      -- D.pump — the debug_continue handler runs on THIS thread, inside that
+      -- drain — so a tighter loop buys no latency at all, and costs a pegged
+      -- core plus the bridge's process-wide queue/resume mutexes taken millions
+      -- of times a second, contending with the very actix worker that has to
+      -- enqueue the request.
+      local last_pump = nil
       repeat
-        D.pump() -- a debug_state during this drain refreshes last_ping
-        mode = bridge.debug.take_resume()
-        if not mode and (clock() - dbg.last_ping) > DEBUG_IDLE_SECONDS then
-          mode = "continue" -- the editor stopped polling (gone): don't freeze forever
+        local now = clock()
+        if last_pump == nil or (now - last_pump) > DRAIN_INTERVAL_SECONDS then
+          last_pump = now
+          D.pump() -- a debug_state during this drain refreshes last_ping
+          mode = bridge.debug.take_resume()
+          if not mode and (clock() - dbg.last_ping) > D.idle_seconds then
+            mode = "continue" -- the editor stopped polling (gone): don't freeze forever
+          end
         end
       until mode ~= nil
       bridge.debug.clear_paused()
@@ -615,6 +697,24 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
       return trace
     end
 
+    -- Capture print for the debugged run by swapping AROUND the xpcall (no
+    -- wrapping pcall there — on_error must snapshot the crash frames live). The
+    -- shim is rt.lua's shared print_shim (RT is installed before this engine);
+    -- the console ring is the sink.
+    --
+    -- Built BEFORE the session is claimed below, because it reads a GLOBAL out
+    -- of a state shared with every other mod and with the console this bridge
+    -- serves — `__DCS_STUDIO_RT = nil` typed into the REPL is enough to make it
+    -- raise. Refusing the run here costs one run; raising with D.running
+    -- already true would cost the rest of the DCS session, every later
+    -- debug_run answering "a debug session is already running".
+    local prev_print = _G.print
+    local rt = __DCS_STUDIO_RT
+    if type(rt) ~= "table" or type(rt.print_shim) ~= "function" then
+      return { ran = false, error = "the console runtime (__DCS_STUDIO_RT) is not installed in this state" }
+    end
+    local print_shim = rt.print_shim(bridge.console.print, prev_print)
+
     -- Session liveness is reported via debug_state (running / error), so the
     -- editor detects the end by polling rather than by awaiting this call —
     -- which it can't, since the run blocks for the whole session and the
@@ -623,22 +723,31 @@ if not (__DCS_STUDIO_DBG and __DCS_STUDIO_DBG.version == 1) then
     D.error = nil
     dbg.cond_error = nil
     dbg.pause_id = 0
-    -- Clear any stale break-all / resume / pause from a prior session so it
-    -- can't phantom-break this run on its first line.
-    bridge.debug.reset_session()
-    dbg.last_ping = clock()
-    -- Capture print for the debugged run by swapping AROUND the xpcall (no
-    -- wrapping pcall — on_error must snapshot the crash frames live). The shim is
-    -- rt.lua's shared print_shim (RT is installed before this engine); the
-    -- console ring is the sink.
-    local prev_print = _G.print
-    _G.print = __DCS_STUDIO_RT.print_shim(bridge.console.print, prev_print)
-    debug.sethook(hook, "l") -- line events only; depth is walked, never counted
-    local ran_ok, run_err = xpcall(chunk, on_error)
+    -- Everything from the claim to the restore runs under a pcall so that NO
+    -- path can leave the flag (or the hook, or _G.print) stuck: the setup below
+    -- calls into the DLL and writes a global, and a state where either raises
+    -- must still be able to start the next session.
+    local started, ran_ok, run_err = pcall(function()
+      -- Clear any stale break-all / resume / pause from a prior session so it
+      -- can't phantom-break this run on its first line.
+      bridge.debug.reset_session()
+      dbg.last_ping = clock()
+      _G.print = print_shim
+      debug.sethook(hook, "l") -- line events only; depth is walked, never counted
+      return xpcall(chunk, on_error)
+    end)
+    -- Ordered by what a raise in the next line would cost: the hook first (it
+    -- would otherwise keep firing over DCS's own code), then the session flag,
+    -- and only then the global that a hostile __newindex could refuse.
     debug.sethook() -- always remove the scoped hook (double-off is harmless)
-    _G.print = prev_print
     dbg.hook_fn = nil
     D.running = false
+    _G.print = prev_print
+    if not started then
+      -- The session never got as far as the chunk; `ran_ok` carries the raise.
+      D.error = "debug session failed to start: " .. tostring(ran_ok)
+      return { ran = false, error = D.error }
+    end
     if not ran_ok then
       local msg = tostring(run_err)
       -- A user Stop unwinds via error() but is a clean end, not a failure.

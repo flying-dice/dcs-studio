@@ -1,7 +1,8 @@
 import * as path from "path";
 import * as vscode from "vscode";
-import { savedGamesDir } from "../bridge/paths";
 import { LogBuffer, type LogEntry, type ModIdentity, modIdentity } from "../core/domain/dcsLog";
+import { MANIFEST_FILE } from "../core/domain/manifestFile";
+import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { ManifestPort } from "../core/ports/manifest";
 import { renderWebviewHtml } from "../webview/html";
 import { type FileState, LogTailer } from "./tailer";
@@ -25,8 +26,13 @@ export class LogPanel {
   private lastDropped = 0;
   private fileState: FileState = "missing";
   private filePath = "";
+  private disposed = false;
 
-  static show(context: vscode.ExtensionContext, manifestPort: ManifestPort): void {
+  static show(
+    context: vscode.ExtensionContext,
+    manifestPort: ManifestPort,
+    roots: InstallRootsPort,
+  ): void {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
     if (LogPanel.current) {
       LogPanel.current.panel.reveal(column);
@@ -37,13 +43,14 @@ export class LogPanel {
       retainContextWhenHidden: true,
       localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
     });
-    LogPanel.current = new LogPanel(panel, context, manifestPort);
+    LogPanel.current = new LogPanel(panel, context, manifestPort, roots);
   }
 
   private constructor(
     panel: vscode.WebviewPanel,
     context: vscode.ExtensionContext,
     private readonly manifestPort: ManifestPort,
+    private readonly roots: InstallRootsPort,
   ) {
     this.panel = panel;
     this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
@@ -68,7 +75,7 @@ export class LogPanel {
       if (!folder) {
         this.mod = null;
       } else {
-        const uri = vscode.Uri.joinPath(folder.uri, "dcs-studio.toml");
+        const uri = vscode.Uri.joinPath(folder.uri, MANIFEST_FILE);
         const bytes = await vscode.workspace.fs.readFile(uri);
         const text = Buffer.from(bytes).toString("utf8");
         const model = this.manifestPort.parseToml(text);
@@ -81,10 +88,14 @@ export class LogPanel {
   }
 
   private restartTailer(): void {
+    // The first start is queued behind the async manifest read, so the user can
+    // close the panel before it ever runs; without this the orphaned tailer
+    // would keep polling dcs.log for the rest of the session.
+    if (this.disposed) return;
     this.tailer?.stop();
     this.buffer.clear();
     this.lastDropped = 0;
-    this.filePath = path.join(savedGamesDir(), "Logs", "dcs.log");
+    this.filePath = path.join(this.roots.savedGames(), "Logs", "dcs.log");
     this.tailer = new LogTailer({
       filePath: this.filePath,
       onLines: (lines) => this.handleLines(lines),
@@ -146,6 +157,7 @@ export class LogPanel {
   }
 
   private dispose(): void {
+    this.disposed = true;
     LogPanel.current = undefined;
     this.tailer?.stop();
     this.panel.dispose();

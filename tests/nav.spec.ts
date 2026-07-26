@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { expectSent, hostSend, openPreview } from "./helpers";
 
 test.describe("nav preview", () => {
@@ -63,5 +63,12 @@ test.describe("nav preview", () => {
     await expect(dot).toHaveClass(/mission/);
     await expect(label).toHaveText("Mission running");
     await expect(time).toHaveText("t 213s");
+
+    // DCS quitting has to walk the footer all the way back, sim clock and all
+    // — a stale "t 213s" under an offline dot reads as a live mission.
+    await hostSend(page, { type: "status", status: { connected: false, dcsTime: null } });
+    await expect(dot).toHaveClass(/off/);
+    await expect(label).toHaveText("Bridge offline");
+    await expect(time).toHaveText("");
   });
 });

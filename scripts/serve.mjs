@@ -51,6 +51,10 @@ const server = http.createServer((req, res) => {
   createReadStream(filePath).pipe(res);
 });
 
-server.listen(port, () => {
+// Loopback only, explicitly. Without a host Node binds 0.0.0.0, which publishes
+// the whole repo root — .git/config with its remotes and credentials included —
+// to every host on whatever network the developer is on, while the line below
+// says 127.0.0.1.
+server.listen(port, "127.0.0.1", () => {
   console.log(`› Preview server: http://127.0.0.1:${port}/`);
 });

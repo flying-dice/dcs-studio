@@ -6,6 +6,4 @@ export interface EnvPort {
   homedir(): string;
   /** `%USERPROFILE%`, or undefined when unset. */
   userProfile(): string | undefined;
-  /** Program Files roots to probe for installs (per candidate drive). */
-  programFilesCandidates(): string[];
 }
