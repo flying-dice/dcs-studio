@@ -130,6 +130,22 @@ same line.
 gate enforced. CI runs one job per layer, plus `cargo llvm-cov` for the Rust bridge
 and a Windows job that re-runs the headless layers on the shipping OS.
 
+**Run the gates serially, and never two `cargo llvm-cov` invocations at once.**
+Both matter for the same reason — a gate that reports the wrong answer is worse
+than no gate:
+
+- The vitest layers' include sets are disjoint *by design*, so running them into
+  one process defeats the point: a line covered by the wrong layer reports green.
+  `vitest run --coverage` at the repo root is worse still — the root config is a
+  `projects` config and vitest treats `coverage` as a root-only option, so every
+  per-project threshold is silently ignored. Use the per-layer commands.
+- Two concurrent `cargo llvm-cov` runs share `bridge/target/llvm-cov-target`, and
+  the second's rebuild deletes the first's test binaries. The first then dies with
+  `could not execute process … (never executed) / No such file or directory` on
+  whichever test happens to be late in the run order. Cargo's file lock does not
+  cover it, because `llvm-cov` owns that directory. If a second measurement is
+  genuinely needed, give it its own `--target-dir`.
+
 - **Unit** is pure logic: no filesystem, no child processes, no `vscode`. Anything
   needing a seam belongs in integration.
 - **Integration** means the seams are real code, not that the OS is. `vscode` is a
@@ -144,12 +160,11 @@ and a Windows job that re-runs the headless layers on the shipping OS.
   `test/support/`, run against each one. `MarketplacePort` is the worked example:
   `marketplaceContract.ts` runs the same invariants against the GitHub adapter and
   against `MockMarketplace`, so the documented one-line swap is a checked claim.
-  `filesystemContract.ts` does NOT yet meet this bar — it runs against
-  `NodeFileSystem` only, while four hand-written `FileSystemPort` fakes in the unit
-  layer each guess separately at whether `writeText` mkdirps and whether `remove`
-  throws on a missing path. Consolidating those into one fake put through the same
-  contract is the open work; until then, a core service can pass every unit test
-  against a fake more permissive than the adapter.
+  `filesystemContract.ts` now meets it too: it runs against `NodeFileSystem` and
+  against `MemFileSystem`, the single unit-layer fake that replaced four
+  hand-written ones which each guessed separately at whether `writeText` mkdirps
+  and whether `remove` throws on a missing path. A core service can no longer
+  pass its unit tests against a fake more permissive than the adapter.
 - Coverage-ignore comments are forbidden except for provably unreachable defensive
   lines, each with a justification comment. Prefer restructuring so the line is
   reachable in a test.
