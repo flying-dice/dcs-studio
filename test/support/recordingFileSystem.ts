@@ -13,13 +13,26 @@ export type FsCall = [FsMethod, ...string[]];
 
 export class RecordingFileSystem implements FileSystemPort {
   readonly calls: FsCall[] = [];
-  private readonly failures: { method: FsMethod; path?: string; message: string }[] = [];
+  private readonly failures: {
+    method: FsMethod;
+    path?: string;
+    message: string;
+    skip: number;
+  }[] = [];
 
   constructor(private readonly inner: FileSystemPort) {}
 
-  /** Make `method` reject with `message`; `path` narrows it to one target. */
-  failOn(method: FsMethod, message: string, path?: string): void {
-    this.failures.push({ method, path, message });
+  /**
+   * Make `method` reject with `message`; `path` narrows it to one target.
+   *
+   * `skip` lets the first N matching calls through before failing, for the case
+   * where one path is touched more than once in a single operation and only the
+   * later touch is under test — the install swap removes `<dir>.previous` both
+   * before it starts (clearing a leftover) and after it succeeds (cleanup), and
+   * those two are different moments with different correct behaviours.
+   */
+  failOn(method: FsMethod, message: string, path?: string, skip = 0): void {
+    this.failures.push({ method, path, message, skip });
   }
 
   /** The arguments of each recorded call to `method`, in order. */
@@ -73,7 +86,10 @@ export class RecordingFileSystem implements FileSystemPort {
     const failure = this.failures.find(
       (f) => f.method === method && (f.path === undefined || f.path === args[0]),
     );
-    if (failure) throw new Error(failure.message);
+    if (failure) {
+      if (failure.skip > 0) failure.skip--;
+      else throw new Error(failure.message);
+    }
     return await call();
   }
 }

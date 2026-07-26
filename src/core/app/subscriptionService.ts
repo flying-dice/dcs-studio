@@ -234,7 +234,25 @@ export class SubscriptionService {
       // the fixed staging name before it extracts anything.
       throw e;
     }
-    await this.ports.fs.remove(previous);
+    // Past this point the update HAS happened: `dir` holds the new payload and
+    // `previous` is a copy nobody needs. Letting a failed delete propagate
+    // would turn a completed swap into a reported failure — `subscribe` would
+    // never reach `ledger.save`, so the ledger would keep describing the old
+    // version while the links resolve into a directory now serving the new one.
+    // The user is told it failed, My Mods shows the old tag, and DCS loads the
+    // new files: worse than the failure being reported, on the one path where
+    // nothing actually went wrong.
+    //
+    // And it is the likely failure, not an exotic one. `previous` is the
+    // directory DCS was reading from until one rename ago, so a surviving
+    // handle under it is exactly what a recursive delete on Windows meets. The
+    // next attempt clears the fixed `.previous` name before it does anything
+    // else, so a leftover copy costs disk and nothing more.
+    try {
+      await this.ports.fs.remove(previous);
+    } catch {
+      // Deliberately swallowed — see above. Nothing here can fail the update.
+    }
   }
 
   /**

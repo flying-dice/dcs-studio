@@ -495,6 +495,61 @@ describe("subscribe", () => {
     ]);
   });
 
+  it("completes the update when only the cleanup of the old payload fails", async () => {
+    // The swap SUCCEEDED here: dir holds v2.0.0 and .previous is a copy nobody
+    // needs. Letting that delete propagate would report a failure for an update
+    // that happened — subscribe would never reach ledger.save, so My Mods would
+    // show v1.0.0 while the links resolve into a directory serving v2.0.0. The
+    // user is told it failed and DCS loads the new files anyway, which is worse
+    // than the failure being reported.
+    //
+    // It is also the likely delete to fail: .previous is the directory DCS was
+    // reading from until one rename ago, so a surviving handle under it is what
+    // a recursive delete on Windows expects to meet.
+    const w = makeWorld();
+    w.ledger.store = { "owner/repo": seeded({ tag: "v1.0.0", enabled: true, links: [] }) };
+    w.mem.seedDir(MOD_DIR);
+    w.mem.seedFile(path.join(MOD_DIR, "Scripts", "X"), "working payload");
+    w.archive.unpacked.set("Scripts/X", "v2 payload");
+    // The SECOND remove of .previous — the cleanup after a successful swap.
+    // The first clears a leftover before anything has moved, and failing there
+    // is a real error worth propagating: the move aside would fail next anyway,
+    // with a worse message.
+    w.fs.failOn("remove", "EPERM: operation not permitted, rmdir", PREVIOUS, 1);
+
+    await expect(
+      w.service.subscribe(target({ tag: "v2.0.0" }), undefined, w.onProgress),
+    ).resolves.not.toThrow();
+
+    // Disk and ledger agree, which is the whole point.
+    expect(w.mem.read(path.join(MOD_DIR, "Scripts", "X"))).toBe("v2 payload");
+    expect(w.ledger.store["owner/repo"]).toMatchObject({ tag: "v2.0.0" });
+    expect(w.ledger.saves).toHaveLength(1);
+  });
+
+  it("leaves everything as it was when the old payload cannot be moved aside", async () => {
+    // Nothing has moved yet at that point, so propagating is correct — the live
+    // payload is untouched and the staged copy is still there for a retry. It
+    // is asserted rather than assumed because "correct by inspection" is what
+    // the original swap bug was too.
+    const w = makeWorld();
+    const links = [{ id: "Owner/Repo:0", dest: "C:\\SG\\DCS\\Scripts\\X" }];
+    w.ledger.store = { "owner/repo": seeded({ tag: "v1.0.0", enabled: true, links }) };
+    w.mem.seedDir(MOD_DIR);
+    w.mem.seedFile(path.join(MOD_DIR, "Scripts", "X"), "working payload");
+    w.fs.failOn("move", "EPERM: operation not permitted, rename", MOD_DIR);
+
+    await expect(
+      w.service.subscribe(target({ tag: "v2.0.0" }), undefined, w.onProgress),
+    ).rejects.toThrow("EPERM: operation not permitted, rename");
+
+    expect(w.mem.read(path.join(MOD_DIR, "Scripts", "X"))).toBe("working payload");
+    expect(w.ledger.saves).toEqual([]);
+    expect(w.ledger.store["owner/repo"]).toMatchObject({ tag: "v1.0.0", enabled: true, links });
+    // The move was attempted and nothing followed it.
+    expect(w.fs.argsFor("move")).toEqual([[MOD_DIR, PREVIOUS]]);
+  });
+
   it("names both copies when the previous payload cannot be put back either", async () => {
     // Both renames failing leaves the live directory empty with two complete
     // payloads beside it. Neither is deleted; the recovery is a manual rename,
