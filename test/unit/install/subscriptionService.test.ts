@@ -218,6 +218,9 @@ const MOD_DIR = path.join(DATA, "Owner__Repo");
 const DL_DIR = path.join(MOD_DIR, ".download");
 // Extraction lands here and is renamed onto MOD_DIR only once it succeeded.
 const STAGING = `${MOD_DIR}.unpacking`;
+// Where the outgoing payload waits while the incoming one takes its place, so
+// that a failed rename can put it back instead of having deleted it already.
+const PREVIOUS = `${MOD_DIR}.previous`;
 // The managed aggregator files land under <savedGames>/Scripts (FakeRoots).
 const AGG_DIR = path.join("C:\\SG\\DCS", "Scripts");
 const BEFORE_AGG = path.join(AGG_DIR, BEFORE_SANITIZE_FILE);
@@ -372,7 +375,12 @@ describe("subscribe", () => {
     expect(w.archive.extracts).toEqual([
       { archive: path.join(DL_DIR, "big.7z.001"), outDir: STAGING },
     ]);
-    expect(w.fs.argsFor("move")).toEqual([[STAGING, MOD_DIR]]);
+    // The outgoing payload is moved aside first and only binned once the
+    // incoming one is in place, so the swap is two renames, never a delete.
+    expect(w.fs.argsFor("move")).toEqual([
+      [MOD_DIR, PREVIOUS],
+      [STAGING, MOD_DIR],
+    ]);
     // The .download dir is cleaned up afterwards.
     expect(w.fs.pathsFor("remove")).toContain(DL_DIR);
 
@@ -448,15 +456,68 @@ describe("subscribe", () => {
     expect(w.ledger.store["owner/repo"]).toMatchObject({ tag: "v1.0.0", enabled: true, links });
   });
 
-  it("bins the staged payload when the swap into place fails", async () => {
+  it("keeps the working install when the swap into place fails", async () => {
+    // The case that used to lose everything. The old order was remove(dir) then
+    // move(staging, dir), with a catch that removed staging — so a failed swap
+    // deleted the old payload and then the new one, leaving nothing on disk
+    // while the ledger still recorded the mod as installed and enabled with
+    // links into a directory that no longer existed.
+    //
+    // It is not an exotic failure: renaming a directory on Windows fails with
+    // EPERM/EBUSY whenever anything holds a handle under it, and updating a mod
+    // while DCS is open is the ordinary way to hit that.
     const w = makeWorld();
-    w.fs.failOn("move", "EPERM: operation not permitted, rename");
+    const links = [{ id: "Owner/Repo:0", dest: "C:\\SG\\DCS\\Scripts\\X" }];
+    w.ledger.store = { "owner/repo": seeded({ tag: "v1.0.0", enabled: true, links }) };
+    w.mem.seedDir(MOD_DIR);
+    w.mem.seedFile(path.join(MOD_DIR, "Scripts", "X"), "working payload");
+    // Only the swap itself fails: moving the old payload aside, and putting it
+    // back, both succeed — which is the whole point of doing it in that order.
+    w.fs.failOn("move", "EPERM: operation not permitted, rename", STAGING);
 
-    await expect(w.service.subscribe(target(), undefined, w.onProgress)).rejects.toThrow(
-      "EPERM: operation not permitted, rename",
+    await expect(
+      w.service.subscribe(target({ tag: "v2.0.0" }), undefined, w.onProgress),
+    ).rejects.toThrow("EPERM: operation not permitted, rename");
+
+    // The v1.0.0 payload is back where the ledger says it is.
+    expect(w.mem.read(path.join(MOD_DIR, "Scripts", "X"))).toBe("working payload");
+    expect(w.ledger.saves).toEqual([]);
+    expect(w.ledger.store["owner/repo"]).toMatchObject({ tag: "v1.0.0", enabled: true, links });
+    // And the staged v2.0.0 copy was never deleted while the live directory was
+    // empty — at no point were both copies gone at once.
+    // Once, to clear the fixed name before extracting — never again. The second
+    // remove is the one that used to delete the last copy in existence.
+    expect(w.fs.pathsFor("remove").filter((p) => p === STAGING)).toHaveLength(1);
+    expect(w.fs.argsFor("move")).toEqual([
+      [MOD_DIR, PREVIOUS],
+      [STAGING, MOD_DIR],
+      [PREVIOUS, MOD_DIR],
+    ]);
+  });
+
+  it("names both copies when the previous payload cannot be put back either", async () => {
+    // Both renames failing leaves the live directory empty with two complete
+    // payloads beside it. Neither is deleted; the recovery is a manual rename,
+    // which nobody can perform without being told the two names.
+    const w = makeWorld();
+    w.ledger.store = { "owner/repo": seeded({ tag: "v1.0.0", enabled: true, links: [] }) };
+    w.mem.seedDir(MOD_DIR);
+    w.mem.seedFile(path.join(MOD_DIR, "Scripts", "X"), "working payload");
+    w.fs.failOn("move", "EPERM: operation not permitted, rename", STAGING);
+    w.fs.failOn("move", "EPERM: operation not permitted, rename", PREVIOUS);
+
+    const err = await w.service.subscribe(target({ tag: "v2.0.0" }), undefined, w.onProgress).then(
+      () => new Error("expected the swap to fail"),
+      (e: unknown) => (e instanceof Error ? e : new Error(String(e))),
     );
 
-    expect(w.fs.pathsFor("remove").filter((p) => p === STAGING)).toHaveLength(2); // before and after
+    expect(err.message).toContain(PREVIOUS);
+    expect(err.message).toContain(STAGING);
+    expect(err.message).toContain("EPERM: operation not permitted, rename");
+    // Once, clearing the fixed name before the swap begins. Nothing removes
+    // either copy afterwards — both are named in the message instead.
+    expect(w.fs.pathsFor("remove").filter((p) => p === PREVIOUS)).toHaveLength(1);
+    expect(w.fs.pathsFor("remove").filter((p) => p === STAGING)).toHaveLength(1);
     expect(w.ledger.saves).toEqual([]);
   });
 

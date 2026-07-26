@@ -1,5 +1,6 @@
 import { win32 as path } from "node:path";
 import { selectPayloadVolumes } from "../domain/archivePolicy";
+import { errorText } from "../domain/errorText";
 import {
   type InstallManifestInput,
   unsafeManifestMessage,
@@ -131,11 +132,20 @@ export class SubscriptionService {
    * Download the payload volumes and unpack them into the mod's data dir.
    *
    * Extraction never writes into the live directory: it lands in a sibling
-   * staging dir which is swapped in with a single rename once 7-Zip has
-   * succeeded. A truncated download, a corrupt archive, a full disk or a
-   * missing archiver therefore leaves the previously unpacked payload — and the
-   * ledger entry describing it — exactly as they were, instead of clearing the
-   * files first and reporting a healthy install over a hole.
+   * staging dir which is swapped in once 7-Zip has succeeded. A truncated
+   * download, a corrupt archive, a full disk or a missing archiver therefore
+   * leaves the previously unpacked payload — and the ledger entry describing it
+   * — exactly as they were, instead of clearing the files first and reporting a
+   * healthy install over a hole.
+   *
+   * The swap itself gets the same treatment, and needs it more. Renaming a
+   * directory on the shipping OS fails with EPERM/EBUSY whenever anything holds
+   * a handle underneath it — DCS itself, an AV scanner, an open editor — which
+   * makes this the step most likely to fail of the whole install. So the old
+   * payload is moved aside rather than deleted, and put back if the new one
+   * cannot take its place; the staged copy is kept in that case too, because
+   * once the live directory is empty deleting the only other copy is how a
+   * failed update turns into a mod that exists in the ledger and nowhere else.
    */
   private async downloadAndUnpack(
     target: InstallTarget,
@@ -164,22 +174,67 @@ export class SubscriptionService {
     // A sibling of `dir` (same volume, so the swap is a rename) with a fixed
     // name, so leftovers from an interrupted run are cleared by the next one.
     const staging = `${dir}.unpacking`;
-    await this.ports.fs.remove(staging);
-    await this.ports.fs.mkdirp(staging);
     try {
+      await this.ports.fs.remove(staging);
+      await this.ports.fs.mkdirp(staging);
       await this.ports.archive.extract(path.join(dl, volumes[0].name), staging);
-      // The payload is complete: the volumes have served their purpose and the
-      // previous unpacked content can now be replaced.
-      await this.ports.fs.remove(dl);
-      await this.ports.fs.remove(dir);
-      await this.ports.fs.move(staging, dir);
     } catch (e) {
-      // Nothing extracted, or the swap itself failed: bin the staged copy so a
-      // retry starts clean, and let the caller report the underlying failure.
+      // Nothing was extracted, and the live payload has not been touched: bin
+      // the staged copy so a retry starts clean and report the real failure.
       await this.ports.fs.remove(staging);
       throw e;
     }
+    // The payload is complete: the volumes have served their purpose and the
+    // previous unpacked content can now be replaced.
+    await this.ports.fs.remove(dl);
+    await this.swapIntoPlace(staging, dir);
     return dir;
+  }
+
+  /**
+   * Replace `dir` with `staging`, keeping a complete payload on disk at every
+   * point in between.
+   *
+   * The old payload goes to a sibling `.previous` rather than to the bin, so
+   * the window in which the live directory does not exist is bounded by one
+   * rename and is recoverable from both sides. On failure the caller sees the
+   * error that actually happened and the mod is left as it was, which is what
+   * the ledger entry — untouched, since this runs before `save` — still says.
+   */
+  private async swapIntoPlace(staging: string, dir: string): Promise<void> {
+    const previous = `${dir}.previous`;
+    // A fixed name, like staging: leftovers from a run that died mid-swap are
+    // cleared by the next attempt rather than accumulating one per update.
+    await this.ports.fs.remove(previous);
+    // `move` requires its source to exist. `dir` does by now — the download
+    // folder was created inside it — but that is an invariant from another
+    // method, so make it locally true instead of inheriting it. On a first
+    // install this is the empty directory that download left behind.
+    await this.ports.fs.mkdirp(dir);
+    await this.ports.fs.move(dir, previous);
+    try {
+      await this.ports.fs.move(staging, dir);
+    } catch (e) {
+      try {
+        await this.ports.fs.move(previous, dir);
+      } catch {
+        // Both renames failed, so the live directory is empty and the only two
+        // copies are the ones this method made. Neither is deleted, and the
+        // message names them: the recovery is a manual rename, and it is not
+        // discoverable without being told where to look.
+        throw new Error(
+          `Update failed while swapping the new payload into place, and the previous payload could not be put back. ` +
+            `Nothing has been lost: the previous payload is at ${previous} and the new one at ${staging}. ` +
+            `Close DCS, rename either one to ${dir}, and try again. Cause: ${errorText(e)}`,
+        );
+      }
+      // The staged copy is deliberately left where it is. Deleting a complete
+      // payload is this method's one forbidden move, and there is no branch
+      // here that knows enough to make an exception: the next attempt clears
+      // the fixed staging name before it extracts anything.
+      throw e;
+    }
+    await this.ports.fs.remove(previous);
   }
 
   /**
@@ -393,7 +448,6 @@ export class SubscriptionService {
     onProgress({ phase: "done", label: `Updated to ${target.tag}.` });
   }
 
-  /** Unsubscribe: disable + delete the unpacked files + drop the ledger entry. */
   /**
    * Remove a mod entirely: its links, then its unpacked payload, then its
    * ledger entry.

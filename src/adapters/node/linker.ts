@@ -52,11 +52,24 @@ function createSymlinkElevated(
     const p = spawn("powershell.exe", psArgs.elevatedCommand(script), {
       windowsHide: true,
     });
+    // Only the LAUNCHER's stderr arrives here — a declined UAC prompt, or a
+    // failure to dispatch at all. The elevated child gets its own console, so
+    // whatever `New-Item` said about the actual failure is never readable from
+    // this side; its exit code (propagated by psArgs.elevatedCommand) is the
+    // only thing that crosses. Hence the fallback naming the operation rather
+    // than a bare `exit 1`, which reads as if the code were the whole story.
     let err = "";
     p.stderr.on("data", (d) => (err += d.toString()));
     p.on("error", (e) => resolve({ ok: false, message: e.message }));
     p.on("exit", (c) =>
-      c === 0 ? resolve({ ok: true }) : resolve({ ok: false, message: err.trim() || `exit ${c}` }),
+      c === 0
+        ? resolve({ ok: true })
+        : resolve({
+            ok: false,
+            message:
+              err.trim() ||
+              `elevated symlink creation failed (exit ${c}) — the elevated window reports no detail back`,
+          }),
     );
   });
 }

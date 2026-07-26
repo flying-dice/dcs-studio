@@ -276,12 +276,31 @@ describe("cross-volume symlink elevation", () => {
     expect(r.message).toBe("The operation was canceled by the user.");
   });
 
-  it("falls back to the exit code when the elevated attempt says nothing", async () => {
+  it("fails the link when the elevated child fails, however quietly", async () => {
+    // The case that used to report success. The elevated child runs in its own
+    // console, so a genuine New-Item failure — target removed between the two
+    // attempts, destination now occupied, privilege still refused — reaches
+    // this side as an exit code and nothing else. If that code is not
+    // propagated the link is recorded as made, and the ledger then describes a
+    // link that is not on disk.
     spawner.plan(() => ({ code: 5 }));
     const r = await mklink(otherVolume(path.join(dest, "mod.lua")), file("mod.lua"));
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.message).toBe("exit 5");
+    expect(r.message).toBe(
+      "elevated symlink creation failed (exit 5) — the elevated window reports no detail back",
+    );
+  });
+
+  it("asks the launcher to carry the elevated child's exit code out", async () => {
+    // The other half of the same defect, on the side this adapter owns:
+    // Start-Process reports its own dispatch, not the child's outcome, so
+    // without these clauses the exit code above is always 0.
+    spawner.plan(() => ({ code: 0 }));
+    await mklink(otherVolume(path.join(dest, "mod.lua")), file("mod.lua"));
+    const command = spawner.calls[0].args[spawner.calls[0].args.length - 1];
+    expect(command).toContain("-PassThru");
+    expect(command).toContain("exit $p.ExitCode");
   });
 
   it("reports PowerShell being unavailable rather than hanging", async () => {

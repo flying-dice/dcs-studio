@@ -4,6 +4,7 @@ import {
   entrypointRunKey,
   resolveEntrypointLaunch,
 } from "../domain/entrypointLaunch";
+import { errorText } from "../domain/errorText";
 import { deriveInstallManifestView } from "../domain/installManifestView";
 import { isUpToDate, toModDto } from "../domain/subscriptions";
 import type { InstallRoots } from "../domain/types";
@@ -99,11 +100,6 @@ export interface MyModsPresenterDeps {
   effect: (effect: MyModsEffect) => void;
   /** Ask the user a modal question; resolves to the chosen action, or undefined. */
   confirm: (request: MyModsConfirm) => Promise<string | undefined>;
-}
-
-/** `message` of an unknown throwable, matching the panel's previous rendering. */
-function errorText(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 export class MyModsPresenter {

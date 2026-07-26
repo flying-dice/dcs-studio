@@ -1,3 +1,4 @@
+import { errorText } from "../domain/errorText";
 import { deriveInstallManifestView, unsafeManifestMessage } from "../domain/installManifestView";
 import type { ProductDetail } from "../domain/types";
 import type { AuthPort } from "../ports/auth";
@@ -44,11 +45,6 @@ export interface MarketplacePresenterDeps {
   post: (msg: unknown) => void;
   /** Perform an editor-side effect. */
   effect: (effect: MarketplaceEffect) => void;
-}
-
-/** `message` of an unknown throwable, matching the panel's previous rendering. */
-function errorText(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 export class MarketplacePresenter {

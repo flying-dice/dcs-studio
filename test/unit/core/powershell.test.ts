@@ -72,6 +72,39 @@ describe("psArgs.elevatedCommand", () => {
     expect(argv[5]).toContain("-Verb RunAs");
   });
 
+  it("propagates the elevated child's exit code as the launcher's own", () => {
+    // The whole reason -PassThru is on the line. Start-Process sets neither
+    // $LASTEXITCODE nor the launcher's exit code, so discarding the process
+    // object it hands back means the launcher exits 0 however the elevated work
+    // went — and linker.ts maps that to { ok: true }, which SubscriptionService
+    // writes to the ledger. A mod would be recorded as enabled with a link that
+    // was never created.
+    expect(argv[5]).toContain("$p = Start-Process");
+    expect(argv[5]).toContain("exit $p.ExitCode");
+  });
+
+  it("fails the launcher when the elevation itself never produced a child", () => {
+    // A declined UAC prompt: Start-Process raises instead of returning, and
+    // only under Stop does that terminate the launcher non-zero. `-not $p`
+    // covers the same ground independently, because this string is never
+    // executed by the suite — Linux CI has no UAC to decline.
+    expect(argv[5]).toContain("$ErrorActionPreference='Stop'");
+    expect(argv[5]).toContain("if (-not $p) { exit 1 }");
+  });
+
+  it("is exactly this script", () => {
+    // The individual assertions above say what each part is for; this one is
+    // what actually pins the composition, the way cliArgs pins an argv. Every
+    // clause here is load-bearing and the order matters — the capture has to
+    // precede the guard, and the guard the propagation.
+    expect(psArgs.elevatedCommand("New-Item -Path 'x'")[5]).toBe(
+      `$ErrorActionPreference='Stop'; ` +
+        `$p = Start-Process -FilePath "powershell.exe" -Verb RunAs -Wait -PassThru ` +
+        `-WindowStyle Hidden -ArgumentList @("-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-Command", 'New-Item -Path ''x'''); ` +
+        `if (-not $p) { exit 1 }; exit $p.ExitCode;`,
+    );
+  });
+
   it("quotes the inner script so its own quotes cannot end it early", () => {
     expect(psArgs.elevatedCommand("Write-Host 'hi'")[5]).toContain(`'Write-Host ''hi'''`);
   });

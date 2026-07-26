@@ -33,15 +33,36 @@ export const psArgs = {
 
   /**
    * Run `script` in an ELEVATED PowerShell, via a non-elevated launcher that
-   * raises the UAC prompt. `-Wait` is what makes the outer process's exit code
-   * mean something: without it the launcher returns before the elevated child
-   * has done anything, and a failed elevation reports success.
+   * raises the UAC prompt.
+   *
+   * Three separate things have to happen for the caller to learn that an
+   * elevated write failed, and `Start-Process` does none of them by default:
+   *
+   * - `-Wait` makes the launcher block until the child is done. Without it the
+   *   launcher returns immediately and there is no status to read yet.
+   * - `-PassThru` returns the child process object. `Start-Process` never sets
+   *   `$LASTEXITCODE` and never adopts the child's status as its own, so this
+   *   object is the *only* route to the child's exit code — and discarding it
+   *   means the launcher exits 0 whenever it managed to dispatch, however the
+   *   elevated work went. That reports a failed link as a successful one, and
+   *   the caller writes it to the ledger.
+   * - `exit $p.ExitCode` propagates it.
+   *
+   * `-ErrorActionPreference Stop` covers the other half: if the launcher itself
+   * fails — a declined UAC prompt is the ordinary case — `Start-Process` raises
+   * rather than returning a process, and only under `Stop` does that terminate
+   * the launcher with a non-zero code. The `-not $p` guard is the belt to that
+   * brace: this string cannot be executed by the test suite (Linux CI, no UAC),
+   * so the one path that must never silently report success does not rest on a
+   * single assumption about PowerShell's error semantics.
    */
   elevatedCommand: (script: string): string[] => {
     const inner = BASE_FLAGS.map((f) => `"${f}"`).join(",");
     return psArgs.command(
-      `Start-Process -FilePath "powershell.exe" -Verb RunAs -Wait -PassThru ` +
-        `-WindowStyle Hidden -ArgumentList @(${inner},"-Command", ${psQuote(script)});`,
+      `$ErrorActionPreference='Stop'; ` +
+        `$p = Start-Process -FilePath "powershell.exe" -Verb RunAs -Wait -PassThru ` +
+        `-WindowStyle Hidden -ArgumentList @(${inner},"-Command", ${psQuote(script)}); ` +
+        `if (-not $p) { exit 1 }; exit $p.ExitCode;`,
     );
   },
 };
