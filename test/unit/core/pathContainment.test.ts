@@ -30,6 +30,22 @@ describe("staysUnder — the shared case table", () => {
   });
 });
 
+describe("destRelative — the shared dest table", () => {
+  it("carries dest cases", () => {
+    expect(CASES.dest.length).toBeGreaterThan(8);
+  });
+
+  // The manifest-facing half of the rule, and the half the table did not cover
+  // until a native `{SavedGames}\Scripts\a.lua` turned out to be refused as a
+  // traversal while a bare `Scripts\Hooks` was accepted. Each case states the
+  // relative path a dest reduces to; the verdict is then whatever the
+  // containment rule says about that path, so the two cannot disagree.
+  it.each(CASES.dest)("reduces $dest to $relative — $why", ({ dest, relative }) => {
+    expect(destRelative(dest)).toBe(relative);
+    expect(destStaysUnder(dest)).toBe(staysUnder(relative));
+  });
+});
+
 describe("destRelative", () => {
   it("strips a leading root token and one root-relative separator", () => {
     expect(destRelative("{SavedGames}/Scripts/a.lua")).toBe("Scripts/a.lua");

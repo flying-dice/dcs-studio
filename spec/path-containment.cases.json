@@ -16,7 +16,13 @@
     "bridge's guard quietly weaker than the extension's. This file is the table",
     "all three read, so adding a case is enough to hold all three to it.",
     "",
-    "Add a case here first, then watch all three suites fail."
+    "Add a case here first, then watch all three suites fail.",
+    "",
+    "`accept`/`reject` are the relative-path rule and all three copies read",
+    "them. `dest` below is the manifest-facing rule on top of it — stripping",
+    "the {SavedGames}/{GameInstall} token before measuring what is left — and",
+    "only the two TypeScript copies have it; the bridge never sees a manifest",
+    "token, so its Rust reader ignores the section."
   ],
   "accept": [
     { "path": "dcs.log", "why": "a bare filename" },
@@ -52,5 +58,57 @@
     { "path": "\\", "why": "separator only, Windows style" },
     { "path": "a//b", "why": "doubled separator — refused rather than silently collapsed" },
     { "path": "a/", "why": "trailing separator, for the same reason" }
+  ],
+  "dest": [
+    {
+      "dest": "{SavedGames}/Scripts/a.lua",
+      "relative": "Scripts/a.lua",
+      "why": "the ordinary form: token, separator, path"
+    },
+    {
+      "dest": "{SavedGames}\\Scripts\\a.lua",
+      "relative": "Scripts\\a.lua",
+      "why": "the same destination written natively. DCS is Windows-only, so this is what an author types — and stripping only `/` left the backslash on, making staysUnder read a rooted path and refuse the manifest as a traversal attempt"
+    },
+    {
+      "dest": "{GameInstall}\\Mods\\aircraft\\X",
+      "relative": "Mods\\aircraft\\X",
+      "why": "the other root token, same rule"
+    },
+    {
+      "dest": "{SavedGames}Scripts/a.lua",
+      "relative": "Scripts/a.lua",
+      "why": "no separator at all after the token — the token names the root, so what follows is already relative to it"
+    },
+    {
+      "dest": "Scripts/Hooks",
+      "relative": "Scripts/Hooks",
+      "why": "no token: an unrecognised prefix is {SavedGames}-relative"
+    },
+    {
+      "dest": "/Scripts/Hooks",
+      "relative": "Scripts/Hooks",
+      "why": "a leading separator with no token names the same place"
+    },
+    {
+      "dest": "\\Scripts\\Hooks",
+      "relative": "Scripts\\Hooks",
+      "why": "and natively, likewise"
+    },
+    {
+      "dest": "{SavedGames}\\..\\..\\Windows",
+      "relative": "..\\..\\Windows",
+      "why": "the reason the separator cannot simply be tolerated: what is left after the token still has to face the containment rule, and this must fail it"
+    },
+    {
+      "dest": "{GameInstall}/../../../etc/passwd",
+      "relative": "../../../etc/passwd",
+      "why": "the same climb on forward slashes"
+    },
+    {
+      "dest": "{SavedGames}\\C:\\Windows",
+      "relative": "C:\\Windows",
+      "why": "a drive prefix smuggled in behind a token"
+    }
   ]
 }

@@ -72,12 +72,20 @@ export function staysUnder(path: string): boolean {
  * removed. Mirrors `splitDest` in media/manifest-core.js, which treats an
  * unrecognised prefix as `{SavedGames}`-relative — so `/Scripts/Hooks` and
  * `Scripts/Hooks` name the same place and both are measured as `Scripts/Hooks`.
+ *
+ * EITHER separator, which was not true at first. Stripping only `/` left the
+ * backslash on `{SavedGames}\Scripts\a.lua`, `staysUnder` read the result as a
+ * rooted path and refused it — while the identical `Scripts\Hooks` with no
+ * token was accepted, because DCS is Windows-only and a backslash is the
+ * separator an author would naturally write. A manifest declaring its
+ * destinations the native way was rejected as a traversal attempt, with nothing
+ * in the message pointing at the separator.
  */
 export function destRelative(dest: string): string {
   for (const token of ROOT_TOKENS) {
-    if (dest.startsWith(token)) return dest.slice(token.length).replace(/^\//, "");
+    if (dest.startsWith(token)) return dest.slice(token.length).replace(/^[/\\]/, "");
   }
-  return dest.replace(/^\//, "");
+  return dest.replace(/^[/\\]/, "");
 }
 
 /** True when a manifest `dest` stays under the DCS root it names. */

@@ -13,10 +13,25 @@ export interface ContainmentCase {
   why: string;
 }
 
-export const CONTAINMENT_CASES: { accept: ContainmentCase[]; reject: ContainmentCase[] } =
-  JSON.parse(
-    readFileSync(join(resolve(__dirname, "../.."), "spec", "path-containment.cases.json"), "utf8"),
-  );
+/**
+ * A manifest `dest` and the relative path it reduces to once its root token is
+ * stripped. The verdict is deliberately not stated: it follows from running
+ * `relative` through the containment rule above, so a case cannot claim one
+ * thing about the token and another about the path under it.
+ */
+export interface DestCase {
+  dest: string;
+  relative: string;
+  why: string;
+}
+
+export const CONTAINMENT_CASES: {
+  accept: ContainmentCase[];
+  reject: ContainmentCase[];
+  dest: DestCase[];
+} = JSON.parse(
+  readFileSync(join(resolve(__dirname, "../.."), "spec", "path-containment.cases.json"), "utf8"),
+);
 
 /** Every case, verdict discarded — for a copy checked against the domain one. */
 export const ALL_CONTAINMENT_PATHS: string[] = [

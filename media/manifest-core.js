@@ -227,11 +227,15 @@
     return out;
   }
 
+  // Either separator after the token: DCS is Windows-only, so a backslash is
+  // what an author writes, and leaving it on made staysUnder read the rest as a
+  // rooted path and refuse the whole manifest. Mirror of destRelative in
+  // src/core/domain/pathContainment.ts, which carries the longer note.
   function splitDest(dest) {
     for (const t of ROOT_TOKENS) {
-      if (dest.startsWith(t)) return { root: t, rest: dest.slice(t.length).replace(/^\//, "") };
+      if (dest.startsWith(t)) return { root: t, rest: dest.slice(t.length).replace(/^[/\\]/, "") };
     }
-    return { root: "{SavedGames}", rest: dest.replace(/^\//, "") };
+    return { root: "{SavedGames}", rest: dest.replace(/^[/\\]/, "") };
   }
 
   function winJoin(base, rest) {

@@ -7,7 +7,7 @@ import {
   destStaysUnder as domainDestStaysUnder,
   staysUnder as domainStaysUnder,
 } from "../../../src/core/domain/pathContainment";
-import { ALL_CONTAINMENT_PATHS } from "../../support/pathContainmentCases";
+import { ALL_CONTAINMENT_PATHS, CONTAINMENT_CASES } from "../../support/pathContainmentCases";
 
 const {
   parseVal,
@@ -378,12 +378,27 @@ describe("staysUnder (webview copy)", () => {
 
   it("agrees with the domain predicate about manifest dests too", () => {
     for (const c of CASES) {
-      for (const token of ["", "{SavedGames}/", "{GameInstall}/"]) {
+      // Both separators after the token, not just `/`. Synthesising these with
+      // a forward slash only was why both copies agreed on the wrong answer:
+      // each stripped `^\/`, so a native `{SavedGames}\Scripts\a.lua` kept its
+      // backslash, read as rooted, and was refused.
+      for (const token of ["", "{SavedGames}/", "{GameInstall}/", "{SavedGames}\\"]) {
         const dest = token + c;
         expect([dest, destStaysUnder(dest)]).toEqual([dest, domainDestStaysUnder(dest)]);
       }
     }
   });
+
+  it.each(CONTAINMENT_CASES.dest)(
+    "reduces $dest to $relative like the domain copy — $why",
+    ({ dest, relative }) => {
+      // splitDest is the webview's destRelative: same token rule, and the same
+      // separator strip. The form shows the author where a link will land, so a
+      // disagreement here is the form promising a path the installer refuses.
+      expect(splitDest(dest).rest).toBe(relative);
+      expect(destStaysUnder(dest)).toBe(domainDestStaysUnder(dest));
+    },
+  );
 });
 
 describe("UMD wrapper", () => {
