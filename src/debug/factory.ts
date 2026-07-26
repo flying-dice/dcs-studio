@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
-import type { DebugEnv } from "../bridge/client";
-import type { BridgeClients } from "../bridge/clients";
+import type { DebugEnv } from "../core/domain/debugProtocol";
 import { isMissionScriptingFile, MISSION_SCRIPT_REFUSAL } from "../core/domain/debugTarget";
+import type { BridgeRouterPort } from "../core/ports/debugBridge";
 import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { SchedulerPort } from "../core/ports/scheduler";
 import { showError } from "../errors";
@@ -19,7 +19,7 @@ export const DEBUG_TYPE = "dcs-lua";
  * instead of failing. */
 export class DcsDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory {
   constructor(
-    private readonly clients: BridgeClients,
+    private readonly clients: BridgeRouterPort,
     private readonly roots: InstallRootsPort,
     private readonly scheduler: SchedulerPort,
   ) {}

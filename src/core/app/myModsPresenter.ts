@@ -71,11 +71,21 @@ export interface MyModsLedger {
   takeCorruptNotice(): string | undefined;
 }
 
-/** The tracked-process launcher, as My Mods drives it. */
+/**
+ * The tracked-process launcher, as My Mods drives it.
+ *
+ * `setOnChange` is the panel's half rather than the presenter's: a tracked
+ * process exiting on its own is the one input neither the user nor the webview
+ * produces, and the panel turns it into a redraw. It belongs here anyway,
+ * because the alternative was the panel naming the concrete `ProcessLauncher`
+ * to get at it — the crossing #61 tracks.
+ */
 export interface EntrypointLauncher {
   isRunning(key: string): boolean;
   launch(key: string, plan: EntrypointLaunchPlan): void;
   stop(key: string): void;
+  /** Register the listener told (with the key) when a tracked process ends. */
+  setOnChange(fn: (key: string, error?: string) => void): void;
 }
 
 /** Persisted "always allow this mod's executable" consent, keyed opaquely. */

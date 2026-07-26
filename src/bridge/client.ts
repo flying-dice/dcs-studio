@@ -22,6 +22,7 @@ import type {
   ReplVariable,
 } from "../core/domain/debugProtocol";
 import type { BridgeConnection, BridgeTransportPort } from "../core/ports/bridgeTransport";
+import type { DebugBridgePort } from "../core/ports/debugBridge";
 import type { DbCategory, DbExportResult, DbExportWhat, DbUnitType, DbWeapon } from "./dbTypes";
 
 // Editor-side WebSocket JSON-RPC client for one in-DCS bridge. Two instances
@@ -51,7 +52,7 @@ interface Pending {
   timer: ReturnType<typeof setTimeout>;
 }
 
-export class BridgeClient {
+export class BridgeClient implements DebugBridgePort {
   private conn: BridgeConnection | undefined;
   private nextId = 1;
   private readonly pending = new Map<string, Pending>();

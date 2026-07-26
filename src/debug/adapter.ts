@@ -1,8 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import type { BridgeClient, DebugEnv, DebugState } from "../bridge/client";
-import type { BridgeClients } from "../bridge/clients";
 import { missionStartFailure } from "../core/domain/bridgeStatusView";
 import {
   actionForResume,
@@ -23,8 +21,10 @@ import {
   toStackTraceResponse,
   toVariablesResponse,
 } from "../core/domain/dapTranslation";
+import type { DebugEnv, DebugState } from "../core/domain/debugProtocol";
 import { missionScriptPath } from "../core/domain/debugTarget";
 import { scanItems } from "../core/domain/missionSanitize";
+import type { BridgeRouterPort, DebugBridgePort } from "../core/ports/debugBridge";
 import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { SchedulerPort, TimerHandle } from "../core/ports/scheduler";
 import { showError } from "../errors";
@@ -38,7 +38,7 @@ import { showError } from "../errors";
 // the mission bridge (port 25570, alive only while a mission runs). This
 // adapter is the stateful shell, run in-process via
 // DebugAdapterInlineImplementation so it can share the extension's two
-// BridgeClient connections. Every translation decision (chunkname↔path rules,
+// DebugBridgePort connections. Every translation decision (chunkname↔path rules,
 // stop-reason mapping, pause_id dedupe, snapshot→DAP shapes, the poll state
 // machine) is pure and lives in core/domain/dapTranslation.
 //
@@ -92,7 +92,7 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
   private config: DcsLaunchConfig;
   private env: DebugEnv = "mission";
   /** The client serving this session's env; re-selected when launch fixes the env. */
-  private client: BridgeClient;
+  private client: DebugBridgePort;
 
   /** Full breakpoint state per file, keyed by lower-cased path (pushed whole per source). */
   private readonly breakpoints = new Map<string, { fsPath: string; bps: StoredBreakpoint[] }>();
@@ -113,7 +113,7 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
   private polling = false;
 
   constructor(
-    private readonly clients: BridgeClients,
+    private readonly clients: BridgeRouterPort,
     config: vscode.DebugConfiguration,
     // Both required, and supplied by the factory. `scheduler` used to default
     // to `nodeScheduler`: that named a concrete adapter from a feature (#61),

@@ -17,11 +17,13 @@ import {
 // owns the file watchers. The status state machine, frontmatter parsing and
 // version compare are pure and live in core/domain/skillsStatus.
 
+import type { SkillsCatalogPort } from "../core/ports/skillsCatalog";
+
 export type { SkillInfo, SkillStatus } from "../core/domain/skillsStatus";
 // Re-exported from core for stable import paths (nav, skillsPanel, extension).
 export { compareVersions, INSTALL_DIR, parseFrontmatter };
 
-export class SkillsLibrary implements vscode.Disposable {
+export class SkillsLibrary implements vscode.Disposable, SkillsCatalogPort {
   private readonly changeEmitter = new vscode.EventEmitter<void>();
   readonly onDidChange = this.changeEmitter.event;
   private readonly subs: vscode.Disposable[] = [];

@@ -99,26 +99,16 @@ const SHARED = new Set(["errors.ts", "external.ts", "webview"]);
 const COMPOSITION_ROOT = "extension.ts";
 
 /**
- * Crossings that already existed when this half of the rule was written. It is
- * a ratchet, not a licence: a new crossing fails the check, and this list must
- * shrink to empty — delete each entry as its site is fixed. Only the first is
- * tracked by an issue (#40 — MyModsPanel names the concrete JsonLedgerStore
- * rather than the SubscriptionLedgerStore port it actually needs); the rest are
- * the same defect, surfaced by writing this check, and have no issue yet.
+ * **Empty, and it stays empty.** This was a ratchet holding the 19 crossings
+ * that existed when the check was written; all 19 are fixed (#40, #61), so the
+ * rule is now enforced outright with nothing grandfathered.
  *
- * Deliberately not asserted to be exhaustive: a fix landing elsewhere would
- * then fail this test, and "someone repaired a boundary" must never read as a
- * boundary violation.
+ * Kept as an empty set rather than deleted so a future crossing that genuinely
+ * cannot be fixed today has somewhere to be recorded WITH its reason, instead
+ * of the rule being weakened or the check deleted. Adding an entry should
+ * require an issue number in a comment beside it.
  */
-const KNOWN_CROSSINGS = new Set([
-  "src/install/myModsPanel.ts -> src/adapters/node/processLauncher",
-  "src/debug/adapter.ts -> src/bridge/client",
-  "src/debug/adapter.ts -> src/bridge/clients",
-  "src/debug/factory.ts -> src/bridge/client",
-  "src/debug/factory.ts -> src/bridge/clients",
-  "src/nav/navView.ts -> src/bridge/clients",
-  "src/nav/navView.ts -> src/skills/library",
-]);
+const KNOWN_CROSSINGS = new Set<string>([]);
 
 /** The crossing `file` makes by importing `spec`, or null when it makes none. */
 function crossing(file: string, spec: string): string | null {

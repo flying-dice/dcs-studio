@@ -1,12 +1,11 @@
 import * as vscode from "vscode";
-import type { ProcessLauncher } from "../adapters/node/processLauncher";
 import type {
   MyModsConfirm,
   MyModsEffect,
   MyModsInbound,
   MyModsLedger,
 } from "../core/app/myModsPresenter";
-import { MyModsPresenter } from "../core/app/myModsPresenter";
+import { type EntrypointLauncher, MyModsPresenter } from "../core/app/myModsPresenter";
 import type { SubscriptionService } from "../core/app/subscriptionService";
 import type { AuthPort } from "../core/ports/auth";
 import type { InstallRootsPort } from "../core/ports/installRoots";
@@ -34,7 +33,7 @@ export class MyModsPanel {
     subs: SubscriptionService,
     ledger: MyModsLedger,
     market: MarketplacePort,
-    launcher: ProcessLauncher,
+    launcher: EntrypointLauncher,
     roots: InstallRootsPort,
     auth: AuthPort,
   ): void {
@@ -67,7 +66,7 @@ export class MyModsPanel {
     subs: SubscriptionService,
     ledger: MyModsLedger,
     market: MarketplacePort,
-    private readonly launcher: ProcessLauncher,
+    private readonly launcher: EntrypointLauncher,
     roots: InstallRootsPort,
     auth: AuthPort,
   ) {

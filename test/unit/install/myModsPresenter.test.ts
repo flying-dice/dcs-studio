@@ -125,6 +125,10 @@ function harness(over: Overrides = {}, replies: (string | undefined)[] = []): Ha
       isRunning: () => false,
       launch: (key, plan) => void launched.push({ key, ...plan }),
       stop: (key) => void stopped.push(key),
+      // The presenter never calls this — a tracked process exiting is the
+      // panel's input, not the presenter's — but it is on the contract, so the
+      // fake carries it rather than the type being loosened to hide that.
+      setOnChange: () => {},
       ...over.launcher,
     },
     roots: {

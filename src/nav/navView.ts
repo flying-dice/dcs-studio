@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
-import type { BridgeClients } from "../bridge/clients";
 import { type DualBridgeStatus, displayTime } from "../core/domain/bridgeProtocol";
 import { MANIFEST_FILE } from "../core/domain/manifestFile";
-import type { SkillsLibrary } from "../skills/library";
+import type { BridgeRouterPort } from "../core/ports/debugBridge";
+import type { SkillsCatalogPort } from "../core/ports/skillsCatalog";
 import { mediaUri, renderWebviewHtml } from "../webview/html";
 
 // The sidebar as website-style page navigation: a WebviewView rendering a logo
@@ -20,8 +20,8 @@ export class NavViewProvider implements vscode.WebviewViewProvider {
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly clients: BridgeClients,
-    private readonly skills: SkillsLibrary,
+    private readonly clients: BridgeRouterPort,
+    private readonly skills: SkillsCatalogPort,
   ) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
