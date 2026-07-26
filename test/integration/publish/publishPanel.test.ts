@@ -62,7 +62,7 @@ const context = () =>
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 async function show() {
-  PublishPanel.show(context(), publishService());
+  PublishPanel.show(context(), publishService(), new VsCodeManifest(context()));
   await flush();
   return state.panels[state.panels.length - 1];
 }
@@ -362,7 +362,7 @@ describe("panel plumbing", () => {
 
   it("reveals the existing panel rather than opening a second", async () => {
     await show();
-    PublishPanel.show(context(), publishService());
+    PublishPanel.show(context(), publishService(), new VsCodeManifest(context()));
     expect(state.panels).toHaveLength(1);
   });
 

@@ -1,3 +1,27 @@
+// win32, not the host's flavour: this joins a Windows DCS install path, and the
+// posix join produces the wrong thing off Windows.
+import { win32 as path } from "node:path";
+import type { InstallRootsPort } from "../ports/installRoots";
+
+/** The file DCS reads to build the mission sandbox, under the install's Scripts. */
+export const MISSION_FILE = "MissionScripting.lua";
+
+/**
+ * The MissionScripting.lua path for the configured install, or undefined when
+ * no install path is set.
+ *
+ * Here rather than beside the panel that manages the file: the debug adapter
+ * needs it too, to tell a user whether the sandbox is currently sanitized, and a
+ * feature reaching into another feature to borrow a pure path rule is the
+ * boundary violation this module exists on the right side of (#61). It is string
+ * arithmetic over a port's answer — no I/O, nothing VS Code — so core is where
+ * it belongs.
+ */
+export function missionScriptPath(roots: InstallRootsPort): string | undefined {
+  const gameInstall = roots.gameInstall();
+  return gameInstall ? path.join(gameInstall, "Scripts", MISSION_FILE) : undefined;
+}
+
 /**
  * Whether a path names the file that DEFINES the mission sandbox.
  *

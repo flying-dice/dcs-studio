@@ -112,18 +112,12 @@ const COMPOSITION_ROOT = "extension.ts";
  */
 const KNOWN_CROSSINGS = new Set([
   "src/install/myModsPanel.ts -> src/adapters/node/processLauncher",
-  "src/bridge/client.ts -> src/adapters/node/wsTransport",
-  "src/debug/adapter.ts -> src/adapters/node/scheduler",
   "src/debug/adapter.ts -> src/bridge/client",
   "src/debug/adapter.ts -> src/bridge/clients",
-  "src/debug/adapter.ts -> src/mission/missionPanel",
-  "src/debug/factory.ts -> src/adapters/node/scheduler",
   "src/debug/factory.ts -> src/bridge/client",
   "src/debug/factory.ts -> src/bridge/clients",
   "src/nav/navView.ts -> src/bridge/clients",
   "src/nav/navView.ts -> src/skills/library",
-  "src/publish/preflight.ts -> src/adapters/vscode/manifest",
-  "src/setup/panel.ts -> src/adapters/node/sevenZip",
 ]);
 
 /** The crossing `file` makes by importing `spec`, or null when it makes none. */

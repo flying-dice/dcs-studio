@@ -13,13 +13,20 @@ vi.mock("fs", () => ({
   },
 }));
 vi.mock("os", () => ({ homedir: () => "C:\\Users\\fallback" }));
-vi.mock("../../../src/adapters/node/sevenZip", () => ({
-  find7z: (configured?: string) => configured ?? sevenZipDetected,
-}));
 
 import * as vscode from "vscode";
 import type { DetectService } from "../../../src/core/app/detectService";
+import type { ArchivePort } from "../../../src/core/ports/archive";
 import { SetupPanel } from "../../../src/setup/panel";
+
+// The panel only ever asks the port where 7-Zip is; packing and extraction are
+// the installer's business, never this panel's. It used to reach past the port
+// into `adapters/node/sevenZip` and this suite mocked that module — the same
+// coupling in the test that #61 removed from the source.
+const archive = (): ArchivePort =>
+  ({
+    available: async () => sevenZipDetected || null,
+  }) as unknown as ArchivePort;
 
 // The first-run gate. Everything else in the extension resolves through the two
 // paths chosen here, and a user who cannot get past this screen sees a product
@@ -46,7 +53,7 @@ const context = () =>
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 async function show() {
-  SetupPanel.show(context(), detect());
+  SetupPanel.show(context(), detect(), archive());
   await flush();
   return state.panels[state.panels.length - 1];
 }
@@ -259,7 +266,7 @@ describe("panel plumbing", () => {
 
   it("reveals the existing panel rather than opening a second", async () => {
     await show();
-    SetupPanel.show(context(), detect());
+    SetupPanel.show(context(), detect(), archive());
     expect(state.panels).toHaveLength(1);
   });
 

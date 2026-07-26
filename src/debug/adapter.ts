@@ -1,7 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { nodeScheduler } from "../adapters/node/scheduler";
 import type { BridgeClient, DebugEnv, DebugState } from "../bridge/client";
 import type { BridgeClients } from "../bridge/clients";
 import { missionStartFailure } from "../core/domain/bridgeStatusView";
@@ -24,11 +23,11 @@ import {
   toStackTraceResponse,
   toVariablesResponse,
 } from "../core/domain/dapTranslation";
+import { missionScriptPath } from "../core/domain/debugTarget";
 import { scanItems } from "../core/domain/missionSanitize";
 import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { SchedulerPort, TimerHandle } from "../core/ports/scheduler";
 import { showError } from "../errors";
-import { missionScriptPath } from "../mission/missionPanel";
 
 // Inline Debug Adapter Protocol implementation for DCS World Lua.
 //
@@ -116,11 +115,14 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
   constructor(
     private readonly clients: BridgeClients,
     config: vscode.DebugConfiguration,
-    private readonly scheduler: SchedulerPort = nodeScheduler,
-    // Required, unlike `scheduler`: this decides whether the mission bridge's
-    // silence is explained by a sanitized MissionScripting.lua, and any default
-    // stub would resolve to a path that never exists and answer "not
-    // sanitized" for every user. The factory supplies it.
+    // Both required, and supplied by the factory. `scheduler` used to default
+    // to `nodeScheduler`: that named a concrete adapter from a feature (#61),
+    // and it meant a test that forgot to pass one drove its poll loop off real
+    // timers rather than failing. `roots` decides whether the mission bridge's
+    // silence is explained by a sanitized MissionScripting.lua — a default stub
+    // would resolve to a path that never exists and answer "not sanitized" for
+    // every user.
+    private readonly scheduler: SchedulerPort,
     private readonly roots: InstallRootsPort,
   ) {
     this.config = config as DcsLaunchConfig;

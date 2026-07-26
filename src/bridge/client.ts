@@ -1,5 +1,4 @@
 import * as vscode from "vscode";
-import { WsBridgeTransport } from "../adapters/node/wsTransport";
 import {
   BRIDGE_INITIAL_BACKOFF_MS,
   type BridgeStatus,
@@ -62,17 +61,18 @@ export class BridgeClient {
   private disposed = false;
   private status: BridgeStatus = INITIAL_BRIDGE_STATUS;
   private readonly listeners = new Set<(s: BridgeStatus) => void>();
-  private readonly transport: BridgeTransportPort;
-
   constructor(
     private readonly host = "127.0.0.1",
     private readonly port = GUI_BRIDGE_PORT,
-    transport?: BridgeTransportPort,
+    // Required, and supplied by the composition root. It used to default to
+    // `new WsBridgeTransport()`, which made this feature name a concrete
+    // adapter (#61) — and the default was already dead: the extension passes a
+    // transport to both clients, and `clients.ts` takes them injected. A
+    // default nobody reaches is a second implementation nobody measures.
+    private readonly transport: BridgeTransportPort,
     /** Names this bridge in user-facing error messages ("GUI bridge" / "Mission bridge"). */
     private readonly label = "bridge",
-  ) {
-    this.transport = transport ?? new WsBridgeTransport();
-  }
+  ) {}
 
   get current(): BridgeStatus {
     return this.status;

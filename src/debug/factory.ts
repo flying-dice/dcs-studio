@@ -1,5 +1,4 @@
 import * as vscode from "vscode";
-import { nodeScheduler } from "../adapters/node/scheduler";
 import type { DebugEnv } from "../bridge/client";
 import type { BridgeClients } from "../bridge/clients";
 import { isMissionScriptingFile, MISSION_SCRIPT_REFUSAL } from "../core/domain/debugTarget";
@@ -11,14 +10,18 @@ import { DcsDebugAdapter } from "./adapter";
 export const DEBUG_TYPE = "dcs-lua";
 
 /** Inline adapter: runs in the extension host and shares the extension's two
- * bridge clients (the adapter picks the one serving the session's env). The
- * scheduler is threaded through so a session's poll loop can be driven by a
- * test; the extension leaves it at the real timers. */
+ * bridge clients (the adapter picks the one serving the session's env).
+ *
+ * Every dependency is required and supplied by the composition root. The
+ * scheduler used to default to `nodeScheduler`, which meant this file named a
+ * concrete adapter — a boundary violation (#61) — and, worse, that forgetting
+ * to pass one in a test silently bound the session's poll loop to real timers
+ * instead of failing. */
 export class DcsDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory {
   constructor(
     private readonly clients: BridgeClients,
     private readonly roots: InstallRootsPort,
-    private readonly scheduler: SchedulerPort = nodeScheduler,
+    private readonly scheduler: SchedulerPort,
   ) {}
 
   createDebugAdapterDescriptor(
