@@ -389,16 +389,16 @@ describe("staysUnder (webview copy)", () => {
     }
   });
 
-  it.each(CONTAINMENT_CASES.dest)(
-    "reduces $dest to $relative like the domain copy — $why",
-    ({ dest, relative }) => {
-      // splitDest is the webview's destRelative: same token rule, and the same
-      // separator strip. The form shows the author where a link will land, so a
-      // disagreement here is the form promising a path the installer refuses.
-      expect(splitDest(dest).rest).toBe(relative);
-      expect(destStaysUnder(dest)).toBe(domainDestStaysUnder(dest));
-    },
-  );
+  it.each(CONTAINMENT_CASES.dest)("reduces $dest to $relative like the domain copy — $why", ({
+    dest,
+    relative,
+  }) => {
+    // splitDest is the webview's destRelative: same token rule, and the same
+    // separator strip. The form shows the author where a link will land, so a
+    // disagreement here is the form promising a path the installer refuses.
+    expect(splitDest(dest).rest).toBe(relative);
+    expect(destStaysUnder(dest)).toBe(domainDestStaysUnder(dest));
+  });
 });
 
 describe("UMD wrapper", () => {
