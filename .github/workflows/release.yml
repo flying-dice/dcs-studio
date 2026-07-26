@@ -13,19 +13,31 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Package & publish GitHub release
-    runs-on: windows-latest
+  # The full pyramid — lint, typecheck, all four coverage gates, clippy under
+  # -D warnings, and the Windows build — as a gate rather than a bystander.
+  #
+  # Both workflows used to trigger on `push: tags`, which made CI *run* for a
+  # release without making it *matter*: two workflows started by the same tag
+  # are independent, with no `needs`, no `workflow_run` and no required status
+  # between them, so this job would happily attach the .vsix and both DLLs to a
+  # release while CI was still going red beside it. Calling it is what turns it
+  # into a precondition.
+  ci:
+    name: Full pipeline
+    uses: ./.github/workflows/ci.yml
+
+  # Everything these check is knowable from the checkout alone, so they run
+  # beside the pipeline rather than behind it: a mismatched version fails in
+  # seconds instead of after the whole pyramid, and neither waits on the other.
+  guards:
+    name: Release guards
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           # The bridge guard below diffs this tag against the previous one.
           fetch-depth: 0
 
-      # Both guards run first, before npm ci, the compile, two coverage gates, a
-      # Rust release build and the payload staging. Everything they check is
-      # knowable from the checkout alone, so a mismatch costs seconds of Windows
-      # runner time here instead of ~15 minutes further down.
       - name: Guard - tag matches package.json version
         if: github.ref_type == 'tag'
         shell: pwsh
@@ -87,6 +99,14 @@ jobs:
           Write-Host "bridge version $was -> $now"
           exit 0
 
+  release:
+    name: Package & publish GitHub release
+    runs-on: windows-latest
+    # Nothing is packaged, let alone published, until both have passed.
+    needs: [ci, guards]
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -95,15 +115,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Everything the pyramid covers — lint, typecheck, four coverage gates,
+      # clippy, the Windows build — has already passed in `ci` above, so what
+      # is left here is only what produces the artefacts. `vscode:prepublish`
+      # compiles again during packaging; this step exists so a compile failure
+      # is named as one rather than surfacing from inside vsce.
       - name: TypeScript compile
         run: npm run compile
-
-      # The two gates by name, not `vitest run --coverage`: the root
-      # vitest.config.ts is a `projects` config, and vitest treats `coverage` as
-      # a root-only option, so the per-project thresholds are ignored there. That
-      # form computes coverage and gates nothing.
-      - name: Unit + integration coverage gates
-        run: npm run coverage:unit && npm run coverage:integration
 
       - uses: dtolnay/rust-toolchain@stable
 
