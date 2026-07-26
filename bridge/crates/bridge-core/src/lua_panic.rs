@@ -27,6 +27,7 @@ use log::error;
 use mlua::prelude::LuaResult;
 use mlua::{ffi, Lua};
 use std::os::raw::c_int;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::slice;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -154,9 +155,26 @@ unsafe fn error_object(state: *mut ffi::lua_State) -> String {
 /// Logging allocates, which on a genuinely exhausted machine may itself fail —
 /// this is best effort by construction. It is still the only effort available:
 /// the alternative is a process that vanishes without a word.
+///
+/// Nothing may leave this frame except that return. `lua_CFunction` is
+/// `extern "C-unwind"`, so the ABI *permits* a Rust panic to propagate — but
+/// the frame it would propagate into is `luaD_throw`, C compiled with no
+/// unwind tables, and unwinding into that is undefined behaviour. A failed
+/// allocation aborts rather than unwinds and is therefore safe already; a
+/// panic is not, and the whole `log`/`log4rs` stack runs here — an appender
+/// lock, a `PatternEncoder`, a file write, any of which can panic. So the body
+/// runs under `catch_unwind` and the discarded `Err` is the point: there is
+/// nowhere to report a failure to log a failure, and this is the one path
+/// where trying anyway would turn a diagnostic into undefined behaviour.
 unsafe extern "C-unwind" fn on_lua_panic(state: *mut ffi::lua_State) -> c_int {
-    let cause = unsafe { error_object(state) };
-    error!("{}", last_words(&cause));
+    // AssertUnwindSafe: the closure's only captured state is the raw pointer,
+    // which it reads through `error_object` and never leaves partly written —
+    // and nothing observes this process afterwards in any case, because Lua
+    // calls `exit` the moment this returns.
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let cause = unsafe { error_object(state) };
+        error!("{}", last_words(&cause));
+    }));
     0
 }
 
@@ -285,6 +303,89 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).expect("clean up");
+    }
+
+    /// A panic in the log stack must not escape the handler.
+    ///
+    /// `lua_CFunction` is `extern "C-unwind"`, so an escaping panic would
+    /// unwind into `luaD_throw` — C with no unwind tables — which is undefined
+    /// behaviour on the one path whose entire job is to leave a diagnostic
+    /// behind. `error!` is not a small call: it is an appender lock, a
+    /// `PatternEncoder` and a file write, and a poisoned lock alone is enough.
+    ///
+    /// Run as a CHILD for the same reason as the panic probe, though a
+    /// different one: `log` takes exactly one logger per process and several
+    /// tests here bootstrap log4rs, so a logger that panics on demand has to be
+    /// installed in a process where it is the first and only one.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_panic_while_logging_does_not_escape_the_handler() {
+        let child = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+            .args(["--exact", "--ignored", "--nocapture", LOGGER_PROBE])
+            .output()
+            .expect("run the logging probe as a child");
+
+        let stderr = String::from_utf8_lossy(&child.stderr).into_owned();
+        assert!(
+            child.status.success(),
+            "the handler must swallow the panic and return: {stderr}"
+        );
+    }
+
+    /// A `log::Log` that panics the way a poisoned appender lock would.
+    struct PanickingLogger;
+
+    impl log::Log for PanickingLogger {
+        fn enabled(&self, _: &log::Metadata) -> bool {
+            true
+        }
+        fn log(&self, _: &log::Record) {
+            panic!("the appender lock was poisoned");
+        }
+        fn flush(&self) {}
+    }
+
+    /// The full name of [`the_probe_whose_logger_panics`] as libtest sees it.
+    const LOGGER_PROBE: &str = "lua_panic::tests::the_probe_whose_logger_panics";
+
+    /// Drives the handler with a logger that panics. `#[ignore]`d because it
+    /// installs that logger process-wide, which every other test in this binary
+    /// would then trip over; run as a child by
+    /// `a_panic_while_logging_does_not_escape_the_handler`.
+    ///
+    /// The pass condition is that this test *finishes*: without `catch_unwind`
+    /// in the handler the panic propagates out of `on_lua_panic` and libtest
+    /// fails the child. In DCS there is no libtest — there is `luaD_throw`.
+    #[test]
+    #[ignore = "installs a process-wide panicking logger; driven as a child by a_panic_while_logging_does_not_escape_the_handler"]
+    fn the_probe_whose_logger_panics() {
+        log::set_boxed_logger(Box::new(PanickingLogger)).expect("the first logger in this process");
+        log::set_max_level(log::LevelFilter::Error);
+        // Guards the probe: if the logger were not actually reached, the
+        // handler would have nothing to survive and this test would pass by
+        // doing nothing at all.
+        assert!(
+            log::log_enabled!(log::Level::Error),
+            "the panicking logger must be the one `error!` reaches"
+        );
+
+        let lua = Lua::new();
+        let mut returned = -1;
+        // SAFETY: as in the sibling test — the closure pushes a string, reads it
+        // back through the handler and pops it, leaving the stack as it found it.
+        unsafe {
+            lua.exec_raw::<()>((), |state| {
+                ffi::lua_pushstring(state, c"not enough memory".as_ptr());
+                returned = on_lua_panic(state);
+                ffi::lua_pop(state, 1);
+            })
+        }
+        .expect("drive the handler on a raw state");
+
+        assert_eq!(returned, 0, "the handler must still return 0 to Lua");
+        // Whatever the appender was mid-way through, the process is about to
+        // end; a real handler's last act would be this too.
+        log::logger().flush();
     }
 
     /// The reproduction itself. **This test ends the process**, which is the
