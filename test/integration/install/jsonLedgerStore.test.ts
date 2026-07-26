@@ -40,14 +40,13 @@ const sub: Subscription = {
 
 describe("load", () => {
   it("returns {} when the file is missing, which is the normal first run", async () => {
-    expect(await store.load()).toEqual({});
-    expect(store.takeCorruptNotice()).toBeUndefined();
+    expect(await store.load()).toEqual({ subs: {} });
     expect(fs.existsSync(store.corruptFilePath())).toBe(false);
   });
 
   it("round-trips a saved ledger", async () => {
     await store.save({ "owner/repo": sub });
-    expect(await store.load()).toEqual({ "owner/repo": sub });
+    expect(await store.load()).toEqual({ subs: { "owner/repo": sub } });
   });
 });
 
@@ -58,11 +57,13 @@ describe("an unreadable ledger", () => {
   it("reads as empty but preserves the file and raises a notice", async () => {
     fs.writeFileSync(store.subsFilePath(), "{not json");
 
-    expect(await store.load()).toEqual({});
+    expect(await store.load()).toEqual({
+      subs: {},
+      recovered: { quarantinedTo: store.corruptFilePath() },
+    });
 
     expect(fs.readFileSync(store.corruptFilePath(), "utf8")).toBe("{not json");
     expect(fs.existsSync(store.subsFilePath())).toBe(false);
-    expect(store.takeCorruptNotice()).toBe(store.corruptFilePath());
   });
 
   it("treats valid JSON that is not a ledger object as unreadable", async () => {
@@ -71,9 +72,11 @@ describe("an unreadable ledger", () => {
     for (const raw of ["[]", "null", "42"]) {
       fs.rmSync(store.corruptFilePath(), { force: true });
       fs.writeFileSync(store.subsFilePath(), raw);
-      expect(await store.load()).toEqual({});
+      expect(await store.load()).toEqual({
+        subs: {},
+        recovered: { quarantinedTo: store.corruptFilePath() },
+      });
       expect(fs.readFileSync(store.corruptFilePath(), "utf8")).toBe(raw);
-      expect(store.takeCorruptNotice()).toBe(store.corruptFilePath());
     }
   });
 
@@ -81,9 +84,10 @@ describe("an unreadable ledger", () => {
     // A directory where the file should be reads as EISDIR, not ENOENT.
     fs.mkdirSync(store.subsFilePath(), { recursive: true });
 
-    expect(await store.load()).toEqual({});
-
-    expect(store.takeCorruptNotice()).toBe(store.corruptFilePath());
+    expect(await store.load()).toEqual({
+      subs: {},
+      recovered: { quarantinedTo: store.corruptFilePath() },
+    });
     expect(fs.statSync(store.corruptFilePath()).isDirectory()).toBe(true);
   });
 
@@ -94,22 +98,76 @@ describe("an unreadable ledger", () => {
     fs.mkdirSync(store.corruptFilePath(), { recursive: true });
     fs.writeFileSync(path.join(store.corruptFilePath(), "keep.txt"), "x");
 
-    expect(await store.load()).toEqual({});
-
-    expect(store.takeCorruptNotice()).toBe(store.subsFilePath());
+    expect(await store.load()).toEqual({
+      subs: {},
+      recovered: { quarantinedTo: store.subsFilePath() },
+    });
     expect(fs.readFileSync(store.subsFilePath(), "utf8")).toBe("{not json");
   });
 
-  it("hands the notice out once, so the warning is not repeated on every refresh", async () => {
+  it("reports the recovery once, because the quarantine resolved it", async () => {
+    // The notice used to be a one-shot flag drained by takeCorruptNotice(), so
+    // "once" was a property of hidden state — and with two panels open the
+    // second to ask saw nothing (#64). It is now a property of the world: the
+    // quarantine RENAMED the unreadable file, so the next read finds nothing
+    // there and is a clean "nothing installed yet".
+    fs.writeFileSync(store.subsFilePath(), "{not json");
+
+    expect(await store.load()).toEqual({
+      subs: {},
+      recovered: { quarantinedTo: store.corruptFilePath() },
+    });
+    expect(await store.load()).toEqual({ subs: {} });
+  });
+
+  it("preserves uninstall-all.bat too, so a later install cannot erase it", async () => {
+    // load() leaves the live script alone when the ledger is unreadable — but
+    // only until the next save(). One install after a corruption legitimately
+    // regenerates it from a ledger containing just that mod, silently dropping
+    // every earlier entry. The links those entries described are still in the
+    // user's DCS folders, and the script was the only thing that removed them.
+    await store.save({ "owner/repo": sub });
+    const before = fs.readFileSync(store.uninstallBatPath(), "utf8");
+    expect(before).toContain("C:\\SG\\DCS\\Scripts\\X");
+
     fs.writeFileSync(store.subsFilePath(), "{not json");
     await store.load();
 
-    expect(store.takeCorruptNotice()).toBe(store.corruptFilePath());
-    expect(store.takeCorruptNotice()).toBeUndefined();
-    // The quarantined file is gone from its old path, so the next read is a
-    // clean "nothing installed yet" rather than a second warning.
-    expect(await store.load()).toEqual({});
-    expect(store.takeCorruptNotice()).toBeUndefined();
+    // A later install rewrites the live script from the emptied ledger…
+    await store.save({ "other/mod": { ...sub, repo: "Other/Mod", links: [] } as Subscription });
+    expect(fs.readFileSync(store.uninstallBatPath(), "utf8")).not.toContain(
+      "C:\\SG\\DCS\\Scripts\\X",
+    );
+    // …and the copy taken at quarantine still lists them.
+    expect(fs.readFileSync(store.uninstallBatBackupPath(), "utf8")).toBe(before);
+  });
+
+  it("survives a corruption that happens before any script exists", async () => {
+    // Nothing to copy aside; the ledger copy is the record, and the read must
+    // not fail because the escape hatch was never written.
+    fs.writeFileSync(store.subsFilePath(), "{not json");
+
+    expect(await store.load()).toEqual({
+      subs: {},
+      recovered: { quarantinedTo: store.corruptFilePath() },
+    });
+    expect(fs.existsSync(store.uninstallBatBackupPath())).toBe(false);
+  });
+
+  it("keeps reporting while the ledger is still unreadable where it is", async () => {
+    // The case the flag got wrong. When the rename cannot happen — something
+    // already occupies the .corrupt path — the ledger is still there and still
+    // unreadable, so every read must say so. Under the flag the user was told
+    // once and then left with a permanently empty panel and no explanation.
+    fs.writeFileSync(store.subsFilePath(), "{not json");
+    fs.mkdirSync(store.corruptFilePath(), { recursive: true });
+    fs.writeFileSync(path.join(store.corruptFilePath(), "keep.txt"), "x");
+
+    const first = await store.load();
+    const second = await store.load();
+
+    expect(first).toEqual({ subs: {}, recovered: { quarantinedTo: store.subsFilePath() } });
+    expect(second).toEqual(first);
   });
 });
 
@@ -172,6 +230,5 @@ describe("ensureUninstallBat", () => {
     expect(p).toBe(store.uninstallBatPath());
     expect(fs.readFileSync(p, "utf8")).toBe(before);
     expect(before).toContain("C:\\SG\\DCS\\Scripts\\X");
-    expect(store.takeCorruptNotice()).toBe(store.corruptFilePath());
   });
 });

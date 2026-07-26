@@ -36,22 +36,20 @@ const sub = (): Subscription =>
 
 let subs: Subscription[] = [];
 let enableThrows: unknown;
+// Set to make the ledger read report a quarantined file (#64) — it travels
+// with the read now rather than through a one-shot flag on the store.
+let recovered: { quarantinedTo: string } | undefined;
 const service = {
   list: async () => subs,
+  listWithRecovery: async () => (recovered ? { mods: subs, recovered } : { mods: subs }),
   enable: async () => {
     if (enableThrows) throw enableThrows;
   },
 } as unknown as SubscriptionService;
 
-let corruptNotice: string | undefined;
 const ledger: MyModsLedger = {
   ensureUninstallBat: () => UNINSTALL_BAT,
   uninstallBatPath: () => UNINSTALL_BAT,
-  takeCorruptNotice: () => {
-    const notice = corruptNotice;
-    corruptNotice = undefined;
-    return notice;
-  },
 };
 
 // Passed straight through to the presenter and never reached from here: only
@@ -113,7 +111,7 @@ beforeEach(() => {
   });
   subs = [sub()];
   enableThrows = undefined;
-  corruptNotice = undefined;
+  recovered = undefined;
   launched.length = 0;
   globalState.clear();
   onChange = undefined;
@@ -204,7 +202,7 @@ describe("the effects the presenter describes", () => {
   });
 
   it("shows the unreadable-ledger notice as a warning", async () => {
-    corruptNotice = `${DATA_DIR}\\subscriptions.json.corrupt`;
+    recovered = { quarantinedTo: `${DATA_DIR}\\subscriptions.json.corrupt` };
     await show();
 
     expect(state.warnings[0]).toContain(`${DATA_DIR}\\subscriptions.json.corrupt`);

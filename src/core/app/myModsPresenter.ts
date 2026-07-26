@@ -58,17 +58,20 @@ export interface MyModsInbound {
 
 /**
  * The ledger surface My Mods consumes. Deliberately NOT `SubscriptionLedgerStore`:
- * that port declares `load`/`save`, and none of the three below — the panel never
- * reads or writes the ledger itself, it asks the service. Kept narrow so a
+ * that port declares `load`/`save`, and neither of the two below — the panel
+ * never reads or writes the ledger itself, it asks the service. Kept narrow so a
  * different ledger backend implements exactly what this consumer needs.
+ *
+ * It used to carry `takeCorruptNotice()` as well, which is why this interface
+ * existed rather than the port: a one-shot flag the port did not declare (#64).
+ * The notice now travels with the read that produced it, via
+ * `SubscriptionService.listWithRecovery`.
  */
 export interface MyModsLedger {
   /** Write `uninstall-all.bat` if missing and answer its path. */
   ensureUninstallBat(): string;
   /** Where `uninstall-all.bat` lives, without writing it. */
   uninstallBatPath(): string;
-  /** The path an unreadable ledger was preserved at, once per corruption. */
-  takeCorruptNotice(): string | undefined;
 }
 
 /**
@@ -95,7 +98,10 @@ export interface ConsentStore {
 }
 
 export interface MyModsPresenterDeps {
-  subs: Pick<SubscriptionService, "list" | "enable" | "disable" | "unsubscribe" | "update">;
+  subs: Pick<
+    SubscriptionService,
+    "list" | "listWithRecovery" | "enable" | "disable" | "unsubscribe" | "update"
+  >;
   ledger: MyModsLedger;
   market: MarketplacePort;
   launcher: EntrypointLauncher;
@@ -176,7 +182,8 @@ export class MyModsPresenter {
     // the product page shows, derived from the ledger snapshot (dests shown as
     // declared tokens — My Mods does not resolve them). Read defensively so
     // ledgers written before bundles/symlinks existed still render.
-    const mods = (await this.deps.subs.list()).map((s) => ({
+    const read = await this.deps.subs.listWithRecovery();
+    const mods = read.mods.map((s) => ({
       ...toModDto(s),
       manifest: deriveInstallManifestView({
         bundles: s.bundles ?? [],
@@ -192,11 +199,10 @@ export class MyModsPresenter {
     // An unreadable ledger reads as empty, so the list below is about to claim
     // nothing is installed while the links are still in the DCS folders. Say so,
     // and point at the file that was preserved — it is the only record of them.
-    const corrupt = this.deps.ledger.takeCorruptNotice();
-    if (corrupt) {
+    if (read.recovered) {
       this.deps.effect({
         kind: "warn",
-        message: `Your DCS Studio mod list could not be read and was preserved as ${corrupt}. My Mods will look empty until it is restored; uninstall-all.bat was left as it was, so it still removes the links already in your DCS folders.`,
+        message: `Your DCS Studio mod list could not be read and was preserved as ${read.recovered.quarantinedTo}. My Mods will look empty until it is restored; uninstall-all.bat was left as it was, so it still removes the links already in your DCS folders.`,
       });
     }
     // Running state keyed exactly as the webview looks it up (`<repo>::<id>`),

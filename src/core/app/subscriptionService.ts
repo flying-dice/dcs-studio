@@ -27,7 +27,7 @@ import type { ClockPort } from "../ports/clock";
 import type { DownloadPort } from "../ports/downloader";
 import type { FileSystemPort } from "../ports/filesystem";
 import type { InstallRootsPort } from "../ports/installRoots";
-import type { SubscriptionLedgerStore } from "../ports/ledger";
+import type { LedgerRead, SubscriptionLedgerStore } from "../ports/ledger";
 import type { LinkerPort } from "../ports/linker";
 import type { ManifestPort } from "../ports/manifest";
 
@@ -86,12 +86,30 @@ export class SubscriptionService {
 
   /** All subscriptions, sorted by display name. */
   async list(): Promise<Subscription[]> {
-    return sortedByName(await this.ports.ledger.load());
+    return (await this.listWithRecovery()).mods;
+  }
+
+  /**
+   * The list, plus what the ledger read had to recover from — the shape My Mods
+   * needs, because an unreadable ledger reads as an EMPTY one and the panel is
+   * about to claim nothing is installed while the links are still in the user's
+   * DCS folders.
+   *
+   * Separate from `list()` rather than widening it: four of its five callers are
+   * `.find(...)` lookups that have no use for the notice, and the point of #64
+   * was to tie the notice to the read that produced it — not to make everyone
+   * carry it.
+   */
+  async listWithRecovery(): Promise<{ mods: Subscription[]; recovered?: LedgerRead["recovered"] }> {
+    const read = await this.ports.ledger.load();
+    return read.recovered
+      ? { mods: sortedByName(read.subs), recovered: read.recovered }
+      : { mods: sortedByName(read.subs) };
   }
 
   /** The subscription for `repo` (case-insensitive), or undefined. */
   async get(repo: string): Promise<Subscription | undefined> {
-    return (await this.ports.ledger.load())[ledgerKey(repo)];
+    return (await this.ports.ledger.load()).subs[ledgerKey(repo)];
   }
 
   async isSubscribed(repo: string): Promise<boolean> {
@@ -309,7 +327,7 @@ export class SubscriptionService {
    * a valid, empty file. Uses the ledger snapshot — never re-fetches manifests.
    */
   private async regenerateAggregators(): Promise<void> {
-    const subs = await this.ports.ledger.load();
+    const { subs } = await this.ports.ledger.load();
     const before: AggregatorEntry[] = [];
     const after: AggregatorEntry[] = [];
     for (const sub of Object.values(subs)) {
@@ -341,7 +359,7 @@ export class SubscriptionService {
     onProgress: OnProgress,
   ): Promise<Subscription> {
     const dir = await this.downloadAndUnpack(target, token, onProgress);
-    const subs = await this.ports.ledger.load();
+    const { subs } = await this.ports.ledger.load();
     const existing = subs[ledgerKey(target.repo)];
     // Snapshot declared entrypoints + mission scripts so My Mods can launch and
     // the aggregators can regenerate without re-fetching manifests.
@@ -372,7 +390,7 @@ export class SubscriptionService {
 
   /** Enable: link the unpacked assets to their dcs-studio.toml destinations. */
   async enable(repo: string): Promise<void> {
-    const subs = await this.ports.ledger.load();
+    const { subs } = await this.ports.ledger.load();
     const sub = subs[ledgerKey(repo)];
     if (!sub) throw new Error("Not subscribed.");
     if (sub.enabled) return;
@@ -416,7 +434,7 @@ export class SubscriptionService {
    * naming it, so the panel reports the truth rather than a clean disable.
    */
   async disable(repo: string): Promise<void> {
-    const subs = await this.ports.ledger.load();
+    const { subs } = await this.ports.ledger.load();
     const sub = subs[ledgerKey(repo)];
     if (!sub?.enabled) return;
     const total = sub.links.length;
@@ -483,7 +501,7 @@ export class SubscriptionService {
    * DCS and running it again finishes the job.
    */
   async unsubscribe(repo: string): Promise<void> {
-    const subs = await this.ports.ledger.load();
+    const { subs } = await this.ports.ledger.load();
     const sub = subs[ledgerKey(repo)];
     if (!sub) return;
 

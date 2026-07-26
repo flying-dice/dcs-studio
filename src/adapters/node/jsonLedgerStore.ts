@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { renderUninstallScript } from "../../core/domain/subscriptions";
 import type { Subscription } from "../../core/domain/types";
-import type { SubscriptionLedgerStore } from "../../core/ports/ledger";
+import type { LedgerRead, SubscriptionLedgerStore } from "../../core/ports/ledger";
 
 // Node adapter for `SubscriptionLedgerStore`: persists the ledger as
 // `<dataDir>/subscriptions.json` (pretty-printed, keyed by lowercased repo — the
@@ -20,9 +20,6 @@ import type { SubscriptionLedgerStore } from "../../core/ports/ledger";
 export class JsonLedgerStore implements SubscriptionLedgerStore {
   constructor(private readonly dataDir: () => string) {}
 
-  /** Set when an unreadable ledger was preserved; consumed by takeCorruptNotice. */
-  private corruptNotice: string | undefined;
-
   /** `<dataDir>/subscriptions.json` — the frozen ledger file. */
   subsFilePath(): string {
     return path.join(this.dataDir(), "subscriptions.json");
@@ -38,9 +35,12 @@ export class JsonLedgerStore implements SubscriptionLedgerStore {
     return `${this.subsFilePath()}.corrupt`;
   }
 
-  /** Tolerant read: `{}` when the file is missing or could not be read. */
-  async load(): Promise<Record<string, Subscription>> {
-    return this.loadSync().subs;
+  /** Tolerant read: empty `subs` when the file is missing or unreadable. */
+  async load(): Promise<LedgerRead> {
+    const read = this.loadSync();
+    return read.quarantinedTo
+      ? { subs: read.subs, recovered: { quarantinedTo: read.quarantinedTo } }
+      : { subs: read.subs };
   }
 
   async save(subs: Record<string, Subscription>): Promise<void> {
@@ -55,28 +55,18 @@ export class JsonLedgerStore implements SubscriptionLedgerStore {
    *  links that are still in the DCS folders. */
   ensureUninstallBat(): string {
     const read = this.loadSync();
-    if (!read.unreadable) this.writeUninstallBat(read.subs);
+    if (!read.quarantinedTo) this.writeUninstallBat(read.subs);
     return this.uninstallBatPath();
   }
 
-  /**
-   * The path an unreadable ledger was preserved at, if one has been quarantined
-   * since this was last called — the message the UI owes the user. Consumed on
-   * read, so the warning is shown once per corruption rather than per refresh.
-   */
-  takeCorruptNotice(): string | undefined {
-    const notice = this.corruptNotice;
-    this.corruptNotice = undefined;
-    return notice;
-  }
-
-  private loadSync(): { subs: Record<string, Subscription>; unreadable: boolean } {
+  /** `quarantinedTo` is set exactly when the read failed and was preserved. */
+  private loadSync(): { subs: Record<string, Subscription>; quarantinedTo?: string } {
     let raw: string;
     try {
       raw = fs.readFileSync(this.subsFilePath(), "utf8");
     } catch (e) {
       // No ledger yet — the normal state before the first install.
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") return { subs: {}, unreadable: false };
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return { subs: {} };
       return this.quarantine();
     }
     try {
@@ -86,14 +76,31 @@ export class JsonLedgerStore implements SubscriptionLedgerStore {
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         return this.quarantine();
       }
-      return { subs: parsed as Record<string, Subscription>, unreadable: false };
+      return { subs: parsed as Record<string, Subscription> };
     } catch {
       return this.quarantine();
     }
   }
 
-  /** Preserve the unreadable ledger beside itself and raise the notice. */
-  private quarantine(): { subs: Record<string, Subscription>; unreadable: true } {
+  /** `uninstall-all.bat` as it was when the ledger went unreadable. */
+  uninstallBatBackupPath(): string {
+    return `${this.uninstallBatPath()}.corrupt`;
+  }
+
+  /**
+   * Preserve the unreadable ledger beside itself, and the escape hatch with it.
+   *
+   * `load()` deliberately leaves `uninstall-all.bat` alone here, because
+   * regenerating it from the empty read would rewrite the only record of links
+   * that are still in the DCS folders. That holds until the next `save()` — one
+   * install after a corruption, and the script is legitimately rewritten from a
+   * ledger containing only the new mod, silently dropping every earlier entry.
+   *
+   * So the script is copied aside at the same moment the ledger is. Copy rather
+   * than move: the live one has to keep working, and it is the version a user
+   * following the warning will reach for first.
+   */
+  private quarantine(): { subs: Record<string, Subscription>; quarantinedTo: string } {
     let preserved = this.corruptFilePath();
     try {
       fs.renameSync(this.subsFilePath(), preserved);
@@ -101,8 +108,13 @@ export class JsonLedgerStore implements SubscriptionLedgerStore {
       // Could not move it — point at where it still is rather than at nothing.
       preserved = this.subsFilePath();
     }
-    this.corruptNotice = preserved;
-    return { subs: {}, unreadable: true };
+    try {
+      fs.copyFileSync(this.uninstallBatPath(), this.uninstallBatBackupPath());
+    } catch {
+      // No script yet (corruption before the first install), or an unwritable
+      // data dir. Best effort: the ledger copy above is the primary record.
+    }
+    return { subs: {}, quarantinedTo: preserved };
   }
 
   private writeUninstallBat(subs: Record<string, Subscription>): void {

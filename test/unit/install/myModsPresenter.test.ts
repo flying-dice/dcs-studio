@@ -92,9 +92,16 @@ function harness(over: Overrides = {}, replies: (string | undefined)[] = []): Ha
   const stopped: string[] = [];
   const remembered: string[] = [];
 
+  // `listWithRecovery` is what refresh() reads; `list` serves the lookups. The
+  // default derives one from the other so a test overriding only `list` still
+  // gets a coherent pair — overriding just one of two views of the same data is
+  // how a fake starts lying.
+  const listed = async () => (over.subs?.list ? over.subs.list() : [sub()]);
+
   const deps: MyModsPresenterDeps = {
     subs: {
-      list: async () => [sub()],
+      list: listed,
+      listWithRecovery: async () => ({ mods: await listed() }),
       enable: async (repo: string) => void calls.push(`enable ${repo}`),
       disable: async (repo: string) => void calls.push(`disable ${repo}`),
       unsubscribe: async (repo: string) => void calls.push(`unsubscribe ${repo}`),
@@ -110,7 +117,6 @@ function harness(over: Overrides = {}, replies: (string | undefined)[] = []): Ha
         return UNINSTALL_BAT;
       },
       uninstallBatPath: () => UNINSTALL_BAT,
-      takeCorruptNotice: () => undefined,
       ...over.ledger,
     },
     market: {
@@ -249,14 +255,20 @@ describe("drawing the list", () => {
     // nothing is installed while the links are still in the DCS folders. The
     // preserved file is the only record of them, so the warning names it.
     const preserved = `${DATA_DIR}\\subscriptions.json.corrupt`;
-    let notice: string | undefined = preserved;
+    // Modelled the way the adapter behaves: the quarantine RENAMES the
+    // unreadable file, so the next read finds nothing there and reports a
+    // plain empty ledger. The warning appearing once is a consequence of the
+    // world changing, not of a flag being drained — which is the whole point
+    // of #64. It used to be a one-shot `takeCorruptNotice()`, so with two
+    // panels open whichever asked second saw nothing at all.
+    let quarantined = false;
     const h = harness({
-      subs: { list: async () => [] },
-      ledger: {
-        takeCorruptNotice: () => {
-          const taken = notice;
-          notice = undefined;
-          return taken;
+      subs: {
+        list: async () => [],
+        listWithRecovery: async () => {
+          if (quarantined) return { mods: [] };
+          quarantined = true;
+          return { mods: [], recovered: { quarantinedTo: preserved } };
         },
       },
     });
@@ -273,9 +285,30 @@ describe("drawing the list", () => {
     );
     expect(mods(h)).toEqual([]);
 
-    // Once per corruption, not once per redraw — the notice is consumed.
+    // Nothing left to quarantine, so nothing more to say.
     await h.presenter.refresh();
     expect(h.effects).toHaveLength(1);
+  });
+
+  it("says so again while the ledger is still unreadable on disk", async () => {
+    // The case the one-shot flag got wrong. If the quarantine rename FAILS —
+    // the file is locked, or the data dir is read-only — the ledger is still
+    // there and still unreadable, and every read re-reports it. Under the old
+    // flag the user was told once and then left with a permanently empty panel
+    // and no explanation.
+    const stillThere = `${DATA_DIR}\\subscriptions.json`;
+    const h = harness({
+      subs: {
+        list: async () => [],
+        listWithRecovery: async () => ({ mods: [], recovered: { quarantinedTo: stillThere } }),
+      },
+    });
+
+    await h.presenter.refresh();
+    await h.presenter.refresh();
+
+    expect(h.effects).toHaveLength(2);
+    expect((h.effects[1] as { message: string }).message).toContain(stillThere);
   });
 
   it("redraws on an explicit refresh message", async () => {
