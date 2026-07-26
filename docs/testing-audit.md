@@ -394,6 +394,51 @@ came out of asking what happens when a user acts at the wrong moment.
   problem to the down-arrow; fixing both directions needs a history-navigation
   mode flag that changes multi-line editing ergonomics. Documented in the spec.
 
+## The one area still unmeasured: Lua
+
+Stated plainly because the headline finding of this audit was that unmeasured
+code cannot be noticed drifting, and that argument does not stop at the language
+boundary.
+
+The four gates cover `src/core/**` plus two `media/*-core.js` (unit), `src/**`
+minus the hexagon (integration), `media/*.js` minus `*-core.js` (e2e), and the
+Rust workspace via `cargo llvm-cov`. **Nothing in that set is Lua** — and about
+2,050 lines of Lua run inside the sim, on the sim thread:
+
+| File | LOC | Executed by a test? | Measured? |
+|---|---|---|---|
+| `bridge-core/lua/debug_engine.lua` | 763 | yes | no |
+| `bridge-core/lua/gui_methods.lua` | 580 | yes | no |
+| `bridge-core/lua/rt.lua` | 450 | yes | no |
+| `bridge-core/lua/mission_methods.lua` | 195 | yes | no |
+| `bridge-core/lua/gui_db.lua` | 194 | yes | no |
+| `bridge-mission/lua/mission_init.lua` | 91 | yes | no |
+| `bridge-core/lua/methods_shared.lua` | 62 | yes | no |
+| `bridge/hook/DcsStudio.lua` | 111 | **now** — `tests/hook_dcs_studio.rs` | no |
+
+The distinction matters. The seven `bridge-*/lua/*.lua` chunks are loaded into
+real Lua states by the Rust integration tests and are genuinely exercised — but
+`cargo llvm-cov` measures Rust regions, and a Lua chunk is opaque to it. So
+"`call_bounded`'s yield branch is covered", "the `gethook` refusal in
+`RT.signature_json` is covered", "`hold_pause`'s drain throttle is covered" are
+claims, not measurements. A branch that stopped being reached would not fail
+anything.
+
+`DcsStudio.lua` was worse and is the reason this section exists: it is the file
+DCS loads at startup, and until `tests/hook_dcs_studio.rs` **no test loaded it at
+all**. `debug_ws_latency.rs` mentions it only to build a minimal hook of its own.
+The `pcall` around `onSimulationFrame`, the `FRAME_ERROR_INTERVAL` throttle and
+the `logger_level` change from `info` to `warn` all shipped unexercised. That
+test stubs the five sim globals and runs the real chunk; both the `pcall` and the
+throttle are mutation-checked.
+
+What is left is measurement, not execution: a Lua coverage hook (`debug.sethook`
+with a `line` mask, or LuaCov) over the chunks the Rust tests already load, and a
+fifth gate to hold the result. That is deliberately not in this branch — it is a
+new toolchain in the one part of the workspace whose failure mode is a crashed
+flight sim, and it deserves its own change rather than a corner of this one.
+**Tracked as #66.**
+
 ## Addendum: what the clean-code round changed about the gates themselves
 
 The pyramid work above was audited afterwards by ten parallel principle-specific
