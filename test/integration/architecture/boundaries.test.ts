@@ -121,6 +121,58 @@ function crossing(file: string, spec: string): string | null {
   return `src/${from} -> src/${target}`.replaceAll(path.sep, "/");
 }
 
+describe("the import scanner itself", () => {
+  // Both boundary tests assert an ABSENCE — `violations` is empty. If
+  // `importSpecifiers` stopped matching (a regex edited, a syntax it does not
+  // cover, a future import form) it returns nothing, both suites stay green,
+  // and the rule is enforced against no imports at all.
+  //
+  // Until the ratchet was emptied there was incidental evidence it worked: 13
+  // entries the scan had to actually produce for the suite to behave as it
+  // did. Emptying it removed that, so the enforcement became unfalsifiable at
+  // the moment it became complete — the same shape as the three Rust tests
+  // that "asserted an absence" and passed while covering nothing.
+  //
+  // So: one positive assertion. It also documents which import forms the rule
+  // covers, which was otherwise only inferable from the regexes.
+
+  it("finds every import form the rule is written against", () => {
+    const sample = [
+      `import a from "./a";`,
+      `import type { B } from "../b";`,
+      `import * as ns from "./ns";`,
+      `export { c } from "./c";`,
+      `export * from "./star";`,
+      `const d = require("./d");`,
+      `void import("./e");`,
+      `import "./f";`,
+    ].join("\n");
+
+    expect(importSpecifiers(sample).sort()).toEqual([
+      "../b",
+      "./a",
+      "./c",
+      "./d",
+      "./e",
+      "./f",
+      "./ns",
+      "./star",
+    ]);
+  });
+
+  it("actually parses the source tree, not just walks it", () => {
+    // The file-count guard below proves files were FOUND. This proves they
+    // were READ: a scanner returning nothing for every file would satisfy the
+    // count and fail here.
+    const files = walk(SRC_DIR, ".ts");
+    const total = files.reduce(
+      (n, f) => n + importSpecifiers(fs.readFileSync(f, "utf8")).length,
+      0,
+    );
+    expect(total).toBeGreaterThan(200);
+  });
+});
+
 describe("adapter boundary", () => {
   it("no module outside core reaches into another unit's internals", () => {
     const files = walk(SRC_DIR, ".ts").filter(

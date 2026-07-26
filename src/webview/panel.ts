@@ -23,14 +23,36 @@ export function activeColumn(): vscode.ViewColumn {
 }
 
 /**
+ * What every webview in this extension may do, panel or view.
+ *
+ * - `enableScripts` — these are applications, not documents.
+ * - `localResourceRoots` — `media/` and nothing else. This is the restriction
+ *   that stops a webview reading the user's disk through a crafted URI.
+ *
+ * Separate from `createPanel` because the sidebar is a `WebviewView`, not a
+ * panel: it takes plain `WebviewOptions` with no home for
+ * `retainContextWhenHidden`, so it cannot call `createPanel` — and it was
+ * therefore left setting its own copy of exactly this pair. That made the
+ * sidebar the one webview whose capabilities could still drift silently, and
+ * it is the worst one to miss: panels are opened on demand and closed, while
+ * the nav is registered at activation and lives for the whole session.
+ *
+ * The security decision is this pair. It is stated here, once, and both
+ * surfaces take it from here.
+ */
+export function webviewCapabilities(extensionUri: vscode.Uri): vscode.WebviewOptions {
+  return {
+    enableScripts: true,
+    localResourceRoots: [vscode.Uri.joinPath(extensionUri, "media")],
+  };
+}
+
+/**
  * A webview panel with this extension's standard capabilities and its icon.
  *
- * - `enableScripts` — every panel here is an application, not a document.
- * - `retainContextWhenHidden` — panels hold live state (a console buffer, a
- *   half-filled form, a running install) that a re-render would lose.
- * - `localResourceRoots` — `media/` and nothing else. This is the restriction
- *   that stops a webview reading the user's disk through a crafted URI, so it
- *   is stated once here rather than ten times.
+ * Adds `retainContextWhenHidden` to [`webviewCapabilities`]: panels hold live
+ * state (a console buffer, a half-filled form, a running install) that a
+ * re-render would lose.
  *
  * `showOptions` takes a column or the full `{ viewColumn, preserveFocus }`
  * form, because the manifest form opens beside its document without stealing
@@ -46,9 +68,8 @@ export function createPanel(
   showOptions: vscode.ViewColumn | { viewColumn: vscode.ViewColumn; preserveFocus?: boolean },
 ): vscode.WebviewPanel {
   const panel = vscode.window.createWebviewPanel(viewType, title, showOptions, {
-    enableScripts: true,
+    ...webviewCapabilities(context.extensionUri),
     retainContextWhenHidden: true,
-    localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
   });
   panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
   return panel;
