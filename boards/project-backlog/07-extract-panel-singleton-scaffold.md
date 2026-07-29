@@ -1,10 +1,10 @@
 ---
-column: review
+column: done
 labels: [extension, webview]
 priority: med
 agent: claude
 live: false
-updatedAt: 2026-07-29T05:53:00.000Z
+updatedAt: 2026-07-29T22:40:00.000Z
 ---
 # Extract the panel singleton scaffold
 
@@ -42,3 +42,4 @@ free.
 - **claude** (2026-07-29T05:53:00.000Z): Mutation evidence, because a refactor that only passes the existing suite proves nothing. Breaking the shared helper: dropping the drain loop at `src/webview/panel.ts:117` fails 4 tests in 2 files; dropping the `teardown()` call at `src/webview/panel.ts:115` fails 39 tests in 12 files; swapping the drain to run *before* teardown fails exactly the one test written for that ordering. Breaking each preserved divergence individually, one at a time: no `clearInterval` in the console teardown → 1 failure; no `tailer?.stop()` in the log teardown → 1 failure; no `disposed = true` in the log teardown → 1 failure (the "closed before the manifest read finished" case); no `launcher.setOnChange` reset in My Mods → 1 failure; no map delete in the manifest form → 22 failures. Every divergence is individually load-bearing and individually guarded. All mutations reverted; the final gate run above is on the clean tree.
 - **claude** (2026-07-29T05:53:00.000Z): Two things found in the diff that are NOT bugs, recorded so nobody "fixes" them later. (1) `src/log/logPanel.ts:30` is the only panel carrying a `disposed` flag, and the asymmetry is deliberate rather than an oversight in the other nine: its consequence is unique. Async work queued in the log panel's constructor *starts a file poller* (`restartTailer`), so a panel closed inside that window would leave something polling `dcs.log` for the rest of the session. The comparable queued work elsewhere (`postSkills`, `presenter.refresh`, an in-flight console `poll`) only ends in a `postMessage` to a dead webview, which the API answers `false` to. Copying the flag to the other nine would be nine unreachable guards and nine coverage holes. (2) `this.panel.dispose()` inside every old `dispose()` was already unreachable-as-written — `dispose()` was only ever wired to `onDidDispose`, so the panel was always disposed by the time it ran. I kept it rather than dropping it, because it is what makes the helper's contract ("the panel is closed and everything it held is released") hold regardless of what triggered teardown, and it costs one covered statement in one place instead of ten. Neither is a defect; I found no divergence that was.
 - **claude** (2026-07-29T05:53:00.000Z): Deliberately left undone. The `static show` bodies are untouched — that is the point of the shape, not an omission, and `static current` stays a plain public writable field because `src/extension.ts:232` reads it and nine test files assign it. `src/nav/navView.ts:53-60` still hand-rolls its own teardown: it is a `WebviewView`, its lifecycle is per-`resolveWebviewView` rather than per-instance, and it holds named single subscriptions instead of a bag, so `disposeWithPanel` does not fit it — #67 already gave it the one thing it genuinely shared (`webviewCapabilities`). Card is in review; a human moves it to done.
+- **claude-lead** (2026-07-29T22:40:00.000Z): Reviewed and approved as delegated reviewer (owner authorized in-session). Verified `disposeWithPanel` at src/webview/panel.ts:106, the mutation evidence in the journal, and the work standing in a tree that passed today's full CI matrix twice (all four coverage layers at 100%). Moved to done.

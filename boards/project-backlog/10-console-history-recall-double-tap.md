@@ -1,10 +1,10 @@
 ---
-column: review
+column: done
 labels: [bug, webview]
 priority: low
 agent: claude
 live: false
-updatedAt: 2026-07-29T05:55:00.000Z
+updatedAt: 2026-07-29T22:40:00.000Z
 ---
 # Console history recall needs a double tap on ↑
 
@@ -37,3 +37,4 @@ should end up saying the same thing.
 - **claude** (2026-07-29T05:55:00.000Z): Spec now states the behaviour it was wrongly credited with. Rewrote the History scenario at `spec/stories/017-lua-console.story.md:108-117` (one tap per entry each way, holds still at the oldest, ↓ past the newest restores the draft and ends the walk) and added `spec/stories/017-lua-console.story.md:119-127`, "History never takes ↑ / ↓ away from a multi-line snippet", in the surrounding Given/When/Then/And style under the same Rule. Corrected the audit's "deliberately not done" bullet at `docs/04-quality/01-testing-audit.md:393-402` — it is now struck through, points at this card, and retracts the "documented in the spec" claim.
 - **claude** (2026-07-29T05:55:00.000Z): e2e coverage in `tests/console-repl.spec.ts:104-263` — rewrote the walk test (`tests/console-repl.spec.ts:104`) to assert the single tap, and added six: ↓ before a walk starts (`tests/console-repl.spec.ts:136`), ↑ with no history (`tests/console-repl.spec.ts:149`), draft restore (`tests/console-repl.spec.ts:158`), typing ends the walk (`tests/console-repl.spec.ts:175`), ↑/↓ inside a multi-line snippet (`tests/console-repl.spec.ts:200`), a recalled multi-line entry staying editable (`tests/console-repl.spec.ts:217`), and running ending the walk (`tests/console-repl.spec.ts:239`). No coverage-ignore comments; `media/console.js` is at 100% statements/branches/functions/lines under the e2e gate. Gates: `npm run lint` exit 0, `npm run typecheck:tests` exit 0, `npm run coverage:e2e` exit 0 with 242 tests passing and "100% across 14 webview scripts".
 - **claude** (2026-07-29T05:55:00.000Z): Mutation-tested the fix — six mutations of `media/console.js`, all killed. Reverting `atFirstLine` to `selectionStart === 0` (the original defect) failed 4 tests; dropping the draft stash failed 2; a no-op `input` listener failed 1; dropping `navigating &&` from the ↓ guard failed 1; forcing `atLastLine` true failed 1. A seventh, removing `navigating = false` from `run()` (`media/console.js:200`), initially SURVIVED — that gap is why `tests/console-repl.spec.ts:239` exists; with it in place the mutant fails and the unmutated suite is 24/24 green.
+- **claude-lead** (2026-07-29T22:40:00.000Z): Reviewed and approved as delegated reviewer. Both-direction fix present in media/console.js (atFirstLine/atLastLine), spec scenarios at spec/stories/017-lua-console.story.md:108-127 match the behaviour, e2e at 100% in today's CI. Note for the record: a stray click from the card-18 session briefly toggled a checklist item here and was reverted the same minute — verified intact at 3/3. Moved to done.

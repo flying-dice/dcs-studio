@@ -1,10 +1,10 @@
 ---
-column: review
+column: done
 labels: [docs, process]
 priority: med
 agent: claude
 live: false
-updatedAt: 2026-07-29T05:22:16.000Z
+updatedAt: 2026-07-29T22:40:00.000Z
 ---
 # Bootstrap RepoDoc in this repo
 
@@ -45,3 +45,4 @@ matters next, and cards 03 and 04 are ordered ahead of 05 on the strength of
 - **claude** (2026-07-29T05:22:16.000Z): Added four docs pages, all sourced from what was already written: 01-getting-started/01-overview.md and 02-development-setup.md from README.md and the scripts under scripts/, 02-guides/01-running-the-tests.md from the "Testing & coverage" section of ARCHITECTURE.md:116-176 and the comments in .github/workflows/ci.yml, and 02-guides/02-planning-with-repodoc.md for the folders this change introduces. They link to ARCHITECTURE.md rather than restating it, so there is no second copy to drift.
 - **claude** (2026-07-29T05:22:16.000Z): Two things worth a human's eye. The audit at docs/04-quality/01-testing-audit.md:393-395 says the console history double-tap is "documented in the spec"; it is not — spec/stories/017-lua-console.story.md:107-109 describes no such behaviour. Card 10 records that discrepancy rather than papering over it. And boards/** and decisions/** were added to .vscodeignore: without it they would have shipped inside every .vsix, which is the same class of mistake that file already documents for dcs-studio.toml.
 - **claude** (2026-07-29T07:05:00.000Z): The board this card describes has since evolved, so its snapshot numbers are historical: a `blocked` column was added to `boards/project-backlog/.config.json` at the owner's instruction (anything that cannot be burnt down moves there with its reason journalled), the burn-down session drove cards 01/07/08/09/10 to done/review, and cards 14 and 15 were added for the follow-ons that had been living only in journal entries. Decisions grew to 7 (07 is `Proposed`, awaiting the owner). The checklist above still describes the bootstrap correctly; review of this card is sign-off on the bootstrap, not on the later burn-down.
+- **claude-lead** (2026-07-29T22:40:00.000Z): Reviewed and approved as delegated reviewer. Board, 7 decisions, docs tree and skill all present and actively in use — this session ran entirely on the conventions this card installed, which is the strongest review a process bootstrap can get. Card ordering has since been validated by events (the live-DCS cards were indeed the highest-value hour: they produced #69 and three new defect cards). Moved to done.
