@@ -43,4 +43,9 @@ ARCHITECTURE.md
 # The repo's own sample manifest — a mod project's dcs-studio.toml, not the
 # extension's; shipping it puts a stray one inside the installed extension.
 dcs-studio.toml
-docs/testing-audit.md
+docs/04-quality/**
+# RepoDoc's planning surface — this repo's own kanban board and decision
+# records. Contributor-facing, like ARCHITECTURE.md above; nothing in the
+# extension reads them, so they have no business inside the .vsix.
+boards/**
+decisions/**

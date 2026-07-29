@@ -190,7 +190,8 @@ curl -s http://127.0.0.1:25570/rpc -H "Content-Type: application/json" \
 ```
 
 Browse the whole surface without a sim: the checked-in OpenRPC documents and
-OpenRPC Playground deep links are in `docs/bridge-api.md` in the dcs-studio repo.
+OpenRPC Playground deep links are in `docs/03-reference/01-bridge-api.md` in the
+dcs-studio repo.
 
 The full surface (per `rpc.discover`): `ping`, `eval`, `console_read`,
 `emit_dlua`, `dump_globals`, `repl_*` (eval/inspect/expand/clear/export),

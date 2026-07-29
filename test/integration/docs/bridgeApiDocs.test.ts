@@ -15,15 +15,15 @@ const lf = (text: string) => text.replace(/\r\n/g, "\n");
 
 describe("generated bridge API docs (golden)", () => {
   // The same anti-drift pattern as the Rust OpenRPC goldens: the checked-in
-  // docs/bridge-api-*.md must be byte-for-byte what the generator emits from
-  // the checked-in OpenRPC documents. On an intentional schema change,
-  // regenerate with `npm run docs:bridge`.
+  // docs/03-reference/*-bridge-api-*.md must be byte-for-byte what the
+  // generator emits from the checked-in OpenRPC documents. On an intentional
+  // schema change, regenerate with `npm run docs:bridge`.
   const pages: Map<string, string> = generateAll(readJson);
 
   it("documents both bridges", () => {
     expect([...pages.keys()].sort()).toEqual([
-      "docs/bridge-api-gui.md",
-      "docs/bridge-api-mission.md",
+      "docs/03-reference/02-bridge-api-gui.md",
+      "docs/03-reference/03-bridge-api-mission.md",
     ]);
   });
 

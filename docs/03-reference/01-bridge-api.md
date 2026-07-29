@@ -35,15 +35,15 @@ document. The canonical documents are checked into this repo and pinned to the
 live surface by tests (see below), so you can browse the full method set — names,
 params, and results — without a running sim:
 
-- **GUI bridge (25569):** [`bridge/crates/bridge-gui/openrpc/dcs_studio_gui.openrpc.json`](../bridge/crates/bridge-gui/openrpc/dcs_studio_gui.openrpc.json)
-- **Mission bridge (25570):** [`bridge/crates/bridge-mission/openrpc/dcs_studio_mission.openrpc.json`](../bridge/crates/bridge-mission/openrpc/dcs_studio_mission.openrpc.json)
+- **GUI bridge (25569):** [`bridge/crates/bridge-gui/openrpc/dcs_studio_gui.openrpc.json`](../../bridge/crates/bridge-gui/openrpc/dcs_studio_gui.openrpc.json)
+- **Mission bridge (25570):** [`bridge/crates/bridge-mission/openrpc/dcs_studio_mission.openrpc.json`](../../bridge/crates/bridge-mission/openrpc/dcs_studio_mission.openrpc.json)
 
 Prefer Markdown? Each document also has a generated, GitHub-viewable **method
 reference** — every method with its summary, params table, and result shape,
 grouped by prefix:
 
-- **GUI bridge:** [bridge-api-gui.md](bridge-api-gui.md)
-- **Mission bridge:** [bridge-api-mission.md](bridge-api-mission.md)
+- **GUI bridge:** [02-bridge-api-gui.md](02-bridge-api-gui.md)
+- **Mission bridge:** [03-bridge-api-mission.md](03-bridge-api-mission.md)
 
 These pages are generated from the OpenRPC JSON by
 `scripts/generate-bridge-docs.mjs` — regenerate with `npm run docs:bridge`
@@ -90,7 +90,7 @@ The mission bridge answers the same call on `127.0.0.1:25570/rpc`.
 
 For the practical driving guide — health checks, evaluating Lua in each
 environment, the debugger methods, and the `db_*` unit-database surface — see
-[`skills/dcs-studio/SKILL.md`](../skills/dcs-studio/SKILL.md).
+[`skills/dcs-studio/SKILL.md`](../../skills/dcs-studio/SKILL.md).
 
 ## The checked-in documents never drift
 

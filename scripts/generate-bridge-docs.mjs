@@ -1,9 +1,9 @@
 // Generate per-bridge Markdown API references from the checked-in OpenRPC
-// goldens (bridge/crates/*/openrpc/*.openrpc.json) into docs/. Everything in
-// the output derives from the JSON — no hand-written method docs — and the
-// output is deterministic (stable ordering, no timestamps), so the pages are
-// goldens too: test/docs/bridgeApiDocs.test.ts pins them to the JSON the same
-// way the Rust tests pin the JSON to the live surface.
+// goldens (bridge/crates/*/openrpc/*.openrpc.json) into docs/03-reference/.
+// Everything in the output derives from the JSON — no hand-written method docs
+// — and the output is deterministic (stable ordering, no timestamps), so the
+// pages are goldens too: test/integration/docs/bridgeApiDocs.test.ts pins them
+// to the JSON the same way the Rust tests pin the JSON to the live surface.
 //
 // Usage: npm run docs:bridge
 import { readFileSync, writeFileSync } from "node:fs";
@@ -14,13 +14,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 export const BRIDGES = [
   {
     json: "bridge/crates/bridge-gui/openrpc/dcs_studio_gui.openrpc.json",
-    out: "docs/bridge-api-gui.md",
+    out: "docs/03-reference/02-bridge-api-gui.md",
   },
   {
     json: "bridge/crates/bridge-mission/openrpc/dcs_studio_mission.openrpc.json",
-    out: "docs/bridge-api-mission.md",
+    out: "docs/03-reference/03-bridge-api-mission.md",
   },
 ];
+
+/** The hand-written companion page every generated page links back to. */
+const OVERVIEW_PAGE = "docs/03-reference/01-bridge-api.md";
 
 // Method groups, in page order. Anything that matches no prefix lands in
 // "General" (ping, eval, dump_globals, emit_dlua, mission_boot, …).
@@ -112,11 +115,21 @@ function groupMethods(methods) {
 }
 
 /**
- * Render one bridge's OpenRPC document as a Markdown reference page.
- * Pure: same document + sourcePath in, same string out — this is what the
- * golden test imports.
+ * A repo-relative target as a link relative to the page that carries it. The
+ * pages live in a numbered docs section, so the number of `../` hops back to
+ * the repo root is a property of `outPath` rather than a constant — hard-coding
+ * it is what breaks the moment a page moves between sections.
  */
-export function renderBridgeDoc(doc, sourcePath) {
+function linkFrom(outPath, target) {
+  return path.posix.relative(path.posix.dirname(outPath), target);
+}
+
+/**
+ * Render one bridge's OpenRPC document as a Markdown reference page.
+ * Pure: same document + sourcePath + outPath in, same string out — this is what
+ * the golden test imports.
+ */
+export function renderBridgeDoc(doc, sourcePath, outPath) {
   const { info, servers = [], methods = [] } = doc;
   const groups = groupMethods(methods);
   const serverList = servers.map((s) => `\`${s.url}\` (${s.name})`).join(" · ");
@@ -126,9 +139,9 @@ export function renderBridgeDoc(doc, sourcePath) {
     "",
     "<!-- GENERATED FILE — do not edit. Regenerate with `npm run docs:bridge`. -->",
     "",
-    `> Generated from [\`${sourcePath}\`](../${sourcePath}) (bridge v${info.version},`,
+    `> Generated from [\`${sourcePath}\`](${linkFrom(outPath, sourcePath)}) (bridge v${info.version},`,
     `> OpenRPC ${doc.openrpc}, env \`${info["x-dcs-env"]}\`). Do not edit by hand —`,
-    "> regenerate with `npm run docs:bridge`. See [bridge-api.md](bridge-api.md) for",
+    `> regenerate with \`npm run docs:bridge\`. See [${path.posix.basename(OVERVIEW_PAGE)}](${linkFrom(outPath, OVERVIEW_PAGE)}) for`,
     "> transports, ports, and how to fetch this document live via `rpc.discover`.",
     "",
     prose(info.description),
@@ -160,7 +173,7 @@ export function renderBridgeDoc(doc, sourcePath) {
 export function generateAll(readJson) {
   const pages = new Map();
   for (const bridge of BRIDGES) {
-    pages.set(bridge.out, renderBridgeDoc(readJson(bridge.json), bridge.json));
+    pages.set(bridge.out, renderBridgeDoc(readJson(bridge.json), bridge.json, bridge.out));
   }
   return pages;
 }

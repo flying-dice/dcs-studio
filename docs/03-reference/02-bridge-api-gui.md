@@ -2,9 +2,9 @@
 
 <!-- GENERATED FILE — do not edit. Regenerate with `npm run docs:bridge`. -->
 
-> Generated from [`bridge/crates/bridge-gui/openrpc/dcs_studio_gui.openrpc.json`](../bridge/crates/bridge-gui/openrpc/dcs_studio_gui.openrpc.json) (bridge v0.3.0,
+> Generated from [`bridge/crates/bridge-gui/openrpc/dcs_studio_gui.openrpc.json`](../../bridge/crates/bridge-gui/openrpc/dcs_studio_gui.openrpc.json) (bridge v0.3.0,
 > OpenRPC 1.3.2, env `gui`). Do not edit by hand —
-> regenerate with `npm run docs:bridge`. See [bridge-api.md](bridge-api.md) for
+> regenerate with `npm run docs:bridge`. See [01-bridge-api.md](01-bridge-api.md) for
 > transports, ports, and how to fetch this document live via `rpc.discover`.
 
 In-DCS DCS Studio JSON-RPC bridge for the gui environment.
