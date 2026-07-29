@@ -1,12 +1,11 @@
 ---
-column: doing
+column: backlog
 labels: [extension, webview, tests]
 priority: med
-agent: opus-contract
 live: false
-status: My Mods landed; eight webviews still uncovered — next up is `log` (presenter first)
+status: My Mods landed; eight webviews still uncovered — next up is `log` (presenter first). Parked in backlog between items so the doing column reflects who is actually working.
 progress: 15
-updatedAt: 2026-07-29T08:45:00.000Z
+updatedAt: 2026-07-29T19:35:00.000Z
 ---
 # Roll presenters out to the remaining panels, extending the message contract as they land
 
