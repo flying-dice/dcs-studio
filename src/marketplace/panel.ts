@@ -11,6 +11,7 @@ import type { MarketplacePort } from "../core/ports/marketplace";
 import { showError } from "../errors";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
+import { activeColumn, createPanel } from "../webview/panel";
 
 // The full-screen storefront, hosted as a webview panel. The webview owns all
 // view state (grid, product page, search/tag/sort); everything the host decides
@@ -31,21 +32,12 @@ export class MarketplacePanel {
     market: MarketplacePort,
     auth: AuthPort,
   ): void {
-    const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+    const column = activeColumn();
     if (MarketplacePanel.current) {
       MarketplacePanel.current.panel.reveal(column);
       return;
     }
-    const panel = vscode.window.createWebviewPanel(
-      MarketplacePanel.viewType,
-      "DCS Marketplace",
-      column,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-      },
-    );
+    const panel = createPanel(context, MarketplacePanel.viewType, "DCS Marketplace", column);
     MarketplacePanel.current = new MarketplacePanel(panel, context, subs, market, auth);
   }
 
@@ -64,8 +56,6 @@ export class MarketplacePanel {
       post: (msg) => void this.panel.webview.postMessage(msg),
       effect: (effect) => this.perform(effect),
     });
-
-    this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html();
 
     this.panel.webview.onDidReceiveMessage(

@@ -15,6 +15,7 @@ import type { DualBridgeStatus } from "../../../src/core/domain/bridgeProtocol";
 import { DocsPanel } from "../../../src/docs/docsPanel";
 import { NavViewProvider } from "../../../src/nav/navView";
 import type { SkillsLibrary } from "../../../src/skills/library";
+import { webviewCapabilities } from "../../../src/webview/panel";
 
 // The sidebar and the documentation panel — the two views a user meets first.
 // The sidebar in particular is pure host-side wiring: it subscribes to three
@@ -86,6 +87,33 @@ beforeEach(() => {
   skillsDisposed = false;
   updates = [];
   DocsPanel.current = undefined;
+});
+
+describe("nav webview capabilities", () => {
+  // The eleventh webview surface, and the one that matters most. The ten
+  // panels are opened on demand and closed; the sidebar is registered at
+  // activation and lives for the whole session, so it has the longest lifetime
+  // and the lowest bar to being rendered. It set its own copy of these options
+  // until #51's follow-up, which made it the only webview whose capabilities
+  // could drift with nothing to catch it.
+
+  it("may run scripts, and may read media/ and nothing wider", async () => {
+    const view = await resolve();
+
+    expect(view.webview.options).toEqual({
+      enableScripts: true,
+      localResourceRoots: [vscode.Uri.joinPath(vscode.Uri.file(EXT), "media")],
+    });
+  });
+
+  it("takes those capabilities from the one place that decides them", async () => {
+    // Not a restatement of the test above: this pins that the sidebar and the
+    // panels resolve to the SAME value, so widening one cannot leave the other
+    // behind. `webviewCapabilities` is the single decision both read.
+    const view = await resolve();
+
+    expect(view.webview.options).toEqual(webviewCapabilities(vscode.Uri.file(EXT)));
+  });
 });
 
 describe("NavViewProvider", () => {

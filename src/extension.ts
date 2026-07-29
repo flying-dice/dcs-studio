@@ -11,6 +11,7 @@ import { JsonLedgerStore } from "./adapters/node/jsonLedgerStore";
 import { Linker } from "./adapters/node/linker";
 import { ProcessLauncher } from "./adapters/node/processLauncher";
 import { RegExeRegistry } from "./adapters/node/registry";
+import { nodeScheduler } from "./adapters/node/scheduler";
 import { SevenZipArchive } from "./adapters/node/sevenZip";
 import { WsBridgeTransport } from "./adapters/node/wsTransport";
 import { VsCodeGitHubAuth } from "./adapters/vscode/auth";
@@ -210,7 +211,9 @@ export function activate(
   context.subscriptions.push(
     vscode.commands.registerCommand("dcs.manifest.author", () => openManifest(context)),
     vscode.commands.registerCommand("dcs.project.new", () => NewProjectPanel.show(context)),
-    vscode.commands.registerCommand("dcs.publish.open", () => PublishPanel.show(context, publish)),
+    vscode.commands.registerCommand("dcs.publish.open", () =>
+      PublishPanel.show(context, publish, manifestPort),
+    ),
     vscode.commands.registerCommand("dcs.marketplace.open", () => {
       MarketplacePanel.show(context, subscriptions, marketplace, auth);
     }),
@@ -282,7 +285,9 @@ export function activate(
   clients.start();
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("dcs.setup.open", () => SetupPanel.show(context, detect)),
+    vscode.commands.registerCommand("dcs.setup.open", () =>
+      SetupPanel.show(context, detect, archive),
+    ),
     vscode.commands.registerCommand("dcs.bridge.console", () =>
       ConsolePanel.show(context, clients),
     ),
@@ -327,7 +332,7 @@ export function activate(
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterDescriptorFactory(
       DEBUG_TYPE,
-      new DcsDebugAdapterFactory(clients, installRoots),
+      new DcsDebugAdapterFactory(clients, installRoots, nodeScheduler),
     ),
     vscode.debug.registerDebugConfigurationProvider(DEBUG_TYPE, new DcsDebugConfigProvider()),
   );
@@ -404,7 +409,7 @@ export function activate(
         "Set DCS Paths",
       )
       .then((choice) => {
-        if (choice) SetupPanel.show(context, detect);
+        if (choice) SetupPanel.show(context, detect, archive);
       });
   }
 }

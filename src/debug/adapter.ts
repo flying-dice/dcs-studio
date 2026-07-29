@@ -1,9 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { nodeScheduler } from "../adapters/node/scheduler";
-import type { BridgeClient, DebugEnv, DebugState } from "../bridge/client";
-import type { BridgeClients } from "../bridge/clients";
 import { missionStartFailure } from "../core/domain/bridgeStatusView";
 import {
   actionForResume,
@@ -24,11 +21,13 @@ import {
   toStackTraceResponse,
   toVariablesResponse,
 } from "../core/domain/dapTranslation";
+import type { DebugEnv, DebugState } from "../core/domain/debugProtocol";
+import { missionScriptPath } from "../core/domain/debugTarget";
 import { scanItems } from "../core/domain/missionSanitize";
+import type { BridgeRouterPort, DebugBridgePort } from "../core/ports/debugBridge";
 import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { SchedulerPort, TimerHandle } from "../core/ports/scheduler";
 import { showError } from "../errors";
-import { missionScriptPath } from "../mission/missionPanel";
 
 // Inline Debug Adapter Protocol implementation for DCS World Lua.
 //
@@ -39,7 +38,7 @@ import { missionScriptPath } from "../mission/missionPanel";
 // the mission bridge (port 25570, alive only while a mission runs). This
 // adapter is the stateful shell, run in-process via
 // DebugAdapterInlineImplementation so it can share the extension's two
-// BridgeClient connections. Every translation decision (chunkname↔path rules,
+// DebugBridgePort connections. Every translation decision (chunkname↔path rules,
 // stop-reason mapping, pause_id dedupe, snapshot→DAP shapes, the poll state
 // machine) is pure and lives in core/domain/dapTranslation.
 //
@@ -93,7 +92,7 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
   private config: DcsLaunchConfig;
   private env: DebugEnv = "mission";
   /** The client serving this session's env; re-selected when launch fixes the env. */
-  private client: BridgeClient;
+  private client: DebugBridgePort;
 
   /** Full breakpoint state per file, keyed by lower-cased path (pushed whole per source). */
   private readonly breakpoints = new Map<string, { fsPath: string; bps: StoredBreakpoint[] }>();
@@ -114,13 +113,16 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
   private polling = false;
 
   constructor(
-    private readonly clients: BridgeClients,
+    private readonly clients: BridgeRouterPort,
     config: vscode.DebugConfiguration,
-    private readonly scheduler: SchedulerPort = nodeScheduler,
-    // Required, unlike `scheduler`: this decides whether the mission bridge's
-    // silence is explained by a sanitized MissionScripting.lua, and any default
-    // stub would resolve to a path that never exists and answer "not
-    // sanitized" for every user. The factory supplies it.
+    // Both required, and supplied by the factory. `scheduler` used to default
+    // to `nodeScheduler`: that named a concrete adapter from a feature (#61),
+    // and it meant a test that forgot to pass one drove its poll loop off real
+    // timers rather than failing. `roots` decides whether the mission bridge's
+    // silence is explained by a sanitized MissionScripting.lua — a default stub
+    // would resolve to a path that never exists and answer "not sanitized" for
+    // every user.
+    private readonly scheduler: SchedulerPort,
     private readonly roots: InstallRootsPort,
   ) {
     this.config = config as DcsLaunchConfig;

@@ -2,8 +2,10 @@ import * as vscode from "vscode";
 import type { PublishService, ReleaseOpts, ShareOpts } from "../core/app/publishService";
 import { type Check, firstBlocker } from "../core/domain/publishChecks";
 import { parseRepoRemote } from "../core/domain/repoRemote";
+import type { ManifestPort } from "../core/ports/manifest";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
+import { activeColumn, createPanel } from "../webview/panel";
 import { preflight, readManifest } from "./preflight";
 
 // The Publish panel: preflight checks, "Share to GitHub" (create repo + push),
@@ -15,28 +17,30 @@ export class PublishPanel {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly root: string | undefined;
 
-  static show(context: vscode.ExtensionContext, publish: PublishService): void {
-    const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+  static show(
+    context: vscode.ExtensionContext,
+    publish: PublishService,
+    manifest: ManifestPort,
+  ): void {
+    const column = activeColumn();
     if (PublishPanel.current) {
       PublishPanel.current.panel.reveal(column);
       return;
     }
-    const panel = vscode.window.createWebviewPanel(PublishPanel.viewType, "Publish Mod", column, {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-    });
-    PublishPanel.current = new PublishPanel(panel, context, publish);
+    const panel = createPanel(context, PublishPanel.viewType, "Publish Mod", column);
+    PublishPanel.current = new PublishPanel(panel, context, publish, manifest);
   }
 
   private constructor(
     panel: vscode.WebviewPanel,
     private readonly context: vscode.ExtensionContext,
     private readonly publish: PublishService,
+    // Threaded to `preflight`, which needs one `parseToml` and used to build the
+    // concrete manifest core from the extension context itself (#61).
+    private readonly manifest: ManifestPort,
   ) {
     this.panel = panel;
     this.root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
@@ -52,8 +56,8 @@ export class PublishPanel {
 
   /** Run preflight, re-render the panel from it, and hand back the checks. */
   private async pushInit(root: string): Promise<Check[]> {
-    const checks = await preflight(this.context, root, this.publish);
-    const m = readManifest(this.context, root);
+    const checks = await preflight(this.manifest, root, this.publish);
+    const m = readManifest(this.manifest, root);
     const repo = await this.detectRepo(root);
     this.post({
       type: "init",

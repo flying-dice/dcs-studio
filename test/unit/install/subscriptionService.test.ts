@@ -18,7 +18,7 @@ import type { ArchivePort } from "../../../src/core/ports/archive";
 import type { ClockPort } from "../../../src/core/ports/clock";
 import type { DownloadPort } from "../../../src/core/ports/downloader";
 import type { InstallRootsPort } from "../../../src/core/ports/installRoots";
-import type { SubscriptionLedgerStore } from "../../../src/core/ports/ledger";
+import type { LedgerRead, SubscriptionLedgerStore } from "../../../src/core/ports/ledger";
 import type { LinkerPort } from "../../../src/core/ports/linker";
 import type { ManifestPort } from "../../../src/core/ports/manifest";
 import { MemFileSystem } from "../../support/memFileSystem";
@@ -36,10 +36,13 @@ const DATA = "D:\\data";
 class FakeLedger implements SubscriptionLedgerStore {
   store: Record<string, Subscription> = {};
   saves: Record<string, Subscription>[] = [];
+  /** Set to make every read report the stored ledger as quarantined (#64). */
+  recovered: LedgerRead["recovered"];
 
-  async load(): Promise<Record<string, Subscription>> {
+  async load(): Promise<LedgerRead> {
     // A fresh object each time, like re-reading a JSON file.
-    return JSON.parse(JSON.stringify(this.store));
+    const subs: Record<string, Subscription> = JSON.parse(JSON.stringify(this.store));
+    return this.recovered ? { subs, recovered: this.recovered } : { subs };
   }
 
   async save(subs: Record<string, Subscription>): Promise<void> {
@@ -250,6 +253,34 @@ describe("list / get / isSubscribed / isEnabled", () => {
       "a/a": seeded({ repo: "a/a", name: "Alpha" }),
     };
     expect((await w.service.list()).map((s) => s.name)).toEqual(["Alpha", "Zulu"]);
+  });
+
+  it("carries the ledger's recovery notice out with the list", async () => {
+    // An unreadable ledger reads as an EMPTY one, so a caller that only sees
+    // the list is about to claim nothing is installed while the links are
+    // still in the user's DCS folders. The notice used to be a one-shot flag
+    // on the adapter, drained by whoever asked first (#64); it now travels
+    // with the read that produced it, so it cannot reach the wrong caller and
+    // cannot go missing when two panels are open.
+    const w = makeWorld();
+    w.ledger.recovered = { quarantinedTo: "D:\\data\\subscriptions.json.corrupt" };
+
+    const read = await w.service.listWithRecovery();
+
+    expect(read.mods).toEqual([]);
+    expect(read.recovered).toEqual({ quarantinedTo: "D:\\data\\subscriptions.json.corrupt" });
+  });
+
+  it("omits the notice entirely when the ledger read cleanly", async () => {
+    // Absent rather than undefined-valued: `recovered` present at all is the
+    // signal, so the callers can branch on the key.
+    const w = makeWorld();
+    w.ledger.store = { "a/a": seeded({ repo: "a/a", name: "Alpha" }) };
+
+    const read = await w.service.listWithRecovery();
+
+    expect(read.mods.map((m) => m.name)).toEqual(["Alpha"]);
+    expect("recovered" in read).toBe(false);
   });
 
   it("gets by repo case-insensitively (lowercased ledger key)", async () => {

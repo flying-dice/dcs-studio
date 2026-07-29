@@ -1,11 +1,10 @@
 import { win32 as path } from "node:path";
 import * as fs from "fs";
-import type * as vscode from "vscode";
-import { manifestCore } from "../adapters/vscode/manifest";
 import type { PublishService } from "../core/app/publishService";
 import { MANIFEST_FILE } from "../core/domain/manifestFile";
 import { type Check, computePreflight, type SourceProbe } from "../core/domain/publishChecks";
 import type { ManifestModel } from "../core/domain/types";
+import type { ManifestPort } from "../core/ports/manifest";
 
 // Preflight checks before publishing: is the manifest valid, do the [[bundle]]
 // paths exist (built), and are the tools (7z, git) present. Errors block a
@@ -13,12 +12,16 @@ import type { ManifestModel } from "../core/domain/types";
 // gathers the fs facts (manifest parse, per-source probes) and reads tool
 // availability (7z, git, gh) through the injected PublishService, then delegates
 // the pass/warn/fail policy to core/domain/publishChecks.ts.
+//
+// The manifest arrives as `ManifestPort`, not as the extension context to build
+// the concrete core from: a feature naming an adapter is the boundary violation
+// #61 tracks, and the port is all this ever wanted — one `parseToml`.
 export type { Check };
 
-export function readManifest(ctx: vscode.ExtensionContext, root: string): ManifestModel | null {
+export function readManifest(manifest: ManifestPort, root: string): ManifestModel | null {
   const p = path.join(root, MANIFEST_FILE);
   try {
-    return manifestCore(ctx).parseToml(fs.readFileSync(p, "utf8"));
+    return manifest.parseToml(fs.readFileSync(p, "utf8"));
   } catch {
     return null;
   }
@@ -37,12 +40,12 @@ function probeBundle(root: string, m: ManifestModel | null): SourceProbe[] {
 }
 
 export async function preflight(
-  ctx: vscode.ExtensionContext,
+  manifestPort: ManifestPort,
   root: string,
   publish: PublishService,
 ): Promise<Check[]> {
   const manifestExists = fs.existsSync(path.join(root, MANIFEST_FILE));
-  const manifest = manifestExists ? readManifest(ctx, root) : null;
+  const manifest = manifestExists ? readManifest(manifestPort, root) : null;
   const tools = await publish.toolFacts();
   return computePreflight({
     manifestExists,

@@ -2,10 +2,11 @@ import { win32 as path } from "node:path";
 import * as fs from "fs";
 import * as os from "os";
 import * as vscode from "vscode";
-import { find7z } from "../adapters/node/sevenZip";
 import type { DetectService } from "../core/app/detectService";
 import { type DcsCandidate, roleProbePath } from "../core/domain/dcsDetect";
+import type { ArchivePort } from "../core/ports/archive";
 import { renderWebviewHtml } from "../webview/html";
+import { activeColumn, createPanel } from "../webview/panel";
 
 // The DCS install selector: pick (or browse to) the userdata (Saved Games) and
 // installation folders, with auto-detected candidates. Saves to the
@@ -17,27 +18,28 @@ export class SetupPanel {
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
 
-  static show(context: vscode.ExtensionContext, detect: DetectService): void {
-    const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+  static show(context: vscode.ExtensionContext, detect: DetectService, archive: ArchivePort): void {
+    const column = activeColumn();
     if (SetupPanel.current) {
       SetupPanel.current.panel.reveal(column);
       return;
     }
-    const panel = vscode.window.createWebviewPanel(SetupPanel.viewType, "DCS Setup", column, {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-    });
-    SetupPanel.current = new SetupPanel(panel, context, detect);
+    const panel = createPanel(context, SetupPanel.viewType, "DCS Setup", column);
+    SetupPanel.current = new SetupPanel(panel, context, detect, archive);
   }
 
   private constructor(
     panel: vscode.WebviewPanel,
     private readonly context: vscode.ExtensionContext,
     private readonly detect: DetectService,
+    // The port, not `find7z`: this panel only needs to answer "where would we
+    // find 7-Zip", which is exactly `available()`, and naming the concrete
+    // adapter from a feature was a boundary violation (#61). The adapter reads
+    // the same `sevenZipPath` setting this panel displays, so the answer is
+    // the one the installer will actually get.
+    private readonly archive: ArchivePort,
   ) {
     this.panel = panel;
-    this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
@@ -59,7 +61,7 @@ export class SetupPanel {
       dataDir: this.cfg().get<string>("dataDir")?.trim() ?? "",
       dataDirDefault: path.join(home, "DCSStudio", "mods"),
       sevenZip: this.cfg().get<string>("sevenZipPath")?.trim() ?? "",
-      sevenZipDetected: find7z(this.cfg().get<string>("sevenZipPath")?.trim() || undefined) ?? "",
+      sevenZipDetected: (await this.archive.available()) ?? "",
       savedCandidates: saved,
       installCandidates: installs,
     });

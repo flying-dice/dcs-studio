@@ -4,6 +4,7 @@ import {
   type DualBridgeStatus,
   INITIAL_DUAL_STATUS,
 } from "../core/domain/bridgeProtocol";
+import type { BridgeRouterPort } from "../core/ports/debugBridge";
 import type { BridgeClient } from "./client";
 
 // The two bridge clients as one unit: the GUI bridge (port 25569, always up
@@ -18,7 +19,7 @@ import type { BridgeClient } from "./client";
 // justified it, so the editor can offer mission actions against a bridge whose
 // mission has ended. Tracked as issue #32; it needs confirming against a live
 // DCS before anyone changes the inference.
-export class BridgeClients {
+export class BridgeClients implements BridgeRouterPort {
   constructor(
     readonly gui: BridgeClient,
     readonly mission: BridgeClient,

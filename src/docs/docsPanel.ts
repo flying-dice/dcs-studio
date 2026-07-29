@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
+import { activeColumn, createPanel } from "../webview/panel";
 
 // The Documentation experience: a webview panel with a table-of-contents
 // sidebar and per-feature guide pages (Mod Manager, manifest reference,
@@ -14,17 +15,13 @@ export class DocsPanel {
   private readonly disposables: vscode.Disposable[] = [];
 
   static show(context: vscode.ExtensionContext, page?: string): void {
-    const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+    const column = activeColumn();
     if (DocsPanel.current) {
       DocsPanel.current.panel.reveal(column);
       if (page) DocsPanel.current.post({ type: "goto", page });
       return;
     }
-    const panel = vscode.window.createWebviewPanel(DocsPanel.viewType, "Documentation", column, {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-    });
+    const panel = createPanel(context, DocsPanel.viewType, "Documentation", column);
     DocsPanel.current = new DocsPanel(panel, context, page);
   }
 
@@ -34,7 +31,6 @@ export class DocsPanel {
     initialPage?: string,
   ) {
     this.panel = panel;
-    this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html(initialPage);
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);

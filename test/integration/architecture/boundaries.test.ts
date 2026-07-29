@@ -99,32 +99,16 @@ const SHARED = new Set(["errors.ts", "external.ts", "webview"]);
 const COMPOSITION_ROOT = "extension.ts";
 
 /**
- * Crossings that already existed when this half of the rule was written. It is
- * a ratchet, not a licence: a new crossing fails the check, and this list must
- * shrink to empty — delete each entry as its site is fixed. Only the first is
- * tracked by an issue (#40 — MyModsPanel names the concrete JsonLedgerStore
- * rather than the SubscriptionLedgerStore port it actually needs); the rest are
- * the same defect, surfaced by writing this check, and have no issue yet.
+ * **Empty, and it stays empty.** This was a ratchet holding the 19 crossings
+ * that existed when the check was written; all 19 are fixed (#40, #61), so the
+ * rule is now enforced outright with nothing grandfathered.
  *
- * Deliberately not asserted to be exhaustive: a fix landing elsewhere would
- * then fail this test, and "someone repaired a boundary" must never read as a
- * boundary violation.
+ * Kept as an empty set rather than deleted so a future crossing that genuinely
+ * cannot be fixed today has somewhere to be recorded WITH its reason, instead
+ * of the rule being weakened or the check deleted. Adding an entry should
+ * require an issue number in a comment beside it.
  */
-const KNOWN_CROSSINGS = new Set([
-  "src/install/myModsPanel.ts -> src/adapters/node/processLauncher",
-  "src/bridge/client.ts -> src/adapters/node/wsTransport",
-  "src/debug/adapter.ts -> src/adapters/node/scheduler",
-  "src/debug/adapter.ts -> src/bridge/client",
-  "src/debug/adapter.ts -> src/bridge/clients",
-  "src/debug/adapter.ts -> src/mission/missionPanel",
-  "src/debug/factory.ts -> src/adapters/node/scheduler",
-  "src/debug/factory.ts -> src/bridge/client",
-  "src/debug/factory.ts -> src/bridge/clients",
-  "src/nav/navView.ts -> src/bridge/clients",
-  "src/nav/navView.ts -> src/skills/library",
-  "src/publish/preflight.ts -> src/adapters/vscode/manifest",
-  "src/setup/panel.ts -> src/adapters/node/sevenZip",
-]);
+const KNOWN_CROSSINGS = new Set<string>([]);
 
 /** The crossing `file` makes by importing `spec`, or null when it makes none. */
 function crossing(file: string, spec: string): string | null {
@@ -136,6 +120,58 @@ function crossing(file: string, spec: string): string | null {
   if (SHARED.has(toUnit) || SHARED.has(`${target}.ts`)) return null;
   return `src/${from} -> src/${target}`.replaceAll(path.sep, "/");
 }
+
+describe("the import scanner itself", () => {
+  // Both boundary tests assert an ABSENCE — `violations` is empty. If
+  // `importSpecifiers` stopped matching (a regex edited, a syntax it does not
+  // cover, a future import form) it returns nothing, both suites stay green,
+  // and the rule is enforced against no imports at all.
+  //
+  // Until the ratchet was emptied there was incidental evidence it worked: 13
+  // entries the scan had to actually produce for the suite to behave as it
+  // did. Emptying it removed that, so the enforcement became unfalsifiable at
+  // the moment it became complete — the same shape as the three Rust tests
+  // that "asserted an absence" and passed while covering nothing.
+  //
+  // So: one positive assertion. It also documents which import forms the rule
+  // covers, which was otherwise only inferable from the regexes.
+
+  it("finds every import form the rule is written against", () => {
+    const sample = [
+      `import a from "./a";`,
+      `import type { B } from "../b";`,
+      `import * as ns from "./ns";`,
+      `export { c } from "./c";`,
+      `export * from "./star";`,
+      `const d = require("./d");`,
+      `void import("./e");`,
+      `import "./f";`,
+    ].join("\n");
+
+    expect(importSpecifiers(sample).sort()).toEqual([
+      "../b",
+      "./a",
+      "./c",
+      "./d",
+      "./e",
+      "./f",
+      "./ns",
+      "./star",
+    ]);
+  });
+
+  it("actually parses the source tree, not just walks it", () => {
+    // The file-count guard below proves files were FOUND. This proves they
+    // were READ: a scanner returning nothing for every file would satisfy the
+    // count and fail here.
+    const files = walk(SRC_DIR, ".ts");
+    const total = files.reduce(
+      (n, f) => n + importSpecifiers(fs.readFileSync(f, "utf8")).length,
+      0,
+    );
+    expect(total).toBeGreaterThan(200);
+  });
+});
 
 describe("adapter boundary", () => {
   it("no module outside core reaches into another unit's internals", () => {

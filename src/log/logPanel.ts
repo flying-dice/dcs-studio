@@ -5,6 +5,7 @@ import { MANIFEST_FILE } from "../core/domain/manifestFile";
 import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { ManifestPort } from "../core/ports/manifest";
 import { renderWebviewHtml } from "../webview/html";
+import { activeColumn, createPanel } from "../webview/panel";
 import { type FileState, LogTailer } from "./tailer";
 
 // The DCS Log viewer: a singleton WebviewPanel (shape copied from
@@ -33,16 +34,12 @@ export class LogPanel {
     manifestPort: ManifestPort,
     roots: InstallRootsPort,
   ): void {
-    const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+    const column = activeColumn();
     if (LogPanel.current) {
       LogPanel.current.panel.reveal(column);
       return;
     }
-    const panel = vscode.window.createWebviewPanel(LogPanel.viewType, "DCS Log", column, {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-    });
+    const panel = createPanel(context, LogPanel.viewType, "DCS Log", column);
     LogPanel.current = new LogPanel(panel, context, manifestPort, roots);
   }
 
@@ -53,7 +50,6 @@ export class LogPanel {
     private readonly roots: InstallRootsPort,
   ) {
     this.panel = panel;
-    this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html(context);
 
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);

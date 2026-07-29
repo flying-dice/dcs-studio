@@ -329,14 +329,18 @@ describe("BridgeClient over a scripted transport", () => {
     mission.dispose();
   });
 
-  it("falls back to the real WebSocket transport when none is injected", async () => {
-    // clients.ts constructs both bridges without a transport, so the default arm
-    // is the only one that ships. A suite that always injects a fake would let
-    // it rot unnoticed — this at least proves it still wires up and disposes.
-    const real = new BridgeClient();
-    expect(real.current).toEqual({ connected: false, dcsTime: null });
-    await expect(real.call("ping")).rejects.toThrow("bridge not connected");
-    expect(() => real.dispose()).not.toThrow();
+  it("starts disconnected and refuses calls until a socket is up", async () => {
+    // Was "falls back to the real WebSocket transport when none is injected",
+    // guarding a `transport ?? new WsBridgeTransport()` default on the strength
+    // of a comment saying clients.ts constructed both bridges without one. It
+    // did not — the extension passes a transport to both, and clients.ts takes
+    // them injected — so the arm shipped nowhere and named a concrete adapter
+    // from a feature (#61). The transport is required now; what is left worth
+    // asserting is the pre-connection state itself.
+    const fresh = new BridgeClient("127.0.0.1", 25569, new FakeTransport());
+    expect(fresh.current).toEqual({ connected: false, dcsTime: null });
+    await expect(fresh.call("ping")).rejects.toThrow("bridge not connected");
+    expect(() => fresh.dispose()).not.toThrow();
   });
 
   it("reconnect() does nothing while the bridge is already connected", async () => {

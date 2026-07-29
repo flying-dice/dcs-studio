@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { requiresOverwriteConfirm } from "../core/domain/skillsStatus";
 import { renderWebviewHtml } from "../webview/html";
+import { activeColumn, createPanel } from "../webview/panel";
 import { INSTALL_DIR, type SkillsLibrary } from "./library";
 
 // The Agent Skills experience: a webview panel listing the skill files the
@@ -14,17 +15,13 @@ export class SkillsPanel {
   private readonly disposables: vscode.Disposable[] = [];
 
   static show(context: vscode.ExtensionContext, manager: SkillsLibrary): void {
-    const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+    const column = activeColumn();
     if (SkillsPanel.current) {
       SkillsPanel.current.panel.reveal(column);
       void SkillsPanel.current.postSkills();
       return;
     }
-    const panel = vscode.window.createWebviewPanel(SkillsPanel.viewType, "Agent Skills", column, {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-    });
+    const panel = createPanel(context, SkillsPanel.viewType, "Agent Skills", column);
     SkillsPanel.current = new SkillsPanel(panel, context, manager);
   }
 
@@ -34,7 +31,6 @@ export class SkillsPanel {
     private readonly manager: SkillsLibrary,
   ) {
     this.panel = panel;
-    this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);

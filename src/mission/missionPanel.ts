@@ -4,6 +4,7 @@ import { win32 as path } from "node:path";
 import * as fs from "fs";
 import * as vscode from "vscode";
 import type { MissionSanitizeService } from "../core/app/missionSanitizeService";
+import { MISSION_FILE, missionScriptPath } from "../core/domain/debugTarget";
 import { allItems, backupPath } from "../core/domain/missionSanitize";
 import type { InstallRootsPort } from "../core/ports/installRoots";
 import { showError } from "../errors";
@@ -12,13 +13,12 @@ import { showError } from "../errors";
 // install: <gameInstall>\Scripts\MissionScripting.lua. Opens the actual file and
 // toggles its sanitization block (desanitize / re-sanitize / restore-from-backup)
 // so the bridge and mission scripts can use the full Lua environment.
-export const MISSION_FILE = "MissionScripting.lua";
-
-/** The MissionScripting.lua path from the configured install, or undefined. */
-export function missionScriptPath(roots: InstallRootsPort): string | undefined {
-  const gi = roots.gameInstall();
-  return gi ? path.join(gi, "Scripts", MISSION_FILE) : undefined;
-}
+//
+// The name and the path rule live in core/domain/debugTarget.ts, because the
+// debug adapter needs them too and reaching across features to borrow them was a
+// boundary violation (#61). Re-exported here so the panel's own callers — and
+// its tests — keep naming one place for "the mission script".
+export { MISSION_FILE, missionScriptPath };
 
 async function requireFile(roots: InstallRootsPort): Promise<string | undefined> {
   const p = missionScriptPath(roots);

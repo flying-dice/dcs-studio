@@ -1,9 +1,10 @@
 import * as vscode from "vscode";
-import type { BridgeClients } from "../bridge/clients";
 import { type DualBridgeStatus, displayTime } from "../core/domain/bridgeProtocol";
 import { MANIFEST_FILE } from "../core/domain/manifestFile";
-import type { SkillsLibrary } from "../skills/library";
+import type { BridgeRouterPort } from "../core/ports/debugBridge";
+import type { SkillsCatalogPort } from "../core/ports/skillsCatalog";
 import { mediaUri, renderWebviewHtml } from "../webview/html";
+import { webviewCapabilities } from "../webview/panel";
 
 // The sidebar as website-style page navigation: a WebviewView rendering a logo
 // header, nav rows (Browse Mods / Create Mods / Publish Mod / DCS Console /
@@ -20,16 +21,17 @@ export class NavViewProvider implements vscode.WebviewViewProvider {
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly clients: BridgeClients,
-    private readonly skills: SkillsLibrary,
+    private readonly clients: BridgeRouterPort,
+    private readonly skills: SkillsCatalogPort,
   ) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
-    webviewView.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "media")],
-    };
+    // The same capability decision the panels get, from the same place. This
+    // used to be its own copy — and the sidebar is the worst surface to let
+    // drift: it is registered at activation and lives for the whole session,
+    // where a panel is opened on demand and closed.
+    webviewView.webview.options = webviewCapabilities(this.extensionUri);
     webviewView.webview.html = this.html(webviewView.webview);
 
     webviewView.webview.onDidReceiveMessage((m: { type: string; command?: string }) => {
