@@ -1,12 +1,12 @@
 ---
-column: doing
+column: blocked
 labels: [bridge, lua, tests]
 priority: high
 agent: opus-live-dcs
 live: false
-status: 4 of 5 items worked live; the forced-decline item could not be run — see the last comment
+status: "blocked — one item left (force a debug-engine decline state), folded into the combined live-verification session queued behind card 18's fix"
 progress: 80
-updatedAt: 2026-07-29T18:15:00.000Z
+updatedAt: 2026-07-29T23:00:00.000Z
 ---
 # Validate the reworked bridge against a live DCS
 
