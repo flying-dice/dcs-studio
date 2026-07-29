@@ -302,6 +302,17 @@ function dcs_studio_gui_jsonrpc.serve(config) end
 ---@return boolean served
 function dcs_studio_gui_jsonrpc.process_queue(router) end
 
+--- Release everything this DLL holds in the CURRENT Lua state, while that state is still alive: drop every handler registered on `router` (each one is a live reference into this state) and fail every request stranded in the server's queue with a truthful error. Call it from the state's own end-of-life signal — the mission bridge does, on S_EVENT_MISSION_END — so DCS's lua_close finds nothing of ours left to collect. Idempotent.
+---@param router dcs_studio_gui.jsonrpc.JsonRpcRouter
+---@param reason? string
+---@return number handlers_released
+---@return number requests_failed
+function dcs_studio_gui_jsonrpc.teardown(router, reason) end
+
+--- Create the teardown sentinel for this Lua state. Keep the returned userdata reachable (the mission bridge parks it in a global): when DCS destroys the state, Lua's lua_close collects it and the DLL fails every stranded request. It is the BACKSTOP for a state that dies without calling `teardown` — it cannot drop Lua handles, because by then touching Lua is exactly what must not happen.
+---@return userdata guard
+function dcs_studio_gui_jsonrpc.state_guard() end
+
 --- The in-DCS DCS Studio native runtime for the gui environment — loaded via require("dcs_studio_gui").
 ---@class dcs_studio_gui
 ---@field name string # The service name ("dcs-studio-gui" / "dcs-studio-mission").

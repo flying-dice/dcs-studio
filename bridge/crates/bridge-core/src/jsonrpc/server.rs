@@ -5,8 +5,8 @@ use actix_ws::{Message, Session};
 
 use crate::jsonrpc::router::JsonRpcRouter;
 use crate::jsonrpc::{
-    JsonRpcError, JsonRpcRequest, JsonRpcResponse, JSON_RPC_INTERNAL_ERROR,
-    JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_VERSION,
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, JSON_RPC_BRIDGE_TORN_DOWN,
+    JSON_RPC_INTERNAL_ERROR, JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_VERSION,
 };
 use crate::lua_utils::serialize_lua_to_json;
 use actix_web::{get, middleware, post, App, HttpRequest, HttpResponse, HttpServer};
@@ -207,6 +207,12 @@ impl JsonRpcServer {
 /// fresh mission never answers a stale request. Returns `true` when the
 /// server was newly started.
 pub(crate) fn ensure_server(config: ServerConfig) -> Result<bool, actix_web::Error> {
+    // Every caller of `serve` is a Lua state that has just come up — the first
+    // mission's, or a later one's after the previous state was torn down. Arm
+    // the teardown for it, or a mission following a released one would spend
+    // its whole life looking already gone (see `crate::jsonrpc::teardown`).
+    crate::jsonrpc::teardown::rearm();
+
     let mut slot = SERVER
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -321,17 +327,98 @@ fn drain_queue(lua: &Lua, app_data: &Data<Mutex<AppData>>, router: &JsonRpcRoute
 /// while its pause (or its running chunk) holds the sim thread and the `GameGUI`
 /// hook cannot run. Returns false when no server is up (nothing to drain).
 pub(crate) fn process_global_queue(lua: &Lua, router: &JsonRpcRouter) -> bool {
-    let app_data = {
-        let slot = GLOBAL_APP_DATA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        slot.clone()
-    };
-    let Some(app_data) = app_data else {
+    let Some(app_data) = current_app_data() else {
         return false;
     };
     drain_queue(lua, &app_data, router);
     true
+}
+
+/// The running server's queue, or `None` when no server is bound.
+fn current_app_data() -> Option<Data<Mutex<AppData>>> {
+    GLOBAL_APP_DATA
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// Fail every request stranded in the running server's queue, telling each
+/// caller `reason`. Returns how many callers were actually told (a caller that
+/// had already given up, and a notification, have nobody to tell).
+///
+/// **Touches no Lua**, which is what makes it callable from the sentinel's
+/// destructor while `lua_close` is running: a queue entry is a serde
+/// [`JsonRpcRequest`] and a `oneshot` sender, and the response is built from a
+/// string. The Lua state that would have answered these requests is going away
+/// or already gone, so the honest outcome is an error naming that — not a
+/// silent drop the caller reads as a closed channel, and not the 30 s server
+/// timeout it would otherwise wait out.
+pub(crate) fn fail_queued(reason: &str) -> usize {
+    let Some(app_data) = current_app_data() else {
+        return 0;
+    };
+    let queue = std::mem::take(&mut lock_app_data(&app_data).rpc_queue);
+
+    // A plain loop rather than a chain: each entry has to be consumed to move
+    // its sender out, and the only interesting outcome is the side effect.
+    let mut told = 0;
+    for app_request in queue {
+        // A notification has no id and no channel — nowhere to report to. A
+        // `send` that fails means the caller already gave up, which is likewise
+        // nothing to report.
+        if let (Some(sender), Some(id)) = (app_request.response_sender, app_request.request.id) {
+            if sender.send(torn_down_response(id, reason)).is_ok() {
+                told += 1;
+            }
+        }
+    }
+    told
+}
+
+/// The envelope a caller gets when the Lua state that would have answered it is
+/// being destroyed.
+fn torn_down_response(id: String, reason: &str) -> JsonRpcResponse {
+    JsonRpcResponse {
+        jsonrpc: JSON_RPC_VERSION.to_string(),
+        id,
+        result: None,
+        error: serde_json::to_value(JsonRpcError {
+            code: JSON_RPC_BRIDGE_TORN_DOWN,
+            message: "bridge torn down".to_string(),
+            data: serde_json::to_value(reason).ok(),
+        })
+        .ok(),
+    }
+}
+
+/// Stop and drop the parked server, leaving this DLL as it was before anything
+/// called [`ensure_server`].
+///
+/// Test-only, and there is deliberately no production counterpart: the mission
+/// DLL's server is meant to outlive every mission in the process. It exists so a
+/// test that binds one can hand the statics back pristine, rather than leaving
+/// the next test's assertions about "the running server" depending on which one
+/// libtest happened to run first.
+#[cfg(test)]
+pub(crate) fn retire_server() {
+    let parked = SERVER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    drop(parked); // `Drop` stops it and retires its queue from GLOBAL_APP_DATA
+}
+
+/// Queue `request` against the RUNNING server, as the HTTP/WS handlers do,
+/// returning the channel a caller would await. Lets the crate's own tests drive
+/// the mission lifecycle — where the interesting moment is a request the sim
+/// never drains — without standing up a socket.
+#[cfg(test)]
+pub(crate) fn queue_against_running_server(
+    request: JsonRpcRequest,
+) -> Option<Receiver<JsonRpcResponse>> {
+    let app_data = current_app_data()?;
+    let mut guard = lock_app_data(&app_data);
+    push_rpc_request(&mut guard, request)
 }
 
 #[post("/rpc")]
@@ -1294,11 +1381,13 @@ mod tests {
     /// dead server's queue would hand the editor responses from the mission
     /// that just ended.
     ///
-    /// This is the only test in the lib binary that binds a port, so the
-    /// "before" and "after" assertions about the DLL-wide slot hold.
+    /// Serialized against every other test that binds a server or arms a
+    /// teardown, so the "before" and "after" assertions about the DLL-wide slot
+    /// are about THIS server.
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn the_global_drain_follows_the_running_server_in_and_out_of_existence() {
+        let _serial = crate::jsonrpc::serially();
         let lua = Lua::new();
         let router = router(&lua);
         assert!(
