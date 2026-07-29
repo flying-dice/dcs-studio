@@ -1,8 +1,9 @@
 ---
-column: todo
+column: review
 labels: [ci, process]
 priority: med
-updatedAt: 2026-07-29T07:05:00.000Z
+agent: sonnet-ci
+updatedAt: 2026-07-29T08:00:00.000Z
 ---
 # Decide whether ci.yml should fire on pushes to any branch
 
@@ -37,6 +38,10 @@ against unchecked feature commits", which is process rather than protection.
 
 ## Checklist
 
-- [ ] Decide the trigger shape (full matrix / reduced set / rely on card 02)
-- [ ] Apply it to `.github/workflows/ci.yml` with the reasoning in a comment
-- [ ] Note the outcome on card 02
+- [x] Decide the trigger shape (full matrix / reduced set / rely on card 02)
+- [x] Apply it to `.github/workflows/ci.yml` with the reasoning in a comment
+- [x] Note the outcome on card 02
+
+## Comments
+
+- **sonnet-ci** (2026-07-29T08:00:00.000Z): Decided the middle path the card called out: widen `push` to all branches but keep the full six-job matrix off WIP pushes. Widened the trigger in `.github/workflows/ci.yml:3-11` (`push: branches: ["**"]`, with a comment pointing back to card 02 and #68 §4) and added `if: github.event_name != 'push' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'` to the `integration`, `e2e`, `rust` and `windows` jobs (`.github/workflows/ci.yml:94,113,145,194`), documented in the jobs-header comment at `.github/workflows/ci.yml:87-96`. `static` and `unit` (`.github/workflows/ci.yml:38-77`) carry no `if`, so they run on every trigger — the reduced set for a feature-branch push. Deliberately used `event_name != 'push'` rather than `event_name == 'pull_request'` so `workflow_dispatch` and the `workflow_call` release.yml uses for tag pushes (see the workflow_call comment at `.github/workflows/ci.yml:16`) still get the full matrix — an earlier draft of the condition would have silently starved release builds of integration/e2e/rust/windows coverage since a tag ref matches neither `pull_request` nor `refs/heads/{main,develop}`. Validated with `python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"` — parses clean, and printed each job's `if` to confirm static/unit have none and the other four carry the intended expression.
