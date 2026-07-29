@@ -25,8 +25,11 @@
 //! right callback name, that `onSimulationFrame` fires at the menu. Those are
 //! claims about DCS and only a live sim can settle them (issue #65).
 
+mod support;
+
 use dcs_bridge_core::{bootstrap, BridgeKind};
 use mlua::{Lua, Table};
+use support::lua_cov::CoveredLua;
 
 /// The shipped hook, verbatim. `include_str!` rather than a path read so a
 /// moved or renamed file fails the build instead of the test.
@@ -308,6 +311,8 @@ fn the_stubbed_module_has_the_shape_the_real_one_does() {
     // path through `bridge` that DcsStudio.lua names, on a genuinely
     // bootstrapped state, so the stub cannot quietly become fiction.
     let lua = unsafe { Lua::unsafe_new() };
+    // Lua line coverage (#66); inert unless `LUA_COV_DIR` is set.
+    let lua = CoveredLua::new(lua);
     let exports = bootstrap(&lua, BridgeKind::Gui, "test").expect("bootstrap");
     lua.globals().set("bridge", exports).expect("bind bridge");
 

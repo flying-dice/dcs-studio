@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 
 mod support;
 
+use support::lua_cov::CoveredLua;
 use support::{connect_ws, rpc, Ws};
 
 use dcs_bridge_core::{bootstrap, BridgeKind};
@@ -58,6 +59,8 @@ fn spawn_sim_thread(shutdown: Arc<AtomicBool>, ready: mpsc::Sender<()>) {
         // engine needs and which the DCS Lua states have, but `Lua::new()` omits
         // as unsafe. This is a test harness, not the DLL.
         let lua = unsafe { Lua::unsafe_new() };
+        // Lua line coverage (#66); inert unless `LUA_COV_DIR` is set.
+        let lua = CoveredLua::new(lua);
         let exports = bootstrap(&lua, BridgeKind::Gui, "test").expect("bootstrap");
 
         // A minimal DcsStudio.lua: bind the server, register the debug methods,

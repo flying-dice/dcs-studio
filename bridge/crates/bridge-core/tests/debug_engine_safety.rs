@@ -29,9 +29,12 @@
 //! Windows-gated like the rest of the suite: the test binary links DCS's own
 //! lua.dll, so put it on PATH and run with `-- --include-ignored`.
 
+mod support;
+
 use dcs_bridge_core::{bootstrap, BridgeKind};
 use mlua::{Lua, Value};
 use std::sync::Mutex;
+use support::lua_cov::CoveredLua;
 
 /// The breakpoint registry and the pause slot are process-wide statics shared
 /// by every state in this binary, so the scenarios must not overlap.
@@ -44,11 +47,14 @@ static TEST_LOCK: Mutex<()> = Mutex::new(());
 /// state desanitized just far enough to load the bridge looks like — the engine
 /// captures its clock at install time, so removing them afterwards would prove
 /// nothing.
-fn engine_state(sanitized: bool) -> Lua {
+fn engine_state(sanitized: bool) -> CoveredLua {
     // SAFETY: test harness, not the DLL. `unsafe_new` loads all standard
     // libraries including `debug`, which the engine needs and which both DCS
     // Lua states provide.
     let lua = unsafe { Lua::unsafe_new() };
+    // Coverage is installed BEFORE bootstrap so the chunks it loads are
+    // measured from their first line (#66). Inert unless `LUA_COV_DIR` is set.
+    let lua = CoveredLua::new(lua);
     if sanitized {
         lua.globals().set("os", Value::Nil).expect("drop os");
         lua.globals().set("timer", Value::Nil).expect("drop timer");

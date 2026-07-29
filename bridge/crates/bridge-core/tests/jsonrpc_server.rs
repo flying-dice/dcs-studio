@@ -30,6 +30,7 @@ fn serially() -> MutexGuard<'static, ()> {
 
 use dcs_bridge_core::{bootstrap, BridgeKind};
 use mlua::{Function, Lua};
+use support::lua_cov::CoveredLua;
 use support::{connect_ws, free_port, get, notification, post_rpc, rpc};
 
 /// A live bridge on `port`, driven from a dedicated "sim thread" that owns the
@@ -70,6 +71,10 @@ impl Bridge {
 
         let joined = std::thread::spawn(move || {
             let lua = Lua::new();
+            // Lua line coverage (#66); inert unless `LUA_COV_DIR` is set. This
+            // state is `Lua::new()`, which has no `debug` library, so the shim
+            // declines here — the same decline path `bootstrap` has.
+            let lua = CoveredLua::new(lua);
             let exports = bootstrap(&lua, BridgeKind::Mission, "test").expect("bootstrap");
             let glue = format!(
                 r#"

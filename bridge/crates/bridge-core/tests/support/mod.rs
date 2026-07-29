@@ -15,6 +15,10 @@
 // The hand-rolled WS frame codec truncates lengths on purpose: test payloads are tiny.
 #![allow(clippy::cast_possible_truncation)]
 
+// Lua line coverage (#66). Must come AFTER the inner attributes above, or the
+// module fails to parse.
+pub mod lua_cov;
+
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
