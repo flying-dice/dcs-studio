@@ -7,6 +7,7 @@ import type {
   ReplVariable,
 } from "../domain/debugProtocol";
 import { errorText } from "../domain/errorText";
+import type { ConsoleHostMessage, ConsoleWebviewMessage } from "./webviewContract";
 
 // The Lua console's decision logic, lifted out of the VS Code panel.
 //
@@ -29,19 +30,17 @@ import { errorText } from "../domain/errorText";
 /** Something only the editor can do, described rather than done. */
 export type ConsoleEffect = { kind: "launchBridge" };
 
-/** The message shapes the console webview sends the host. */
-export interface ConsoleInbound {
-  type: string;
-  env?: LuaEnv;
-  envs?: LuaEnv[];
-  code?: string;
-  expr?: string;
-  ref?: number;
-  id?: number;
-  nodeId?: number;
-  reqId?: number;
-  label?: string;
-}
+/**
+ * The message shapes the console webview sends the host — the declared
+ * contract, not a local restatement of it. Named here as well so the panel
+ * keeps importing its boundary type from the module it talks to; the union
+ * itself lives in `webviewContract.ts`, where the webview half is checked
+ * against the same declaration.
+ */
+export type ConsoleInbound = ConsoleWebviewMessage;
+
+/** The one console message that carries an export request's whole payload. */
+type ConsoleExportRequest = Extract<ConsoleWebviewMessage, { type: "export" }>;
 
 /** A sim-written export file, and the name to offer for the user's copy. */
 export interface ConsoleExportSave {
@@ -96,8 +95,12 @@ export interface ConsolePresenterDeps {
   tailed: readonly ConsoleBridge[];
   /** The explorer's `**` sweep budget, read fresh so a settings change lands live. */
   wildcardDepth: () => number;
-  /** Deliver a message to the webview. */
-  post: (msg: unknown) => void;
+  /**
+   * Deliver a message to the webview. Typed to the declared host union, so a
+   * message `media/console.js` has no case for cannot be sent from here
+   * without the contract being updated first.
+   */
+  post: (msg: ConsoleHostMessage) => void;
   /** Perform an editor-side effect. */
   effect: (effect: ConsoleEffect) => void;
   /**
@@ -263,7 +266,11 @@ export class ConsolePresenter {
   /** Full-table JSON export: the sim serializes to a temp file in its write
    * dir; the host copies that wherever the user picks and says whether it
    * landed, so a cancelled dialog answers the request rather than hanging it. */
-  private async export(env: LuaEnv, client: ConsoleBridge, msg: ConsoleInbound): Promise<void> {
+  private async export(
+    env: LuaEnv,
+    client: ConsoleBridge,
+    msg: ConsoleExportRequest,
+  ): Promise<void> {
     try {
       const { path, bytes } = await client.replExport(env, { ref: msg.ref, expr: msg.expr });
       const saved = await this.deps.saveExport({

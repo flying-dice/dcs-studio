@@ -4,6 +4,7 @@ import type { ProductDetail } from "../domain/types";
 import type { AuthPort } from "../ports/auth";
 import type { MarketplacePort } from "../ports/marketplace";
 import type { SubscriptionService } from "./subscriptionService";
+import type { MarketplaceHostMessage, MarketplaceWebviewMessage } from "./webviewContract";
 
 // The marketplace storefront's decision logic, lifted out of the VS Code panel.
 //
@@ -25,15 +26,14 @@ export type MarketplaceEffect =
   | { kind: "info"; message: string }
   | { kind: "installFailed"; message: string; cause: unknown };
 
-/** The message shapes the marketplace webview sends the host. */
-export interface MarketplaceInbound {
-  type: string;
-  repo?: string;
-  name?: string;
-  force?: boolean;
-  url?: string;
-  page?: string;
-}
+/**
+ * The message shapes the marketplace webview sends the host — the declared
+ * contract, not a local restatement of it. Named here as well so the panel
+ * keeps importing its boundary type from the module it talks to; the union
+ * itself lives in `webviewContract.ts`, where the webview half is checked
+ * against the same declaration.
+ */
+export type MarketplaceInbound = MarketplaceWebviewMessage;
 
 export interface MarketplacePresenterDeps {
   subs: Pick<SubscriptionService, "install" | "unsubscribe" | "fetchPlan" | "isSubscribed">;
@@ -41,8 +41,12 @@ export interface MarketplacePresenterDeps {
   auth: AuthPort;
   /** The discovery topic, read fresh so a settings change takes effect live. */
   topic: () => string;
-  /** Deliver a message to the webview. */
-  post: (msg: unknown) => void;
+  /**
+   * Deliver a message to the webview. Typed to the declared host union, so a
+   * message `media/marketplace.js` has no case for cannot be sent from here
+   * without the contract being updated first.
+   */
+  post: (msg: MarketplaceHostMessage) => void;
   /** Perform an editor-side effect. */
   effect: (effect: MarketplaceEffect) => void;
 }

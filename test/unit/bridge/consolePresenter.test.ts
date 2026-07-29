@@ -3,6 +3,7 @@ import type {
   ConsoleBridge,
   ConsoleEffect,
   ConsoleExportSave,
+  ConsoleInbound,
   ConsolePresenterDeps,
 } from "../../../src/core/app/consolePresenter";
 import { ConsolePresenter } from "../../../src/core/app/consolePresenter";
@@ -437,7 +438,11 @@ describe("the offline call to action", () => {
 
   it("ignores a message type it does not handle", async () => {
     const h = harness();
-    await h.presenter.handle({ type: "somethingElse" });
+    // Cast deliberately: `ConsoleInbound` is now the declared union
+    // (src/core/app/webviewContract.ts), so this type cannot be written
+    // legally — which is the point. It still ARRIVES, from a stale document or
+    // a crafted post, and the switch has to survive it.
+    await h.presenter.handle({ type: "somethingElse" } as unknown as ConsoleInbound);
     expect(h.gui.calls).toEqual([]);
     expect(h.posted).toEqual([]);
     expect(h.effects).toEqual([]);

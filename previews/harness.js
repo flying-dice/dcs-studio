@@ -9,6 +9,13 @@
 //
 // - window.__sentMessages: every message the webview posts to the host,
 //   in order. Read by tests/helpers.ts#sentMessages / expectSent.
+// - window.__receivedMessages: the mirror image — every host -> webview
+//   message delivered through __host.receive, as {type, changed}. `changed`
+//   says whether the document differed either side of the dispatch, i.e.
+//   whether the webview CONSUMED the push rather than merely being handed it;
+//   it is only measured while window.__contractProbe is set (see
+//   tests/webviewContract.spec.ts), because serialising the document around
+//   every message would slow the sweep specs down for nothing.
 // - window.__host.onPost(fn): a fixture registers fn to react to webview
 //   posts (e.g. answer the boot "refresh"/"ready" request, or run a scripted
 //   fake-install flow). Multiple handlers may be registered; all run.
@@ -21,10 +28,22 @@
   const sent = [];
   window.__sentMessages = sent;
 
+  const received = [];
+  window.__receivedMessages = received;
+
   const postHandlers = [];
   window.__host = {
     receive(msg) {
+      // Every webview router in media/ dispatches synchronously off the
+      // "message" event, so the document either side of this call is a sound
+      // before/after pair — no settling, no polling.
+      const probing = window.__contractProbe === true;
+      const before = probing ? document.body.innerHTML : "";
       window.dispatchEvent(new MessageEvent("message", { data: msg }));
+      received.push({
+        type: msg ? msg.type : undefined,
+        changed: probing ? document.body.innerHTML !== before : null,
+      });
     },
     onPost(fn) {
       postHandlers.push(fn);

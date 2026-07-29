@@ -382,11 +382,21 @@ came out of asking what happens when a user acts at the wrong moment.
 
 ## What is deliberately not done
 
-- **G3's declared message-contract table.** Both halves of every webview protocol
-  now execute under a gate, so a dropped handler fails a test. A typed contract
-  table would still be worth adding alongside a wider presenter rollout; deriving
-  it by regex is not, because the webviews use several dispatch shapes and an
-  inferred contract produces false failures.
+- ~~**G3's declared message-contract table.**~~ **Since done, for two of eleven
+  webviews** (board card `09-typed-webview-message-contract`). The contract is
+  declared in `src/core/app/webviewContract.ts` — typed
+  `HostMessage`/`WebviewMessage` unions for `console` and `marketplace`, the two
+  panels with a presenter — and checked from three directions: the compiler
+  (each presenter's `post` is typed to its host union, so an undeclared push
+  does not build), the unit layer (every declared inbound message is asserted to
+  be acted on, every declared outbound to be produced), and the e2e layer (the
+  real `media/*.js` is driven in Chromium and the set it posts and consumes is
+  asserted equal to the declaration). Nothing is regex-derived: the parked
+  reasoning was right that an inferred contract produces false failures, and the
+  way past it was to observe the webview rather than read it. The other nine
+  webviews are named in `UNCOVERED_WEBVIEWS` and checked against `previews/`, so
+  the remaining gap is data rather than an absence; closing it means giving
+  those panels presenters first.
 - ~~**Presenter extraction beyond the marketplace pilot.**~~ **Since done**
   (board card `08-presenter-for-console-panel`; `myModsPanel` was done in the
   clean-code round, issue #40). `consolePanel` is now a 139-line shell over

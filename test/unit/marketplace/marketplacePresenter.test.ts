@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   type MarketplaceEffect,
+  type MarketplaceInbound,
   MarketplacePresenter,
   type MarketplacePresenterDeps,
 } from "../../../src/core/app/marketplacePresenter";
@@ -500,7 +501,11 @@ describe("editor effects", () => {
 
   it("ignores an unknown message type", async () => {
     const h = harness();
-    await h.presenter.handle({ type: "somethingElse" });
+    // Cast deliberately: `MarketplaceInbound` is now the declared union
+    // (src/core/app/webviewContract.ts), so this type cannot be written
+    // legally — which is the point. It still ARRIVES, from a stale document or
+    // a crafted post, and the switch has to survive it.
+    await h.presenter.handle({ type: "somethingElse" } as unknown as MarketplaceInbound);
     expect(h.posted).toEqual([]);
     expect(h.effects).toEqual([]);
   });
