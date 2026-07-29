@@ -28,11 +28,9 @@ mod sqlite;
 mod surface;
 mod toml_codec;
 
-use log::LevelFilter::Warn;
 use log::{info, warn, LevelFilter};
 use mlua::prelude::{LuaFunction, LuaResult, LuaTable};
 use mlua::Lua;
-use module_config::ModuleConfig;
 use std::env;
 use std::path::PathBuf;
 
@@ -173,12 +171,7 @@ impl BridgeKind {
 /// Returns any `mlua` error raised while building the binding surface or
 /// loading the embedded runtime/debug-engine chunks into this state.
 pub fn bootstrap(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<LuaTable> {
-    let module_config: ModuleConfig = lua
-        .globals()
-        .get::<ModuleConfig>("DCS_STUDIO")
-        .unwrap_or_default();
-
-    let logger_level: LevelFilter = module_config.logger_level.unwrap_or(Warn);
+    let logger_level: LevelFilter = module_config::logger_level(lua);
 
     // Logging is best effort and its outcome is only ever diagnostic: a bridge
     // that could not open its log file is still a working bridge, and the one

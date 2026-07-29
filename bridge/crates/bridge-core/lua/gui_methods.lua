@@ -234,6 +234,10 @@ if not __DCS_STUDIO_MISSION_BOOTED then
     fail("mission scripting is sanitized (require/package are nil). Run 'DCS Studio: Desanitize MissionScripting.lua', restart DCS, then start the mission again.")
   else
     __DCS_STUDIO_WRITEDIR = %q
+    -- Same reason the GameGUI hook sets it (card 16): read by the mission DLL
+    -- on require(), and without it the module falls back to its own default —
+    -- which used to be TRACE, and wrote megabytes on the sim thread.
+    DCS_STUDIO = { logger_level = "warn" }
     package.cpath = package.cpath .. ";" .. %q
     local ok2, err2 = pcall(require, "dcs_studio_mission")
     if ok2 then

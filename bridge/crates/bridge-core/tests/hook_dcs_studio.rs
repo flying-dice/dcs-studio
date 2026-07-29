@@ -137,6 +137,46 @@ fn the_hook_keeps_the_log_level_that_keeps_the_sim_thread_quiet() {
     assert_eq!(level, "warn");
 }
 
+/// The bug card 16 exists for. DCS does not run a hook chunk with `_G` as its
+/// environment: it hands each `Scripts/Hooks` file its own table (reads fall
+/// through to `_G`, writes do not come back). A bare `DCS_STUDIO = ...` in the
+/// hook therefore set a key nobody reads — `lua_getglobal` in the DLL saw nil,
+/// `bootstrap` defaulted, and the bridge shipped at TRACE. Loading the hook
+/// under exactly that environment is the only place this can be caught without
+/// a sim, so it is asserted against `_G`, not against the chunk's own env.
+#[test]
+fn the_level_reaches_real_globals_even_when_dcs_sandboxes_the_hook() {
+    let lua = unsafe { Lua::unsafe_new() };
+    lua.load(SIM).exec().expect("stub the sim");
+    lua.globals()
+        .set("HOOK_SRC", HOOK)
+        .expect("hand over the hook source");
+    lua.load(
+        r"
+        local env = setmetatable({}, { __index = _G })
+        local chunk = assert(loadstring(HOOK_SRC, 'DcsStudio.lua'))
+        setfenv(chunk, env)
+        chunk()
+        SANDBOX = env
+        ",
+    )
+    .exec()
+    .expect("load the hook in a hook environment");
+
+    let level: String = lua
+        .load("rawget(_G, 'DCS_STUDIO').logger_level")
+        .eval()
+        .expect("the level must be in the globals the DLL reads");
+    assert_eq!(level, "warn");
+    // And the rest of the hook still ran in that environment — a sandbox that
+    // broke `require` would make the assertion above meaningless.
+    let bound: bool = lua
+        .load("SPY.callbacks ~= nil")
+        .eval()
+        .expect("callback spy");
+    assert!(bound, "the sandboxed hook still starts the bridge");
+}
+
 #[test]
 fn a_failed_module_load_says_so_and_registers_nothing() {
     let lua = unsafe { Lua::unsafe_new() };

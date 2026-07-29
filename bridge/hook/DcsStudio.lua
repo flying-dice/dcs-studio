@@ -25,7 +25,14 @@ package.cpath = package.cpath .. ";" .. lfs.writedir() .. "Mods\\tech\\DcsStudio
 -- default (and the mission bridge's): anything chattier logs every RPC response
 -- body on the sim thread into a non-rolling file, and a paused debug session
 -- polls debug_state four times a second carrying the whole snapshot each time.
-DCS_STUDIO = { logger_level = "warn" }
+--
+-- Written through _G explicitly, and that is load-bearing (card 16): DCS runs
+-- Scripts/Hooks chunks with their own environment table, so a bare
+-- `DCS_STUDIO = ...` here lands in THAT table and never reaches the globals the
+-- DLL reads with lua_getglobal — which is exactly what a live session measured
+-- (DCS_STUDIO nil in the GUI state, the bridge logging at TRACE). Reads still
+-- pass through to _G, which is why `package.cpath` below works either way.
+_G.DCS_STUDIO = { logger_level = "warn" }
 
 local ok, bridge = pcall(require, "dcs_studio_gui")
 if not ok then
