@@ -1,6 +1,7 @@
 import type { DualBridgeStatus } from "../domain/bridgeProtocol";
 import type { LuaEnv, ReplVariable } from "../domain/debugProtocol";
 import type { InstallManifestView } from "../domain/installManifestView";
+import type { ModDto } from "../domain/subscriptions";
 import type { MarketListing, ProductDetail } from "../domain/types";
 import type { Progress } from "./subscriptionService";
 
@@ -38,8 +39,8 @@ import type { Progress } from "./subscriptionService";
 //
 // ## Coverage is deliberately partial
 //
-// Only the two panels with a presenter (`console`, `marketplace`) are covered.
-// The other nine webviews still have both halves under their own gates but no
+// Only the panels with a presenter (`console`, `marketplace`, `mymods`) are
+// covered. The other eight webviews still have both halves under their own gates but no
 // declared contract between them; they are named in `UNCOVERED_WEBVIEWS` so the
 // gap is visible in the table rather than silent, and the tests assert that
 // list is exactly "every preview page minus the covered ones". Extending the
@@ -198,6 +199,64 @@ const MARKETPLACE_TO_WEBVIEW_KEYS: { readonly [K in MarketplaceHostMessage["type
   installError: true,
 };
 
+// ── My Mods ──────────────────────────────────────────────────────────────────
+
+/** One installed mod as the My Mods list renders it: the DTO plus its breakdown. */
+export type MyModsModView = ModDto & { manifest: InstallManifestView };
+
+/** A message `media/mymods.js` posts. */
+export type MyModsWebviewMessage =
+  | { type: "refresh" }
+  | { type: "enable"; repo?: string }
+  | { type: "disable"; repo?: string }
+  | { type: "uninstall"; repo?: string }
+  | { type: "update"; repo?: string }
+  | { type: "launch"; repo?: string; id?: string }
+  | { type: "stop"; repo?: string; id?: string }
+  | { type: "openDir"; repo?: string }
+  | { type: "openExternal"; url?: string }
+  | { type: "openDocs"; page?: string }
+  | { type: "createShortcut" }
+  | { type: "revealBat" }
+  | { type: "cleanUninstall" };
+
+/** A message `MyModsPresenter` pushes to the My Mods webview. */
+export type MyModsHostMessage =
+  | {
+      type: "init";
+      dataDir: string;
+      uninstallBat: string;
+      mods: MyModsModView[];
+      /** Per-entrypoint running state, keyed exactly as the webview looks it up. */
+      running: Record<string, boolean>;
+    }
+  | { type: "busy"; repo: string; busy: boolean }
+  | { type: "progress"; repo: string; label: string; pct: number | undefined }
+  | { type: "entrypoint"; repo: string; id: string; running: boolean; error?: string };
+
+const MYMODS_TO_HOST_KEYS: { readonly [K in MyModsWebviewMessage["type"]]: true } = {
+  refresh: true,
+  enable: true,
+  disable: true,
+  uninstall: true,
+  update: true,
+  launch: true,
+  stop: true,
+  openDir: true,
+  openExternal: true,
+  openDocs: true,
+  createShortcut: true,
+  revealBat: true,
+  cleanUninstall: true,
+};
+
+const MYMODS_TO_WEBVIEW_KEYS: { readonly [K in MyModsHostMessage["type"]]: true } = {
+  init: true,
+  busy: true,
+  progress: true,
+  entrypoint: true,
+};
+
 // ── The table ────────────────────────────────────────────────────────────────
 
 /** One covered panel's half of the contract, as data the tests iterate. */
@@ -241,10 +300,19 @@ export const MARKETPLACE_PROTOCOL: WebviewProtocol = {
   silent: [],
 };
 
+export const MYMODS_PROTOCOL: WebviewProtocol = {
+  preview: "mymods.html",
+  scripts: ["mymods.js"],
+  toHost: Object.keys(MYMODS_TO_HOST_KEYS),
+  toWebview: Object.keys(MYMODS_TO_WEBVIEW_KEYS),
+  silent: [],
+};
+
 /** Every panel whose protocol is declared, keyed by preview page basename. */
 export const WEBVIEW_PROTOCOLS: Readonly<Record<string, WebviewProtocol>> = {
   console: CONSOLE_PROTOCOL,
   marketplace: MARKETPLACE_PROTOCOL,
+  mymods: MYMODS_PROTOCOL,
 };
 
 /**
@@ -260,7 +328,6 @@ export const UNCOVERED_WEBVIEWS: readonly string[] = [
   "docs",
   "log",
   "manifest",
-  "mymods",
   "nav",
   "newproject",
   "publish",

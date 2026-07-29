@@ -382,18 +382,19 @@ came out of asking what happens when a user acts at the wrong moment.
 
 ## What is deliberately not done
 
-- ~~**G3's declared message-contract table.**~~ **Since done, for two of eleven
-  webviews** (board card `09-typed-webview-message-contract`). The contract is
+- ~~**G3's declared message-contract table.**~~ **Since done, for three of eleven
+  webviews** (board cards `09-typed-webview-message-contract` and
+  `14-presenter-rollout-remaining-panels`). The contract is
   declared in `src/core/app/webviewContract.ts` — typed
-  `HostMessage`/`WebviewMessage` unions for `console` and `marketplace`, the two
-  panels with a presenter — and checked from three directions: the compiler
+  `HostMessage`/`WebviewMessage` unions for `console`, `marketplace` and
+  `mymods`, the panels with a presenter — and checked from three directions: the compiler
   (each presenter's `post` is typed to its host union, so an undeclared push
   does not build), the unit layer (every declared inbound message is asserted to
   be acted on, every declared outbound to be produced), and the e2e layer (the
   real `media/*.js` is driven in Chromium and the set it posts and consumes is
   asserted equal to the declaration). Nothing is regex-derived: the parked
   reasoning was right that an inferred contract produces false failures, and the
-  way past it was to observe the webview rather than read it. The other nine
+  way past it was to observe the webview rather than read it. The other eight
   webviews are named in `UNCOVERED_WEBVIEWS` and checked against `previews/`, so
   the remaining gap is data rather than an absence; closing it means giving
   those panels presenters first.

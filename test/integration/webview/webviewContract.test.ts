@@ -7,8 +7,8 @@ import { UNCOVERED_WEBVIEWS, WEBVIEW_PROTOCOLS } from "../../../src/core/app/web
 // (`src/core/app/webviewContract.ts`): which webviews it covers, and — the part
 // that matters — which it does not.
 //
-// The contract is deliberately partial: only the two panels with a presenter
-// have declared message unions. A partial gate's real failure mode is the one
+// The contract is deliberately partial: only the panels with a presenter have
+// declared message unions. A partial gate's real failure mode is the one
 // previewAssets.test.ts was written against — it is only as complete as the
 // list it was given, and a webview nobody added to either list is invisible in
 // exactly the same way whether it was an omission or a decision. So the

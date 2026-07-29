@@ -4,6 +4,7 @@ import type {
   EntrypointLauncher,
   MyModsConfirm,
   MyModsEffect,
+  MyModsInbound,
   MyModsLedger,
   MyModsPresenterDeps,
 } from "../../../src/core/app/myModsPresenter";
@@ -695,7 +696,11 @@ describe("messages that carry nothing to act on", () => {
   it("ignores actions with no repo, no id, and types it does not know", async () => {
     const h = harness();
     for (const type of ["enable", "disable", "uninstall", "update", "openDir", "mystery"]) {
-      await h.presenter.handle({ type });
+      // "mystery" is deliberately outside the declared union
+      // (`src/core/app/webviewContract.ts`) — a webview can post anything, and
+      // the presenter ignoring it is the behaviour under test, so the cast is
+      // the point rather than a workaround.
+      await h.presenter.handle({ type } as unknown as MyModsInbound);
     }
     await h.presenter.handle({ type: "launch", repo: "Owner/Mod" });
     await h.presenter.handle({ type: "stop", id: "gui" });
