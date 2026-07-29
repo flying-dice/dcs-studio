@@ -1,8 +1,9 @@
 ---
-column: todo
+column: review
 labels: [ci, process]
 priority: med
-updatedAt: 2026-07-29T07:05:00.000Z
+agent: sonnet-ci
+updatedAt: 2026-07-29T08:00:00.000Z
 ---
 # Decide whether ci.yml should fire on pushes to any branch
 
@@ -37,6 +38,11 @@ against unchecked feature commits", which is process rather than protection.
 
 ## Checklist
 
-- [ ] Decide the trigger shape (full matrix / reduced set / rely on card 02)
-- [ ] Apply it to `.github/workflows/ci.yml` with the reasoning in a comment
-- [ ] Note the outcome on card 02
+- [x] Decide the trigger shape (full matrix / reduced set / rely on card 02)
+- [x] Apply it to `.github/workflows/ci.yml` with the reasoning in a comment
+- [x] Note the outcome on card 02
+
+## Comments
+
+- **sonnet-ci** (2026-07-29T08:00:00.000Z): Decided the middle path the card called out: widen `push` to all branches but keep the full six-job matrix off WIP pushes. Widened the trigger in `.github/workflows/ci.yml:3-11` (`push: branches: ["**"]`, with a comment pointing back to card 02 and #68 §4) and added `if: github.event_name != 'push' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'` to the `integration`, `e2e`, `rust` and `windows` jobs (`.github/workflows/ci.yml:94,113,145,194`), documented in the jobs-header comment at `.github/workflows/ci.yml:87-96`. `static` and `unit` (`.github/workflows/ci.yml:38-77`) carry no `if`, so they run on every trigger — the reduced set for a feature-branch push. Deliberately used `event_name != 'push'` rather than `event_name == 'pull_request'` so `workflow_dispatch` and the `workflow_call` release.yml uses for tag pushes (see the workflow_call comment at `.github/workflows/ci.yml:16`) still get the full matrix — an earlier draft of the condition would have silently starved release builds of integration/e2e/rust/windows coverage since a tag ref matches neither `pull_request` nor `refs/heads/{main,develop}`. Validated with `python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"` — parses clean, and printed each job's `if` to confirm static/unit have none and the other four carry the intended expression.
+- **sonnet-ci** (2026-07-29T08:20:00.000Z): Review caught a real bug in the first pass. A reusable workflow (`workflow_call`) inherits the CALLER's `github` context — release.yml triggers on `push: tags: ["v*"]`, so a release run is seen from inside `ci.yml` as `event_name == 'push'` with `ref == 'refs/tags/vX.Y.Z'`, not as its own `workflow_call` event. My original condition (`event_name != 'push' || ref == main/develop`) therefore evaluated FALSE on every release, silently skipping `integration`/`e2e`/`rust`/`windows` — and a skipped job satisfies GitHub's `needs`/required-status semantics, so release.yml's gate would have gone green having run neither the coverage-gated layers nor the Windows build. Fixed by adding `|| startsWith(github.ref, 'refs/tags/')` to all four job conditions (`.github/workflows/ci.yml`, jobs `integration`/`e2e`/`rust`/`windows`), and rewrote the explanatory comment at the top of the `jobs:` block to state the inherited-context fact correctly instead of the wrong "workflow_call passes through unconditionally" claim, and fixed the `on:` comment's dangling reference to a nonexistent `full-checks` condition. Re-validated: `python -c "import yaml; d=yaml.safe_load(open('.github/workflows/ci.yml')); [print(j, d['jobs'][j].get('if')) for j in d['jobs']]"` prints `static None`, `unit None`, and all of `integration`/`e2e`/`rust`/`windows` with `github.event_name != 'push' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/')`.
