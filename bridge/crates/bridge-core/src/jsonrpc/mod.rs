@@ -1,12 +1,13 @@
 pub mod openrpc;
 pub mod router;
 pub mod server;
+pub mod teardown;
 
 use crate::facade::{p, p_opt, r, r_named, Sub};
 use crate::jsonrpc::router::JsonRpcRouter;
 use crate::jsonrpc::server::JsonRpcServer;
 use mlua::prelude::LuaResult;
-use mlua::{ExternalError, IntoLuaMulti, UserDataRef};
+use mlua::{ExternalError, IntoLuaMulti, UserDataRef, UserDataRefMut};
 
 // The JSON-RPC envelope types (defined in `crate::protocol`) — this crate is the
 // single source of truth for the wire shapes the editor side speaks to.
@@ -14,6 +15,26 @@ pub use crate::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, JSON_RP
 
 pub const JSON_RPC_METHOD_NOT_FOUND: i32 = -32601;
 pub const JSON_RPC_INTERNAL_ERROR: i32 = -32603;
+
+/// Implementation-defined server error (the JSON-RPC 2.0 `-32000..-32099` band):
+/// the Lua state that would have answered this request is being destroyed, so
+/// nothing can ever answer it. Distinguishable from a plain internal error on
+/// purpose — the editor should treat it as "the mission ended", not "the bridge
+/// is broken".
+pub const JSON_RPC_BRIDGE_TORN_DOWN: i32 = -32001;
+
+/// One turnstile for every test in this crate that touches the DLL-wide server,
+/// request queue or teardown flag. libtest runs a binary's tests in parallel,
+/// and those statics are deliberately one-per-DLL: two tests binding a server or
+/// arming a teardown at once would each see the other's moves, and an assertion
+/// about "the running server" would be answering about someone else's.
+#[cfg(test)]
+pub(crate) fn serially() -> std::sync::MutexGuard<'static, ()> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// Register the `jsonrpc` sub-namespace: the `JsonRpcServer` and
 /// `JsonRpcRouter` userdata proxies plus the free `serve`/`process_queue`
@@ -77,6 +98,8 @@ pub fn register(sub: &mut Sub) -> LuaResult<()> {
         },
     )?;
 
+    register_teardown(sub, &router_ty)?;
+
     sub.proxy::<JsonRpcRouter>(
         "JsonRpcRouter",
         "A method-name → Lua-handler table for JSON-RPC dispatch.",
@@ -95,6 +118,46 @@ pub fn register(sub: &mut Sub) -> LuaResult<()> {
                  string, type? = string, required? = boolean, description? = string }, ... } }.",
                 );
         },
+    )?;
+
+    Ok(())
+}
+
+/// The teardown surface: releasing a Lua state before DCS destroys it, and the
+/// sentinel that notices when DCS destroys one without being asked. Split out of
+/// [`register`] only to keep that function readable.
+fn register_teardown(sub: &mut Sub, router_ty: &str) -> LuaResult<()> {
+    sub.func(
+        "teardown",
+        &[p("router", router_ty), p_opt("reason", "string")],
+        &[
+            r_named("number", "handlers_released"),
+            r_named("number", "requests_failed"),
+        ],
+        "Release everything this DLL holds in the CURRENT Lua state, while that \
+         state is still alive: drop every handler registered on `router` (each \
+         one is a live reference into this state) and fail every request \
+         stranded in the server's queue with a truthful error. Call it from the \
+         state's own end-of-life signal — the mission bridge does, on \
+         S_EVENT_MISSION_END — so DCS's lua_close finds nothing of ours left to \
+         collect. Idempotent.",
+        |lua, (mut router, reason): (UserDataRefMut<JsonRpcRouter>, Option<String>)| {
+            let reason = reason.unwrap_or_else(|| "requested".to_string());
+            teardown::release(&mut router, &reason).into_lua_multi(lua)
+        },
+    )?;
+
+    sub.func(
+        "state_guard",
+        &[],
+        &[r_named("userdata", "guard")],
+        "Create the teardown sentinel for this Lua state. Keep the returned \
+         userdata reachable (the mission bridge parks it in a global): when DCS \
+         destroys the state, Lua's lua_close collects it and the DLL fails every \
+         stranded request. It is the BACKSTOP for a state that dies without \
+         calling `teardown` — it cannot drop Lua handles, because by then \
+         touching Lua is exactly what must not happen.",
+        |lua, ()| teardown::StateGuard.into_lua_multi(lua),
     )?;
 
     Ok(())

@@ -82,6 +82,25 @@ impl JsonRpcRouter {
         self.methods.get(name).map(|entry| &entry.handler)
     }
 
+    /// Drop every registered handler, returning how many there were.
+    ///
+    /// This is the mission bridge's teardown (see
+    /// [`crate::jsonrpc::teardown`]): each entry holds a [`LuaFunction`], i.e. a
+    /// live mlua reference into the Lua state that registered it, and the
+    /// mission state is destroyed under this router on every mission unload.
+    /// Called while that state is still alive, this drops the references
+    /// normally; left to the userdata's own `__gc`, the same drops happen
+    /// *during* `lua_close`.
+    pub(crate) fn release(&mut self) -> usize {
+        let released = self.methods.len();
+        debug!("Releasing {released} method(s)");
+        self.methods.clear();
+        // The map's buckets still hold capacity for the handlers just dropped;
+        // shrinking makes "released" mean released, so a leak here would show.
+        self.methods.shrink_to_fit();
+        released
+    }
+
     /// Every registered method, sorted by name, paired with its metadata — the
     /// single source the `OpenRPC` builder ([`crate::jsonrpc::openrpc`]) turns
     /// into the `rpc.discover` document.
@@ -177,5 +196,31 @@ mod tests {
         // A bare registration keeps default (empty) metadata.
         let (_, ping) = &methods[1];
         assert!(ping.description.is_none());
+    }
+
+    /// Releasing empties the router, and says how many handler references it
+    /// let go of. Those references are the mission bridge's only handles into
+    /// the mission Lua state, so the count is what the teardown log reports and
+    /// what proves the state was left holding nothing (card 18 / issue #69).
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn releasing_empties_the_router_and_counts_what_it_let_go() {
+        let lua = Lua::new();
+        let noop: LuaFunction = lua.globals().get("print").expect("print");
+        let mut router = JsonRpcRouter::new();
+        router.add_method("ping".into(), noop.clone(), MethodMeta::default());
+        router.add_method("eval".into(), noop, MethodMeta::default());
+
+        assert_eq!(
+            router.release(),
+            2,
+            "both handlers were held, both released"
+        );
+        assert!(router.methods_sorted().is_empty());
+        assert!(
+            router.get_method("ping").is_none(),
+            "a released router dispatches nothing — the state it pointed at is going away"
+        );
+        assert_eq!(router.release(), 0, "releasing again is free");
     }
 }

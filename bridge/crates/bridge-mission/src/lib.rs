@@ -8,6 +8,11 @@
 //! ring) persists in the process from the first load until DCS exits. The
 //! embedded init is written to be re-run per mission: `jsonrpc.serve` reuses
 //! the running server, and the debugger session state is reset.
+//!
+//! It is also written to be torn down per mission (issue #69): the init
+//! registers a release that drops every mlua handle this DLL holds in the
+//! mission state *before* DCS closes that state, plus a sentinel userdata as a
+//! backstop. See `dcs_bridge_core`'s `jsonrpc::teardown`.
 
 use dcs_bridge_core::BridgeKind;
 use mlua::prelude::{LuaResult, LuaTable};
@@ -144,6 +149,104 @@ mod tests {
             .eval()
             .expect("the scheduled pump must run and reschedule itself");
         assert!(next > 0.0, "the pump must reschedule itself: {next}");
+    }
+
+    /// The teardown the init wires up (card 18 / issue #69), driven through the
+    /// mission state's own end-of-life event.
+    ///
+    /// This is the trigger that has to work, because it is the only one that
+    /// fires while the state is still whole: the sentinel backstop runs inside
+    /// `lua_close`, by which point the router's handlers have already been
+    /// dropped from `__gc` — the thing being avoided. So the wiring is pinned
+    /// here: the handler is registered, an unrelated event does nothing, the
+    /// mission-end event releases, and the model-time pump stops rather than
+    /// dispatching into a state DCS is unloading.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn the_mission_init_releases_the_state_when_the_mission_ends() {
+        let lua = Lua::new();
+        // The mission state's `env`, `timer` and `world`, as the init uses them.
+        lua.load(
+            r"
+            REPORTED = {}
+            env = {
+              info = function(msg) table.insert(REPORTED, msg) end,
+              error = function(msg) table.insert(REPORTED, msg) end,
+            }
+            timer = {
+              getTime = function() return 0 end,
+              scheduleFunction = function(fn, arg, at) SCHEDULED = { fn = fn } end,
+            }
+            world = {
+              event = { S_EVENT_MISSION_END = 27 },
+              addEventHandler = function(handler) HANDLER = handler end,
+            }
+            ",
+        )
+        .exec()
+        .expect("stub the mission state");
+
+        super::dcs_studio_mission(&lua).expect("luaopen_dcs_studio_mission");
+
+        assert!(
+            lua.load(
+                "return HANDLER ~= nil and __DCS_STUDIO_MISSION_GUARD ~= nil \
+                 and type(__DCS_STUDIO_MISSION_TEARDOWN) == 'function'"
+            )
+            .eval::<bool>()
+            .expect("the init registered its teardown"),
+            "the mission-end handler, the sentinel and the named entry point \
+             must all be in place — each covers a different way a mission ends"
+        );
+
+        // An unrelated event must not tear the bridge down mid-mission: this
+        // handler sees every event the mission raises.
+        lua.load("HANDLER:onEvent({ id = 1 })")
+            .exec()
+            .expect("an unrelated event is ignored");
+        let pumped: f64 = lua
+            .load("return SCHEDULED.fn()")
+            .eval()
+            .expect("the pump still runs");
+        assert!(pumped > 0.0, "the pump reschedules itself mid-mission");
+
+        // Mission end: the release runs while the state is still usable.
+        lua.load("HANDLER:onEvent({ id = world.event.S_EVENT_MISSION_END })")
+            .exec()
+            .expect("the mission-end event releases the state");
+        let reported: String = lua
+            .load("return table.concat(REPORTED, ' | ')")
+            .eval()
+            .expect("reported");
+        assert!(
+            reported.contains("released") && reported.contains("Lua handler(s)"),
+            "the release must say what it let go of: {reported}"
+        );
+        assert!(
+            !reported.contains("teardown failed"),
+            "the release must not have raised: {reported}"
+        );
+
+        // The pump unschedules itself: a released router answers nothing, and
+        // re-entering a state DCS is unloading is the bug being removed.
+        assert!(
+            lua.load("return SCHEDULED.fn() == nil")
+                .eval::<bool>()
+                .expect("the pump must decline after teardown"),
+            "returning nil is how a DCS scheduled function unschedules itself"
+        );
+
+        // Idempotent: a mission that fires its end event twice (or fires it and
+        // is then collected) must not report a second release.
+        let before = reported.len();
+        lua.load("HANDLER:onEvent({ id = world.event.S_EVENT_MISSION_END })")
+            .exec()
+            .expect("a second mission-end event is a no-op");
+        let after: String = lua
+            .load("return table.concat(REPORTED, ' | ')")
+            .eval()
+            .expect("reported");
+        assert_eq!(after.len(), before, "nothing more was reported: {after}");
     }
 
     /// Both halves of `luaopen` propagate rather than panic. `require` runs
