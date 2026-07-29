@@ -1,4 +1,5 @@
 import type { DualBridgeStatus } from "../domain/bridgeProtocol";
+import type { LogEntry, ModIdentity } from "../domain/dcsLog";
 import type { LuaEnv, ReplVariable } from "../domain/debugProtocol";
 import type { InstallManifestView } from "../domain/installManifestView";
 import type { ModDto } from "../domain/subscriptions";
@@ -39,13 +40,13 @@ import type { Progress } from "./subscriptionService";
 //
 // ## Coverage is deliberately partial
 //
-// Only the panels with a presenter (`console`, `marketplace`, `mymods`) are
-// covered. The other eight webviews still have both halves under their own gates but no
+// Only the panels with a presenter (`console`, `marketplace`, `mymods`, `log`)
+// are covered. The other seven webviews still have both halves under their own gates but no
 // declared contract between them; they are named in `UNCOVERED_WEBVIEWS` so the
 // gap is visible in the table rather than silent, and the tests assert that
 // list is exactly "every preview page minus the covered ones". Extending the
 // contract to a panel means giving it a presenter first — an inferred contract
-// for the remaining nine would be worse than none.
+// for the remaining seven would be worse than none.
 //
 // ## Why the payload fields are mostly optional
 //
@@ -257,6 +258,52 @@ const MYMODS_TO_WEBVIEW_KEYS: { readonly [K in MyModsHostMessage["type"]]: true 
   entrypoint: true,
 };
 
+// ── Log ──────────────────────────────────────────────────────────────────────
+
+/** Whether `dcs.log` is currently there to read. The tailer reports it and the
+ * webview renders the "not found" pane off it, so the name lives with the
+ * messages that carry it. */
+export type LogFileState = "ok" | "missing";
+
+/** A message `media/log.js` posts. */
+export type LogWebviewMessage = { type: "ready" } | { type: "clear" } | { type: "openSettings" };
+
+/** A message `LogPresenter` pushes to the log webview. */
+export type LogHostMessage =
+  /** The boot handshake's reply: the backlog tailed before the webview loaded. */
+  | {
+      type: "init";
+      entries: readonly LogEntry[];
+      mod: ModIdentity | null;
+      file: string;
+      state: LogFileState;
+    }
+  | {
+      type: "append";
+      entries: readonly LogEntry[];
+      /** Continuation lines re-sent whole per entry, so a repeat cannot duplicate. */
+      cont: { seq: number; cont: string[] }[];
+      /** How many entries the buffer cap evicted since the last append. */
+      dropped: number;
+    }
+  | { type: "reset" }
+  | { type: "fileState"; state: LogFileState; file: string }
+  | { type: "mod"; mod: ModIdentity | null };
+
+const LOG_TO_HOST_KEYS: { readonly [K in LogWebviewMessage["type"]]: true } = {
+  ready: true,
+  clear: true,
+  openSettings: true,
+};
+
+const LOG_TO_WEBVIEW_KEYS: { readonly [K in LogHostMessage["type"]]: true } = {
+  init: true,
+  append: true,
+  reset: true,
+  fileState: true,
+  mod: true,
+};
+
 // ── The table ────────────────────────────────────────────────────────────────
 
 /** One covered panel's half of the contract, as data the tests iterate. */
@@ -308,9 +355,18 @@ export const MYMODS_PROTOCOL: WebviewProtocol = {
   silent: [],
 };
 
+export const LOG_PROTOCOL: WebviewProtocol = {
+  preview: "log.html",
+  scripts: ["log.js"],
+  toHost: Object.keys(LOG_TO_HOST_KEYS),
+  toWebview: Object.keys(LOG_TO_WEBVIEW_KEYS),
+  silent: [],
+};
+
 /** Every panel whose protocol is declared, keyed by preview page basename. */
 export const WEBVIEW_PROTOCOLS: Readonly<Record<string, WebviewProtocol>> = {
   console: CONSOLE_PROTOCOL,
+  log: LOG_PROTOCOL,
   marketplace: MARKETPLACE_PROTOCOL,
   mymods: MYMODS_PROTOCOL,
 };
@@ -326,7 +382,6 @@ export const WEBVIEW_PROTOCOLS: Readonly<Record<string, WebviewProtocol>> = {
  */
 export const UNCOVERED_WEBVIEWS: readonly string[] = [
   "docs",
-  "log",
   "manifest",
   "nav",
   "newproject",

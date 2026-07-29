@@ -17,9 +17,12 @@
 import type { Stats } from "fs";
 import * as fsp from "fs/promises";
 import { StringDecoder } from "string_decoder";
+import type { LogFileState } from "../core/app/webviewContract";
 import { LineDecoder } from "../core/domain/dcsLog";
 
-export type FileState = "ok" | "missing";
+/** Alias of the declared contract's own name for it (`LogFileState`), so the
+ * state the tailer reports and the state the webview is told cannot drift. */
+export type FileState = LogFileState;
 
 export interface LogTailerCallbacks {
   /** Complete, decoded lines read since the last callback (in order). */

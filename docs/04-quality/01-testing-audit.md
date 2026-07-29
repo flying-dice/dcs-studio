@@ -382,19 +382,19 @@ came out of asking what happens when a user acts at the wrong moment.
 
 ## What is deliberately not done
 
-- ~~**G3's declared message-contract table.**~~ **Since done, for three of eleven
+- ~~**G3's declared message-contract table.**~~ **Since done, for four of eleven
   webviews** (board cards `09-typed-webview-message-contract` and
   `14-presenter-rollout-remaining-panels`). The contract is
   declared in `src/core/app/webviewContract.ts` — typed
-  `HostMessage`/`WebviewMessage` unions for `console`, `marketplace` and
-  `mymods`, the panels with a presenter — and checked from three directions: the compiler
+  `HostMessage`/`WebviewMessage` unions for `console`, `marketplace`, `mymods`
+  and `log`, the panels with a presenter — and checked from three directions: the compiler
   (each presenter's `post` is typed to its host union, so an undeclared push
   does not build), the unit layer (every declared inbound message is asserted to
   be acted on, every declared outbound to be produced), and the e2e layer (the
   real `media/*.js` is driven in Chromium and the set it posts and consumes is
   asserted equal to the declaration). Nothing is regex-derived: the parked
   reasoning was right that an inferred contract produces false failures, and the
-  way past it was to observe the webview rather than read it. The other eight
+  way past it was to observe the webview rather than read it. The other seven
   webviews are named in `UNCOVERED_WEBVIEWS` and checked against `previews/`, so
   the remaining gap is data rather than an absence; closing it means giving
   those panels presenters first.
@@ -402,7 +402,9 @@ came out of asking what happens when a user acts at the wrong moment.
   (board card `08-presenter-for-console-panel`; `myModsPanel` was done in the
   clean-code round, issue #40). `consolePanel` is now a 139-line shell over
   `core/app/consolePresenter.ts`, which imports no `vscode` at all and is
-  covered by the unit layer rather than the integration one. The G5 table above
+  covered by the unit layer rather than the integration one. `logPanel` followed
+  the same way (board card `14-presenter-rollout-remaining-panels`): a 130-line
+  shell over `core/app/logPresenter.ts`. The G5 table above
   still reads 309 lines / 22 refs — that is the original audit's measurement at
   `8c45b98` and is left as the record of what was true then, per this
   document's status note.

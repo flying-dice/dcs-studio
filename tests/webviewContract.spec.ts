@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import {
   CONSOLE_PROTOCOL,
+  LOG_PROTOCOL,
   MARKETPLACE_PROTOCOL,
   MYMODS_PROTOCOL,
   type WebviewProtocol,
@@ -39,8 +40,8 @@ import { hostSend, openPreview, sentMessages } from "./helpers";
 //
 // ## Scope
 //
-// Console, marketplace and My Mods only — the panels with a presenter. The
-// other eight webviews are named in `UNCOVERED_WEBVIEWS` and checked against the
+// Console, marketplace, My Mods and log only — the panels with a presenter. The
+// other seven webviews are named in `UNCOVERED_WEBVIEWS` and checked against the
 // preview directory by test/integration/webview/webviewContract.test.ts, so
 // the uncovered set is data rather than an omission.
 
@@ -299,6 +300,71 @@ test.describe("mymods ↔ MyModsPresenter message contract", () => {
 
     await collect(page, sent, consumed);
     assertContract(MYMODS_PROTOCOL, sent, consumed);
+    expect(errors).toEqual([]);
+  });
+});
+
+test.describe("log ↔ LogPresenter message contract", () => {
+  test("the webview posts and consumes exactly the declared message set", async ({ page }) => {
+    const sent = new Set<string>();
+    const consumed = new Map<string, boolean>();
+
+    await armProbe(page);
+    // Boot: media/log.js posts `ready` from the bottom of its IIFE and the
+    // fixture answers `init` with five entries, one per level.
+    const errors = await openPreview(page, "log");
+    await expect(page.getByTestId("log-row")).toHaveCount(5);
+
+    // `append` — the tail's steady state. The webview batches this into the next
+    // animation frame, which is why the harness re-checks the document a frame
+    // after the dispatch rather than only inline.
+    await hostSend(page, {
+      type: "append",
+      entries: [
+        {
+          seq: 6,
+          time: "2026-07-13 12:00:05.006",
+          level: "INFO",
+          subsystem: "my-mod",
+          thread: "Main",
+          message: "another line arrived",
+          mine: true,
+          cont: [],
+        },
+      ],
+      cont: [],
+      dropped: 2,
+    });
+    await expect(page.getByTestId("log-row")).toHaveCount(6);
+    await expect(page.getByTestId("dropped-badge")).toHaveText("2 dropped");
+
+    // `reset` — DCS truncated the log on restart.
+    await hostSend(page, { type: "reset" });
+    await expect(page.getByTestId("restart-divider")).toBeVisible();
+    await expect(page.getByTestId("log-row")).toHaveCount(0);
+
+    // `mod` — the identity re-derived after the workspace changed. Pushing null
+    // is what hides the filter, so it is the visible half of the pair.
+    await expect(page.getByTestId("mine-toggle")).toBeVisible();
+    await hostSend(page, { type: "mod", mod: null });
+    await expect(page.getByTestId("mine-toggle")).toBeHidden();
+
+    // `clear` — the toolbar button, which empties the host's backlog too.
+    await page.getByTestId("clear-btn").click();
+    await expect(page.getByTestId("dropped-badge")).toBeHidden();
+
+    // `fileState` — the missing pane, and the only route to `openSettings`:
+    // the button lives inside that pane, so the file has to go away first.
+    await hostSend(page, {
+      type: "fileState",
+      state: "missing",
+      file: "C:\\Users\\test\\Saved Games\\DCS\\Logs\\dcs.log",
+    });
+    await expect(page.getByTestId("missing-pane")).toBeVisible();
+    await page.getByTestId("open-settings-btn").click();
+
+    await collect(page, sent, consumed);
+    assertContract(LOG_PROTOCOL, sent, consumed);
     expect(errors).toEqual([]);
   });
 });
