@@ -1,8 +1,12 @@
 ---
-column: todo
+column: doing
 labels: [bug, bridge]
 priority: high
-updatedAt: 2026-07-29T19:20:00.000Z
+agent: opus-loglevel
+live: true
+status: Fixed and gated; live re-verification pending a sim session
+progress: 80
+updatedAt: 2026-07-29T20:55:00.000Z
 ---
 # The bridge ships at TRACE inside DCS — the configured warn level never arrives
 
@@ -21,7 +25,17 @@ the config global.
 
 ## Checklist
 
-- [ ] Establish why `DCS_STUDIO` is nil in the live GUI state when the hook sets it
-- [ ] Make the missing-config path default to `Warn` (align with the read-config default)
-- [ ] Add a test that exercises the config-absent path — the case CI never had
-- [ ] Re-verify log volume in a live session at the shipped level
+- [x] Establish why `DCS_STUDIO` is nil in the live GUI state when the hook sets it
+- [x] Make the missing-config path default to `Warn` (align with the read-config default)
+- [x] Add a test that exercises the config-absent path — the case CI never had
+- [ ] Re-verify log volume in a live session at the shipped level — queued behind
+      the card-18 sim session; another agent owns DCS and the write dir right now,
+      so nothing here has been confirmed against the sim
+
+## Comments
+
+- **opus-loglevel** (2026-07-29T20:35:00.000Z): **Mechanism.** DCS does not run a `Scripts/Hooks` chunk with `_G` as its environment — it gives each hook file its own environment table whose reads fall through to the globals and whose writes do not come back. So `DCS_STUDIO = { logger_level = "warn" }` at `bridge/hook/DcsStudio.lua:28` set a key in that private table, while the DLL reads the real globals (`lua.globals().get("DCS_STUDIO")`, `bridge/crates/bridge-core/src/module_config.rs:45-51`) and saw nil. Two pieces of evidence make this the mechanism rather than a guess. (1) The asymmetry inside the hook itself: `package.cpath = package.cpath .. …` (`bridge/hook/DcsStudio.lua:22`) demonstrably WORKED live — `require` found the DLL and the bridge served — and that line only ever *mutates a table reached by a read*, never creates a global; the one line that creates a global is the one that vanished. (2) The probe that reported nil in card 03 reads the same table the DLL does: GUI `eval` runs through `loadstring` (`bridge/crates/bridge-core/lua/gui_methods.lua:99`), and a Lua 5.1 `loadstring` chunk gets `_G`, not the caller's environment — so "eval sees nil" and "the DLL sees nil" are the same observation about `_G`, consistent with the hook's write landing elsewhere. Timing is ruled out: the assignment precedes `require` in the same chunk, and `luaopen` is what reads it. This is also precisely why CI never caught it — `bridge/crates/bridge-core/tests/hook_dcs_studio.rs:95` loaded the hook with the default environment, i.e. straight into `_G`.
+- **opus-loglevel** (2026-07-29T20:40:00.000Z): **Fix — delivery first, then the safe default.** Delivery: the hook now writes `_G.DCS_STUDIO = { logger_level = "warn" }` (`bridge/hook/DcsStudio.lua:24-35`), which lands in the globals the DLL reads under a sandboxing loader and is identical to the old behaviour without one. The mission bridge had the same hole from the other end — the boot snippet dispatched into the mission state never set the config at all, which is why the mission log was ALSO at TRACE (2.36 MB in card 03's session) — so the snippet now sets it before `require` (`bridge/crates/bridge-core/lua/gui_methods.lua:236-240`), next to the `__DCS_STUDIO_WRITEDIR` global that the mission DLL already reads back successfully from that same chunk. Default: `module_config.rs` grew `DEFAULT_LEVEL = Warn` and a `logger_level(lua)` helper that collapses every "the Lua side did not tell us" case — absent global, non-table value, unparseable level, omitted level — onto it (`bridge/crates/bridge-core/src/module_config.rs:12-51`); `bootstrap` is now one call (`bridge/crates/bridge-core/src/lib.rs:174`) instead of a `get().unwrap_or_default()` whose default said `Trace` and an `unwrap_or(Warn)` that only covered the other half. Belt and braces on purpose: even if some future loader hides the global again, the shipped level is `Warn`.
+- **opus-loglevel** (2026-07-29T20:45:00.000Z): **Tests.** `bridge/crates/bridge-core/tests/hook_dcs_studio.rs:141-179` — `the_level_reaches_real_globals_even_when_dcs_sandboxes_the_hook` loads the shipped hook under `setfenv(chunk, setmetatable({}, {__index=_G}))`, i.e. the loader DCS actually uses, and asserts via `rawget(_G, 'DCS_STUDIO')` that the level reached the globals (plus that the bridge still started, so the assertion is not vacuous). It fails against the old hook. Unit side, `bridge/crates/bridge-core/src/module_config.rs:98-137`: `an_absent_config_global_logs_at_warn_rather_than_trace` (the case CI never had), `a_configured_level_still_wins_over_the_default` (a supplied `trace` is still honoured — the knob must keep working), and `an_unusable_config_falls_back_to_warn_too`.
+- **opus-loglevel** (2026-07-29T20:50:00.000Z): **Gates** (run in `bridge/`): `cargo fmt --all -- --check` clean; `cargo clippy --all-targets -- -D warnings` clean; `cargo test --workspace` green — 11/11 in the hook suite including the new sandbox test, all other suites green. The `module_config` unit tests are `#[cfg_attr(windows, ignore)]` (they need DCS's `lua.dll`), so I re-ran them explicitly with the DCS `bin` on PATH and all three pass; on Linux CI they run by default. `cargo llvm-cov` not run (single-invocation rule; no coverage-affecting claim made here). One aside for whoever reads a full `--ignored` sweep: `lua_panic::tests::the_probe_whose_logger_panics` fails in such a sweep by design — it installs a process-wide panicking logger and is meant to run only as the child of `a_panic_while_logging_does_not_escape_the_handler` (`bridge/crates/bridge-core/src/lua_panic.rs:359-361`). Not a regression from this change.
+- **opus-loglevel** (2026-07-29T20:55:00.000Z): **Status: honest.** Everything above is proven against stock Lua and a faithful reproduction of DCS's hook environment — which is exactly the kind of proof #65 exists to distrust. The claim that the live GUI and mission logs now sit at `warn` is UNVERIFIED: card 03's measurement is what motivated the change, and re-measuring needs the sim. I was explicitly barred from launching DCS or touching the write dir this session (another agent owns it), so the last checklist item stays unticked and queues behind the card-18 sim session. Card stays in `doing`.
