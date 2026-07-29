@@ -31,6 +31,16 @@
   const received = [];
   window.__receivedMessages = received;
 
+  // How many animation frames the page has asked for. Read either side of a
+  // host -> webview dispatch to tell "this router deferred its render" apart
+  // from "something else was already pending".
+  let frameRequests = 0;
+  const rawRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = (fn) => {
+    frameRequests++;
+    return rawRequestAnimationFrame(fn);
+  };
+
   const postHandlers = [];
   window.__host = {
     receive(msg) {
@@ -39,11 +49,27 @@
       // before/after pair — no settling, no polling.
       const probing = window.__contractProbe === true;
       const before = probing ? document.body.innerHTML : "";
+      const framesBefore = frameRequests;
       window.dispatchEvent(new MessageEvent("message", { data: msg }));
-      received.push({
+      const record = {
         type: msg ? msg.type : undefined,
         changed: probing ? document.body.innerHTML !== before : null,
-      });
+      };
+      received.push(record);
+      // A router may consume a push by SCHEDULING its render rather than doing
+      // it inline — media/log.js batches `append` into the next animation frame,
+      // so a grid that grew a hundred rows looks unchanged the instant the
+      // dispatch returns. Re-measure after that frame has run, but ONLY when
+      // this dispatch is what asked for it: a plain "did the document change
+      // within the next frame" would credit a message with whatever some other
+      // pending task did, and would score console's deliberately silent
+      // `explorerConfig` as consumed. The callback below is registered after the
+      // router's own, so it runs after it in the same frame.
+      if (probing && !record.changed && frameRequests > framesBefore) {
+        requestAnimationFrame(() => {
+          if (document.body.innerHTML !== before) record.changed = true;
+        });
+      }
     },
     onPost(fn) {
       postHandlers.push(fn);

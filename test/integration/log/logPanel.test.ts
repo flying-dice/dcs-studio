@@ -3,10 +3,15 @@ import { fireConfigurationChanged, resetVscode, state, vscodeMock } from "../sup
 
 vi.mock("vscode", () => vscodeMock());
 
-// The DCS Log viewer's host side. Everything the user sees is driven by three
-// tailer callbacks and one handshake, so what matters here is that lines,
-// truncations and a missing file each turn into the right webview message —
-// and that closing the panel really stops the poll behind it.
+// The DCS Log viewer's SHELL. What a batch of lines becomes, when a tick is
+// silent, what the handshake replays and how a broken manifest maps to "no mod"
+// all live in `LogPresenter` and are covered without a `vscode` double at all
+// (test/unit/log/logPresenter.test.ts). What is only true here is the wiring:
+// the panel and its document, the manifest read, that each of the tailer's three
+// callbacks reaches the presenter, that a settings change re-points the tail,
+// that the openSettings effect becomes a command — and that closing the panel
+// really stops the poll behind it, including inside the async window before the
+// first tail ever starts.
 
 /** A tailer the test drives directly, standing in for the fs-polling one. */
 interface FakeTailer {
@@ -163,41 +168,19 @@ describe("whose mod the lines belong to", () => {
     expect(panel.webview.postedOfType("mod")[0]).toEqual({ type: "mod", mod: null });
   });
 
-  it("has no mod when the folder has no manifest", async () => {
+  it("still opens, and still tails, when the manifest cannot be read at all", async () => {
+    // The read is the shell's; that a rejected one means "no mod" rather than a
+    // dead panel is the presenter's, and is asserted there over every failure.
     manifestBytes = new Error("ENOENT");
-    const panel = await show();
-    expect(panel.webview.postedOfType("mod")[0]).toEqual({ type: "mod", mod: null });
-  });
-
-  it("has no mod when the manifest is malformed", async () => {
-    // A half-written TOML must not stop the log from opening at all.
-    parseThrows = new Error("expected `=`");
     const panel = await show();
 
     expect(panel.webview.postedOfType("mod")[0]).toEqual({ type: "mod", mod: null });
     expect(tailer().started).toBe(true);
   });
-
-  it("has no mod when the manifest declares no project name", async () => {
-    projectName = null;
-    const panel = await show();
-    expect(panel.webview.postedOfType("mod")[0]).toEqual({ type: "mod", mod: null });
-  });
-
-  it("marks entries from the workspace mod as mine", async () => {
-    const panel = await show();
-    tailer().opts.onLines([
-      entry("super-carrier-tweaks", "deck ready"),
-      entry("DCS", "unrelated engine chatter"),
-    ]);
-
-    const appended = panel.webview.postedOfType("append")[0].entries as { mine: boolean }[];
-    expect(appended.map((e) => e.mine)).toEqual([true, false]);
-  });
 });
 
 describe("lines arriving from the tail", () => {
-  it("appends parsed entries", async () => {
+  it("hands the tailer's lines to the presenter", async () => {
     const panel = await show();
     tailer().opts.onLines([entry("DCS", "starting", "WARNING")]);
 
@@ -208,44 +191,6 @@ describe("lines arriving from the tail", () => {
       cont: [],
       dropped: 0,
     });
-  });
-
-  it("attaches a stack trace to the entry it belongs to instead of listing it as new", async () => {
-    // A Lua traceback arrives as many unparseable lines; shown as entries they
-    // would swamp the grid and detach the error from its own stack.
-    const panel = await show();
-    tailer().opts.onLines([entry("SCRIPTING", "Lua error")]);
-    const seq = (panel.webview.postedOfType("append")[0].entries as { seq: number }[])[0].seq;
-
-    tailer().opts.onLines(["\tstack traceback:", "\t\tin function 'foo'"]);
-
-    const update = panel.webview.postedOfType("append")[1];
-    expect(update.entries).toEqual([]);
-    // Each update carries that entry's whole trace so far, and the webview
-    // swaps the list wholesale — so re-sending earlier lines cannot duplicate.
-    expect((update.cont as { seq: number }[]).map((c) => c.seq)).toEqual([seq, seq]);
-    expect((update.cont as { cont: string[] }[]).at(-1)?.cont).toEqual([
-      "\tstack traceback:",
-      "\t\tin function 'foo'",
-    ]);
-  });
-
-  it("says nothing when a read produced no lines", async () => {
-    // Every poll tick that adds nothing must stay silent, or the webview would
-    // re-render several times a second while DCS sits idle.
-    const panel = await show();
-    tailer().opts.onLines([]);
-    expect(panel.webview.postedOfType("append")).toEqual([]);
-  });
-
-  it("reports how many entries the buffer cap evicted", async () => {
-    // The webview shows the drop count so a user who scrolled up knows the
-    // history above them is gone rather than merely off-screen.
-    const panel = await show();
-    tailer().opts.onLines(Array.from({ length: 5000 }, (_, i) => entry("DCS", `line ${i}`)));
-    tailer().opts.onLines([entry("DCS", "one too many")]);
-
-    expect(panel.webview.postedOfType("append")[1]).toMatchObject({ dropped: 1 });
   });
 });
 
@@ -263,15 +208,11 @@ describe("what the file itself is doing", () => {
     });
   });
 
-  it("clears the grid when DCS truncates the log on restart", async () => {
-    // Keeping the old entries would silently mix two DCS sessions together.
+  it("forwards a truncation to the presenter", async () => {
+    // That the grid is emptied with it is asserted in the presenter's own suite.
     const panel = await show();
-    tailer().opts.onLines([entry("DCS", "previous session")]);
     tailer().opts.onReset();
-    await panel.webview.receive({ type: "ready" });
-
     expect(panel.webview.postedOfType("reset")).toHaveLength(1);
-    expect(panel.webview.postedOfType("init")[0]).toMatchObject({ entries: [] });
   });
 
   it("restarts the tail against the new path when the Saved Games setting changes", async () => {
@@ -298,11 +239,10 @@ describe("what the file itself is doing", () => {
 });
 
 describe("messages from the webview", () => {
-  it("answers the boot handshake with the buffered backlog and current state", async () => {
-    // The webview loads after the tail has already been running, so without
-    // this replay the user sees an empty grid until the next line lands.
+  it("reaches the presenter, which answers the handshake for the file being tailed", async () => {
+    // What the reply CONTAINS is the presenter's; that the panel's receiver is
+    // wired to it, and to the path this shell handed the tailer, is this suite's.
     const panel = await show();
-    tailer().opts.onState("ok");
     tailer().opts.onLines([entry("DCS", "already tailed")]);
 
     await panel.webview.receive({ type: "ready" });
@@ -310,37 +250,14 @@ describe("messages from the webview", () => {
     expect(panel.webview.postedOfType("init")[0]).toMatchObject({
       mod: { name: "Super Carrier Tweaks" },
       file: tailer().opts.filePath,
-      state: "ok",
       entries: [expect.objectContaining({ message: "already tailed" })],
     });
   });
 
-  it("reports the file as missing in the handshake until the tailer says otherwise", async () => {
-    const panel = await show();
-    await panel.webview.receive({ type: "ready" });
-    expect(panel.webview.postedOfType("init")[0]).toMatchObject({ state: "missing" });
-  });
-
-  it("empties the backlog on clear, so a later handshake does not resurrect it", async () => {
-    const panel = await show();
-    tailer().opts.onLines([entry("DCS", "noise")]);
-    await panel.webview.receive({ type: "clear" });
-    await panel.webview.receive({ type: "ready" });
-
-    expect(panel.webview.postedOfType("init")[0]).toMatchObject({ entries: [] });
-  });
-
-  it("routes the settings link to the setup panel", async () => {
+  it("performs the openSettings effect as the setup command", async () => {
     const panel = await show();
     await panel.webview.receive({ type: "openSettings" });
     expect(state.executedCommands).toEqual([{ command: "dcs.setup.open", args: [] }]);
-  });
-
-  it("ignores a message type it does not know", async () => {
-    const panel = await show();
-    const before = panel.webview.posted.length;
-    await panel.webview.receive({ type: "explode" });
-    expect(panel.webview.posted).toHaveLength(before);
   });
 });
 

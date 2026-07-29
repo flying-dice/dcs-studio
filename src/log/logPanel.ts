@@ -1,12 +1,12 @@
-import * as path from "path";
 import * as vscode from "vscode";
-import { LogBuffer, type LogEntry, type ModIdentity, modIdentity } from "../core/domain/dcsLog";
+import type { LogEffect, LogInbound } from "../core/app/logPresenter";
+import { LogPresenter } from "../core/app/logPresenter";
 import { MANIFEST_FILE } from "../core/domain/manifestFile";
 import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { ManifestPort } from "../core/ports/manifest";
 import { renderWebviewHtml } from "../webview/html";
 import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
-import { type FileState, LogTailer } from "./tailer";
+import { LogTailer } from "./tailer";
 
 // The DCS Log viewer: a singleton WebviewPanel (shape copied from
 // bridge/consolePanel.ts) live-tailing Saved Games/DCS/Logs/dcs.log via
@@ -15,18 +15,20 @@ import { type FileState, LogTailer } from "./tailer";
 // reads a file off disk. Restarts its tailer when dcsStudio.savedGamesPath
 // changes, and re-derives "my mod" identity from the workspace's
 // dcs-studio.toml (hidden — no error — when there's no workspace or manifest).
+//
+// Everything the host decides — what a batch of lines becomes, when a tick is
+// silent, what the boot handshake replays, and the "any failure means no mod"
+// mapping over the manifest — lives in LogPresenter, which knows nothing about
+// VS Code. This class is the shell around it: the panel, the tailer's lifetime,
+// the manifest read, and the effects the presenter describes.
 export class LogPanel {
   public static current: LogPanel | undefined;
   private static readonly viewType = "dcsStudio.logViewer";
 
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[];
-  private readonly buffer = new LogBuffer();
+  private readonly presenter: LogPresenter;
   private tailer: LogTailer | undefined;
-  private mod: ModIdentity | null = null;
-  private lastDropped = 0;
-  private fileState: FileState = "missing";
-  private filePath = "";
   private disposed = false;
 
   static show(
@@ -46,8 +48,8 @@ export class LogPanel {
   private constructor(
     panel: vscode.WebviewPanel,
     context: vscode.ExtensionContext,
-    private readonly manifestPort: ManifestPort,
-    private readonly roots: InstallRootsPort,
+    manifestPort: ManifestPort,
+    roots: InstallRootsPort,
   ) {
     this.panel = panel;
     // `disposed` is set here, not just relied on through the tailer: the first
@@ -58,9 +60,20 @@ export class LogPanel {
       LogPanel.current = undefined;
       this.tailer?.stop();
     });
+    this.presenter = new LogPresenter({
+      roots,
+      parseManifest: (text) => manifestPort.parseToml(text),
+      manifestText: () => this.manifestText(),
+      post: (msg) => void this.panel.webview.postMessage(msg),
+      effect: (effect) => this.perform(effect),
+    });
     this.panel.webview.html = this.html(context);
 
-    this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
+    this.panel.webview.onDidReceiveMessage(
+      (m: LogInbound) => this.presenter.handle(m),
+      null,
+      this.disposables,
+    );
 
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration((e) => {
@@ -68,26 +81,25 @@ export class LogPanel {
       }),
     );
 
-    void this.loadModIdentity().then(() => this.restartTailer());
+    void this.presenter.loadModIdentity().then(() => this.restartTailer());
   }
 
-  /** Re-derive "my mod" identity from the workspace's dcs-studio.toml; null on any failure. */
-  private async loadModIdentity(): Promise<void> {
-    try {
-      const folder = vscode.workspace.workspaceFolders?.[0];
-      if (!folder) {
-        this.mod = null;
-      } else {
-        const uri = vscode.Uri.joinPath(folder.uri, MANIFEST_FILE);
-        const bytes = await vscode.workspace.fs.readFile(uri);
-        const text = Buffer.from(bytes).toString("utf8");
-        const model = this.manifestPort.parseToml(text);
-        this.mod = modIdentity(model.project?.name);
-      }
-    } catch {
-      this.mod = null;
+  /** The workspace manifest's text, or `null` when no folder is open. Rejects
+   * when there is no manifest to read — the presenter maps that to "no mod". */
+  private async manifestText(): Promise<string | null> {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) return null;
+    const uri = vscode.Uri.joinPath(folder.uri, MANIFEST_FILE);
+    return Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8");
+  }
+
+  /** Carry out one presenter-described effect. */
+  private perform(effect: LogEffect): void {
+    switch (effect.kind) {
+      case "openSettings":
+        void vscode.commands.executeCommand("dcs.setup.open");
+        break;
     }
-    this.post({ type: "mod", mod: this.mod });
   }
 
   private restartTailer(): void {
@@ -96,67 +108,13 @@ export class LogPanel {
     // would keep polling dcs.log for the rest of the session.
     if (this.disposed) return;
     this.tailer?.stop();
-    this.buffer.clear();
-    this.lastDropped = 0;
-    this.filePath = path.join(this.roots.savedGames(), "Logs", "dcs.log");
     this.tailer = new LogTailer({
-      filePath: this.filePath,
-      onLines: (lines) => this.handleLines(lines),
-      onState: (state) => this.handleState(state),
-      onReset: () => this.handleReset(),
+      filePath: this.presenter.retarget(),
+      onLines: (lines) => this.presenter.onLines(lines),
+      onState: (state) => this.presenter.onState(state),
+      onReset: () => this.presenter.onReset(),
     });
     this.tailer.start();
-  }
-
-  private handleLines(lines: string[]): void {
-    const entries: LogEntry[] = [];
-    const cont: { seq: number; cont: string[] }[] = [];
-    for (const line of lines) {
-      const ev = this.buffer.push(line, this.mod);
-      if (ev.kind === "added") entries.push(ev.entry);
-      else cont.push({ seq: ev.entry.seq, cont: ev.entry.cont });
-    }
-    const dropped = this.buffer.droppedCount - this.lastDropped;
-    this.lastDropped = this.buffer.droppedCount;
-    if (entries.length || cont.length || dropped) {
-      this.post({ type: "append", entries, cont, dropped });
-    }
-  }
-
-  private handleState(state: FileState): void {
-    this.fileState = state;
-    this.post({ type: "fileState", state, file: this.filePath });
-  }
-
-  private handleReset(): void {
-    this.buffer.clear();
-    this.lastDropped = 0;
-    this.post({ type: "reset" });
-  }
-
-  private async onMessage(msg: { type: string }): Promise<void> {
-    switch (msg.type) {
-      case "ready":
-        this.post({
-          type: "init",
-          entries: this.buffer.list(),
-          mod: this.mod,
-          file: this.filePath,
-          state: this.fileState,
-        });
-        break;
-      case "clear":
-        this.buffer.clear();
-        this.lastDropped = 0;
-        break;
-      case "openSettings":
-        void vscode.commands.executeCommand("dcs.setup.open");
-        break;
-    }
-  }
-
-  private post(msg: unknown): void {
-    void this.panel.webview.postMessage(msg);
   }
 
   private html(context: vscode.ExtensionContext): string {

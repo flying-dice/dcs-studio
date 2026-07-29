@@ -6,6 +6,8 @@ import type {
   ConsoleInbound,
 } from "../../../src/core/app/consolePresenter";
 import { ConsolePresenter } from "../../../src/core/app/consolePresenter";
+import type { LogEffect, LogInbound, LogPresenterDeps } from "../../../src/core/app/logPresenter";
+import { LogPresenter } from "../../../src/core/app/logPresenter";
 import type {
   MarketplaceEffect,
   MarketplaceInbound,
@@ -20,11 +22,13 @@ import type {
 import { MyModsPresenter } from "../../../src/core/app/myModsPresenter";
 import type {
   ConsoleHostMessage,
+  LogHostMessage,
   MarketplaceHostMessage,
   MyModsHostMessage,
 } from "../../../src/core/app/webviewContract";
 import {
   CONSOLE_PROTOCOL,
+  LOG_PROTOCOL,
   MARKETPLACE_PROTOCOL,
   MYMODS_PROTOCOL,
   UNCOVERED_WEBVIEWS,
@@ -304,6 +308,60 @@ function myModsHarness(over: Partial<MyModsPresenterDeps> = {}): MyModsHarness {
   };
 }
 
+// ── Log harness ──────────────────────────────────────────────────────────────
+
+const LOG_TOML = '[project]\nname = "Super Carrier Tweaks"\n';
+const LOG_LINE = "2026-07-13 12:00:00.001 INFO    DCS (Main): deck ready";
+
+interface LogHarness {
+  presenter: LogPresenter;
+  posted: LogHostMessage[];
+  effects: LogEffect[];
+  /**
+   * Everything observable about the presenter: what it has emitted, plus what it
+   * WOULD replay if the webview handshook right now.
+   *
+   * `clear` is the first declared message whose whole job is to change host
+   * state and answer nothing — counting posts and effects would score it as
+   * ignored. The boot handshake is the presenter's own window onto that state,
+   * so the probe asks it, diverting the reply away from `posted` so that reading
+   * the state is not itself one of the interactions being measured.
+   */
+  fingerprint(): string;
+}
+
+function logHarness(over: Partial<LogPresenterDeps> = {}): LogHarness {
+  const posted: LogHostMessage[] = [];
+  const effects: LogEffect[] = [];
+  let sink = posted;
+  const presenter = new LogPresenter({
+    roots: {
+      savedGames: () => "C:\\Saved Games\\DCS",
+      gameInstall: () => "C:\\DCS World",
+      dataDir: () => "D:\\mods",
+    },
+    parseManifest: () => ({ project: { name: "Super Carrier Tweaks" } }),
+    manifestText: async () => LOG_TOML,
+    post: (msg) => sink.push(msg),
+    effect: (e) => effects.push(e),
+    ...over,
+  });
+  // The shell points the presenter at a file before any tick reaches it.
+  presenter.retarget();
+  return {
+    presenter,
+    posted,
+    effects,
+    fingerprint: () => {
+      const probe: LogHostMessage[] = [];
+      sink = probe;
+      presenter.handle({ type: "ready" });
+      sink = posted;
+      return JSON.stringify([posted, effects, probe]);
+    },
+  };
+}
+
 /** The message types a run of the presenter actually pushed, de-duplicated. */
 function typesOf(posted: { type: string }[]): string[] {
   return [...new Set(posted.map((m) => m.type))].sort();
@@ -368,11 +426,32 @@ const MYMODS_DRIVES: Record<MyModsInbound["type"], Drive<MyModsInbound>> = {
   cleanUninstall: { send: { type: "cleanUninstall" } },
 };
 
+/**
+ * The log's plan needs a different `before` to the others: `clear` empties the
+ * tailed backlog, and lines reach the presenter from the TAILER, not from a
+ * webview message — so the setup is a call, not a list of inbound messages.
+ */
+interface LogDrive {
+  setup?: (p: LogPresenter) => void;
+  send: LogInbound;
+}
+
+const LOG_DRIVES: Record<LogInbound["type"], LogDrive> = {
+  ready: { send: { type: "ready" } },
+  clear: { setup: (p) => p.onLines([LOG_LINE]), send: { type: "clear" } },
+  openSettings: { send: { type: "openSettings" } },
+};
+
 // ── The contract table itself ────────────────────────────────────────────────
 
 describe("the declared webview contract", () => {
   it("names a protocol for every presenter-backed panel and nothing else", () => {
-    expect(Object.keys(WEBVIEW_PROTOCOLS).sort()).toEqual(["console", "marketplace", "mymods"]);
+    expect(Object.keys(WEBVIEW_PROTOCOLS).sort()).toEqual([
+      "console",
+      "log",
+      "marketplace",
+      "mymods",
+    ]);
   });
 
   it("declares a non-empty message set in both directions", () => {
@@ -571,6 +650,50 @@ describe("mymods — webview -> host", () => {
     const h = myModsHarness();
     await h.presenter.handle({ type: "notInTheContract" } as unknown as MyModsInbound);
     expect(h.interactions()).toBe(0);
+  });
+});
+
+// ── Log: the host half ───────────────────────────────────────────────────────
+
+describe("log — webview -> host", () => {
+  it("drives exactly the declared message set", () => {
+    expect(Object.keys(LOG_DRIVES).sort()).toEqual([...LOG_PROTOCOL.toHost].sort());
+  });
+
+  it.each(LOG_PROTOCOL.toHost)("%s is acted on", (type) => {
+    const plan = LOG_DRIVES[type as LogInbound["type"]];
+    const h = logHarness();
+    plan.setup?.(h.presenter);
+    const before = h.fingerprint();
+    h.presenter.handle(plan.send);
+    expect(h.fingerprint()).not.toBe(before);
+  });
+
+  it("does nothing at all for a message type the contract does not declare", () => {
+    // The negative control, and the one that matters most here: the fingerprint
+    // includes replayed state, so without this "something changed" could be true
+    // for any input at all.
+    const h = logHarness();
+    h.presenter.onLines([LOG_LINE]);
+    const before = h.fingerprint();
+    h.presenter.handle({ type: "notInTheContract" } as unknown as LogInbound);
+    expect(h.fingerprint()).toBe(before);
+  });
+});
+
+describe("log — host -> webview", () => {
+  it("produces exactly the declared message set", async () => {
+    const h = logHarness();
+    // `mod` — the manifest read the panel does before its first tail.
+    await h.presenter.loadModIdentity();
+    // The three tailer callbacks: `fileState`, `append`, `reset`.
+    h.presenter.onState("ok");
+    h.presenter.onLines([LOG_LINE]);
+    h.presenter.onReset();
+    // `init` — the webview's boot handshake.
+    h.presenter.handle({ type: "ready" });
+
+    expect(typesOf(h.posted)).toEqual([...LOG_PROTOCOL.toWebview].sort());
   });
 });
 
