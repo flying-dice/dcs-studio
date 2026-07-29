@@ -18,6 +18,8 @@ use mlua::{
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::error::Error;
+use std::io;
+use std::sync::mpsc;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -28,6 +30,15 @@ use tokio::task::spawn_local;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_mins(5);
+
+/// How long [`JsonRpcServer::new`] waits for its server thread to report
+/// whether the port bound.
+///
+/// The caller is the DCS Lua thread — the sim's main loop — so this wait is
+/// bounded on purpose: a server thread that wedges before reporting must cost
+/// the startup `pcall` an error, not the sim its frame loop forever. Binding a
+/// loopback port is microseconds; ten seconds is "something is badly wrong".
+const BIND_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The running server's request queue, reachable DLL-wide so any code in this
 /// DLL's Lua state can drain it — not just the holder of the `JsonRpcServer`
@@ -143,6 +154,25 @@ impl AppData {
 }
 
 impl JsonRpcServer {
+    /// Bind the port and start serving, or fail with the reason.
+    ///
+    /// The whole of the server's construction — `HttpServer::new`, `bind` and
+    /// `run` — happens on the thread that owns the actix `System`, and the bind
+    /// outcome travels back to the caller over a channel. Two reasons, both
+    /// learned the hard way (card 20):
+    ///
+    /// 1. `HttpServer::run` is documented to panic without a Tokio runtime, and
+    ///    the caller is the DCS Lua thread, which has none. The returned
+    ///    `Server` is also inert until polled, so creating it here and polling
+    ///    it there made the listener's survival depend on what happened to the
+    ///    future in between — and what happened was that the only `.await` on
+    ///    it sat inside an `info!` argument, which `log` does not evaluate at
+    ///    the shipped `warn` level. The bridge bound a port, reported success,
+    ///    dropped the unpolled future, and refused every connection.
+    /// 2. A genuine bind failure must still reach Lua as an error. Moving the
+    ///    bind off the caller would otherwise turn "the port is taken" into a
+    ///    silent success, which is the same failure mode wearing a different
+    ///    hat.
     fn new(config: ServerConfig) -> Result<Self, actix_web::Error> {
         let service = ServiceInfo::new(config.env.as_deref(), &config.host, config.port);
         let app_data = Data::new(Mutex::new(AppData::new(
@@ -152,28 +182,74 @@ impl JsonRpcServer {
         let app_data_2 = app_data.clone();
 
         let host = config.host.clone();
+        let host_for_error = config.host.clone();
         let port = config.port;
 
-        let server = HttpServer::new(move || {
-            App::new()
-                .wrap(middleware::Logger::default())
-                .service(get_ws)
-                .service(get_health)
-                .service(post_rpc)
-                .app_data(Data::clone(&app_data_2))
-        })
-        .workers(1)
-        .bind((host, port))?
-        .run();
+        // Build, bind AND run the server on the thread that owns the runtime,
+        // and report the bind outcome back over a channel. See `BIND_TIMEOUT`
+        // and the module note on why none of this may happen on the caller.
+        let (outcome_tx, outcome_rx) = mpsc::sync_channel::<Result<ServerHandle, io::Error>>(1);
+        thread::Builder::new()
+            .name(format!("dcs-studio-jsonrpc-{port}"))
+            .spawn(move || {
+                actix_web::rt::System::new().block_on(async move {
+                    let bound = HttpServer::new(move || {
+                        App::new()
+                            .wrap(middleware::Logger::default())
+                            .service(get_ws)
+                            .service(get_health)
+                            .service(post_rpc)
+                            .app_data(Data::clone(&app_data_2))
+                    })
+                    .workers(1)
+                    .bind((host, port));
 
-        let handle = server.handle();
+                    let server = match bound {
+                        Ok(bound) => bound.run(),
+                        Err(cause) => {
+                            let _ = outcome_tx.send(Err(cause));
+                            return;
+                        }
+                    };
 
-        thread::spawn(move || {
-            info!("Starting server in new thread");
-            actix_web::rt::System::new().block_on(async {
-                info!("Server run finished: {:?}", server.await);
-            });
-        });
+                    // A caller that already gave up (see `BIND_TIMEOUT`) has no
+                    // way to stop this server, so don't start one: dropping the
+                    // future here releases the listener rather than leaving a
+                    // port bound to nothing for the rest of the DCS session.
+                    if outcome_tx.send(Ok(server.handle())).is_err() {
+                        warn!("jsonrpc: nobody left to serve for, releasing {port}");
+                        return;
+                    }
+
+                    // The `Server` future does NOTHING until it is polled, and
+                    // this await is the only thing that ever polls it. It must
+                    // stay a statement in its own right — computing the outcome
+                    // first and logging it after, never inside a log macro's
+                    // arguments (card 20).
+                    let finished = server.await;
+                    info!("Server run finished: {finished:?}");
+                });
+            })?;
+
+        let handle = match outcome_rx.recv_timeout(BIND_TIMEOUT) {
+            Ok(outcome) => outcome?,
+            // The thread neither bound nor failed within the budget. Waiting
+            // longer is not an option — the caller is the sim thread.
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(ErrorInternalServerError(format!(
+                    "jsonrpc.serve: the server thread did not report a bind result for \
+                     {host_for_error}:{port} within {BIND_TIMEOUT:?}"
+                )));
+            }
+            // The sender was dropped without sending: the server thread died,
+            // and a panic there would otherwise be swallowed silently.
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(ErrorInternalServerError(format!(
+                    "jsonrpc.serve: the server thread for {host_for_error}:{port} died before it \
+                     could bind"
+                )));
+            }
+        };
 
         // Publish the queue for process_global_queue (any-state drains). The
         // newest server wins; realistically there is exactly one per process.
@@ -776,6 +852,85 @@ mod tests {
 
     fn config(json: &str) -> ServerConfig {
         serde_json::from_str(json).expect("config")
+    }
+
+    /// A loopback port nothing is listening on: bind one, read its number, let
+    /// it go. Racy in principle, fine in a serialized test.
+    fn free_port() -> u16 {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("probe");
+        probe.local_addr().expect("addr").port()
+    }
+
+    /// Ask a bound bridge for `/health` over a raw socket and return the whole
+    /// HTTP response. No client dependency, and it proves the server is
+    /// *serving* rather than merely bound.
+    fn health_over_tcp(port: u16) -> std::io::Result<String> {
+        use std::io::{Read, Write};
+
+        let mut socket = std::net::TcpStream::connect(("127.0.0.1", port))?;
+        socket.set_read_timeout(Some(Duration::from_secs(10)))?;
+        socket
+            .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+        let mut answer = String::new();
+        socket.read_to_string(&mut answer)?;
+        Ok(answer)
+    }
+
+    /// **Card 20.** A `Server` future does nothing until something polls it, and
+    /// the only thing that ever polled this one was the argument of
+    /// `info!("Server run finished: {:?}", server.await)`. `log`'s macros do not
+    /// evaluate their arguments when the level is disabled, so at the shipped
+    /// `warn` level that `await` simply never happened: the future was dropped
+    /// unpolled and took the freshly bound listener with it, while `new()` had
+    /// already returned `Ok`. Hence a bridge that logged itself serving and
+    /// refused every connection.
+    ///
+    /// The level is pinned to `Warn` here deliberately — that is the shipped
+    /// one, and it must not be the difference between a working bridge and a
+    /// dead port.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn the_bound_listener_serves_at_the_shipped_warn_log_level() {
+        let _serial = crate::jsonrpc::serially();
+        let restore_level = log::max_level();
+        log::set_max_level(log::LevelFilter::Warn);
+
+        let port = free_port();
+        let server = JsonRpcServer::new(config(&format!(
+            r#"{{"host":"127.0.0.1","port":{port},"env":"gui"}}"#
+        )))
+        .expect("a free port binds");
+
+        let answer = health_over_tcp(port);
+        drop(server);
+        log::set_max_level(restore_level);
+
+        let answer = answer.expect("the listener must still exist at warn");
+        assert!(answer.contains("200 OK"), "{answer}");
+        assert!(answer.contains("dcs-studio-gui"), "{answer}");
+    }
+
+    /// The other half of card 20: making the bind outcome travel back from the
+    /// server's own thread must not lose a real failure. A port somebody else
+    /// holds has to reach Lua as an error the startup `pcall` can report — the
+    /// bug being avoided is the mirror image of the one above, a bridge that
+    /// reports success while nothing is listening.
+    #[test]
+    fn a_port_already_taken_is_reported_to_the_caller() {
+        let _serial = crate::jsonrpc::serially();
+        let squatter = std::net::TcpListener::bind("127.0.0.1:0").expect("squat");
+        let port = squatter.local_addr().expect("addr").port();
+
+        let Err(err) = JsonRpcServer::new(config(&format!(
+            r#"{{"host":"127.0.0.1","port":{port},"env":"gui"}}"#
+        ))) else {
+            panic!("the port is taken, so there is nothing to serve on");
+        };
+        let err = err.to_string();
+        assert!(
+            err.contains("os error"),
+            "the real cause reaches Lua: {err}"
+        );
     }
 
     fn app_data() -> Data<Mutex<AppData>> {
