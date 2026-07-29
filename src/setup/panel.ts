@@ -6,7 +6,7 @@ import type { DetectService } from "../core/app/detectService";
 import { type DcsCandidate, roleProbePath } from "../core/domain/dcsDetect";
 import type { ArchivePort } from "../core/ports/archive";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
 
 // The DCS install selector: pick (or browse to) the userdata (Saved Games) and
 // installation folders, with auto-detected candidates. Saves to the
@@ -16,7 +16,7 @@ export class SetupPanel {
   public static current: SetupPanel | undefined;
   private static readonly viewType = "dcsStudio.setup";
   private readonly panel: vscode.WebviewPanel;
-  private readonly disposables: vscode.Disposable[] = [];
+  private readonly disposables: vscode.Disposable[];
 
   static show(context: vscode.ExtensionContext, detect: DetectService, archive: ArchivePort): void {
     const column = activeColumn();
@@ -40,9 +40,11 @@ export class SetupPanel {
     private readonly archive: ArchivePort,
   ) {
     this.panel = panel;
+    this.disposables = disposeWithPanel(panel, () => {
+      SetupPanel.current = undefined;
+    });
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
-    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     void this.pushInit();
   }
 
@@ -143,12 +145,6 @@ export class SetupPanel {
 
   private post(msg: unknown): void {
     void this.panel.webview.postMessage(msg);
-  }
-
-  private dispose(): void {
-    SetupPanel.current = undefined;
-    this.panel.dispose();
-    while (this.disposables.length) this.disposables.pop()?.dispose();
   }
 
   private html(): string {

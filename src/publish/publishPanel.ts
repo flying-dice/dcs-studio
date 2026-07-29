@@ -5,7 +5,7 @@ import { parseRepoRemote } from "../core/domain/repoRemote";
 import type { ManifestPort } from "../core/ports/manifest";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
 import { preflight, readManifest } from "./preflight";
 
 // The Publish panel: preflight checks, "Share to GitHub" (create repo + push),
@@ -14,7 +14,7 @@ export class PublishPanel {
   public static current: PublishPanel | undefined;
   private static readonly viewType = "dcsStudio.publish";
   private readonly panel: vscode.WebviewPanel;
-  private readonly disposables: vscode.Disposable[] = [];
+  private readonly disposables: vscode.Disposable[];
   private readonly root: string | undefined;
 
   static show(
@@ -40,10 +40,12 @@ export class PublishPanel {
     private readonly manifest: ManifestPort,
   ) {
     this.panel = panel;
+    this.disposables = disposeWithPanel(panel, () => {
+      PublishPanel.current = undefined;
+    });
     this.root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
-    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     void this.refresh();
   }
 
@@ -142,12 +144,6 @@ export class PublishPanel {
   }
   private post(msg: unknown): void {
     void this.panel.webview.postMessage(msg);
-  }
-
-  private dispose(): void {
-    PublishPanel.current = undefined;
-    this.panel.dispose();
-    while (this.disposables.length) this.disposables.pop()?.dispose();
   }
 
   private html(): string {

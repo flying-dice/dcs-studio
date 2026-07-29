@@ -11,7 +11,7 @@ import type { MarketplacePort } from "../core/ports/marketplace";
 import { showError } from "../errors";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
 
 // The full-screen storefront, hosted as a webview panel. The webview owns all
 // view state (grid, product page, search/tag/sort); everything the host decides
@@ -23,7 +23,7 @@ export class MarketplacePanel {
   public static current: MarketplacePanel | undefined;
   private static readonly viewType = "dcsStudio.marketplace";
 
-  private readonly disposables: vscode.Disposable[] = [];
+  private readonly disposables: vscode.Disposable[];
   private readonly presenter: MarketplacePresenter;
 
   static show(
@@ -48,6 +48,9 @@ export class MarketplacePanel {
     market: MarketplacePort,
     auth: AuthPort,
   ) {
+    this.disposables = disposeWithPanel(panel, () => {
+      MarketplacePanel.current = undefined;
+    });
     this.presenter = new MarketplacePresenter({
       subs,
       market,
@@ -69,7 +72,6 @@ export class MarketplacePanel {
         if (e.provider.id === "github") void this.presenter.refreshAuth();
       }),
     );
-    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
   }
 
   refresh(): void {
@@ -99,12 +101,6 @@ export class MarketplacePanel {
         void showError(effect.message, effect.cause);
         break;
     }
-  }
-
-  private dispose(): void {
-    MarketplacePanel.current = undefined;
-    this.panel.dispose();
-    while (this.disposables.length) this.disposables.pop()?.dispose();
   }
 
   private html(): string {

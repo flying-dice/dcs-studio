@@ -7,13 +7,11 @@ import * as vscode from "vscode";
 // the shared media/base.css (design system) before its own stylesheets and
 // loads media/shared.js (the dcsUi helpers) before its own scripts.
 
-// TODO: clean-code - 0.6 - DRY (#51): the document boilerplate is shared, but the
-// singleton scaffold around it is not — nine panels each hand-write the same
-// `static current`, `static show`, `panel`, `disposables`, `onDidDispose ->
-// dispose`, `dispose() { current = undefined; … }` block. They have already
-// diverged in teardown detail, and each divergence needs its own test.
-// (The asset-list half of #51 is closed: see
-// test/integration/webview/previewAssets.test.ts.)
+// The rest of #51 lives next door in ./panel.ts: `createPanel` +
+// `webviewCapabilities` own how a panel is opened, and `disposeWithPanel` owns
+// how one is closed. The asset-list half is checked by
+// test/integration/webview/previewAssets.test.ts.
+
 /** A webview-safe URI for a file under the extension's media/ folder. */
 export function mediaUri(
   webview: vscode.Webview,

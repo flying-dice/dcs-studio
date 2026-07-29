@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { requiresOverwriteConfirm } from "../core/domain/skillsStatus";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
 import { INSTALL_DIR, type SkillsLibrary } from "./library";
 
 // The Agent Skills experience: a webview panel listing the skill files the
@@ -12,7 +12,7 @@ export class SkillsPanel {
   public static current: SkillsPanel | undefined;
   private static readonly viewType = "dcsStudio.skills";
   private readonly panel: vscode.WebviewPanel;
-  private readonly disposables: vscode.Disposable[] = [];
+  private readonly disposables: vscode.Disposable[];
 
   static show(context: vscode.ExtensionContext, manager: SkillsLibrary): void {
     const column = activeColumn();
@@ -31,9 +31,11 @@ export class SkillsPanel {
     private readonly manager: SkillsLibrary,
   ) {
     this.panel = panel;
+    this.disposables = disposeWithPanel(panel, () => {
+      SkillsPanel.current = undefined;
+    });
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
-    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     this.disposables.push(this.manager.onDidChange(() => void this.postSkills()));
     void this.postSkills();
   }
@@ -116,12 +118,6 @@ export class SkillsPanel {
       installDir: INSTALL_DIR,
       hasWorkspace: !!vscode.workspace.workspaceFolders?.length,
     });
-  }
-
-  private dispose(): void {
-    SkillsPanel.current = undefined;
-    this.panel.dispose();
-    while (this.disposables.length) this.disposables.pop()?.dispose();
   }
 
   private html(): string {

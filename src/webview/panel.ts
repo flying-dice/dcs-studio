@@ -74,3 +74,48 @@ export function createPanel(
   panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.png");
   return panel;
 }
+
+/**
+ * The closing half of the singleton-panel scaffold (#51): one panel's
+ * subscription bag, wired so that closing the panel empties it.
+ *
+ * Push every subscription the panel takes into the returned array — or hand it
+ * straight to `onDidReceiveMessage`/`onDid…` as their `disposables` argument,
+ * which is what the VS Code event signature exists for. When the panel closes,
+ * this runs, in order:
+ *
+ * 1. `teardown()` — the panel's OWN closing work: releasing the slot that holds
+ *    the open instance (`Foo.current = undefined`, or a map delete for the
+ *    per-document manifest form) and stopping whatever the panel started that
+ *    is not a `Disposable` — a poll timer, a log tailer, a callback registered
+ *    on a longer-lived object. This is the part that had already diverged, so
+ *    it stays a per-panel closure rather than something inferred here.
+ * 2. `panel.dispose()` — idempotent, and a no-op on the normal path (we are
+ *    inside the panel's own dispose event). It is what makes the sequence hold
+ *    for a caller that ever reaches teardown another way.
+ * 3. Draining the bag, last-registered first.
+ *
+ * Deliberately NOT a base class, for the reason `createPanel` above gives: the
+ * `reveal` branch of every `static show` does something different — the docs
+ * panel navigates to a page, My Mods and Agent Skills re-query, the console
+ * just raises the tab — and an inherited `show` would have to grow a hook for
+ * each. What is shared here is only the part that is identical in all ten, and
+ * the part where drift means a leak: a listener left attached to a live signal,
+ * or a `current` still pointing at a closed panel so it can never re-open.
+ */
+export function disposeWithPanel(
+  panel: vscode.WebviewPanel,
+  teardown: () => void,
+): vscode.Disposable[] {
+  const disposables: vscode.Disposable[] = [];
+  panel.onDidDispose(
+    () => {
+      teardown();
+      panel.dispose();
+      while (disposables.length) disposables.pop()?.dispose();
+    },
+    null,
+    disposables,
+  );
+  return disposables;
+}

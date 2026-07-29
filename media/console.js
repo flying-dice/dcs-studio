@@ -16,7 +16,18 @@
   const core = window.DcsExplorerCore;
   const persisted = vscode.getState() || {};
   const history = persisted.history || [];
-  let histIdx = history.length;
+  // History recall is a transient *mode*, deliberately not persisted: only the
+  // history array survives a reload, so a re-created panel always starts from
+  // the newest entry rather than resuming a half-finished walk.
+  //   navigating — ↑/↓ are stepping through history rather than moving the caret
+  //   histIdx    — where the walk is; only meaningful while navigating, and
+  //                history.length is the position of the draft (one past newest)
+  //   draft      — what was in the box when the walk started, put back by a ↓
+  //                past the newest entry. Without it, entering history from a
+  //                half-typed snippet would destroy it.
+  let navigating = false;
+  let histIdx = 0;
+  let draft = "";
   let status = {
     gui: { connected: false, dcsTime: null },
     mission: { connected: false, dcsTime: null },
@@ -184,28 +195,61 @@
     if (history[history.length - 1] !== code) history.push(code);
     if (history.length > 100) history.shift();
     persist();
-    histIdx = history.length;
+    // Running always ends a walk: the next ↑ starts again from the newest entry
+    // (which is the snippet just run) rather than from wherever the walk stopped.
+    navigating = false;
     codeEl.value = "";
     vscode.postMessage({ type: "eval", env, code });
   }
 
+  // The caret has first claim on ↑/↓: history is only reached from the box's
+  // first line (↑) or last line (↓), so arrowing around a multi-line snippet
+  // moves the caret instead of swapping the text out from under the user. A
+  // one-line entry is on the first *and* the last line at once, which is what
+  // makes stepping through recalled history a single tap in each direction —
+  // the old "caret is at offset 0" test spent the first tap moving the caret
+  // home after every recall.
+  function atFirstLine() {
+    return !codeEl.value.slice(0, codeEl.selectionStart).includes("\n");
+  }
+  function atLastLine() {
+    return !codeEl.value.slice(codeEl.selectionStart).includes("\n");
+  }
+
+  /** Show history[idx] — or the stashed draft at history.length — caret at the end. */
+  function recall(idx) {
+    histIdx = idx;
+    codeEl.value = idx === history.length ? draft : history[idx];
+    codeEl.selectionStart = codeEl.value.length;
+    codeEl.selectionEnd = codeEl.value.length;
+  }
+
   runBtn.addEventListener("click", run);
+  // Editing the box ends the walk, so the next ↑ starts from the newest entry
+  // with the edited text as the draft. `recall` assigns .value directly, which
+  // fires no input event — only the user's own typing/pasting lands here.
+  codeEl.addEventListener("input", () => {
+    navigating = false;
+  });
   codeEl.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
       run();
-    } else if (e.key === "ArrowUp" && codeEl.selectionStart === 0 && history.length) {
+    } else if (e.key === "ArrowUp" && history.length && atFirstLine()) {
       e.preventDefault();
-      histIdx = Math.max(0, histIdx - 1);
-      codeEl.value = history[histIdx] || "";
-    } else if (
-      e.key === "ArrowDown" &&
-      codeEl.selectionStart === codeEl.value.length &&
-      history.length
-    ) {
+      if (!navigating) {
+        navigating = true;
+        draft = codeEl.value;
+        histIdx = history.length;
+      }
+      // At the oldest entry ↑ holds still rather than clearing the box.
+      if (histIdx > 0) recall(histIdx - 1);
+    } else if (e.key === "ArrowDown" && navigating && atLastLine()) {
       e.preventDefault();
-      histIdx = Math.min(history.length, histIdx + 1);
-      codeEl.value = history[histIdx] || "";
+      recall(histIdx + 1);
+      // Past the newest entry is the draft again — and that ends the walk, so
+      // ↓ never runs off into an empty box the user has to type their way out of.
+      if (histIdx === history.length) navigating = false;
     }
   });
 

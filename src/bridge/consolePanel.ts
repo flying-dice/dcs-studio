@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { exportFileBase } from "../core/domain/bridgeConsole";
 import type { DualBridgeStatus } from "../core/domain/bridgeProtocol";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
 import type { BridgeClient, LuaEnv } from "./client";
 import type { BridgeClients } from "./clients";
 import { saveExport } from "./saveExport";
@@ -25,7 +25,7 @@ export class ConsolePanel {
   private static readonly viewType = "dcsStudio.console";
 
   private readonly panel: vscode.WebviewPanel;
-  private readonly disposables: vscode.Disposable[] = [];
+  private readonly disposables: vscode.Disposable[];
   private readonly pollTimer: ReturnType<typeof setInterval>;
   /** Per-bridge tail state. A reconnect means the server (and its ring)
    * restarted — reset the cursor so the fresh ring is read from the start. */
@@ -47,6 +47,13 @@ export class ConsolePanel {
     private readonly clients: BridgeClients,
   ) {
     this.panel = panel;
+    // The poll loop is a bare interval, not a Disposable, so it is the one
+    // thing the shared bag cannot reach — clearing it is this panel's own
+    // closing work.
+    this.disposables = disposeWithPanel(panel, () => {
+      ConsolePanel.current = undefined;
+      clearInterval(this.pollTimer);
+    });
     this.panel.webview.html = this.html(context);
 
     this.tails.set(clients.gui, { lastSeq: 0, wasConnected: false });
@@ -54,7 +61,6 @@ export class ConsolePanel {
 
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
     this.disposables.push(this.clients.onStatus((s) => this.postStatus(s)));
-    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
 
     // The sweep's `**` depth budget is a user setting; push it now and whenever
     // it changes so the explorer's sweep math stays in sync without a reload.
@@ -264,13 +270,6 @@ export class ConsolePanel {
 
   private post(msg: unknown): void {
     void this.panel.webview.postMessage(msg);
-  }
-
-  private dispose(): void {
-    ConsolePanel.current = undefined;
-    clearInterval(this.pollTimer);
-    this.panel.dispose();
-    while (this.disposables.length) this.disposables.pop()?.dispose();
   }
 
   private html(context: vscode.ExtensionContext): string {

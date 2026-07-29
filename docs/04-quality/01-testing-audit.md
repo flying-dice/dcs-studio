@@ -390,9 +390,17 @@ came out of asking what happens when a user acts at the wrong moment.
 - **Presenter extraction beyond the marketplace pilot.** `consolePanel` still
   carries enough decision logic to deserve it (`myModsPanel` was done in the
   clean-code round, issue #40).
-- **`console.js` history recall needs a double tap.** The obvious fix moves the
-  problem to the down-arrow; fixing both directions needs a history-navigation
-  mode flag that changes multi-line editing ergonomics. Documented in the spec.
+- ~~**`console.js` history recall needs a double tap.**~~ **Since fixed**
+  (board card `10-console-history-recall-double-tap`). The parked reasoning was
+  half right: it does need a history-navigation mode flag, but the ergonomics
+  cost was avoidable. The guard changed from "the caret is at offset 0" to "the
+  caret is on the input's first line" (and the mirror for ↓), which a one-line
+  recalled entry satisfies with the caret at its end — so each direction is one
+  tap, while multi-line snippets keep ↑/↓ for the caret. The mode flag pays for
+  restoring the draft on the way out and for resetting the walk when the user
+  types. It was *not* documented in the spec, as this bullet claimed; the
+  History scenario in `spec/stories/017-lua-console.story.md` now states the
+  behaviour, and `tests/console-repl.spec.ts` covers both directions.
 
 ## The one area still unmeasured: Lua
 

@@ -13,7 +13,7 @@ import type { MarketplacePort } from "../core/ports/marketplace";
 import { showError } from "../errors";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
 
 // The "My Mods" experience: manage subscribed mods — enable/disable the symlinks,
 // update to a newer release, or uninstall (unsubscribe). Everything the host
@@ -26,7 +26,7 @@ export class MyModsPanel {
   public static current: MyModsPanel | undefined;
   private static readonly viewType = "dcsStudio.myMods";
   private readonly panel: vscode.WebviewPanel;
-  private readonly disposables: vscode.Disposable[] = [];
+  private readonly disposables: vscode.Disposable[];
   private readonly presenter: MyModsPresenter;
 
   static show(
@@ -85,13 +85,16 @@ export class MyModsPanel {
     });
 
     this.panel = panel;
+    this.disposables = disposeWithPanel(panel, () => {
+      MyModsPanel.current = undefined;
+      this.launcher.setOnChange(() => {}); // stop refreshing a disposed panel
+    });
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage(
       (m: MyModsInbound) => void this.presenter.handle(m),
       null,
       this.disposables,
     );
-    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     // A tracked entrypoint that exits/errors on its own refreshes the list so the
     // Launch/Stop state stays truthful without the user hitting Refresh.
     this.launcher.setOnChange(() => void this.presenter.refresh());
@@ -138,13 +141,6 @@ export class MyModsPanel {
         break;
       }
     }
-  }
-
-  private dispose(): void {
-    MyModsPanel.current = undefined;
-    this.launcher.setOnChange(() => {}); // stop refreshing a disposed panel
-    this.panel.dispose();
-    while (this.disposables.length) this.disposables.pop()?.dispose();
   }
 
   private html(): string {

@@ -106,8 +106,24 @@ Feature: Lua console
       And an error renders prefixed "✖" in red
 
     Scenario: History
-      When the user presses ↑ / ↓ at the edges of the input
-      Then previous entries are recalled (up to 100, duplicates collapsed)
+      Given previous snippets have been run (up to 100 kept, duplicates collapsed)
+      When the user presses ↑ with the caret on the input's first line
+      Then the most recent entry is recalled, with the caret at its end
+      And each further ↑ steps one entry older, one tap per entry,
+        holding still at the oldest rather than emptying the input
+      And ↓ steps back toward the newest the same way
+      And ↓ past the newest entry restores whatever was being typed when the
+        walk began — an empty input if nothing was
+      And that ends the walk, so a later ↑ starts again from the most recent entry
+
+    Scenario: History never takes ↑ / ↓ away from a multi-line snippet
+      Given the input holds a snippet spanning several lines
+      When the user presses ↑ with the caret below the first line,
+        or ↓ with it above the last
+      Then the caret moves within the snippet and nothing is recalled —
+        including while a walk is in progress, so a recalled entry stays editable
+      And editing the input ends any walk in progress, so the next ↑ starts from
+        the most recent entry and treats the edited text as the draft to restore
 
     Scenario: print output streams live
       Given any script in the sim calls print(...)

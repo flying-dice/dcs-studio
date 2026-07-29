@@ -5,7 +5,7 @@ import { MANIFEST_FILE } from "../core/domain/manifestFile";
 import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { ManifestPort } from "../core/ports/manifest";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
 import { type FileState, LogTailer } from "./tailer";
 
 // The DCS Log viewer: a singleton WebviewPanel (shape copied from
@@ -20,7 +20,7 @@ export class LogPanel {
   private static readonly viewType = "dcsStudio.logViewer";
 
   private readonly panel: vscode.WebviewPanel;
-  private readonly disposables: vscode.Disposable[] = [];
+  private readonly disposables: vscode.Disposable[];
   private readonly buffer = new LogBuffer();
   private tailer: LogTailer | undefined;
   private mod: ModIdentity | null = null;
@@ -50,10 +50,17 @@ export class LogPanel {
     private readonly roots: InstallRootsPort,
   ) {
     this.panel = panel;
+    // `disposed` is set here, not just relied on through the tailer: the first
+    // start is queued behind an async manifest read, so a panel closed inside
+    // that window must be able to say so when the queued work finally runs.
+    this.disposables = disposeWithPanel(panel, () => {
+      this.disposed = true;
+      LogPanel.current = undefined;
+      this.tailer?.stop();
+    });
     this.panel.webview.html = this.html(context);
 
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
-    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
 
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration((e) => {
@@ -150,14 +157,6 @@ export class LogPanel {
 
   private post(msg: unknown): void {
     void this.panel.webview.postMessage(msg);
-  }
-
-  private dispose(): void {
-    this.disposed = true;
-    LogPanel.current = undefined;
-    this.tailer?.stop();
-    this.panel.dispose();
-    while (this.disposables.length) this.disposables.pop()?.dispose();
   }
 
   private html(context: vscode.ExtensionContext): string {

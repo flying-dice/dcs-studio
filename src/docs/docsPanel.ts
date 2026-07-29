@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
 
 // The Documentation experience: a webview panel with a table-of-contents
 // sidebar and per-feature guide pages (Mod Manager, manifest reference,
@@ -12,7 +12,7 @@ export class DocsPanel {
   public static current: DocsPanel | undefined;
   private static readonly viewType = "dcsStudio.docs";
   private readonly panel: vscode.WebviewPanel;
-  private readonly disposables: vscode.Disposable[] = [];
+  private readonly disposables: vscode.Disposable[];
 
   static show(context: vscode.ExtensionContext, page?: string): void {
     const column = activeColumn();
@@ -31,9 +31,11 @@ export class DocsPanel {
     initialPage?: string,
   ) {
     this.panel = panel;
+    this.disposables = disposeWithPanel(panel, () => {
+      DocsPanel.current = undefined;
+    });
     this.panel.webview.html = this.html(initialPage);
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
-    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
   }
 
   private async onMessage(msg: { type: string; command?: string; url?: string }): Promise<void> {
@@ -49,12 +51,6 @@ export class DocsPanel {
 
   private post(msg: unknown): void {
     void this.panel.webview.postMessage(msg);
-  }
-
-  private dispose(): void {
-    DocsPanel.current = undefined;
-    this.panel.dispose();
-    while (this.disposables.length) this.disposables.pop()?.dispose();
   }
 
   private html(initialPage?: string): string {

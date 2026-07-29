@@ -2,7 +2,7 @@ import { win32 as path } from "node:path";
 import * as vscode from "vscode";
 import type { InstallRootsPort } from "../core/ports/installRoots";
 import { renderWebviewHtml } from "../webview/html";
-import { createPanel } from "../webview/panel";
+import { createPanel, disposeWithPanel } from "../webview/panel";
 
 // The manifest authoring FORM as a companion webview opened beside the normal
 // text editor — a split view: raw dcs-studio.toml (real editor: TOML syntax +
@@ -12,7 +12,7 @@ import { createPanel } from "../webview/panel";
 export class ManifestFormPanel {
   private static readonly panels = new Map<string, ManifestFormPanel>();
 
-  private readonly disposables: vscode.Disposable[] = [];
+  private readonly disposables: vscode.Disposable[];
   // The last text WE wrote into the document, so a form-originated edit echoing
   // back through onDidChangeTextDocument doesn't clobber the form (and its focus).
   private lastWritten: string | null = null;
@@ -44,6 +44,11 @@ export class ManifestFormPanel {
     private readonly document: vscode.TextDocument,
     private readonly installRoots: InstallRootsPort,
   ) {
+    // Keyed by document rather than a single `current`: one form per manifest,
+    // so the slot this releases is its entry in the map.
+    this.disposables = disposeWithPanel(panel, () => {
+      ManifestFormPanel.panels.delete(this.document.uri.toString());
+    });
     this.panel.webview.html = this.html();
 
     this.disposables.push(
@@ -63,7 +68,6 @@ export class ManifestFormPanel {
     );
 
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
-    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
   }
 
   // The same resolution the installer uses, not a second copy of it: the form's
@@ -93,12 +97,6 @@ export class ManifestFormPanel {
         break;
       }
     }
-  }
-
-  private dispose(): void {
-    ManifestFormPanel.panels.delete(this.document.uri.toString());
-    this.panel.dispose();
-    while (this.disposables.length) this.disposables.pop()?.dispose();
   }
 
   private html(): string {

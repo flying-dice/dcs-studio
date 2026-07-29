@@ -4,7 +4,7 @@ import * as vscode from "vscode";
 import { browseStart, initialForm } from "../core/domain/projectForm";
 import { TEMPLATES } from "../core/domain/projectTemplates";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
 import { scaffoldInPlace, scaffoldNewFolder } from "./scaffold";
 
 // The guided New Project experience — the VS Code port of the real app's
@@ -19,7 +19,7 @@ export class NewProjectPanel {
   public static current: NewProjectPanel | undefined;
   private static readonly viewType = "dcsStudio.newProject";
   private readonly panel: vscode.WebviewPanel;
-  private readonly disposables: vscode.Disposable[] = [];
+  private readonly disposables: vscode.Disposable[];
 
   static show(context: vscode.ExtensionContext): void {
     const column = activeColumn();
@@ -36,9 +36,11 @@ export class NewProjectPanel {
     private readonly context: vscode.ExtensionContext,
   ) {
     this.panel = panel;
+    this.disposables = disposeWithPanel(panel, () => {
+      NewProjectPanel.current = undefined;
+    });
     this.panel.webview.html = this.html();
     this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
-    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     void this.pushInit();
   }
 
@@ -124,12 +126,6 @@ export class NewProjectPanel {
 
   private post(msg: unknown): void {
     void this.panel.webview.postMessage(msg);
-  }
-
-  private dispose(): void {
-    NewProjectPanel.current = undefined;
-    this.panel.dispose();
-    while (this.disposables.length) this.disposables.pop()?.dispose();
   }
 
   private html(): string {

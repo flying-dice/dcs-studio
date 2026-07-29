@@ -101,7 +101,9 @@ test.describe("Lua Console — Console tab", () => {
     expect(errors).toEqual([]);
   });
 
-  test("↑/↓ walk the history and ↓ past the end clears the box", async ({ page }) => {
+  test("↑/↓ walk the history one tap at a time and ↓ past the end clears the box", async ({
+    page,
+  }) => {
     await openPreview(page, "console");
     for (const code of ["return 1", "return 2"]) {
       await page.getByTestId("code-input").fill(code);
@@ -112,35 +114,152 @@ test.describe("Lua Console — Console tab", () => {
     await box.press("ArrowUp");
     await expect(box).toHaveValue("return 2");
 
-    // Recall leaves the caret at the end of the recalled text, and ↑ only
-    // walks history from the start of the box — so the next ↑ is spent moving
-    // the caret back to column 0 and the one after it does the recall. Worth
-    // pinning: it's why stepping back through history feels like it needs a
-    // double tap.
+    // Recall leaves the caret at the end of the recalled text, but a one-line
+    // entry is still on the box's first line — so the next ↑ steps straight to
+    // the older entry instead of being spent moving the caret home. This is the
+    // double tap the card was raised for.
     await box.press("ArrowUp");
-    await expect(box).toHaveValue("return 2");
+    await expect(box).toHaveValue("return 1");
+    // The oldest entry is the end of the road: ↑ holds still rather than
+    // clearing the box.
     await box.press("ArrowUp");
     await expect(box).toHaveValue("return 1");
 
-    // ↓ only walks when the caret is at the end, which it is after a recall.
+    // ↓ walks back toward the newest, also one tap per entry.
     await box.press("ArrowDown");
     await expect(box).toHaveValue("return 2");
-    // Past the newest entry is "the empty box you were typing in".
+    // Past the newest entry is "the box you were typing in" — empty here.
     await box.press("ArrowDown");
     await expect(box).toHaveValue("");
   });
 
-  test("↑ is left to the caret when it is not at the start of the box", async ({ page }) => {
-    // ↑ inside a multi-line snippet has to move the caret, not swap the text
-    // out from under the user.
+  test("↓ does nothing until a walk has been started with ↑", async ({ page }) => {
+    // Without a walk in progress there is nothing "newer" to step to, so ↓ is
+    // left to the caret — and the box the user is typing in is never replaced.
+    await openPreview(page, "console");
+    await page.getByTestId("code-input").fill("return 1");
+    await page.getByTestId("run-btn").click();
+
+    const box = page.getByTestId("code-input");
+    await box.fill("half typed");
+    await box.press("ArrowDown");
+    await expect(box).toHaveValue("half typed");
+  });
+
+  test("↑ with no history at all leaves the box alone", async ({ page }) => {
+    const errors = await openPreview(page, "console");
+    const box = page.getByTestId("code-input");
+    await box.fill("never run");
+    await box.press("ArrowUp");
+    await expect(box).toHaveValue("never run");
+    expect(errors).toEqual([]);
+  });
+
+  test("a walk started from a half-typed snippet gives it back on the way out", async ({
+    page,
+  }) => {
+    // Entering history from a draft has to be non-destructive, or ↑ becomes a
+    // key you learn not to press.
+    await openPreview(page, "console");
+    await page.getByTestId("code-input").fill("return 1");
+    await page.getByTestId("run-btn").click();
+
+    const box = page.getByTestId("code-input");
+    await box.fill("local unfinished =");
+    await box.press("ArrowUp");
+    await expect(box).toHaveValue("return 1");
+    await box.press("ArrowDown");
+    await expect(box).toHaveValue("local unfinished =");
+  });
+
+  test("editing the box ends the walk, so the next ↑ starts from the newest entry", async ({
+    page,
+  }) => {
+    // Otherwise the mode outlives its usefulness: after typing something new,
+    // ↑ would resume from wherever the last walk stopped.
+    await openPreview(page, "console");
+    for (const code of ["return 1", "return 2"]) {
+      await page.getByTestId("code-input").fill(code);
+      await page.getByTestId("run-btn").click();
+    }
+
+    const box = page.getByTestId("code-input");
+    await box.press("ArrowUp");
+    await box.press("ArrowUp");
+    await expect(box).toHaveValue("return 1");
+
+    // Typing (not a programmatic recall) drops the mode.
+    await box.fill("x");
+    await box.press("ArrowUp");
+    await expect(box).toHaveValue("return 2");
+    // …and the typed draft is what the walk hands back.
+    await box.press("ArrowDown");
+    await expect(box).toHaveValue("x");
+  });
+
+  test("↑/↓ move the caret inside a multi-line snippet instead of recalling", async ({ page }) => {
+    // The whole point of the first-line/last-line rule: arrowing around a
+    // multi-line snippet must not swap the text out from under the user.
     await openPreview(page, "console");
     await page.getByTestId("code-input").fill("return 1");
     await page.getByTestId("run-btn").click();
 
     const box = page.getByTestId("code-input");
     await box.fill("local a = 1\nreturn a");
+    // Caret is on the last line, so ↑ is the caret's — it only reaches history
+    // once the caret is on the first line.
     await box.press("ArrowUp");
     await expect(box).toHaveValue("local a = 1\nreturn a");
+    await box.press("ArrowUp");
+    await expect(box).toHaveValue("return 1");
+  });
+
+  test("a recalled multi-line entry is still editable with ↑/↓", async ({ page }) => {
+    // Being mid-walk does not hand ↑/↓ over to history wholesale — inside the
+    // recalled snippet they are the caret's again, in both directions.
+    await openPreview(page, "console");
+    await page.getByTestId("code-input").fill("local a = 1\nreturn a");
+    await page.getByTestId("run-btn").click();
+
+    const box = page.getByTestId("code-input");
+    await box.press("ArrowUp");
+    await expect(box).toHaveValue("local a = 1\nreturn a");
+    // Caret lands at the end (last line); ↑ walks it up to the first line.
+    await box.press("ArrowUp");
+    await expect(box).toHaveValue("local a = 1\nreturn a");
+    // And ↓ walks it back down rather than stepping to a newer entry.
+    await box.press("ArrowDown");
+    await expect(box).toHaveValue("local a = 1\nreturn a");
+    // Now on the last line again, ↓ resumes the walk — past the newest entry,
+    // back to the empty draft.
+    await box.press("ArrowDown");
+    await expect(box).toHaveValue("");
+  });
+
+  test("running a snippet ends the walk, so ↑ starts from the newest entry again", async ({
+    page,
+  }) => {
+    // A walk that outlived the run would leave the position stale against a
+    // history that just grew — after running from the oldest entry, ↑ would
+    // appear to do nothing at all.
+    await openPreview(page, "console");
+    for (const code of ["return 1", "return 2"]) {
+      await page.getByTestId("code-input").fill(code);
+      await page.getByTestId("run-btn").click();
+    }
+
+    const box = page.getByTestId("code-input");
+    await box.press("ArrowUp");
+    await box.press("ArrowUp");
+    await expect(box).toHaveValue("return 1");
+
+    // Re-run what was recalled: the box clears and the walk is over.
+    await box.press("Control+Enter");
+    await expect(box).toHaveValue("");
+    await box.press("ArrowUp");
+    await expect(box).toHaveValue("return 1");
+    await box.press("ArrowUp");
+    await expect(box).toHaveValue("return 2");
   });
 
   test("re-running the same snippet does not duplicate the history entry", async ({ page }) => {
