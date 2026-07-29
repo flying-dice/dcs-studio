@@ -182,7 +182,6 @@ impl JsonRpcServer {
         let app_data_2 = app_data.clone();
 
         let host = config.host.clone();
-        let host_for_error = config.host.clone();
         let port = config.port;
 
         // Build, bind AND run the server on the thread that owns the runtime,
@@ -236,17 +235,26 @@ impl JsonRpcServer {
             // The thread neither bound nor failed within the budget. Waiting
             // longer is not an option — the caller is the sim thread.
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Close the channel BEFORE anything else. A `send` landing in
+                // the window between the timeout and this scope's end would
+                // otherwise succeed, so the thread's "nobody left to serve for"
+                // release would never fire and it would serve forever on a
+                // handle no one can reach — the exact leak the timeout exists
+                // to avoid. Dropping the receiver first makes that late send
+                // fail by construction.
+                drop(outcome_rx);
                 return Err(ErrorInternalServerError(format!(
-                    "jsonrpc.serve: the server thread did not report a bind result for \
-                     {host_for_error}:{port} within {BIND_TIMEOUT:?}"
+                    "jsonrpc.serve: the server thread did not report a bind result for {}:{port} \
+                     within {BIND_TIMEOUT:?}",
+                    config.host
                 )));
             }
             // The sender was dropped without sending: the server thread died,
             // and a panic there would otherwise be swallowed silently.
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return Err(ErrorInternalServerError(format!(
-                    "jsonrpc.serve: the server thread for {host_for_error}:{port} died before it \
-                     could bind"
+                    "jsonrpc.serve: the server thread for {}:{port} died before it could bind",
+                    config.host
                 )));
             }
         };
