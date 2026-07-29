@@ -20,13 +20,14 @@ import { ConsolePanel } from "../../../src/bridge/consolePanel";
 import { EXPORT_OPEN_LIMIT_BYTES } from "../../../src/core/domain/bridgeConsole";
 import { CONNECTED, FakeBridgeClient, OFFLINE } from "./fakeBridgeClient";
 
-// The Lua console brokers between one webview and two independent bridges. It
-// has to keep routing straight — a mission-env eval sent to the GUI bridge runs
-// in the wrong Lua universe and quietly returns nonsense — and it has to stay
-// usable when one of them is not there, which is the normal state: the mission
-// bridge only exists while a mission is loaded, so "offline" is a mode, not an
-// error. Every request carries a correlation id the webview matches replies
-// against, so a failed call still has to answer, or the UI waits forever.
+// The shell around ConsolePresenter: the webview panel, the settings read, the
+// poll timer, and the URI plumbing behind a table export. The console's own
+// decisions — env routing, request validation, error→message mapping, the
+// per-bridge output cursor — belong to the presenter and are asserted without
+// an editor in test/unit/bridge/consolePresenter.test.ts. What is left here is
+// the wiring, and it is worth its own layer: a settings read that never reaches
+// the explorer, a timer that outlives its panel, or a sim-side temp file nobody
+// deletes are all failures no amount of pure-logic testing would catch.
 
 const EXT = "C:\\ext";
 const TEMP = "D:\\Saved Games\\DCS\\lua-export.json";
@@ -109,7 +110,7 @@ describe("opening the console", () => {
 });
 
 describe("status and configuration", () => {
-  it("pushes the sweep budget the explorer has to plan against", () => {
+  it("pushes the sweep budget read from the user's settings", () => {
     expect(posted("explorerConfig")).toEqual({ type: "explorerConfig", wildcardDepth: 1 });
   });
 
@@ -138,198 +139,6 @@ describe("status and configuration", () => {
       status: { gui: CONNECTED, mission: OFFLINE },
     });
   });
-
-  it("replays status and config when the webview says it has booted", async () => {
-    gui.emit(CONNECTED);
-    await send({ type: "ready" });
-    // The webview reloads on its own (hidden tab, VS Code restart) and comes
-    // back blank; without a replay it shows "offline" over a live bridge.
-    expect(panel.webview.postedOfType("status").at(-1)).toEqual({
-      type: "status",
-      status: { gui: CONNECTED, mission: OFFLINE },
-    });
-    expect(panel.webview.postedOfType("explorerConfig")).toHaveLength(2);
-  });
-});
-
-describe("evaluating Lua", () => {
-  it("runs code in the GUI state by default and returns the value", async () => {
-    gui.answer("replEval", () => ({ ok: true, result: 42 }));
-    await send({ type: "eval", code: "return 42" });
-    expect(gui.lastCall("replEval")?.args).toEqual(["gui", "return 42"]);
-    expect(posted("result")).toEqual({ type: "result", value: 42 });
-  });
-
-  it("routes a mission-env eval to the mission bridge", async () => {
-    mission.answer("replEval", () => ({ ok: true, result: "ok" }));
-    await send({ type: "eval", env: "mission", code: "return 1" });
-    // The mission scripting state is a different Lua universe; the GUI bridge
-    // cannot see anything the mission defined.
-    expect(mission.lastCall("replEval")?.args).toEqual(["mission", "return 1"]);
-    expect(gui.calls).toEqual([]);
-  });
-
-  it("reports a statement with no value as null rather than nothing", async () => {
-    gui.answer("replEval", () => ({ ok: true }));
-    await send({ type: "eval", code: "x = 1" });
-    // `undefined` would drop out of the JSON message entirely and the webview
-    // would sit waiting for a result that never arrives.
-    expect(posted("result")).toEqual({ type: "result", value: null });
-  });
-
-  it("shows the Lua error a failed chunk produced", async () => {
-    gui.answer("replEval", () => ({ ok: false, err: "attempt to index a nil value" }));
-    await send({ type: "eval", code: "return nil.x" });
-    expect(posted("error")).toEqual({
-      type: "error",
-      message: "attempt to index a nil value",
-    });
-  });
-
-  it("still says something when a failure carries no message", async () => {
-    gui.answer("replEval", () => ({ ok: false }));
-    await send({ type: "eval", code: "return 1" });
-    expect(posted("error")).toEqual({ type: "error", message: "error" });
-  });
-
-  it("reports a bridge that dropped mid-call", async () => {
-    gui.answer("replEval", () => Promise.reject(new Error("gui bridge not connected")));
-    await send({ type: "eval", code: "return 1" });
-    // DCS quitting mid-eval must land as a console error, not an unhandled
-    // rejection with the prompt stuck.
-    expect(posted("error")).toEqual({ type: "error", message: "gui bridge not connected" });
-  });
-
-  it("ignores an eval with no code", async () => {
-    await send({ type: "eval" });
-    expect(gui.calls).toEqual([]);
-  });
-});
-
-describe("the explorer", () => {
-  it("answers an inspect with the Lua type, keeping the envelope's own type", async () => {
-    gui.answer("replInspect", () => ({ ok: true, type: "table", value: "{...}", ref: 7 }));
-    await send({ type: "inspect", id: 3, expr: "Group" });
-    // `luaType`, not `type`: the envelope's `type` is how the webview routes
-    // the message at all, so a Lua value called "table" must not shadow it.
-    expect(posted("inspectResult")).toEqual({
-      type: "inspectResult",
-      id: 3,
-      env: "gui",
-      expr: "Group",
-      ok: true,
-      err: undefined,
-      luaType: "table",
-      value: "{...}",
-      ref: 7,
-    });
-  });
-
-  it("answers a failed inspect against the same request id", async () => {
-    gui.answer("replInspect", () => Promise.reject(new Error("bridge closed")));
-    await send({ type: "inspect", id: 9, expr: "Group", env: "gui" });
-    // The webview keys pending nodes by id; an unanswered one spins forever.
-    expect(posted("inspectResult")).toEqual({
-      type: "inspectResult",
-      id: 9,
-      env: "gui",
-      expr: "Group",
-      ok: false,
-      err: "bridge closed",
-    });
-  });
-
-  it("ignores an inspect with no expression", async () => {
-    await send({ type: "inspect", id: 1 });
-    expect(gui.calls).toEqual([]);
-  });
-
-  it("expands a table into its children", async () => {
-    gui.answer("replExpand", () => ({ variables: [{ name: "id", value: "1" }] }));
-    await send({ type: "expand", ref: 7, nodeId: 12 });
-    expect(gui.lastCall("replExpand")?.args).toEqual(["gui", 7]);
-    expect(posted("expandResult")).toEqual({
-      type: "expandResult",
-      nodeId: 12,
-      ok: true,
-      variables: [{ name: "id", value: "1" }],
-    });
-  });
-
-  it("treats an expansion with no variables as an empty node", async () => {
-    gui.answer("replExpand", () => ({}));
-    await send({ type: "expand", ref: 7, nodeId: 12 });
-    // A missing list would leave the tree node marked as still loading.
-    expect(posted("expandResult")).toMatchObject({ ok: true, variables: [] });
-  });
-
-  it("answers a failed expansion so the node stops loading", async () => {
-    gui.answer("replExpand", () => Promise.reject(new Error("ref expired")));
-    await send({ type: "expand", ref: 7, nodeId: 12 });
-    expect(posted("expandResult")).toEqual({
-      type: "expandResult",
-      nodeId: 12,
-      ok: false,
-      err: "ref expired",
-    });
-  });
-
-  it("ignores an expand with no ref", async () => {
-    await send({ type: "expand", nodeId: 1 });
-    expect(gui.calls).toEqual([]);
-  });
-
-  it("resolves a function signature on demand", async () => {
-    gui.answer("replSignature", () => ({ ok: true, params: ["id", "name"], native: false }));
-    await send({ type: "signature", ref: 4, reqId: 88 });
-    expect(posted("signatureResult")).toEqual({
-      type: "signatureResult",
-      reqId: 88,
-      ok: true,
-      params: ["id", "name"],
-      native: false,
-      err: undefined,
-    });
-  });
-
-  it("answers a failed signature lookup against its request id", async () => {
-    gui.answer("replSignature", () => Promise.reject("not a function"));
-    await send({ type: "signature", ref: 4, reqId: 88 });
-    // A non-Error rejection still has to come back as text the tooltip can show.
-    expect(posted("signatureResult")).toEqual({
-      type: "signatureResult",
-      reqId: 88,
-      ok: false,
-      err: "not a function",
-    });
-  });
-
-  it("ignores a signature request with no ref", async () => {
-    await send({ type: "signature", reqId: 1 });
-    expect(gui.calls).toEqual([]);
-  });
-
-  it("releases held refs in each env the tree touched", async () => {
-    await send({ type: "clearExplorer", envs: ["gui", "mission"] });
-    // Refs pin Lua values in the sim; never releasing them leaks memory inside
-    // DCS for as long as it runs.
-    expect(gui.lastCall("replClear")?.args).toEqual(["gui"]);
-    expect(mission.lastCall("replClear")?.args).toEqual(["mission"]);
-  });
-
-  it("keeps clearing the other envs when one is already gone", async () => {
-    mission.answer("replClear", () => Promise.reject(new Error("mission bridge not connected")));
-    await send({ type: "clearExplorer", envs: ["mission", "gui"] });
-    // A finished mission took its refs with it — nothing to release, and no
-    // reason to abandon the GUI state's.
-    expect(gui.lastCall("replClear")?.args).toEqual(["gui"]);
-  });
-
-  it("clears nothing when the tree never reached a bridge", async () => {
-    await send({ type: "clearExplorer" });
-    expect(gui.calls).toEqual([]);
-    expect(mission.calls).toEqual([]);
-  });
 });
 
 describe("exporting a table", () => {
@@ -343,8 +152,7 @@ describe("exporting a table", () => {
     await send({ type: "export", ref: 5, label: "db.Units", reqId: 2 });
 
     // The sim serializes to disk because a whole table would never fit through
-    // the WebSocket.
-    expect(gui.lastCall("replExport")?.args).toEqual(["gui", { ref: 5, expr: undefined }]);
+    // the WebSocket, so the editor half of the export is a file copy.
     expect(seededText(TARGET)).toBe('{"a":1}');
     expect(state.shownDocuments).toEqual([TARGET]);
     expect(posted("exportDone")).toEqual({ type: "exportDone", reqId: 2, saved: true });
@@ -417,19 +225,6 @@ describe("exporting a table", () => {
     expect(seededText(TEMP)).toBeUndefined();
     expect(seededText(TARGET)).toBeUndefined();
   });
-
-  it("answers with the failure when the sim could not serialize the table", async () => {
-    gui.answer("replExport", () => Promise.reject(new Error("cannot serialize userdata")));
-
-    await send({ type: "export", ref: 5, reqId: 2 });
-
-    expect(posted("exportDone")).toEqual({
-      type: "exportDone",
-      reqId: 2,
-      saved: false,
-      error: "cannot serialize userdata",
-    });
-  });
 });
 
 describe("the offline call to action", () => {
@@ -438,23 +233,10 @@ describe("the offline call to action", () => {
     // One implementation of launching, shared with the palette and status bar.
     expect(state.executedCommands).toEqual([{ command: "dcs.bridge.launch", args: [] }]);
   });
-
-  it("ignores a message type it does not handle", async () => {
-    await send({ type: "somethingElse" });
-    expect(gui.calls).toEqual([]);
-    expect(state.executedCommands).toEqual([]);
-  });
 });
 
 describe("tailing sim output", () => {
-  it("reads nothing while a bridge is offline", async () => {
-    await vi.advanceTimersByTimeAsync(1000);
-    // Polling a closed socket just throws once a second for the whole session.
-    expect(gui.calls).toEqual([]);
-    expect(mission.calls).toEqual([]);
-  });
-
-  it("streams print output from both bridges independently", async () => {
+  it("polls both bridges on the interval the panel starts", async () => {
     gui.emit(CONNECTED);
     mission.emit(CONNECTED);
     gui.answer("consoleRead", () => ({ lines: [{ seq: 1, text: "gui line" }], latest: 1 }));
@@ -465,69 +247,12 @@ describe("tailing sim output", () => {
 
     await vi.advanceTimersByTimeAsync(1000);
 
-    // Each bridge has its own output ring, so both have to be tailed or half
-    // the sim's print output never appears.
+    // Each bridge has its own output ring, so both have to be handed to the
+    // presenter or half the sim's print output never appears.
     const texts = panel.webview
       .postedOfType("print")
       .flatMap((m) => (m.lines as { text: string }[]).map((l) => l.text));
     expect(texts.sort()).toEqual(["gui line", "mission line"]);
-  });
-
-  it("says nothing while the sim is idle", async () => {
-    gui.emit(CONNECTED);
-    gui.answer("consoleRead", () => ({ lines: [], latest: 0 }));
-
-    await vi.advanceTimersByTimeAsync(3000);
-
-    // A mission that never calls print still polls once a second; posting an
-    // empty batch each time would churn the webview forever.
-    expect(panel.webview.postedOfType("print")).toEqual([]);
-    expect(gui.calls.map((c) => c.args[0])).toEqual([0, 0, 0]);
-  });
-
-  it("advances the cursor without posting when the ring only dropped old lines", async () => {
-    gui.emit(CONNECTED);
-    gui.answer("consoleRead", () => ({ lines: [], latest: 40 }));
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(panel.webview.postedOfType("print")).toEqual([]);
-
-    gui.answer("consoleRead", () => ({ lines: [{ seq: 41, text: "next" }], latest: 41 }));
-    await vi.advanceTimersByTimeAsync(1000);
-    // Re-reading from 0 would replay the whole ring as if it were new output.
-    expect(gui.lastCall("consoleRead")?.args).toEqual([40]);
-  });
-
-  it("reads from the cursor it reached, not from the start", async () => {
-    gui.emit(CONNECTED);
-    gui.answer("consoleRead", () => ({ lines: [{ seq: 5, text: "a" }], latest: 5 }));
-    await vi.advanceTimersByTimeAsync(1000);
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(gui.calls.map((c) => c.args[0])).toEqual([0, 5]);
-  });
-
-  it("rereads the ring from the start after DCS restarts", async () => {
-    gui.emit(CONNECTED);
-    gui.answer("consoleRead", () => ({ lines: [{ seq: 9, text: "a" }], latest: 9 }));
-    await vi.advanceTimersByTimeAsync(1000);
-
-    gui.emit(OFFLINE);
-    await vi.advanceTimersByTimeAsync(1000);
-    gui.emit(CONNECTED);
-    await vi.advanceTimersByTimeAsync(1000);
-
-    // The bridge server restarts with DCS and its ring starts again at zero;
-    // keeping the old cursor would hide every line of the new session.
-    expect(gui.calls.map((c) => c.args[0])).toEqual([0, 0]);
-  });
-
-  it("keeps polling after a read fails", async () => {
-    gui.emit(CONNECTED);
-    gui.answer("consoleRead", () => Promise.reject(new Error("timed out")));
-    await vi.advanceTimersByTimeAsync(1000);
-    gui.answer("consoleRead", () => ({ lines: [{ seq: 1, text: "back" }], latest: 1 }));
-    await vi.advanceTimersByTimeAsync(1000);
-    // A dropped frame must not end the tail for the rest of the session.
-    expect(posted("print")).toMatchObject({ lines: [{ seq: 1, text: "back" }] });
   });
 });
 

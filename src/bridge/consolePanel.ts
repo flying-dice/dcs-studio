@@ -1,9 +1,12 @@
 import * as vscode from "vscode";
-import { exportFileBase } from "../core/domain/bridgeConsole";
-import type { DualBridgeStatus } from "../core/domain/bridgeProtocol";
+import type {
+  ConsoleEffect,
+  ConsoleExportSave,
+  ConsoleInbound,
+} from "../core/app/consolePresenter";
+import { ConsolePresenter } from "../core/app/consolePresenter";
 import { renderWebviewHtml } from "../webview/html";
 import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
-import type { BridgeClient, LuaEnv } from "./client";
 import type { BridgeClients } from "./clients";
 import { saveExport } from "./saveExport";
 
@@ -20,6 +23,12 @@ import { saveExport } from "./saveExport";
 // `dcsStudio.explorerWildcardDepth` setting (pushed to the webview as an
 // `explorerConfig` message), and a full-table JSON export: the sim writes the file, we
 // copy it wherever the user picks.
+//
+// Everything the host decides — env routing, which requests are well-formed,
+// how a rejected RPC becomes an answer, and the per-bridge output cursor —
+// lives in ConsolePresenter, which knows nothing about VS Code. This class is
+// the shell around it: it owns the panel, the poll timer, the settings read and
+// the URI plumbing, and performs the effects the presenter describes.
 export class ConsolePanel {
   public static current: ConsolePanel | undefined;
   private static readonly viewType = "dcsStudio.console";
@@ -27,9 +36,7 @@ export class ConsolePanel {
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[];
   private readonly pollTimer: ReturnType<typeof setInterval>;
-  /** Per-bridge tail state. A reconnect means the server (and its ring)
-   * restarted — reset the cursor so the fresh ring is read from the start. */
-  private readonly tails = new Map<BridgeClient, ConsoleTail>();
+  private readonly presenter: ConsolePresenter;
 
   static show(context: vscode.ExtensionContext, clients: BridgeClients): void {
     const column = activeColumn();
@@ -44,7 +51,7 @@ export class ConsolePanel {
   private constructor(
     panel: vscode.WebviewPanel,
     context: vscode.ExtensionContext,
-    private readonly clients: BridgeClients,
+    clients: BridgeClients,
   ) {
     this.panel = panel;
     // The poll loop is a bare interval, not a Disposable, so it is the one
@@ -54,222 +61,69 @@ export class ConsolePanel {
       ConsolePanel.current = undefined;
       clearInterval(this.pollTimer);
     });
+    this.presenter = new ConsolePresenter({
+      bridges: clients,
+      // Both rings, named here because which bridges exist is the shell's
+      // knowledge — the presenter only knows it has to tail each of them.
+      tailed: [clients.gui, clients.mission],
+      wildcardDepth: () => this.wildcardDepth(),
+      post: (msg) => void this.panel.webview.postMessage(msg),
+      effect: (effect) => this.perform(effect),
+      saveExport: (request) => this.save(request),
+    });
     this.panel.webview.html = this.html(context);
 
-    this.tails.set(clients.gui, { lastSeq: 0, wasConnected: false });
-    this.tails.set(clients.mission, { lastSeq: 0, wasConnected: false });
-
-    this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
-    this.disposables.push(this.clients.onStatus((s) => this.postStatus(s)));
+    this.panel.webview.onDidReceiveMessage(
+      (m: ConsoleInbound) => void this.presenter.handle(m),
+      null,
+      this.disposables,
+    );
+    this.disposables.push(clients.onStatus((s) => this.presenter.pushStatus(s)));
 
     // The sweep's `**` depth budget is a user setting; push it now and whenever
     // it changes so the explorer's sweep math stays in sync without a reload.
-    this.postConfig();
+    this.presenter.pushConfig();
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration("dcsStudio.explorerWildcardDepth")) this.postConfig();
+        if (e.affectsConfiguration("dcsStudio.explorerWildcardDepth")) this.presenter.pushConfig();
       }),
     );
 
     // Stream sim `print` output from BOTH bridges while connected.
-    this.pollTimer = setInterval(() => void this.poll(), 1000);
+    this.pollTimer = setInterval(() => void this.presenter.poll(), 1000);
   }
 
-  private async onMessage(msg: {
-    type: string;
-    env?: LuaEnv;
-    envs?: LuaEnv[];
-    code?: string;
-    expr?: string;
-    ref?: number;
-    id?: number;
-    nodeId?: number;
-    reqId?: number;
-    label?: string;
-  }): Promise<void> {
-    const env: LuaEnv = msg.env ?? "gui";
-    const client = this.clients.forEnv(env);
-    switch (msg.type) {
-      case "ready":
-        // The webview finished booting — (re)push the current status and the
-        // explorer's sweep-depth config so it renders from a known state.
-        this.postStatus(this.clients.current);
-        this.postConfig();
-        break;
-      case "eval": {
-        if (typeof msg.code !== "string") return;
-        try {
-          const r = await client.replEval(env, msg.code);
-          if (r.ok) this.post({ type: "result", value: r.result === undefined ? null : r.result });
-          else this.post({ type: "error", message: r.err || "error" });
-        } catch (e) {
-          this.post({ type: "error", message: errText(e) });
-        }
-        break;
-      }
-      case "inspect": {
-        if (typeof msg.expr !== "string") return;
-        try {
-          const r = await client.replInspect(env, msg.expr);
-          // `luaType` (not `type`) carries the value's Lua type — the envelope's
-          // own `type` field is "inspectResult" and must not be shadowed.
-          this.post({
-            type: "inspectResult",
-            id: msg.id,
-            env,
-            expr: msg.expr,
-            ok: r.ok,
-            err: r.err,
-            luaType: r.type,
-            value: r.value,
-            ref: r.ref,
-          });
-        } catch (e) {
-          this.post({
-            type: "inspectResult",
-            id: msg.id,
-            env,
-            expr: msg.expr,
-            ok: false,
-            err: errText(e),
-          });
-        }
-        break;
-      }
-      case "expand": {
-        if (typeof msg.ref !== "number") return;
-        try {
-          const r = await client.replExpand(env, msg.ref);
-          this.post({
-            type: "expandResult",
-            nodeId: msg.nodeId,
-            ok: true,
-            variables: r.variables ?? [],
-          });
-        } catch (e) {
-          this.post({ type: "expandResult", nodeId: msg.nodeId, ok: false, err: errText(e) });
-        }
-        break;
-      }
-      case "signature": {
-        if (typeof msg.ref !== "number") return;
-        try {
-          const r = await client.replSignature(env, msg.ref);
-          this.post({
-            type: "signatureResult",
-            reqId: msg.reqId,
-            ok: r.ok,
-            params: r.params,
-            native: r.native,
-            err: r.err,
-          });
-        } catch (e) {
-          this.post({ type: "signatureResult", reqId: msg.reqId, ok: false, err: errText(e) });
-        }
-        break;
-      }
-      case "clearExplorer": {
-        // Release sim-side refs in every env the tree touched (routed to the
-        // env's own bridge); an env that is gone (mission ended) has nothing
-        // to release — ignore its error.
-        for (const e of msg.envs ?? []) {
-          try {
-            await this.clients.forEnv(e).replClear(e);
-          } catch {
-            /* state gone; nothing held */
-          }
-        }
-        break;
-      }
-      case "export": {
-        await this.export(env, msg);
-        break;
-      }
-      case "launch":
-        // The offline status line's inline CTA — funnel into the same
-        // dcs.bridge.launch command as the Command Palette and the status
-        // bar dispatcher (single implementation, per ARCHITECTURE.md).
+  /** Carry out one presenter-described effect. */
+  private perform(effect: ConsoleEffect): void {
+    switch (effect.kind) {
+      case "launchBridge":
         void vscode.commands.executeCommand("dcs.bridge.launch");
         break;
     }
   }
 
-  /** Full-table JSON export: the sim serializes to a temp file in its write
-   * dir; we copy that to wherever the user picks, then open it if it's small
-   * enough to view comfortably. */
-  private async export(
-    env: LuaEnv,
-    msg: { ref?: number; expr?: string; label?: string; reqId?: number },
-  ): Promise<void> {
-    // Tracked outside the try so the tidy-up runs on EVERY path out of it: a
-    // copy the user's disk refuses would otherwise leave a multi-megabyte
-    // dcs-studio-export-*.json in the DCS write dir forever.
-    let temp: vscode.Uri | undefined;
+  /**
+   * Save the sim's export where the user chooses, then tidy up after it.
+   *
+   * The delete runs in a `finally` so it happens on EVERY path out: a copy the
+   * user's disk refuses would otherwise leave a multi-megabyte
+   * dcs-studio-export-*.json in the DCS write dir forever.
+   */
+  private async save(request: ConsoleExportSave): Promise<boolean> {
+    const temp = vscode.Uri.file(request.path);
     try {
-      const { path, bytes } = await this.clients
-        .forEnv(env)
-        .replExport(env, { ref: msg.ref, expr: msg.expr });
-      temp = vscode.Uri.file(path);
-      const saved = await saveExport(temp, exportFileBase(msg.label), bytes);
-      this.post({ type: "exportDone", reqId: msg.reqId, saved });
-    } catch (e) {
-      this.post({ type: "exportDone", reqId: msg.reqId, saved: false, error: errText(e) });
+      return await saveExport(temp, request.baseName, request.bytes);
     } finally {
-      if (temp) {
-        try {
-          await vscode.workspace.fs.delete(temp);
-        } catch {
-          /* best-effort tidy of the sim-side temp file */
-        }
+      try {
+        await vscode.workspace.fs.delete(temp);
+      } catch {
+        /* best-effort tidy of the sim-side temp file */
       }
     }
   }
 
-  private async poll(): Promise<void> {
-    // Driven off the tail map itself, so every bridge with tail state is
-    // polled and none can be polled without it.
-    await Promise.all([...this.tails].map(([client, tail]) => this.pollOne(client, tail)));
-  }
-
-  private async pollOne(client: BridgeClient, tail: ConsoleTail): Promise<void> {
-    const connected = client.current.connected;
-    if (!connected) {
-      tail.wasConnected = false;
-      return;
-    }
-    if (!tail.wasConnected) {
-      // Fresh connection = the server restarted with a fresh ring (both
-      // servers outlive missions and only restart with DCS) — read it from 0.
-      tail.wasConnected = true;
-      tail.lastSeq = 0;
-    }
-    try {
-      const { lines, latest } = await client.consoleRead(tail.lastSeq);
-      if (lines.length) {
-        tail.lastSeq = latest;
-        this.post({ type: "print", lines });
-      } else if (latest > tail.lastSeq) {
-        tail.lastSeq = latest;
-      }
-    } catch {
-      /* transient; next tick retries */
-    }
-  }
-
-  private postStatus(s: DualBridgeStatus): void {
-    this.post({ type: "status", status: s });
-  }
-
-  /** Push the explorer's sweep depth budget (the `**` wildcard cost). */
-  private postConfig(): void {
-    const wildcardDepth = vscode.workspace
-      .getConfiguration("dcsStudio")
-      .get<number>("explorerWildcardDepth", 1);
-    this.post({ type: "explorerConfig", wildcardDepth });
-  }
-
-  private post(msg: unknown): void {
-    void this.panel.webview.postMessage(msg);
+  private wildcardDepth(): number {
+    return vscode.workspace.getConfiguration("dcsStudio").get<number>("explorerWildcardDepth", 1);
   }
 
   private html(context: vscode.ExtensionContext): string {
@@ -282,15 +136,4 @@ export class ConsolePanel {
       csp: { font: true },
     });
   }
-}
-
-/** Where a bridge's output ring has been read up to, and whether it was
- * connected on the previous tick. */
-interface ConsoleTail {
-  lastSeq: number;
-  wasConnected: boolean;
-}
-
-function errText(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }

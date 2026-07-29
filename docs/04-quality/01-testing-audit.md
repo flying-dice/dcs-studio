@@ -387,9 +387,14 @@ came out of asking what happens when a user acts at the wrong moment.
   table would still be worth adding alongside a wider presenter rollout; deriving
   it by regex is not, because the webviews use several dispatch shapes and an
   inferred contract produces false failures.
-- **Presenter extraction beyond the marketplace pilot.** `consolePanel` still
-  carries enough decision logic to deserve it (`myModsPanel` was done in the
-  clean-code round, issue #40).
+- ~~**Presenter extraction beyond the marketplace pilot.**~~ **Since done**
+  (board card `08-presenter-for-console-panel`; `myModsPanel` was done in the
+  clean-code round, issue #40). `consolePanel` is now a 139-line shell over
+  `core/app/consolePresenter.ts`, which imports no `vscode` at all and is
+  covered by the unit layer rather than the integration one. The G5 table above
+  still reads 309 lines / 22 refs — that is the original audit's measurement at
+  `8c45b98` and is left as the record of what was true then, per this
+  document's status note.
 - ~~**`console.js` history recall needs a double tap.**~~ **Since fixed**
   (board card `10-console-history-recall-double-tap`). The parked reasoning was
   half right: it does need a history-navigation mode flag, but the ergonomics
