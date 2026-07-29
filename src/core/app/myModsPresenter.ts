@@ -12,6 +12,7 @@ import type { AuthPort } from "../ports/auth";
 import type { InstallRootsPort } from "../ports/installRoots";
 import type { MarketplacePort } from "../ports/marketplace";
 import type { SubscriptionService } from "./subscriptionService";
+import type { MyModsHostMessage, MyModsWebviewMessage } from "./webviewContract";
 
 // The "My Mods" decision logic, lifted out of the VS Code panel.
 //
@@ -47,14 +48,14 @@ export interface MyModsConfirm {
   actions: string[];
 }
 
-/** The message shapes the My Mods webview sends the host. */
-export interface MyModsInbound {
-  type: string;
-  repo?: string;
-  url?: string;
-  id?: string;
-  page?: string;
-}
+/**
+ * The message shapes the My Mods webview sends the host — the declared
+ * contract, not a local restatement of it. Named here as well so the panel
+ * keeps importing its boundary type from the module it talks to; the union
+ * itself lives in `webviewContract.ts`, where the webview half is checked
+ * against the same declaration.
+ */
+export type MyModsInbound = MyModsWebviewMessage;
 
 /**
  * The ledger surface My Mods consumes. Deliberately NOT `SubscriptionLedgerStore`:
@@ -110,8 +111,12 @@ export interface MyModsPresenterDeps {
   consent: ConsentStore;
   /** The data dir, read fresh so a settings change shows up on the next redraw. */
   dataDir: () => string;
-  /** Deliver a message to the webview. */
-  post: (msg: unknown) => void;
+  /**
+   * Deliver a message to the webview. Typed to the declared host union, so a
+   * message `media/mymods.js` has no case for cannot be sent from here without
+   * the contract being updated first.
+   */
+  post: (msg: MyModsHostMessage) => void;
   /** Perform an editor-side effect. */
   effect: (effect: MyModsEffect) => void;
   /** Ask the user a modal question; resolves to the chosen action, or undefined. */
@@ -122,37 +127,46 @@ export class MyModsPresenter {
   constructor(private readonly deps: MyModsPresenterDeps) {}
 
   async handle(msg: MyModsInbound): Promise<void> {
-    const repo = msg.repo;
+    // Narrowing is per case rather than off a hoisted `msg.repo`: the inbound
+    // type is now the declared discriminated union, and only some of its
+    // members carry a repo at all.
     switch (msg.type) {
       case "refresh":
         await this.refresh();
         break;
-      case "enable":
+      case "enable": {
+        const repo = msg.repo;
         if (repo) await this.act(repo, () => this.deps.subs.enable(repo), "Enabled");
         break;
-      case "disable":
+      }
+      case "disable": {
+        const repo = msg.repo;
         if (repo) {
           await this.stopRepoEntrypoints(repo); // stop running exes before unlinking
           await this.act(repo, () => this.deps.subs.disable(repo), "Disabled");
         }
         break;
-      case "uninstall":
+      }
+      case "uninstall": {
+        const repo = msg.repo;
         if (repo) {
           await this.stopRepoEntrypoints(repo);
           await this.act(repo, () => this.deps.subs.unsubscribe(repo), "Uninstalled");
         }
         break;
+      }
       case "launch":
-        if (repo && msg.id) await this.launchEntrypoint(repo, msg.id);
+        if (msg.repo && msg.id) await this.launchEntrypoint(msg.repo, msg.id);
         break;
       case "stop":
-        if (repo && msg.id) this.stopEntrypoint(repo, msg.id);
+        if (msg.repo && msg.id) this.stopEntrypoint(msg.repo, msg.id);
         break;
       case "update":
-        if (repo) await this.runUpdate(repo);
+        if (msg.repo) await this.runUpdate(msg.repo);
         break;
       case "openDir":
-        if (repo) {
+        if (msg.repo) {
+          const repo = msg.repo;
           const sub = (await this.deps.subs.list()).find((s) => s.repo === repo);
           if (sub) this.deps.effect({ kind: "reveal", path: sub.dir });
         }

@@ -13,17 +13,25 @@ import type {
 } from "../../../src/core/app/marketplacePresenter";
 import { MarketplacePresenter } from "../../../src/core/app/marketplacePresenter";
 import type {
+  MyModsEffect,
+  MyModsInbound,
+  MyModsPresenterDeps,
+} from "../../../src/core/app/myModsPresenter";
+import { MyModsPresenter } from "../../../src/core/app/myModsPresenter";
+import type {
   ConsoleHostMessage,
   MarketplaceHostMessage,
+  MyModsHostMessage,
 } from "../../../src/core/app/webviewContract";
 import {
   CONSOLE_PROTOCOL,
   MARKETPLACE_PROTOCOL,
+  MYMODS_PROTOCOL,
   UNCOVERED_WEBVIEWS,
   WEBVIEW_PROTOCOLS,
 } from "../../../src/core/app/webviewContract";
 import type { DualBridgeStatus } from "../../../src/core/domain/bridgeProtocol";
-import type { ProductDetail } from "../../../src/core/domain/types";
+import type { ProductDetail, Subscription } from "../../../src/core/domain/types";
 
 // The HOST half of the declared webview contract
 // (`src/core/app/webviewContract.ts`), both directions, table-driven.
@@ -202,6 +210,100 @@ function marketplaceHarness(over: Partial<MarketplacePresenterDeps> = {}): Marke
   };
 }
 
+// ── My Mods harness ──────────────────────────────────────────────────────────
+
+const REPO = "Owner/Mod";
+const MOD_DIR = "D:\\mods\\owner-mod";
+
+function subscription(over: Partial<Subscription> = {}): Subscription {
+  return {
+    repo: REPO,
+    name: "Carrier Mod",
+    tag: "v1.0.0",
+    dir: MOD_DIR,
+    enabled: true,
+    links: [{ id: "l1", dest: "C:\\Saved Games\\DCS\\Mods\\Mod" }],
+    entrypoints: [{ id: "gui", name: "Config GUI", exe: "bin\\config.exe" }],
+    ...over,
+  } as Subscription;
+}
+
+interface MyModsHarness {
+  presenter: MyModsPresenter;
+  posted: MyModsHostMessage[];
+  effects: MyModsEffect[];
+  calls: string[];
+  interactions(): number;
+}
+
+/**
+ * `consented` skips the launch modal (the consent rules have their own tests in
+ * `test/unit/install/myModsPresenter.test.ts`); `answer` is what every modal
+ * question resolves to, so `cleanUninstall` reaches its effect.
+ */
+function myModsHarness(over: Partial<MyModsPresenterDeps> = {}): MyModsHarness {
+  const posted: MyModsHostMessage[] = [];
+  const effects: MyModsEffect[] = [];
+  const calls: string[] = [];
+  const list = async () => [subscription()];
+  const deps: MyModsPresenterDeps = {
+    subs: {
+      list,
+      listWithRecovery: async () => ({ mods: await list() }),
+      enable: async (repo) => void calls.push(`enable ${repo}`),
+      disable: async (repo) => void calls.push(`disable ${repo}`),
+      unsubscribe: async (repo) => void calls.push(`unsubscribe ${repo}`),
+      update: async (target, _token, onProgress) => {
+        calls.push(`update ${target.repo}`);
+        onProgress({ phase: "download", label: "Downloading…", pct: 42 });
+      },
+    } as MyModsPresenterDeps["subs"],
+    ledger: {
+      ensureUninstallBat: () => {
+        calls.push("ensureUninstallBat");
+        return "D:\\mods\\uninstall-all.bat";
+      },
+      uninstallBatPath: () => "D:\\mods\\uninstall-all.bat",
+    },
+    market: {
+      discover: async () => [],
+      // A newer tag than the subscription's, so `update` runs rather than
+      // short-circuiting on "already up to date".
+      loadProduct: async () => product({ repo: REPO, release_tag: "v2.0.0" }),
+    },
+    launcher: {
+      isRunning: () => false,
+      launch: (key) => void calls.push(`launch ${key}`),
+      stop: (key) => void calls.push(`stop ${key}`),
+      setOnChange: () => {},
+    },
+    roots: {
+      savedGames: () => "C:\\Saved Games\\DCS",
+      gameInstall: () => "C:\\DCS World",
+      dataDir: () => "D:\\mods",
+    },
+    auth: {
+      getToken: async () => undefined,
+      onDidChangeSessions: () => ({ dispose: () => {} }),
+      currentSession: async () => undefined,
+      signIn: async () => undefined,
+    },
+    consent: { granted: () => true, remember: async () => {} },
+    dataDir: () => "D:\\mods",
+    post: (msg) => posted.push(msg),
+    effect: (e) => effects.push(e),
+    confirm: async () => "Run uninstall-all.bat",
+    ...over,
+  };
+  return {
+    presenter: new MyModsPresenter(deps),
+    posted,
+    effects,
+    calls,
+    interactions: () => posted.length + effects.length + calls.length,
+  };
+}
+
 /** The message types a run of the presenter actually pushed, de-duplicated. */
 function typesOf(posted: { type: string }[]): string[] {
   return [...new Set(posted.map((m) => m.type))].sort();
@@ -250,11 +352,27 @@ const MARKETPLACE_DRIVES: Record<MarketplaceInbound["type"], Drive<MarketplaceIn
   uninstall: { send: { type: "uninstall", repo: "Owner/Repo" } },
 };
 
+const MYMODS_DRIVES: Record<MyModsInbound["type"], Drive<MyModsInbound>> = {
+  refresh: { send: { type: "refresh" } },
+  enable: { send: { type: "enable", repo: REPO } },
+  disable: { send: { type: "disable", repo: REPO } },
+  uninstall: { send: { type: "uninstall", repo: REPO } },
+  update: { send: { type: "update", repo: REPO } },
+  launch: { send: { type: "launch", repo: REPO, id: "gui" } },
+  stop: { send: { type: "stop", repo: REPO, id: "gui" } },
+  openDir: { send: { type: "openDir", repo: REPO } },
+  openExternal: { send: { type: "openExternal", url: `https://github.com/${REPO}` } },
+  openDocs: { send: { type: "openDocs", page: "sandbox" } },
+  createShortcut: { send: { type: "createShortcut" } },
+  revealBat: { send: { type: "revealBat" } },
+  cleanUninstall: { send: { type: "cleanUninstall" } },
+};
+
 // ── The contract table itself ────────────────────────────────────────────────
 
 describe("the declared webview contract", () => {
-  it("names a protocol for both presenter-backed panels and nothing else", () => {
-    expect(Object.keys(WEBVIEW_PROTOCOLS).sort()).toEqual(["console", "marketplace"]);
+  it("names a protocol for every presenter-backed panel and nothing else", () => {
+    expect(Object.keys(WEBVIEW_PROTOCOLS).sort()).toEqual(["console", "marketplace", "mymods"]);
   });
 
   it("declares a non-empty message set in both directions", () => {
@@ -430,5 +548,44 @@ describe("marketplace — host -> webview", () => {
     await session({}, (p) => p.handle({ type: "uninstall", repo: "Owner/Repo" }));
 
     expect(typesOf(posted)).toEqual([...MARKETPLACE_PROTOCOL.toWebview].sort());
+  });
+});
+
+// ── My Mods: the host half ───────────────────────────────────────────────────
+
+describe("mymods — webview -> host", () => {
+  it("drives exactly the declared message set", () => {
+    expect(Object.keys(MYMODS_DRIVES).sort()).toEqual([...MYMODS_PROTOCOL.toHost].sort());
+  });
+
+  it.each(MYMODS_PROTOCOL.toHost)("%s is acted on", async (type) => {
+    const plan = MYMODS_DRIVES[type as MyModsInbound["type"]];
+    const h = myModsHarness();
+    for (const m of plan.before ?? []) await h.presenter.handle(m);
+    const before = h.interactions();
+    await h.presenter.handle(plan.send);
+    expect(h.interactions()).toBeGreaterThan(before);
+  });
+
+  it("does nothing at all for a message type the contract does not declare", async () => {
+    const h = myModsHarness();
+    await h.presenter.handle({ type: "notInTheContract" } as unknown as MyModsInbound);
+    expect(h.interactions()).toBe(0);
+  });
+});
+
+describe("mymods — host -> webview", () => {
+  it("produces exactly the declared message set", async () => {
+    const h = myModsHarness();
+    // `init` — every redraw; `busy` — any lifecycle action latching the row.
+    await h.presenter.handle({ type: "enable", repo: REPO });
+    // `progress` — only the update path, and only for a tag newer than the
+    // installed one (an up-to-date mod is deliberately not re-downloaded).
+    await h.presenter.handle({ type: "update", repo: REPO });
+    // `entrypoint` — the Launch/Stop pair.
+    await h.presenter.handle({ type: "launch", repo: REPO, id: "gui" });
+    await h.presenter.handle({ type: "stop", repo: REPO, id: "gui" });
+
+    expect(typesOf(h.posted)).toEqual([...MYMODS_PROTOCOL.toWebview].sort());
   });
 });

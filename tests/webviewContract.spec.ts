@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 import {
   CONSOLE_PROTOCOL,
   MARKETPLACE_PROTOCOL,
+  MYMODS_PROTOCOL,
   type WebviewProtocol,
 } from "../src/core/app/webviewContract";
 import { expect, test } from "./fixtures";
@@ -38,8 +39,8 @@ import { hostSend, openPreview, sentMessages } from "./helpers";
 //
 // ## Scope
 //
-// Console and marketplace only — the two panels with a presenter. The other
-// nine webviews are named in `UNCOVERED_WEBVIEWS` and checked against the
+// Console, marketplace and My Mods only — the panels with a presenter. The
+// other eight webviews are named in `UNCOVERED_WEBVIEWS` and checked against the
 // preview directory by test/integration/webview/webviewContract.test.ts, so
 // the uncovered set is data rather than an omission.
 
@@ -237,6 +238,68 @@ test.describe("marketplace ↔ MarketplacePresenter message contract", () => {
     assertContract(MARKETPLACE_PROTOCOL, sent, consumed);
     expect(errors).toEqual([]);
     expect(errors2).toEqual([]);
+  });
+});
+
+test.describe("mymods ↔ MyModsPresenter message contract", () => {
+  const SRS = "Owner/DCS-SRS";
+  const row = (page: Page, repo: string) =>
+    page.locator(`[data-testid="mod-row"][data-repo="${repo}"]`);
+
+  test("the webview posts and consumes exactly the declared message set", async ({ page }) => {
+    const sent = new Set<string>();
+    const consumed = new Map<string, boolean>();
+
+    await armProbe(page);
+    // Boot: media/mymods.js posts `refresh` from the bottom of its IIFE and the
+    // fixture answers `init`.
+    const errors = await openPreview(page, "mymods");
+    await expect(page.getByTestId("mod-row")).toHaveCount(5);
+
+    // The four panel-level buttons.
+    await page.getByTestId("shortcut-btn").click();
+    await page.getByTestId("reveal-bat-btn").click();
+    await page.getByTestId("clean-uninstall-btn").click();
+    await page.getByTestId("refresh-btn").click();
+
+    // An entrypoint's Launch/Stop pair — the fixture scripts the `entrypoint`
+    // replies, so the row's running state is what proves consumption.
+    const ep = page.locator(`[data-ep="${SRS}::srs-server"]`);
+    await ep.getByTestId("launch-btn").click();
+    await expect(ep.getByTestId("stop-btn")).toBeVisible();
+    await ep.getByTestId("stop-btn").click();
+    await expect(ep.getByTestId("launch-btn")).toBeVisible();
+
+    // The script-execution notice's "Learn more" is the page's only `openDocs`.
+    await page
+      .locator(`[data-testid="mod-manifest"][data-repo="${SRS}"]`)
+      .getByTestId("mod-sanitize-learn-more")
+      .click();
+
+    // Per-mod buttons, each on a DIFFERENT mod: Update and Uninstall latch their
+    // row busy, and a latched row's buttons are disabled — driving them all
+    // through one mod would be driving a page the user could not.
+    await row(page, "Owner/Plain-Mod").getByTestId("open-dir-btn").click();
+    await row(page, "Owner/Plain-Mod").getByTestId("github-btn").click();
+    await row(page, "Owner/Risky-Mod").getByTestId("update-btn").click();
+    await expect(row(page, "Owner/Risky-Mod").getByTestId("update-btn")).toBeDisabled();
+    await row(page, "Owner/Inert-Mod").getByTestId("uninstall-btn").click();
+
+    // The enable switch, both ways — the checkbox is visually replaced by the
+    // slider, so it is driven through the label as a user does.
+    await row(page, "Owner/Disabled-Mod").locator(".switch").click();
+    await row(page, "Owner/Plain-Mod").locator(".switch").click();
+
+    // `busy` and `progress` have no fixture reply behind them (the real host
+    // sends them off a lifecycle action), so they are pushed directly.
+    await hostSend(page, { type: "busy", repo: SRS, busy: true });
+    await expect(row(page, SRS).getByTestId("update-btn")).toBeDisabled();
+    await hostSend(page, { type: "progress", repo: SRS, label: "Downloading v2…" });
+    await expect(row(page, SRS).getByTestId("mod-progress")).toHaveText("Downloading v2…");
+
+    await collect(page, sent, consumed);
+    assertContract(MYMODS_PROTOCOL, sent, consumed);
+    expect(errors).toEqual([]);
   });
 });
 
