@@ -106,6 +106,19 @@ an existing port with adapter-specific details.
 - `detectService.ts` — DCS Saved Games + game-install detection (ordering, dedup,
   validity). Injected: registry, filesystem, env. Rules are pure in
   `core/domain/dcsDetect.ts`.
+- Presenters — `marketplacePresenter.ts` (the pilot), `myModsPresenter.ts` (#40),
+  `consolePresenter.ts` (board card 08). Each holds a panel's decision logic as a
+  `vscode`-free object that returns state, outgoing messages and described effects;
+  the panel shell owns the `WebviewPanel` and performs the effects. Presenters are
+  covered by the unit layer; the shells they leave behind stay under integration.
+- `webviewContract.ts` — the declared webview ↔ host message contract (board
+  card 09): typed unions per covered panel plus a runtime table whose
+  `toHost`/`toWebview` arrays are derived from the unions by mapped types, so
+  table and union cannot drift without a compile error. Covered panels are those
+  with presenters (console, marketplace today); the rest are named in
+  `UNCOVERED_WEBVIEWS` and a census test holds that list to exactly the
+  `previews/` directory. Extending coverage to a panel means extracting its
+  presenter first — an inferred contract is worse than none.
 - Skills bundled-vs-installed status (frontmatter parse, version compare, modified
   detection) is a pure domain module `core/domain/skillsStatus.ts`, driven by the
   `skills/library.ts` adapter (`SkillsLibrary`) — no dedicated app service.

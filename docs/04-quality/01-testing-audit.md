@@ -462,6 +462,17 @@ new toolchain in the one part of the workspace whose failure mode is a crashed
 flight sim, and it deserves its own change rather than a corner of this one.
 **Tracked as #66.**
 
+> **Since investigated** (board card `05-choose-lua-coverage-route`): the hook
+> was built and works — the prototype is in-tree under
+> `bridge-core/tests/support/`, inert unless `LUA_COV_DIR` is set — but the
+> fifth gate was deliberately **not** added. The perturbation everyone expected
+> turned out not to exist (the instrumented failures were a `debug.getinfo`
+> frame-depth artefact, not a slowdown), and the real limit is reach: only a
+> handful of the suite's Lua states carry `debug` at all, so the measurable
+> number is ~12% and mostly cannot move. Gating that would be the same
+> false-green shape this addendum documents below. See
+> `decisions/07-no-lua-coverage-gate-yet.md` and the evidence on #66.
+
 ## Addendum: what the clean-code round changed about the gates themselves
 
 The pyramid work above was audited afterwards by ten parallel principle-specific

@@ -85,7 +85,14 @@ added to a panel but not to its preview page is never executed, never measured,
 and the gate still reports green —
 `test/integration/webview/previewAssets.test.ts` exists to assert that list.
 
-And nothing measures Lua. About 2,050 in-sim lines are loaded and executed by the
+And nothing gates Lua. About 2,050 in-sim lines are loaded and executed by the
 Rust tests, but `cargo llvm-cov` measures Rust regions and a Lua chunk is opaque
-to it. That gap is stated honestly in the
-[testing audit](../04-quality/01-testing-audit.md) and tracked as issue #66.
+to it. A working line-coverage prototype now lives in-tree
+(`bridge/crates/bridge-core/tests/support/lua_cov.rs` + `coverage.lua`, inert
+unless `LUA_COV_DIR` is set), and the investigation on board card
+`05-choose-lua-coverage-route` disproved the blocker #66 was framed around —
+but deliberately added **no fifth gate**: only a handful of the suite's Lua
+states are instrumentable at all (the shim needs `debug`, which mlua's
+`Lua::new()` omits), so a threshold over the resulting ~12% would gate a number
+that mostly cannot move. The open decision is recorded in
+[decision 07](../../decisions/07-no-lua-coverage-gate-yet.md) and on issue #66.
