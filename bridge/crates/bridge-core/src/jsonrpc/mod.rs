@@ -126,6 +126,11 @@ pub fn register(sub: &mut Sub) -> LuaResult<()> {
 /// The teardown surface: releasing a Lua state before DCS destroys it, and the
 /// sentinel that notices when DCS destroys one without being asked. Split out of
 /// [`register`] only to keep that function readable.
+///
+/// Registered on BOTH bridges because the whole `jsonrpc` namespace is shared,
+/// and **inert on the GUI bridge by design**: the `GameGUI` state is created once
+/// at DCS start and lives until the process exits, so it has no teardown to run
+/// and the hook parks no sentinel. Only `dcs_studio_mission` uses these.
 fn register_teardown(sub: &mut Sub, router_ty: &str) -> LuaResult<()> {
     sub.func(
         "teardown",

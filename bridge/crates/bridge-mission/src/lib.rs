@@ -189,14 +189,20 @@ mod tests {
         super::dcs_studio_mission(&lua).expect("luaopen_dcs_studio_mission");
 
         assert!(
-            lua.load(
-                "return HANDLER ~= nil and __DCS_STUDIO_MISSION_GUARD ~= nil \
-                 and type(__DCS_STUDIO_MISSION_TEARDOWN) == 'function'"
-            )
-            .eval::<bool>()
-            .expect("the init registered its teardown"),
-            "the mission-end handler, the sentinel and the named entry point \
-             must all be in place — each covers a different way a mission ends"
+            lua.load("return HANDLER ~= nil and __DCS_STUDIO_MISSION_GUARD ~= nil")
+                .eval::<bool>()
+                .expect("the init registered its teardown"),
+            "the mission-end handler and the sentinel must both be in place — \
+             they cover the two different ways a mission ends"
+        );
+        // The release is reachable ONLY through those two. A global would let any
+        // mission script or co-installed mod end the bridge for the rest of the
+        // mission with one call, and nothing legitimate needs one.
+        assert!(
+            lua.load("return __DCS_STUDIO_MISSION_TEARDOWN == nil")
+                .eval::<bool>()
+                .expect("check for a teardown global"),
+            "the teardown must not be published as a global"
         );
 
         // An unrelated event must not tear the bridge down mid-mission: this
@@ -209,6 +215,33 @@ mod tests {
             .eval()
             .expect("the pump still runs");
         assert!(pumped > 0.0, "the pump reschedules itself mid-mission");
+
+        // A raise inside the handler body must not escape: DCS calls this from
+        // its C++ event dispatcher, for every event the mission raises, and
+        // there is nothing above it to catch a Lua error.
+        lua.load(
+            r#"
+            HANDLER:onEvent(setmetatable({}, {
+              __index = function() error("this event cannot be read", 0) end,
+            }))
+            "#,
+        )
+        .exec()
+        .expect("a raising event must be contained, not propagated");
+        let reported: String = lua
+            .load("return table.concat(REPORTED, ' | ')")
+            .eval()
+            .expect("reported");
+        assert!(
+            reported.contains("teardown handler error"),
+            "the contained raise must still be reported: {reported}"
+        );
+        assert!(
+            lua.load("return SCHEDULED.fn() ~= nil")
+                .eval::<bool>()
+                .expect("the pump still runs"),
+            "a bad event must not have torn the bridge down"
+        );
 
         // Mission end: the release runs while the state is still usable.
         lua.load("HANDLER:onEvent({ id = world.event.S_EVENT_MISSION_END })")
