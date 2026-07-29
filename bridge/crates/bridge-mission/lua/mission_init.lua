@@ -81,20 +81,22 @@ local function teardown(why)
     return
   end
   torn_down = true
-  local ok, released, failed = pcall(bridge.jsonrpc.teardown, router, why)
+  local ok, released_or_err, failed = pcall(bridge.jsonrpc.teardown, router, why)
   if ok then
     report_info(string.format("mission bridge released %s Lua handler(s) and failed %s queued request(s) on %s",
-      tostring(released), tostring(failed), tostring(why)))
+      tostring(released_or_err), tostring(failed), tostring(why)))
   else
     -- Never fatal: this runs on DCS's way out of the mission, and a raise here
     -- would land in the engine's event dispatcher with nothing to catch it.
-    report_error("mission bridge teardown failed: " .. tostring(released))
+    report_error("mission bridge teardown failed: " .. tostring(released_or_err))
   end
 end
 
--- Reachable by name so the GUI bridge (or an operator, over RPC) can trigger
--- the release explicitly, and so a re-require into the same state finds it.
-__DCS_STUDIO_MISSION_TEARDOWN = teardown
+-- Deliberately NOT published as a global. Anything in this state — another mod,
+-- a mission script — could call it, and one call silently ends the bridge for
+-- the rest of the mission. There is no caller that needs it: the event handler
+-- below is the trigger, the sentinel is the backstop, and an operator who
+-- genuinely has to force a release can eval `bridge.jsonrpc.teardown(...)`.
 
 -- Primary trigger: the mission's own end-of-life event, which fires while the
 -- state is fully functional. pcall'd and feature-checked because `world` is
@@ -102,10 +104,19 @@ __DCS_STUDIO_MISSION_TEARDOWN = teardown
 -- bridge must still load there.
 if type(world) == "table" and type(world.addEventHandler) == "function" then
   local handler_ok, handler_err = pcall(world.addEventHandler, {
+    -- Protected like the timer pump below, and for the same reason: this body
+    -- is called from DCS's C++ event dispatcher for EVERY event the mission
+    -- raises, and a raise escaping into it has nothing to catch it. Nothing
+    -- here can raise today; the pcall is what keeps that true after an edit.
     onEvent = function(_, event)
-      local ended = world.event and world.event.S_EVENT_MISSION_END
-      if event and ended and event.id == ended then
-        teardown("mission end")
+      local ok, err = pcall(function()
+        local ended = world.event and world.event.S_EVENT_MISSION_END
+        if event and ended and event.id == ended then
+          teardown("mission end")
+        end
+      end)
+      if not ok then
+        report_error("mission bridge teardown handler error: " .. tostring(err))
       end
     end,
   })
