@@ -5,9 +5,9 @@ on:
   # is human-blocked, so a push straight to main with no PR is still possible
   # — #68 §4's failure mode (commits pushed, issues closed, zero check-runs)
   # stays structurally possible until that lands. Every branch now gets a
-  # check-run of some kind; see the `full-checks` condition below for which
-  # jobs run on which branch, so WIP feature pushes don't pay for a Windows
-  # runner and two Rust builds on every commit.
+  # check-run of some kind; see the `if:` conditions on the jobs below for
+  # which jobs run on which branch, so WIP feature pushes don't pay for a
+  # Windows runner and two Rust builds on every commit.
   push:
     branches: ["**"]
   pull_request:
@@ -45,14 +45,21 @@ jobs:
   # static and unit run for every trigger this workflow has: push to any
   # branch, pull_request, workflow_dispatch and workflow_call (release.yml) —
   # the reduced set that gives a WIP feature push a check-run at all.
-  # integration, e2e, rust and windows additionally require
-  # `event_name != 'push' || ref is main/develop`, i.e. they run for anything
-  # that ISN'T a plain branch push (pull_request, workflow_dispatch, and the
-  # workflow_call a release tag triggers all pass through unconditionally),
-  # and for a push only when it lands directly on main or develop. That keeps
-  # the full six-job matrix — Windows runner and two Rust builds included —
-  # off work-in-progress feature-branch pushes, while still gating every PR,
-  # every commit reaching main/develop, and every release.
+  # integration, e2e, rust and windows additionally require this to be true:
+  # `event_name != 'push' || ref is main/develop/a version tag`. pull_request
+  # and workflow_dispatch pass through unconditionally. workflow_call does
+  # NOT get its own event_name here: a reusable workflow inherits the calling
+  # workflow's `github` context, so a release run — release.yml triggers on
+  # `push: tags: ["v*"]` — is seen from inside this file as `event_name ==
+  # 'push'` with `ref == 'refs/tags/vX.Y.Z'`. That is why the condition also
+  # matches `startsWith(github.ref, 'refs/tags/')`: without it, every release
+  # push would satisfy `event_name == 'push'` and fail the main/develop check,
+  # skipping these four jobs — and a skipped job satisfies `needs`, so
+  # release.yml's gate would go green having run neither the coverage-gated
+  # layers nor the Windows build it exists to protect. With the tag branch
+  # included, the full six-job matrix — Windows runner and two Rust builds
+  # included — is off only for plain WIP feature-branch pushes, and still runs
+  # for every PR, every commit reaching main/develop, and every release.
   static:
     name: Compile + lint
     runs-on: ubuntu-latest
@@ -95,7 +102,7 @@ jobs:
 
   integration:
     name: Integration layer (100% gate)
-    if: github.event_name != 'push' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -114,7 +121,7 @@ jobs:
 
   e2e:
     name: E2E layer (100% gate)
-    if: github.event_name != 'push' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -146,7 +153,7 @@ jobs:
 
   rust:
     name: Rust bridge tests (100% gate)
-    if: github.event_name != 'push' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -195,7 +202,7 @@ jobs:
 
   windows:
     name: Shipping target (Windows)
-    if: github.event_name != 'push' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
