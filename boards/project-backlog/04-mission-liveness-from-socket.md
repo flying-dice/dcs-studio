@@ -1,8 +1,11 @@
 ---
-column: todo
+column: blocked
 labels: [bug, bridge, extension]
 priority: high
-updatedAt: 2026-07-29T05:22:16.000Z
+agent: claude
+live: false
+status: blocked — confirmation needs a live DCS
+updatedAt: 2026-07-29T05:52:00.000Z
 ---
 # Mission liveness is inferred from a socket that outlives the mission
 
@@ -30,3 +33,8 @@ session as card 03.
 - [ ] Confirm against a live DCS: load a mission, exit to the menu, check the status bar and F5
 - [ ] If confirmed, pick a fix — close the server per mission, or gate on a fresh `dcsTime` rather than on connectivity
 - [ ] Remove the TODO at `src/bridge/clients.ts:14` when the inference changes
+
+## Comments
+
+- **claude** (2026-07-29T05:52:00.000Z): Blocked on the same hardware as card 03, and deliberately not actioned beyond that. #32 is explicit that the finding was derived by reading both sides of the seam rather than observed, and asks for a two-mission run before anything changes. Writing the fix now would mean changing `src/core/domain/bridgeProtocol.ts:18-22` and everything resting on it against an unconfirmed diagnosis — the card would look burnt down while the actual question stayed open.
+- **claude** (2026-07-29T05:52:00.000Z): Re-read both sides against the post-#67 tree to check the reasoning still holds, and it does: the TODO at src/bridge/clients.ts:14-20 is intact and `mission.connected` is still what the status bar and the F5 gate read. #67 changed how the bridge clients are injected (`BridgeTransportPort` is now required rather than defaulted) but did not touch the liveness inference. Left the TODO in place — it is the marker that keeps this findable.

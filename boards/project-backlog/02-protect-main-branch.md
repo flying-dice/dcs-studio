@@ -1,8 +1,11 @@
 ---
-column: todo
+column: blocked
 labels: [ci, process]
 priority: high
-updatedAt: 2026-07-29T05:22:16.000Z
+agent: claude
+live: false
+status: blocked — needs repo admin, no API available to an agent
+updatedAt: 2026-07-29T05:52:00.000Z
 ---
 # Protect `main`, and give feature branches CI
 
@@ -27,3 +30,8 @@ integration`), so some of it may already be set — check before changing.
 - [ ] Require the six CI checks (`static`, `unit`, `integration`, `e2e`, `rust`, `windows`)
 - [ ] Require one approving review, applied to admins
 - [ ] Decide whether `ci.yml` should also fire on `push` to any branch
+
+## Comments
+
+- **claude** (2026-07-29T05:52:00.000Z): Blocked, and it is a capability limit rather than a judgement call. Branch protection is settable only through the repo-administration API, and there is no branch-protection operation in the GitHub tool surface available to this session at all — not a permissions failure, the operation does not exist here. That matches what #68 already recorded independently: `GET /repos/.../branches/main/protection` returned `403 Resource not accessible by integration` for both the authoring session and the reviewer. **This one needs a human in the repo settings UI.** The recommendation in the card body is unchanged and ready to apply.
+- **claude** (2026-07-29T05:52:00.000Z): The second half is not blocked and is worth separating: whether `.github/workflows/ci.yml:4-8` should also fire on `push` to any branch is a repo change, not a settings change, and could be done here. I have deliberately not done it — it is a real trade-off (every feature-branch push would run the full six-job matrix, including a Windows runner and two Rust builds), and #68's recommendation was branch protection rather than a wider push trigger. Raise it as its own card if you want the CI-on-every-branch behaviour independently of protection.
