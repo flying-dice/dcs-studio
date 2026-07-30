@@ -5,8 +5,8 @@
 -- via the version guard, so a fresh state heals itself on the next call. Pure
 -- Lua 5.1 with no require. Entry points return JSON strings because
 -- dostring_in can only pass strings between states.
-if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
-  local RT = { version = 2, refs = {}, nrefs = 0 }
+if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 3) then
+  local RT = { version = 3, refs = {}, nrefs = 0 }
   local MAX_TABLE_CHILDREN = 1000 -- cap children returned for one expand
   -- Ref ceiling so a huge drill-down can't pin unbounded memory. Raised for v2:
   -- functions now consume refs too (single table slots each), and a budget-
@@ -211,10 +211,148 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 2) then
     return 0
   end
 
+  -- ── DCS control-API calls that kill the PROCESS (card 19) ──
+  --
+  -- `DCS.getMissionLoaded()` with a mission loaded takes DCS down on the spot:
+  -- C0000005 ACCESS_VIOLATION in `lua_pushnil` under a runaway
+  -- `ED_lua_copyindex` recursion (598 and 997 frames deep in the two dumps) —
+  -- ED's cross-state value copy walking a graph it never terminates on. That is
+  -- a hardware fault in a C recursion, not a Lua error: **no pcall can contain
+  -- it** (measured live — `pcall(DCS.getMissionLoaded)` dies exactly like the
+  -- bare call), and it is equally fatal through `net.dostring_in`, so the
+  -- server/config/export environments offer no safe delegate either. The only
+  -- defence is not to make the call. Verified on DCS 2.9.27.25340.
+  --
+  -- Measured SAFE in the same live session, with a mission loaded, and
+  -- deliberately NOT listed here: getPause, getModelTime, getRealTime,
+  -- getMissionName, getMissionFilename, getMissionDescription, getMissionTheatre,
+  -- getMissionOptions, getMissionResult, getMissionPersistenceData,
+  -- getCurrentMission, getUserOptions, getSimulatorMode, getAvailableCoalitions,
+  -- getPlayerUnit, getPlayerUnitType, getPlayerCoalition, getUnitProperty,
+  -- isMultiplayer, isServer. (The card's title also blamed `getPause`; it is
+  -- innocent — it answers `true`/`false` at the menu and in a mission.)
+  local FATAL_DCS = {
+    getMissionLoaded = "DCS.getMissionLoaded() is blocked by DCS Studio: called with a mission loaded it "
+      .. "crashes DCS 2.9.27 instantly (ACCESS_VIOLATION inside ED's cross-state value copy), and no pcall "
+      .. "can contain it. Use DCS.getMissionName() (empty string at the main menu) or DCS.getModelTime() instead.",
+  }
+
+  -- The `DCS` table as user chunks see it: a snapshot of the real one with the
+  -- fatal getters replaced by a stub that raises a truthful Lua error. The
+  -- snapshot (rather than a bare `__index` proxy) keeps `for k, v in pairs(DCS)`
+  -- working, since Lua 5.1's pairs ignores metamethods; `__index` still covers
+  -- keys DCS adds later, and `__newindex` sends writes of NEW keys to the real
+  -- table. Writes to keys present in the snapshot stay sandbox-local — which is
+  -- the harmless direction, and it means a user cannot un-block a fatal getter
+  -- for the rest of the process by assigning over it.
+  --
+  -- Not a sandbox: `getmetatable(DCS).__index` (or `debug.getregistry`, or
+  -- `rawset` on `getfenv()`) reaches the real table, and that is fine. The
+  -- threat model is the ACCIDENT — the console user, the extension, or a script
+  -- typing a documented-looking getter — not an author determined to call
+  -- something that crashes their own sim.
+  local function guarded_dcs(real)
+    local proxy = {}
+    for k, v in pairs(real) do
+      proxy[k] = v
+    end
+    for name, why in pairs(FATAL_DCS) do
+      proxy[name] = function()
+        error(why, 0)
+      end
+    end
+    return setmetatable(proxy, { __index = real, __newindex = real })
+  end
+
+  -- The guarded view of the live `DCS`, memoized against its identity so a state
+  -- that swaps the table gets a fresh snapshot. Anything that is not a table
+  -- (nil in a mission state, or a value a chunk assigned) passes through
+  -- untouched — there is nothing to guard and pretending otherwise would lie
+  -- about what the name holds.
+  local guard_for, guard_dcs
+
+  local function guarded_dcs_for(real)
+    if type(real) ~= "table" then
+      return real
+    end
+    if guard_for ~= real then
+      guard_for = real
+      guard_dcs = guarded_dcs(real)
+    end
+    return guard_dcs
+  end
+
+  -- Environment for chunks the user asked us to run (console eval, inspect,
+  -- export, the `eval` RPC). Everything but `DCS` reads and writes straight
+  -- through to `_G`, so global side effects behave exactly as before the guard
+  -- existed. nil in a state without a `DCS` table (every mission state), where
+  -- the chunk runs in the plain global environment as it always did.
+  --
+  -- Built FRESH per chunk, and that is load-bearing (review of card 19). The
+  -- table itself must stay empty — `__newindex` forwards, so nothing is ever
+  -- stored in it — because a `DCS` key PRESENT in a shared env would be
+  -- overwritten in place by a chunk's bare `DCS = x` without `__newindex` ever
+  -- firing, and that overwrite would then disable the guard for every later
+  -- eval/inspect/export/watch in the state. One accidental console line must not
+  -- be able to do that. So `DCS` is served from `__index` (always the current
+  -- guarded view) and a bare `DCS = x` is captured here instead: **sandbox-local
+  -- to the one chunk that wrote it** — that chunk reads back its own value, the
+  -- state's real `DCS` is left intact, and the next chunk gets the guard back.
+  -- The expensive part (the ~230-key snapshot) is memoized above; this is one
+  -- empty table and one metatable per chunk.
+  local function chunk_env()
+    if type(DCS) ~= "table" then
+      return nil
+    end
+    local dcs_local, dcs_written = nil, false
+    return setmetatable({}, {
+      __index = function(_, k)
+        if k == "DCS" then
+          if dcs_written then
+            return dcs_local
+          end
+          return guarded_dcs_for(_G.DCS)
+        end
+        return _G[k]
+      end,
+      __newindex = function(_, k, v)
+        if k == "DCS" then
+          dcs_local, dcs_written = v, true
+          return
+        end
+        _G[k] = v
+      end,
+    })
+  end
+
+  -- The globals table a user-facing evaluation should resolve names through:
+  -- the guarded environment where there is a `DCS` table, else plain `_G`. The
+  -- debug engine's watch/hover/console evaluations chain their frame-locals
+  -- proxy onto this rather than onto `_G` directly. A fresh table per call (see
+  -- chunk_env), so callers hold ONE for the whole evaluation rather than asking
+  -- per name lookup.
+  function RT.global_env()
+    return chunk_env() or _G
+  end
+
+  -- Run `f` (a freshly loaded chunk) in that environment. Exposed because
+  -- gui_methods.lua's `eval` and the debug engine load their own chunks, and
+  -- neither may be the one hole in the guard.
+  function RT.guard_chunk(f)
+    local env = chunk_env()
+    if env then
+      setfenv(f, env)
+    end
+    return f
+  end
+
   local function compile(code)
     local f, err = loadstring("return " .. code)
     if not f then
       f, err = loadstring(code)
+    end
+    if f then
+      return RT.guard_chunk(f), nil
     end
     return f, err
   end

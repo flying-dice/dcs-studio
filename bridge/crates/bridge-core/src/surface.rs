@@ -335,7 +335,7 @@ mod tests {
         lua.load(
             r#"
             local RT = assert(__DCS_STUDIO_RT, "RT installed")
-            assert(RT.version == 2, "RT is v2")
+            assert(RT.version == 3, "RT is v3")
 
             G = {
               tbl = { a = 1, b = 2 },
@@ -451,6 +451,112 @@ mod tests {
         )
         .exec()
         .expect("rt degraded (no debug) suite");
+    }
+
+    /// The card-19 guard: user chunks run against a `DCS` whose
+    /// process-killing getters raise a truthful Lua error, and everything else
+    /// about the environment behaves as if they ran against `_G`.
+    ///
+    /// `DCS.getMissionLoaded()` cannot be tested for real anywhere — the live
+    /// sim answers it with an `ACCESS_VIOLATION` that no pcall can contain, which
+    /// is the entire reason for the guard. What IS testable off-sim is that the
+    /// bridge never reaches the real function, and a stub that records the call
+    /// proves exactly that.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn rt_guards_the_process_killing_dcs_getters() {
+        let lua = Lua::new();
+        lua.load(crate::RT_SOURCE).exec().expect("install RT");
+        lua.load(
+            r#"
+            local RT = assert(__DCS_STUDIO_RT, "RT installed")
+
+            REACHED = false
+            DCS = {
+              -- Stands in for the live getter. If the guard ever lets a call
+              -- through, this flips instead of killing a process.
+              getMissionLoaded = function() REACHED = true return "boom" end,
+              getMissionName = function() return "Free flight" end,
+              getModelTime = function() return 42 end,
+              answer = 7,
+            }
+
+            -- The blocked getter fails with a message naming it, the crash, and
+            -- what to use instead — and never runs.
+            local r = RT.eval_json("DCS.getMissionLoaded()")
+            assert(r:find('"ok":false'), "blocked: " .. r)
+            assert(r:find("getMissionLoaded"), "error names the getter: " .. r)
+            assert(r:find("crashes DCS"), "error says why: " .. r)
+            assert(r:find("getMissionName"), "error offers an alternative: " .. r)
+            assert(REACHED == false, "the real function was never called")
+
+            -- Dynamic spelling is blocked too: the guard is the table the chunk
+            -- sees, not a scan of its source.
+            local dyn = RT.eval_json('DCS["get" .. "MissionLoaded"]()')
+            assert(dyn:find('"ok":false') and dyn:find("getMissionLoaded"), "dynamic: " .. dyn)
+            assert(REACHED == false, "still never called")
+
+            -- Everything else passes straight through, by call and by field.
+            assert(RT.eval_json("DCS.getModelTime()"):find('"result":42'), "safe getter passes")
+            assert(RT.eval_json("DCS.answer"):find('"result":7'), "fields pass")
+
+            -- pairs(DCS) still enumerates the API (Lua 5.1 pairs ignores
+            -- __index, so the guard snapshots rather than proxies).
+            local keys = RT.eval_json('local n = 0 for k in pairs(DCS) do n = n + 1 end return n')
+            assert(keys:find('"result":4'), "pairs sees all four keys: " .. keys)
+
+            -- Globals still read and WRITE through: a chunk's side effects have
+            -- to land in _G exactly as they did before the guard existed.
+            RT.eval_json("SET_BY_CHUNK = 'yes'")
+            assert(SET_BY_CHUNK == "yes", "global write reached _G")
+            assert(RT.eval_json("return SET_BY_CHUNK"):find("yes"), "global read from _G")
+
+            -- A key added to DCS after the snapshot is still visible (__index),
+            -- and a NEW key written by a chunk reaches the real table.
+            DCS.later = "added"
+            assert(RT.eval_json("return DCS.later"):find("added"), "late key visible")
+            RT.eval_json("DCS.brand_new = 'written'")
+            assert(DCS.brand_new == "written", "new key reached the real DCS")
+
+            -- The other two chunk entry points share the same compile, so they
+            -- are guarded by construction; assert it rather than assume it.
+            assert(RT.inspect_json("DCS.getMissionLoaded()"):find('"ok":false'), "inspect guarded")
+            assert(RT.export_json("DCS.getMissionLoaded()", nil):find("^ERR:"), "export guarded")
+            assert(REACHED == false, "no entry point reached the real function")
+
+            -- A bare `DCS = x` inside a chunk is sandbox-local: that chunk reads
+            -- back its own value, the state's real DCS is untouched, and — the
+            -- regression this covers — the NEXT chunk gets the guard back. A
+            -- shared env table would have let this one line disable the guard
+            -- for every later eval in the state.
+            local own = RT.eval_json("DCS = nil return type(DCS)")
+            assert(own:find('"result":"nil"'), "the writing chunk sees its own value: " .. own)
+            assert(type(DCS) == "table" and DCS.getMissionName ~= nil, "the real DCS survived")
+            assert(RT.eval_json("return type(DCS)"):find('"result":"table"'), "next chunk sees DCS")
+            local after = RT.eval_json("DCS.getMissionLoaded()")
+            assert(after:find('"ok":false') and after:find("getMissionLoaded"), "still guarded: " .. after)
+            assert(REACHED == false, "and still never called")
+
+            -- Same for overwriting it with a table of the user's own: local to
+            -- that chunk only.
+            RT.eval_json("DCS = { getMissionLoaded = function() return 'mine' end }")
+            assert(RT.eval_json("DCS.getMissionLoaded()"):find('"ok":false'), "no carry-over")
+
+            -- Swapping the DCS table re-guards against the new one.
+            DCS = { getMissionLoaded = function() REACHED = true end, fresh = 1 }
+            assert(RT.eval_json("return DCS.fresh"):find('"result":1'), "new table visible")
+            assert(RT.eval_json("DCS.getMissionLoaded()"):find('"ok":false'), "new table guarded")
+            assert(REACHED == false, "and still never called")
+
+            -- A state with no DCS table at all (every mission state) keeps the
+            -- plain global environment.
+            DCS = nil
+            assert(RT.global_env() == _G, "no DCS: plain _G")
+            assert(RT.eval_json("return 1 + 1"):find('"result":2'), "chunks still run")
+            "#,
+        )
+        .exec()
+        .expect("rt fatal-getter guard suite");
     }
 
     /// A binding that cannot be registered must abort its whole sub-namespace,

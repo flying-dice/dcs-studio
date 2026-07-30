@@ -23,6 +23,12 @@ return function(router, deps)
     description = "Liveness check. dcs_time is mission model time (0 at the main menu).",
   })
 
+  -- Appended to the description of every method that runs Lua the user wrote,
+  -- in this bridge only: the guard lives in the GUI state's `DCS` table, and the
+  -- mission bridge (which shares SHARED_META) has no DCS table to guard.
+  local GUARD_NOTE = " DCS.getMissionLoaded() is refused with an explanatory error:"
+    .. " calling it with a mission loaded crashes DCS 2.9.27 outright."
+
   -- Run arbitrary Lua in the GUI/hooks environment and return the result.
   -- localhost-only by the server bind; gives full DCS.*/net.* control
   -- (e.g. start missions, DCS.exitProcess()) for the editor and dev tooling.
@@ -33,9 +39,13 @@ return function(router, deps)
     if not f then
       error("loadstring: " .. tostring(lerr))
     end
-    return RT.with_print_capture(bridge.console.print, f)
+    -- RT.guard_chunk swaps in the environment whose `DCS` refuses the calls that
+    -- kill the process outright (card 19 — DCS.getMissionLoaded). The console's
+    -- repl_* paths get it inside RT's own compile; this handler loads its chunk
+    -- itself, so it has to ask.
+    return RT.with_print_capture(bridge.console.print, RT.guard_chunk(f))
   end, {
-    description = "Run Lua in the GUI/hooks state (DCS.*, net.*) and return the result. print() output streams into console_read. For the mission state use the mission bridge on port 25570.",
+    description = "Run Lua in the GUI/hooks state (DCS.*, net.*) and return the result. print() output streams into console_read. For the mission state use the mission bridge on port 25570." .. GUARD_NOTE,
     params = { { name = "code", type = "string", required = true, description = "Lua source to run." } },
   })
 
@@ -137,7 +147,7 @@ return function(router, deps)
     local envname = repl_env(params)
     return rt_call_decoded(envname, string.format("eval_json(%q)", (params and params.code) or ""))
   end, {
-    description = "Console eval in the chosen environment: { ok, result?, err? }.",
+    description = "Console eval in the chosen environment: { ok, result?, err? }." .. GUARD_NOTE,
     params = { { name = "code", type = "string", required = true }, REPL_ENV_META },
   })
 
@@ -145,7 +155,7 @@ return function(router, deps)
     local envname = repl_env(params)
     return rt_call_decoded(envname, string.format("inspect_json(%q)", (params and params.expr) or ""))
   end, {
-    description = SHARED_META.repl_inspect.description,
+    description = SHARED_META.repl_inspect.description .. GUARD_NOTE,
     params = { { name = "expr", type = "string", required = true }, REPL_ENV_META },
   })
 
@@ -200,7 +210,7 @@ return function(router, deps)
     end
     return finalize_export(rt_call(envname, callexpr))
   end, {
-    description = SHARED_META.repl_export.description,
+    description = SHARED_META.repl_export.description .. GUARD_NOTE,
     params = {
       { name = "expr", type = "string", required = false },
       { name = "ref", type = "number", required = false },
