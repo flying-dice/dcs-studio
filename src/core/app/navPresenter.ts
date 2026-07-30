@@ -26,7 +26,9 @@ import type { NavHostMessage, NavWebviewMessage } from "./webviewContract";
 //    different rows: "Create a Mod" reads as "Edit Project", and Publish Mod
 //    appears at all;
 //  - the `run` guard. A row names its own command, so the host executes a string
-//    that came out of a document — an empty one is dropped rather than run.
+//    that came out of a document — an empty one is dropped rather than run;
+//  - the BOOT REPLAY. `ready` is answered with all three pushes, which is the
+//    only reason the status has to be readable on demand here (card 29).
 //
 // What stays in the shell (`src/nav/navView.ts`) is the view, the rendered
 // document with its logo, the three subscriptions and their teardown, the
@@ -44,6 +46,16 @@ export type NavEffect =
 export type NavInbound = NavWebviewMessage;
 
 export interface NavPresenterDeps {
+  /**
+   * Both bridges' status as it is NOW.
+   *
+   * The other two facts below are already pull-shaped, but the status only ever
+   * arrived by subscription — which is exactly why a `ready` handshake could not
+   * answer with it before. Read on demand rather than remembered here: the router
+   * holds the authoritative pair, and a copy in the presenter would be a second
+   * one to keep in step.
+   */
+  status: () => DualBridgeStatus;
   /** Installed skills with a newer bundled version, for the badge. */
   updatesAvailable: () => Promise<readonly SkillInfo[]>;
   /** Whether the workspace has a `dcs-studio.toml`. */
@@ -105,13 +117,37 @@ export class NavPresenter {
     this.deps.post({ type: "manifest", hasManifest: await this.deps.manifestExists() });
   }
 
-  handle(msg: NavInbound): void {
+  /**
+   * The sidebar's opening state, answering its boot handshake.
+   *
+   * All three pushes are also made unprompted when the view resolves; this is the
+   * SECOND chance, and the reason there is one is that both of those pushes are
+   * async and can land before `media/nav.js` has attached its listener. A lost
+   * push leaves the sidebar complete but stale, and the stale state that matters
+   * is Publish Mod staying hidden in a workspace that is already a mod project —
+   * so the user's route to publishing is absent from the sidebar until a
+   * workspace-folder change or the file watcher sees `dcs-studio.toml` appear,
+   * neither of which happens when an existing project is simply opened (card 29).
+   *
+   * Both pushes are idempotent, so answering is cheap and safe however many times
+   * the editor re-resolves the view.
+   */
+  async ready(): Promise<void> {
+    this.pushStatus(this.deps.status());
+    await this.pushSkills();
+    await this.pushManifest();
+  }
+
+  async handle(msg: NavInbound): Promise<void> {
     switch (msg.type) {
       case "run":
         // The command id comes out of the document, so it may be absent from a
         // stale or crafted post. Running "" would raise an editor error dialog
         // for something no user asked for.
         if (msg.command) this.deps.effect({ kind: "runCommand", command: msg.command });
+        break;
+      case "ready":
+        await this.ready();
         break;
     }
   }

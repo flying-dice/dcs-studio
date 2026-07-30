@@ -661,21 +661,26 @@ export interface NavStatus {
 /**
  * A message `media/nav.js` posts.
  *
- * One, from one delegated wiring over every row: each row carries its own
- * `data-command` and the click handler posts it (`media/nav.js:140-147`). So the
- * sidebar is the one webview whose entire host-bound half is a single message
- * carrying a command id the DOM chose — which is why the presenter guards it.
+ * `run` comes from one delegated wiring over every row: each row carries its own
+ * `data-command` and the click handler posts it (`media/nav.js`). So the command
+ * id is one the DOM chose — which is why the presenter guards it.
+ *
+ * `ready` is the boot handshake, and the sidebar was the last webview without
+ * one (card 29). It carries nothing: what it asks for is the whole opening
+ * state, and the presenter already knows all three parts.
  */
-export type NavWebviewMessage = { type: "run"; command?: string };
+export type NavWebviewMessage = { type: "run"; command?: string } | { type: "ready" };
 
 /**
  * A message `NavPresenter` pushes to the sidebar.
  *
- * All three are UNPROMPTED, and the sidebar is the only webview where that is
- * not a hazard: `media/nav.js` renders its rows and its "Bridge offline" footer
- * from static data at load and posts no handshake, so a push lost to the load
- * race leaves a page that is complete and merely stale, not blank (cf. cards
- * 22-24). See card 29 for the one place that staleness is user-visible.
+ * All three are pushed unprompted when the view resolves AND in answer to the
+ * webview's `ready` — the shape cards 22-24 converged on, with the unprompted
+ * push kept as the first chance rather than replaced. The sidebar needed it
+ * least and still needed it: it renders its rows and its "Bridge offline" footer
+ * from static data at load, so a lost push leaves a page that is complete but
+ * stale — and two of those stale states are user-visible, the worst being
+ * Publish Mod staying hidden in a workspace that IS a mod project (card 29).
  */
 export type NavHostMessage =
   | { type: "status"; status: NavStatus }
@@ -686,6 +691,7 @@ export type NavHostMessage =
 
 const NAV_TO_HOST_KEYS: { readonly [K in NavWebviewMessage["type"]]: true } = {
   run: true,
+  ready: true,
 };
 
 const NAV_TO_WEBVIEW_KEYS: { readonly [K in NavHostMessage["type"]]: true } = {

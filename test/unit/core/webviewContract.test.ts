@@ -743,6 +743,7 @@ function navHarness(over: Partial<NavPresenterDeps> = {}): NavHarness {
   const posted: NavHostMessage[] = [];
   const effects: NavEffect[] = [];
   const deps: NavPresenterDeps = {
+    status: () => STATUS,
     updatesAvailable: async () => [EDITED_SKILL],
     manifestExists: async () => true,
     post: (msg) => posted.push(msg),
@@ -885,6 +886,7 @@ const SKILLS_DRIVES: Record<SkillsInbound["type"], Drive<SkillsInbound>> = {
 
 const NAV_DRIVES: Record<NavInbound["type"], Drive<NavInbound>> = {
   run: { send: { type: "run", command: "dcs.marketplace.open" } },
+  ready: { send: { type: "ready" } },
 };
 
 // ── The contract table itself ────────────────────────────────────────────────
@@ -1411,32 +1413,31 @@ describe("nav — webview -> host", () => {
     expect(Object.keys(NAV_DRIVES).sort()).toEqual([...NAV_PROTOCOL.toHost].sort());
   });
 
-  it.each(NAV_PROTOCOL.toHost)("%s is acted on", (type) => {
+  it.each(NAV_PROTOCOL.toHost)("%s is acted on", async (type) => {
     const plan = NAV_DRIVES[type as NavInbound["type"]];
     const h = navHarness();
-    for (const m of plan.before ?? []) h.presenter.handle(m);
+    for (const m of plan.before ?? []) await h.presenter.handle(m);
     const before = h.interactions();
-    h.presenter.handle(plan.send);
+    await h.presenter.handle(plan.send);
     expect(h.interactions()).toBeGreaterThan(before);
   });
 
-  it("does nothing at all for a message type the contract does not declare", () => {
+  it("does nothing at all for a message type the contract does not declare", async () => {
     const h = navHarness();
-    h.presenter.handle({ type: "notInTheContract" } as unknown as NavInbound);
+    await h.presenter.handle({ type: "notInTheContract" } as unknown as NavInbound);
     expect(h.interactions()).toBe(0);
   });
 });
 
 describe("nav — host -> webview", () => {
   it("produces exactly the declared message set", async () => {
-    // Three pushes from three independent signals, and none of them is a reply:
-    // the sidebar's webview posts nothing but `run`, so every message here is the
-    // host volunteering. One presenter is enough — unlike publish, the sidebar has
-    // no state it is CONSTRUCTED in that it cannot also reach.
+    // Three pushes from three independent signals — and, since card 29, all three
+    // are ALSO the answer to the webview's `ready`, which is what makes driving
+    // the handshake enough to produce the whole set. One presenter is enough:
+    // unlike publish, the sidebar has no state it is CONSTRUCTED in that it
+    // cannot also reach.
     const h = navHarness();
-    h.presenter.pushStatus(STATUS);
-    await h.presenter.pushSkills();
-    await h.presenter.pushManifest();
+    await h.presenter.handle({ type: "ready" });
 
     expect(typesOf(h.posted)).toEqual([...NAV_PROTOCOL.toWebview].sort());
   });

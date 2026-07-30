@@ -8,6 +8,35 @@ test.describe("nav preview", () => {
     await expect(page.locator('[data-testid="nav-item"][data-id="publish"]')).toHaveClass(/hidden/);
   });
 
+  test("posts a boot handshake so the opening state can be re-asked for", async ({ page }) => {
+    // The sidebar renders complete from static data, which is why it had no
+    // handshake at all — but the host's opening pushes are async and can land
+    // before this listener exists, and nothing else re-pushes (card 29).
+    await openPreview(page, "nav");
+    await expectSent(page, { type: "ready" });
+  });
+
+  test("the handshake answer reveals Publish Mod when the opening push was lost", async ({
+    page,
+  }) => {
+    // The whole user-visible cost of the lost race: in a workspace that IS a mod
+    // project, the route to publishing is simply absent from the sidebar. This
+    // fixture answers ONLY the handshake, so the row's appearance is the
+    // handshake's doing and nothing else's.
+    const errors = await openPreview(page, "nav", { query: { scenario: "modproject" } });
+
+    await expect(page.locator('[data-testid="nav-item"][data-id="publish"]')).not.toHaveClass(
+      /hidden/,
+    );
+    await expect(page.locator('[data-testid="nav-item"][data-id="create"] .label')).toHaveText(
+      "Edit Project",
+    );
+    await expect(
+      page.locator('[data-testid="nav-item"][data-id="skills"]').getByTestId("nav-badge"),
+    ).toHaveText("1");
+    expect(errors).toEqual([]);
+  });
+
   test("clicking a row posts {type: run, command} and activates the row", async ({ page }) => {
     await openPreview(page, "nav");
     const browse = page.locator('[data-testid="nav-item"][data-id="browse"]');

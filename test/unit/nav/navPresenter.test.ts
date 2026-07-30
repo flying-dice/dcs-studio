@@ -43,6 +43,7 @@ function harness(over: Partial<NavPresenterDeps> = {}): Harness {
   const posted: NavHostMessage[] = [];
   const effects: NavEffect[] = [];
   const deps: NavPresenterDeps = {
+    status: () => status(),
     updatesAvailable: async () => [],
     manifestExists: async () => false,
     post: (msg) => posted.push(msg),
@@ -161,6 +162,57 @@ describe("NavPresenter — whether the workspace is already a mod project", () =
     exists = true;
     await h.presenter.pushManifest();
     expect(h.posted.map((m) => (m as { hasManifest: boolean }).hasManifest)).toEqual([false, true]);
+  });
+});
+
+describe("NavPresenter — the boot handshake", () => {
+  it("answers ready with all three facts, so a lost opening push is recoverable", async () => {
+    // The sidebar is COMPLETE at load, so a lost push leaves it stale rather than
+    // blank — but the stale state that matters hides Publish Mod in a workspace
+    // that is already a mod project, and nothing else re-pushes until a
+    // workspace-folder change or the watcher sees dcs-studio.toml appear (card 29).
+    const h = harness({
+      status: () => status({ mission: { connected: true, dcsTime: 213 } } as never),
+      updatesAvailable: async () => [outdated("a")],
+      manifestExists: async () => true,
+    });
+    await h.presenter.handle({ type: "ready" });
+    expect(h.posted).toEqual([
+      { type: "status", status: { connected: true, dcsTime: 213 } },
+      { type: "skills", updates: 1 },
+      { type: "manifest", hasManifest: true },
+    ]);
+  });
+
+  it("reads the status as it is now rather than replaying the one it opened with", async () => {
+    // The other two facts were already pull-shaped; the status only ever arrived
+    // by subscription, which is why the handshake could not answer with it before.
+    let live = status();
+    const h = harness({ status: () => live });
+    await h.presenter.handle({ type: "ready" });
+    live = status({ gui: { connected: true, dcsTime: 0 } } as never);
+    await h.presenter.handle({ type: "ready" });
+    expect(h.posted.filter((m) => m.type === "status")).toEqual([
+      { type: "status", status: { connected: false, dcsTime: null } },
+      { type: "status", status: { connected: true, dcsTime: 0 } },
+    ]);
+  });
+
+  it("answers every ready, because the editor may re-resolve the view", async () => {
+    // All three pushes are idempotent, so answering again is cheap — and a view
+    // the editor dropped and re-resolved posts a second `ready` from a fresh
+    // document that has been told nothing.
+    const h = harness();
+    await h.presenter.handle({ type: "ready" });
+    await h.presenter.handle({ type: "ready" });
+    expect(h.posted.map((m) => m.type)).toEqual([
+      "status",
+      "skills",
+      "manifest",
+      "status",
+      "skills",
+      "manifest",
+    ]);
   });
 });
 

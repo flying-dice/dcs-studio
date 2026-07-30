@@ -38,6 +38,8 @@ function statusOf(over: Partial<DualBridgeStatus> = {}): DualBridgeStatus {
   } as DualBridgeStatus;
 }
 
+/** What the router currently reports, as `BridgeRouterPort.current` would. */
+let routerStatus: DualBridgeStatus = statusOf();
 let statusListener: ((s: DualBridgeStatus) => void) | undefined;
 let skillsListener: (() => void) | undefined;
 let statusDisposed = false;
@@ -46,6 +48,11 @@ let updates: string[] = [];
 
 function clients(): BridgeClients {
   return {
+    // What the presenter reads to answer the webview's boot `ready` — the
+    // router's authoritative pair rather than a copy the view kept.
+    get current() {
+      return routerStatus;
+    },
     onStatus: (fn: (s: DualBridgeStatus) => void) => {
       statusListener = fn;
       return {
@@ -90,6 +97,7 @@ beforeEach(() => {
   statusDisposed = false;
   skillsDisposed = false;
   updates = [];
+  routerStatus = statusOf();
   DocsPanel.current = undefined;
 });
 
@@ -133,6 +141,29 @@ describe("NavViewProvider", () => {
     const view = await resolve();
     await view.webview.receive({ type: "run", command: "dcs.marketplace.open" });
     expect(state.executedCommands).toEqual([{ command: "dcs.marketplace.open", args: [] }]);
+  });
+
+  it("answers the webview's boot handshake with the whole opening state", async () => {
+    // The shell half of card 29: the two pushes `resolveWebviewView` kicks off are
+    // async and can land before media/nav.js is listening, and the sidebar has no
+    // other trigger — so a workspace that IS a mod project would keep Publish Mod
+    // hidden until a folder change. The status in the answer comes from the
+    // router's `current`, which is the only reason the presenter can be asked for
+    // it outside a subscription callback.
+    resetVscode({ workspaceFolders: ["C:\\proj"], existingPaths: ["C:\\proj\\dcs-studio.toml"] });
+    updates = ["dcs-studio"];
+    routerStatus = statusOf({ mission: { connected: true, dcsTime: 213 } } as never);
+    const view = await resolve();
+    view.webview.posted.length = 0; // ignore the unprompted first chance
+
+    await view.webview.receive({ type: "ready" });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(view.webview.postedOfType("status").at(-1)).toMatchObject({
+      status: { connected: true, dcsTime: 213 },
+    });
+    expect(view.webview.postedOfType("skills").at(-1)).toMatchObject({ updates: 1 });
+    expect(view.webview.postedOfType("manifest").at(-1)).toMatchObject({ hasManifest: true });
   });
 
   it("delivers the bridge status the router reports to the presenter", async () => {

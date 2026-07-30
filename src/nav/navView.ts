@@ -49,6 +49,10 @@ export class NavViewProvider implements vscode.WebviewViewProvider {
     // view they draw, so a push after disposal must be a no-op, and the shell
     // holds the only reference that can tell.
     this.presenter = new NavPresenter({
+      // The router holds the authoritative pair; the presenter reads it when the
+      // webview's `ready` asks for the opening state, rather than keeping a copy
+      // fed by the subscription below.
+      status: () => this.clients.current,
       updatesAvailable: () => this.skills.updatesAvailable(),
       manifestExists: () => this.manifestExists(),
       post: (msg) => void this.view?.webview.postMessage(msg),
@@ -65,12 +69,16 @@ export class NavViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.options = webviewCapabilities(this.extensionUri);
     webviewView.webview.html = this.html(webviewView.webview);
 
-    webviewView.webview.onDidReceiveMessage((m: NavInbound) => this.presenter.handle(m));
+    webviewView.webview.onDidReceiveMessage((m: NavInbound) => void this.presenter.handle(m));
 
     this.statusSub?.dispose();
     this.statusSub = this.clients.onStatus((s: DualBridgeStatus) => this.presenter.pushStatus(s));
 
     // Badge the Agent Skills row when an installed skill file is outdated.
+    //
+    // This push and `watchManifest`'s are the FIRST chance, not the only one:
+    // both are async and can resolve before `media/nav.js` has attached its
+    // listener, so the webview's `ready` is answered with all three (card 29).
     this.skillsSub?.dispose();
     this.skillsSub = this.skills.onDidChange(() => void this.presenter.pushSkills());
     void this.presenter.pushSkills();
