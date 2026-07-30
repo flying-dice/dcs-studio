@@ -10,11 +10,15 @@
 
   const { esc } = dcsUi;
 
+  /** Whether the manual actually has this page. The ids live here, in
+   *  docs-content.js, so the host cannot make this judgement for us. */
+  const known = (id) => pages.some((p) => p.id === id);
+
   const state = vscode.getState() || {};
   let current =
-    window.__INITIAL_PAGE__ && pages.some((p) => p.id === window.__INITIAL_PAGE__)
+    window.__INITIAL_PAGE__ && known(window.__INITIAL_PAGE__)
       ? window.__INITIAL_PAGE__
-      : pages.some((p) => p.id === state.page)
+      : known(state.page)
         ? state.page
         : pages[0]?.id;
 
@@ -49,7 +53,14 @@
   }
 
   function render(id) {
-    const page = pages.find((p) => p.id === id) || pages[0];
+    // An id the manual does not have renders NOTHING: the reader keeps their
+    // place and their persisted page. This used to fall back to `pages[0]`,
+    // which threw an open reader back to the front of the manual — and
+    // overwrote their stored page with it — whenever a `goto` named a page that
+    // had been renamed away, while the same deep link into a CLOSED panel was
+    // simply ignored (card 28). The boot path validates for the same reason;
+    // this is the one rule, in one place.
+    const page = pages.find((p) => p.id === id);
     if (!page) return;
     current = page.id;
     vscode.setState({ page: current });

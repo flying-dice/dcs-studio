@@ -70,14 +70,14 @@
       return;
     }
     if (m.type === "browse") {
-      // `valid` is part of the declared payload (the host probes the role's
-      // witness path), so the fixture sends it even though media/setup.js
-      // currently renders nothing off it — see card 14's journal.
+      // `valid` is the host's probe of the role's witness path, and the panel
+      // now renders the pill off it (card 23). The install pick is deliberately
+      // invalid so browsing shows the warning variant too.
       window.__host.receive({
         type: "browsed",
         which: m.which,
         path: BROWSED[m.which],
-        valid: true,
+        valid: m.which !== "install",
       });
       return;
     }

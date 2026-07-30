@@ -89,6 +89,10 @@ export class ManifestPresenter {
    * the form would clobber the field the user is typing in.
    *
    * Per instance, which is the point — see the note at the top of this file.
+   *
+   * Dropped as soon as the document diverges from it (`onDocumentChanged`): it
+   * describes the document's CURRENT text or nothing, and a watermark outliving
+   * that suppresses changes it has no claim on.
    */
   private lastWritten: string | null = null;
 
@@ -133,6 +137,15 @@ export class ManifestPresenter {
   onDocumentChanged(): void {
     const rawText = this.deps.text();
     if (rawText === this.lastWritten) return;
+    // The document has genuinely diverged from our last write, so that write can
+    // never legitimately come back as an echo again — and a watermark kept past
+    // this point swallows a LATER change that merely reproduces the same text.
+    // The reachable case is undo-then-redo: the form writes T1, the user undoes
+    // to T0 (pushed, here), then redoes back to T1 — which used to match the
+    // stale watermark and be suppressed, leaving the form showing T0 while the
+    // document held T1, until the next form edit quietly undid the redo
+    // (card 27). Cleared BEFORE the push, so the push is the last word.
+    this.lastWritten = null;
     this.deps.post({ type: "external", rawText });
   }
 

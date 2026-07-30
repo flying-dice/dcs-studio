@@ -194,4 +194,12 @@
       ftime.textContent = "";
     }
   });
+
+  // The boot handshake, posted last — after the listener above exists, so the
+  // answer cannot be missed. The rows and the footer are already drawn from the
+  // static data above, so this asks for the three facts only the host has: the
+  // bridge status, the skills badge and whether this workspace is a mod project.
+  // Without it, the host's unprompted opening pushes were the ONLY chance, and a
+  // lost one left Publish Mod hidden in a project that could be published.
+  vscode.postMessage({ type: "ready" });
 })();

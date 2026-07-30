@@ -1,5 +1,5 @@
 import { expect, test } from "./fixtures";
-import { expectSent, hostSend, openPreview } from "./helpers";
+import { expectSent, hostSend, openPreview, webviewState } from "./helpers";
 
 test.describe("docs preview", () => {
   test("renders the TOC from __DOCS__ and the first page by default", async ({ page }) => {
@@ -92,12 +92,29 @@ test.describe("docs preview", () => {
     await expect(page.getByTestId("page-title")).toHaveText("Welcome to DCS Studio");
   });
 
-  test("an unknown goto target falls back to the first page rather than blanking", async ({
-    page,
-  }) => {
-    await openPreview(page, "docs");
+  test("an unknown goto target leaves the reader where they were", async ({ page }) => {
+    // A Learn-more button whose data-docs names a page that has since been
+    // renamed used to throw an open reader back to Overview mid-read — and
+    // overwrite their persisted page with it, so reopening the panel did not
+    // recover it. The same deep link into a CLOSED panel was already ignored;
+    // this is the half that disagreed (card 28).
+    const errors = await openPreview(page, "docs");
+    await page.locator('[data-testid="toc-link"][data-page="publishing"]').click();
+    await expect(page.getByTestId("page-title")).toHaveText("Publishing Your Mod");
+
     await hostSend(page, { type: "goto", page: "no-such-page" });
-    await expect(page.getByTestId("page-title")).toHaveText("Welcome to DCS Studio");
+
+    await expect(page.getByTestId("page-title")).toHaveText("Publishing Your Mod");
+    // Nothing was persisted either, so a reopened panel still resumes here.
+    expect(await webviewState(page)).toEqual({ page: "publishing" });
+    expect(errors).toEqual([]);
+  });
+
+  test("a goto with no page at all is ignored", async ({ page }) => {
+    await openPreview(page, "docs");
+    await page.locator('[data-testid="toc-link"][data-page="publishing"]').click();
+    await hostSend(page, { type: "goto" });
+    await expect(page.getByTestId("page-title")).toHaveText("Publishing Your Mod");
   });
 
   test("the last page offers Previous but no Next", async ({ page }) => {

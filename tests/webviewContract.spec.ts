@@ -635,10 +635,12 @@ test.describe("nav ↔ NavPresenter message contract", () => {
     const consumed = new Map<string, boolean>();
 
     await armProbe(page);
-    // Boot: media/nav.js posts nothing and is sent nothing. It renders its rows
-    // and its "Bridge offline" footer from static data in the script itself, so
-    // unlike every panel the sidebar is COMPLETE at load — which is why all three
-    // host pushes below are the host volunteering rather than answering.
+    // Boot: media/nav.js renders its rows and its "Bridge offline" footer from
+    // static data in the script itself, so unlike every panel the sidebar is
+    // COMPLETE at load — and it still posts `ready`, which the fixture answers
+    // with all three pushes, because the host's unprompted opening pushes can be
+    // lost to the load race and nothing else re-pushes them (card 29). The pushes
+    // driven below are the host volunteering the same three facts later.
     const errors = await openPreview(page, "nav");
     await expect(page.getByTestId("nav-item")).toHaveCount(10);
     await expect(page.getByTestId("status-label")).toHaveText("Bridge offline");

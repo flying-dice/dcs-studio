@@ -367,7 +367,17 @@
     const m = e.data;
     if (!m) return;
     if (m.type === "external") {
-      // The document changed outside the form (raw-text edit, undo, revert).
+      // The document changed outside the form (raw-text edit, undo, revert,
+      // `git checkout`, another extension's formatter). The document is the
+      // source of truth, so a keystroke still inside its 200ms debounce window
+      // is DROPPED rather than flushed: the model that timer would emit from is
+      // the one being replaced right here, so letting it fire would rewrite the
+      // just-changed file in the form's own canonical formatting — an edit
+      // attributed to a keystroke the user has already lost (card 26).
+      if (editTimer) {
+        clearTimeout(editTimer);
+        editTimer = null;
+      }
       state.model = parseToml(m.rawText);
       render();
     } else if (m.type === "roots") {

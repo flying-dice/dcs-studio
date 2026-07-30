@@ -13,9 +13,25 @@
     sevenZipDetected: "",
     savedCandidates: [],
     installCandidates: [],
+    // The host's verdict for each hand-browsed path, keyed by role. A browsed
+    // path is by definition not among the detected candidates, so this is the
+    // only thing that can put a pill under it.
+    browsed: {},
   };
 
   const { esc } = dcsUi;
+
+  // What `browsed.valid` means for the two roles that show a validity line, in
+  // the same words the detected candidates use — the host probed the role's
+  // witness path (`Config`, `bin\DCS.exe`) and only ships the boolean.
+  const BROWSED_DETAIL = {
+    saved: { ok: "has Config", warn: "no Config folder — run DCS once, or pick another folder" },
+    install: { ok: "has bin\\DCS.exe", warn: "no bin\\DCS.exe in this folder" },
+  };
+
+  function validityLine(which, valid, detail) {
+    return `<div class="status-line ${valid ? "ok" : "warn"}" data-testid="validity-line" data-which="${which}">${valid ? "✔" : "⚠"} ${esc(detail)}</div>`;
+  }
 
   function candList(items, current, which) {
     if (!items.length) {
@@ -35,13 +51,20 @@
 
   function validity(which, p) {
     if (!p) return "";
-    // We only know detected candidates' validity; for a typed/current path show a
-    // neutral hint (the host validates browsed picks).
     const list = which === "install" ? state.installCandidates : state.savedCandidates;
     const hit = list.find((c) => c.path.toLowerCase() === p.toLowerCase());
-    if (hit) {
-      return `<div class="status-line ${hit.valid ? "ok" : "warn"}" data-testid="validity-line" data-which="${which}">${hit.valid ? `✔ ${hit.detail}` : `⚠ ${hit.detail}`}</div>`;
+    // A detected candidate carries its own detail text, so prefer it.
+    if (hit) return validityLine(which, hit.valid, hit.detail);
+    // Otherwise the path may be one the user browsed to, which the host probed
+    // for us: a wrong hand-picked folder gets the same red pill the same folder
+    // would get had it been detected.
+    const probed = state.browsed[which];
+    if (probed && probed.path.toLowerCase() === p.toLowerCase()) {
+      const words = BROWSED_DETAIL[which];
+      return validityLine(which, probed.valid, probed.valid ? words.ok : words.warn);
     }
+    // A path typed by hand has never been probed — claiming anything about it
+    // would be a guess, so say nothing.
     return "";
   }
 
@@ -165,10 +188,14 @@
       state.installCandidates = m.installCandidates || [];
       render();
     } else if (m.type === "browsed") {
+      // `which` is always a real role: the host resolves a role-less browse to
+      // userdata and echoes what it resolved, so this half needs no fallback of
+      // its own — the two used to disagree (this one meant "install").
+      state.browsed[m.which] = { path: m.path, valid: m.valid };
       if (m.which === "saved") state.savedGames = m.path;
       else if (m.which === "data") state.dataDir = m.path;
       else if (m.which === "sevenzip") state.sevenZip = m.path;
-      else state.gameInstall = m.path;
+      else if (m.which === "install") state.gameInstall = m.path;
       render();
     } else if (m.type === "saved") {
       const note = document.getElementById("savedNote");

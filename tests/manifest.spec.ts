@@ -245,6 +245,45 @@ test.describe("manifest preview", () => {
     await expect(page.getByTestId("bundle-row")).toHaveCount(0);
     await expect(page.getByTestId("symlink-row")).toHaveCount(0);
   });
+
+  test("an external change cancels the keystroke still inside the debounce window", async ({
+    page,
+  }) => {
+    // The document is the source of truth: an undo, a revert or a `git checkout`
+    // that lands within 200ms of a keystroke discards that keystroke. The timer
+    // it armed used to fire anyway and post an `edit` built from the NEW model,
+    // rewriting the just-changed file in the form's canonical formatting —
+    // attributed to an edit the user had already lost (card 26).
+    await openPreview(page, "manifest");
+    // Both halves in one evaluate, so the race is pinned rather than timed.
+    await page.evaluate(() => {
+      const input = document.querySelector('[data-sec="project"][data-key="name"]') as any;
+      input.value = "typed-then-lost";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      (window as any).__host.receive({
+        type: "external",
+        rawText: '[project]\nname = "from-outside"\nversion = "9.9.9"\n',
+      });
+    });
+
+    await expect(page.locator('[data-sec="project"][data-key="name"]')).toHaveValue("from-outside");
+    // Well past the 200ms debounce: nothing may have been posted at all.
+    await page.waitForTimeout(500);
+    expect((await sentMessages(page)).filter((m) => m.type === "edit")).toEqual([]);
+  });
+
+  test("a keystroke after an external change still reaches the document", async ({ page }) => {
+    // The cancellation must be of the pending timer only — the form stays live.
+    await openPreview(page, "manifest");
+    await hostSend(page, {
+      type: "external",
+      rawText: '[project]\nname = "from-outside"\nversion = "9.9.9"\n',
+    });
+    await page.locator('[data-sec="project"][data-key="name"]').fill("typed-after");
+    await expectSent(page, { type: "edit" });
+    const edits = (await sentMessages(page)).filter((m) => m.type === "edit");
+    expect(edits[edits.length - 1].text).toContain('name = "typed-after"');
+  });
 });
 
 test.describe("manifest — validation and host pushes", () => {

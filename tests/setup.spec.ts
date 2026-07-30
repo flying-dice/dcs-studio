@@ -66,14 +66,79 @@ test.describe("setup preview", () => {
     );
   });
 
-  test("a hand-picked path outside the detected set gets no validity claim", async ({ page }) => {
-    // The panel only knows the validity of what it detected; asserting "✔" for
-    // an arbitrary browsed folder would be a lie, so it says nothing.
+  test("browsing to a folder that is not a DCS userdata dir shows the warning pill", async ({
+    page,
+  }) => {
+    // The host probed `Config` for us and said no. Rendering nothing here (which
+    // is what the panel used to do, because the pill was derived only from the
+    // detected candidates a browsed path is never in) let a user save a wrong
+    // folder with no warning at all — while the same folder, auto-detected, went
+    // red.
     await openPreview(page, "setup");
-    await hostSend(page, { type: "browsed", which: "saved", path: "Z:\\somewhere\\else" });
+    await hostSend(page, {
+      type: "browsed",
+      which: "saved",
+      path: "Z:\\somewhere\\else",
+      valid: false,
+    });
 
     await expect(page.getByTestId("saved-input")).toHaveValue("Z:\\somewhere\\else");
+    const line = page.locator('[data-testid="validity-line"][data-which="saved"]');
+    await expect(line).toHaveClass(/warn/);
+    await expect(line).toContainText("no Config folder");
+  });
+
+  test("browsing to a real install folder shows the ok pill for that role", async ({ page }) => {
+    await openPreview(page, "setup");
+    await hostSend(page, {
+      type: "browsed",
+      which: "install",
+      path: "Z:\\Games\\DCS World",
+      valid: true,
+    });
+
+    const line = page.locator('[data-testid="validity-line"][data-which="install"]');
+    await expect(line).toHaveClass(/ok/);
+    await expect(line).toHaveText("✔ has bin\\DCS.exe");
+  });
+
+  test("a path typed by hand, which nothing has probed, still gets no validity claim", async ({
+    page,
+  }) => {
+    // The verdict belongs to a path, not to a field: only what the host actually
+    // probed (or detected) may be judged.
+    await openPreview(page, "setup", { query: { scenario: "none" } });
+    // One role has a verdict for a DIFFERENT path; the other has none at all.
+    await hostSend(page, { type: "browsed", which: "saved", path: "Z:\\browsed", valid: false });
+    await expect(page.locator('[data-testid="validity-line"][data-which="saved"]')).toHaveClass(
+      /warn/,
+    );
+
+    await page.getByTestId("saved-input").fill("Z:\\typed\\by\\hand");
+    await page.getByTestId("install-input").fill("Z:\\typed\\install");
+    // Any push re-renders the form; this one is for an unrelated field.
+    await hostSend(page, { type: "browsed", which: "data", path: "Z:\\mods", valid: true });
+
+    await expect(page.getByTestId("saved-input")).toHaveValue("Z:\\typed\\by\\hand");
     await expect(page.locator('[data-testid="validity-line"][data-which="saved"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="validity-line"][data-which="install"]')).toHaveCount(
+      0,
+    );
+  });
+
+  test("ignores a browsed answer whose role it does not recognise", async ({ page }) => {
+    // The host resolves a role-less browse itself and echoes the role it chose,
+    // so every answer that arrives names a real field. Anything else is a stale
+    // or crafted post and must not land in a box by falling through.
+    const errors = await openPreview(page, "setup");
+    const saved = await page.getByTestId("saved-input").inputValue();
+    await hostSend(page, { type: "browsed", which: "mystery", path: "Z:\\nowhere", valid: true });
+
+    await expect(page.getByTestId("saved-input")).toHaveValue(saved);
+    await expect(page.getByTestId("install-input")).toHaveValue("");
+    await expect(page.getByTestId("data-input")).toHaveValue("");
+    await expect(page.getByTestId("sevenzip-input")).toHaveValue("");
+    expect(errors).toEqual([]);
   });
 
   test("nothing detected tells the user to browse instead of showing an empty list", async ({
