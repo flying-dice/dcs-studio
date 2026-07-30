@@ -3,11 +3,11 @@
 -- DLL image and its statics persist for the process lifetime). Receives the
 -- bridge exports table as the chunk argument.
 --
--- Starts (or reuses) this DLL's JSON-RPC server on 127.0.0.1:25570, registers
--- the mission-state method set, and schedules the queue pump on model time —
--- the DCS-gRPC pattern. While a debug_run holds the sim thread, the debug
--- engine serves the editor itself (D.pump → process_queue), so the scheduled
--- pump being blocked is fine.
+-- Binds a JSON-RPC server on 127.0.0.1:25570 that THIS state owns, registers the
+-- mission-state method set, and schedules the queue pump on model time — the
+-- DCS-gRPC pattern. While a debug_run holds the sim thread, the debug engine
+-- serves the editor itself (DBG.pump → server:process_rpc), so the scheduled pump
+-- being blocked is fine.
 --
 -- It also registers the TEARDOWN that releases this state before DCS destroys
 -- it — see the "Teardown" section below and issue #69.
@@ -31,16 +31,25 @@ local function report_info(msg)
   pcall(bridge.logger.info, msg)
 end
 
--- Start the server, or reuse the one from a previous mission (which also
--- drops any requests stranded in its queue between missions).
-local server_ok, started = pcall(bridge.jsonrpc.serve, {
+-- Bind this mission's own server. `serve` hands back userdata that OWNS it: the
+-- listener, its actix worker and its request queue all live exactly as long as
+-- THIS Lua state holds the value, and stop when it does not. Nothing is shared
+-- through the DLL between missions, so each mission gets a fresh worker and
+-- fresh connections (card 18, iteration 3 — the owner's Lua-lifecycle directive).
+--
+-- It is deliberately NOT parked in a global. The pump closures below capture it,
+-- and DCS's timer holds those for the life of the state, which is precisely the
+-- lifetime wanted — while a global would hand any co-installed mod or mission
+-- script a `:stop()` that ends the bridge for the rest of the mission (the same
+-- reasoning that removed __DCS_STUDIO_MISSION_TEARDOWN).
+local server_ok, server = pcall(bridge.jsonrpc.serve, {
   host = "127.0.0.1",
   port = 25570,
   timeout = 30,
   env = "mission",
 })
-if not server_ok then
-  report_error("mission bridge server failed to start: " .. tostring(started))
+if not server_ok or not server then
+  report_error("mission bridge server failed to start: " .. tostring(server))
   return
 end
 
@@ -75,12 +84,20 @@ bridge.register_methods(router, {
 -- torn_down also stops the pumps: a released router answers nothing, and
 -- dispatching into a state DCS is unloading is the behaviour being removed.
 --
--- The release ALSO stops this DLL's HTTP server (card 18, second iteration):
--- releasing the handlers was live-verified necessary and insufficient — DCS still
--- died whenever the mission bridge's actix worker had accepted connections during
--- the mission, including in a run that was paused throughout so nothing was ever
--- dispatched into Lua. So the worker and its connections must not span the unload
--- either. The next mission's require → jsonrpc.serve binds a fresh server.
+-- The release ALSO stops this mission's HTTP server (card 18, second iteration,
+-- live-verified 2/2 clean): releasing the handlers alone was necessary and
+-- insufficient — DCS still died whenever the mission bridge's actix worker had
+-- accepted connections during the mission, including in a run that was paused
+-- throughout so nothing was ever dispatched into Lua. So the worker and its
+-- connections must not span the unload either.
+--
+-- The step ORDER inside bridge's teardown is load-bearing and verified: handlers,
+-- then the queue's -32001s (read off the still-running server), then the
+-- listener. Do not re-arrange it.
+--
+-- If this trigger never fires — a mission that ends without S_EVENT_MISSION_END —
+-- the server userdata's own __gc during lua_close now stops it anyway. That is
+-- iteration 3 closing iteration 2's one documented gap.
 local torn_down = false
 
 local function teardown(why)
@@ -88,16 +105,19 @@ local function teardown(why)
     return
   end
   torn_down = true
-  local ok, released_or_err, failed, stopped_port = pcall(bridge.jsonrpc.teardown, router, why)
+  local ok, released_or_err, failed, stopped_port = pcall(server.teardown, server, router, why)
   if ok then
     -- The stopped port is reported through env.info deliberately: the shipped
     -- logger level is `warn`, so the Rust-side info line does not reach
     -- dcs_studio_mission.log, and this is the diagnostic a live unload needs.
-    local server = stopped_port
+    -- Deliberately NOT named `server`: that would shadow the userdata this
+    -- closure needs, and the next edit to move it above the pcall would take the
+    -- teardown with it.
+    local server_note = stopped_port
         and ("stopped its HTTP server on port " .. tostring(stopped_port))
         or "had no HTTP server to stop"
     report_info(string.format("mission bridge released %s Lua handler(s), failed %s queued request(s) and %s on %s",
-      tostring(released_or_err), tostring(failed), server, tostring(why)))
+      tostring(released_or_err), tostring(failed), server_note, tostring(why)))
   else
     -- Never fatal: this runs on DCS's way out of the mission, and a raise here
     -- would land in the engine's event dispatcher with nothing to catch it.
@@ -105,11 +125,11 @@ local function teardown(why)
   end
 end
 
--- Deliberately NOT published as a global. Anything in this state — another mod,
--- a mission script — could call it, and one call silently ends the bridge for
--- the rest of the mission. There is no caller that needs it: the event handler
--- below is the trigger, the sentinel is the backstop, and an operator who
--- genuinely has to force a release can eval `bridge.jsonrpc.teardown(...)`.
+-- Deliberately NOT published as a global, and neither is `server` — anything in
+-- this state (another mod, a mission script) could call either, and one call
+-- silently ends the bridge for the rest of the mission. There is no caller that
+-- needs one: the event handler below is the trigger, and the server userdata's
+-- own collection by lua_close is the backstop.
 
 -- Primary trigger: the mission's own end-of-life event, which fires while the
 -- state is fully functional. pcall'd and feature-checked because `world` is
@@ -138,21 +158,22 @@ if type(world) == "table" and type(world.addEventHandler) == "function" then
   end
 end
 
--- Backstop: a sentinel userdata collected by lua_close, for a state that dies
--- without S_EVENT_MISSION_END ever firing. It cannot drop the router's Lua
--- handles — by then, touching Lua is the thing to avoid — so it only fails the
--- stranded requests. Parked in a global to keep it reachable for the whole life
--- of the state.
-__DCS_STUDIO_MISSION_GUARD = bridge.jsonrpc.state_guard()
+-- Backstop: none is wired here any more, and that is the point. The server
+-- userdata IS the sentinel — lua_close collects it and its destructor stops the
+-- listener, fails the stranded requests and waits (tightly bounded) for the actix
+-- System thread. Iteration 2 needed a separate sentinel because the server lived
+-- in a DLL static that no state's death could reach; it could only fail the queue,
+-- so an event-less mission kept its listener across the unload.
 
--- While a debug session holds the sim thread, the engine drains this DLL's
--- queue itself through this router.
+-- While a debug session holds the sim thread, the engine drains this mission's
+-- queue itself through this router — reaching it through the server userdata this
+-- state owns, not through the DLL.
 if DBG then
   DBG.pump = function()
     if torn_down then
       return
     end
-    bridge.jsonrpc.process_queue(router)
+    server:process_rpc(router)
   end
 end
 
@@ -169,7 +190,7 @@ timer.scheduleFunction(function()
     return nil
   end
   local ok, err = pcall(function()
-    bridge.jsonrpc.process_queue(router)
+    server:process_rpc(router)
   end)
   if not ok then
     report_error("mission pump error: " .. tostring(err))
@@ -177,8 +198,4 @@ timer.scheduleFunction(function()
   return timer.getTime() + 0.1
 end, nil, timer.getTime() + 0.1)
 
-if started then
-  report_info("mission bridge serving JSON-RPC on 127.0.0.1:25570")
-else
-  report_info("mission bridge reattached to the running server on 127.0.0.1:25570")
-end
+report_info("mission bridge serving JSON-RPC on 127.0.0.1:25570")

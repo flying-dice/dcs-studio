@@ -62,17 +62,17 @@ DCS = { setUserCallbacks = function(cb) SPY.callbacks = cb end }
 package.preload["dcs_studio_gui"] = function()
   return {
     jsonrpc = {
-      JsonRpcServer = {
-        new = function(cfg)
-          SPY.server_cfg = cfg
-          return {
-            process_rpc = function(_self, _router)
-              SPY.pumped = SPY.pumped + 1
-              if FAIL_PUMP then error(FAIL_PUMP, 0) end
-            end,
-          }
-        end,
-      },
+      -- `serve` hands back userdata that owns the server; the hook parks it in
+      -- its frame callbacks, which is what this stub stands in for.
+      serve = function(cfg)
+        SPY.server_cfg = cfg
+        return {
+          process_rpc = function(_self, _router)
+            SPY.pumped = SPY.pumped + 1
+            if FAIL_PUMP then error(FAIL_PUMP, 0) end
+          end,
+        }
+      end,
       JsonRpcRouter = { new = function() return { is_router = true } end },
     },
     register_methods = function(_router, ctx)
@@ -358,7 +358,7 @@ fn the_stubbed_module_has_the_shape_the_real_one_does() {
 
     for path in [
         "bridge.register_methods",
-        "bridge.jsonrpc.JsonRpcServer.new",
+        "bridge.jsonrpc.serve",
         "bridge.jsonrpc.JsonRpcRouter.new",
     ] {
         let kind: String = lua

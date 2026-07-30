@@ -3,16 +3,19 @@
 //! start. Bootstraps the shared core for [`BridgeKind::Mission`], then runs
 //! the embedded mission init (router, method registration, timer pump).
 //!
-//! The mission Lua state is destroyed and recreated per mission, but this DLL
-//! image (and its statics — the server, the debugger registry, the console
-//! ring) persists in the process from the first load until DCS exits. The
-//! embedded init is written to be re-run per mission: `jsonrpc.serve` reuses
-//! the running server, and the debugger session state is reset.
+//! The mission Lua state is destroyed and recreated per mission, and this DLL
+//! image persists in the process from the first load until DCS exits — so
+//! anything per-mission belongs to the STATE, not to the DLL. The server the
+//! embedded init binds is userdata that state owns (card 18, iteration 3): it
+//! serves for exactly as long as the mission's state holds it, and stops when
+//! that state does — including from `__gc` inside DCS's own `lua_close`. What
+//! genuinely spans the process is only what should: the debugger registry, the
+//! console ring, the logger.
 //!
-//! It is also written to be torn down per mission (issue #69): the init
-//! registers a release that drops every mlua handle this DLL holds in the
-//! mission state *before* DCS closes that state, plus a sentinel userdata as a
-//! backstop. See `dcs_bridge_core`'s `jsonrpc::teardown`.
+//! The init is also written to be torn down per mission (issue #69): it registers
+//! a release on `S_EVENT_MISSION_END` that drops every mlua handle this bridge
+//! holds in the mission state, answers its stranded callers and stops its server
+//! *before* DCS closes that state. See `dcs_bridge_core`'s `jsonrpc::teardown`.
 
 use dcs_bridge_core::BridgeKind;
 use mlua::prelude::{LuaResult, LuaTable};
@@ -61,10 +64,9 @@ mod tests {
     );
 
     /// One turnstile for every test that runs the real `luaopen`, because each
-    /// one binds (or reuses) 127.0.0.1:25570 through this crate's single set of
-    /// DLL statics. It matters more since card 18's server stop: a mission end
-    /// now STOPS that server, so two tests overlapping would have one tearing the
-    /// other's bridge down mid-assertion.
+    /// one binds 127.0.0.1:25570 — the real port, as a real mission does. Since
+    /// card 18 each state owns its own server there, so two overlapping tests
+    /// would have the second's bind refused by the first's live listener.
     fn serially() -> std::sync::MutexGuard<'static, ()> {
         static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
         SERIAL
@@ -164,6 +166,37 @@ mod tests {
         assert!(next > 0.0, "the pump must reschedule itself: {next}");
     }
 
+    /// What the init must and must NOT have left in the mission state: the
+    /// mission-end handler that is the primary trigger, and no globals.
+    ///
+    /// The second half is a regression test for two audit findings. Iteration 2's
+    /// `lua_close` sentinel global is gone because the server userdata's own
+    /// `Drop` is the backstop now (card 18, iteration 3). And neither the teardown
+    /// nor the server may be published: a global would hand any mission script or
+    /// co-installed mod a call that ends the bridge for the rest of the mission,
+    /// and nothing legitimate needs one — the pump closures hold the server, which
+    /// is exactly the lifetime wanted.
+    fn assert_teardown_wiring(lua: &Lua) {
+        assert!(
+            lua.load("return HANDLER ~= nil")
+                .eval::<bool>()
+                .expect("the init registered its teardown"),
+            "the mission-end handler must be in place — it is the trigger that \
+             runs while the state is still whole"
+        );
+        assert!(
+            lua.load(
+                "return __DCS_STUDIO_MISSION_GUARD == nil and \
+                 __DCS_STUDIO_MISSION_TEARDOWN == nil and \
+                 __DCS_STUDIO_MISSION_SERVER == nil"
+            )
+            .eval::<bool>()
+            .expect("check the state's globals"),
+            "the retired sentinel, the teardown and the server must all be absent \
+             from the globals"
+        );
+    }
+
     /// The teardown the init wires up (card 18 / issue #69), driven through the
     /// mission state's own end-of-life event.
     ///
@@ -202,22 +235,7 @@ mod tests {
 
         super::dcs_studio_mission(&lua).expect("luaopen_dcs_studio_mission");
 
-        assert!(
-            lua.load("return HANDLER ~= nil and __DCS_STUDIO_MISSION_GUARD ~= nil")
-                .eval::<bool>()
-                .expect("the init registered its teardown"),
-            "the mission-end handler and the sentinel must both be in place — \
-             they cover the two different ways a mission ends"
-        );
-        // The release is reachable ONLY through those two. A global would let any
-        // mission script or co-installed mod end the bridge for the rest of the
-        // mission with one call, and nothing legitimate needs one.
-        assert!(
-            lua.load("return __DCS_STUDIO_MISSION_TEARDOWN == nil")
-                .eval::<bool>()
-                .expect("check for a teardown global"),
-            "the teardown must not be published as a global"
-        );
+        assert_teardown_wiring(&lua);
 
         // An unrelated event must not tear the bridge down mid-mission: this
         // handler sees every event the mission raises.

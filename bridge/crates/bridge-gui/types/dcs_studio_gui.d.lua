@@ -254,23 +254,33 @@ function dcs_studio_gui_logger.warn(msg, ns) end
 ---@param ns? string
 function dcs_studio_gui_logger.error(msg, ns) end
 
---- The native WebSocket/HTTP JSON-RPC server inside the DLL.
+--- The native WebSocket/HTTP JSON-RPC server inside the DLL, owned by the Lua state that created it.
 ---@class dcs_studio_gui.jsonrpc.JsonRpcServer
 local dcs_studio_gui_jsonrpc_JsonRpcServer = {}
 
---- Bind a server. `config = { host = string, port = number, timeout? = number, env? = string }`.
+--- Bind a server. `config = { host = string, port = number, timeout? = number, env? = string }`. The same thing `serve` does — prefer `serve`, which is what both bridges' boot code calls.
 ---@param config table
 ---@return dcs_studio_gui.jsonrpc.JsonRpcServer
 function dcs_studio_gui_jsonrpc_JsonRpcServer.new(config) end
 
---- Drain the queued requests, dispatching each through `router`. Call once per simulation frame.
+--- Drain this server's queued requests, dispatching each through `router`. Call once per simulation frame.
 ---@param router dcs_studio_gui.jsonrpc.JsonRpcRouter
 ---@return boolean
 function dcs_studio_gui_jsonrpc_JsonRpcServer:process_rpc(router) end
 
---- Stop the server (gracefully by default).
----@param graceful? boolean
-function dcs_studio_gui_jsonrpc_JsonRpcServer:stop(graceful) end
+--- Stop serving now, cutting open connections, and wait (bounded) for the server's thread to leave its actix System. Returns false for `stopped` if it had already stopped. Idempotent; the same thing dropping the userdata does.
+---@return boolean stopped
+---@return boolean system_exited
+function dcs_studio_gui_jsonrpc_JsonRpcServer:stop() end
+
+--- End this Lua state's use of the bridge while the state is still ALIVE, in order: drop every handler registered on `router` (each is a live reference into this state), fail every request stranded in this server's queue with a truthful error, then stop the server. Call it from the state's own end-of-life signal — the mission bridge does, on S_EVENT_MISSION_END — so DCS's lua_close finds nothing of ours left to collect and nothing of ours still serving. The GUI bridge's listener is left up (its state outlives every mission). Idempotent, and dropping the userdata does the server half anyway.
+---@param router dcs_studio_gui.jsonrpc.JsonRpcRouter
+---@param reason? string
+---@return number handlers_released
+---@return number requests_failed
+---@return number|nil stopped_port
+---@return boolean system_exited
+function dcs_studio_gui_jsonrpc_JsonRpcServer:teardown(router, reason) end
 
 --- A method-name → Lua-handler table for JSON-RPC dispatch.
 ---@class dcs_studio_gui.jsonrpc.JsonRpcRouter
@@ -288,31 +298,14 @@ function dcs_studio_gui_jsonrpc_JsonRpcRouter:add_method(name, handler, meta) en
 
 --- The WebSocket/HTTP JSON-RPC server and router.
 ---@class dcs_studio_gui.jsonrpc
----@field JsonRpcServer dcs_studio_gui.jsonrpc.JsonRpcServer # The native WebSocket/HTTP JSON-RPC server inside the DLL.
+---@field JsonRpcServer dcs_studio_gui.jsonrpc.JsonRpcServer # The native WebSocket/HTTP JSON-RPC server inside the DLL, owned by the Lua state that created it.
 ---@field JsonRpcRouter dcs_studio_gui.jsonrpc.JsonRpcRouter # A method-name → Lua-handler table for JSON-RPC dispatch.
 local dcs_studio_gui_jsonrpc = {}
 
---- Start this DLL's server if none is running, else reuse the running one (dropping any requests stranded in its queue). Idempotent across mission reloads — the DLL image and its server outlive each mission's Lua state. `config` as for JsonRpcServer.new. Returns true when the server was newly started.
+--- Bind this bridge's JSON-RPC server and return it as userdata that OWNS it. `config` as for JsonRpcServer.new. KEEP THE RETURNED VALUE REACHABLE for as long as the bridge should serve: the server stops when the Lua state stops holding it, including when DCS destroys the state (lua_close collects the userdata). Each Lua state gets its own server — nothing is shared through the DLL between mission loads.
 ---@param config table
----@return boolean started
+---@return dcs_studio_gui.jsonrpc.JsonRpcServer server
 function dcs_studio_gui_jsonrpc.serve(config) end
-
---- Drain the running server's queued requests through `router`, callable from anywhere in this DLL's Lua state (not just the holder of the server userdata). The debugger pumps the editor's requests with this while a paused chunk holds the sim thread. Returns false when no server is running.
----@param router dcs_studio_gui.jsonrpc.JsonRpcRouter
----@return boolean served
-function dcs_studio_gui_jsonrpc.process_queue(router) end
-
---- Release everything this DLL holds in the CURRENT Lua state, while that state is still alive, and stop serving from outside it: drop every handler registered on `router` (each one is a live reference into this state), fail every request stranded in the server's queue with a truthful error, and stop the MISSION bridge's HTTP server so its actix worker and the connections it accepted do not outlive the state either (the GUI bridge's server is left alone — its state is never destroyed). Call it from the state's own end-of-life signal — the mission bridge does, on S_EVENT_MISSION_END — so DCS's lua_close finds nothing of ours left to collect and nothing of ours still serving. Returns the port that was stopped, or nil if there was no mission server to stop. Idempotent.
----@param router dcs_studio_gui.jsonrpc.JsonRpcRouter
----@param reason? string
----@return number handlers_released
----@return number requests_failed
----@return number|nil stopped_port
-function dcs_studio_gui_jsonrpc.teardown(router, reason) end
-
---- Create the teardown sentinel for this Lua state. Keep the returned userdata reachable (the mission bridge parks it in a global): when DCS destroys the state, Lua's lua_close collects it and the DLL fails every stranded request. It is the BACKSTOP for a state that dies without calling `teardown` — it cannot drop Lua handles, because by then touching Lua is exactly what must not happen, and it does not stop the server either, because blocking inside lua_close on the sim thread would trade a crash for a freeze.
----@return userdata guard
-function dcs_studio_gui_jsonrpc.state_guard() end
 
 --- The in-DCS DCS Studio native runtime for the gui environment — loaded via require("dcs_studio_gui").
 ---@class dcs_studio_gui
