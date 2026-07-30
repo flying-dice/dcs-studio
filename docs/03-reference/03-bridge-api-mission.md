@@ -49,7 +49,7 @@ Run Lua in the mission scripting state and return the result. print() output str
 
 ### `ping`
 
-Liveness check. dcs_time is mission model time; it stops advancing while the sim is paused. NOTE: this bridge's queue pump runs on model time too — requests queue (until the 30s server timeout) while the sim is paused or between missions.
+Liveness check. dcs_time is mission model time; it stops advancing while the sim is paused. NOTE: this bridge's queue pump runs on model time too, so while the sim is paused or sitting on the briefing screen nothing dispatches requests into Lua — since card 17 a call arriving then is refused at once with -32002 'sim not pumping' rather than queueing until the server timeout. GET /health reports the same via pump_idle_ms/pump_stalled.
 
 _No parameters._
 
