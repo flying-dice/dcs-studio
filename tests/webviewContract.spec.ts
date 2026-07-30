@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import {
   CONSOLE_PROTOCOL,
+  DOCS_PROTOCOL,
   LOG_PROTOCOL,
   MANIFEST_PROTOCOL,
   MARKETPLACE_PROTOCOL,
@@ -44,8 +45,9 @@ import { expectSent, hostSend, openPreview, sentMessages } from "./helpers";
 //
 // ## Scope
 //
-// Console, marketplace, My Mods, log, publish, setup, New Project and the
-// manifest form only — the panels with a presenter. The other three webviews are
+// Console, marketplace, My Mods, log, publish, setup, New Project, the manifest
+// form and the docs panel only — the panels with a presenter. The other two
+// webviews (`nav`, `skills`) are
 // named in `UNCOVERED_WEBVIEWS` and checked against the
 // preview directory by test/integration/webview/webviewContract.test.ts, so
 // the uncovered set is data rather than an omission.
@@ -532,6 +534,50 @@ test.describe("manifest ↔ ManifestPresenter message contract", () => {
     await collect(page, sent, consumed);
     assertContract(MANIFEST_PROTOCOL, sent, consumed);
     expect(errors).toEqual([]);
+  });
+});
+
+test.describe("docs ↔ DocsPresenter message contract", () => {
+  test("the webview posts and consumes exactly the declared message set", async ({ page }) => {
+    const sent = new Set<string>();
+    const consumed = new Map<string, boolean>();
+
+    // Session 1 — the REAL shipped manual (media/docs-content.js, which the
+    // preview loads unmodified). media/docs.js posts nothing at load and needs
+    // nothing pushed at it: its opening page crosses inside the DOCUMENT as the
+    // inline `window.__INITIAL_PAGE__` the host renders, so like the manifest form
+    // there is no handshake here to lose (cf. cards 22-24).
+    await armProbe(page);
+    const errors = await openPreview(page, "docs");
+    await expect(page.getByTestId("page-title")).toHaveText("Welcome to DCS Studio");
+
+    // `run` — a page body's "try it" button. These live in the CONTENT script
+    // rather than in markup docs.js owns, which is exactly the dispatch shape a
+    // regex contract gets wrong and a drive gets for free.
+    await page.getByTestId("command-btn").first().click();
+
+    // `goto` — the host navigating a panel that is already open, which is the
+    // only message it sends. The page pane and the TOC's active row both change.
+    await hostSend(page, { type: "goto", page: "publishing" });
+    await expect(page.getByTestId("page-title")).toHaveText("Publishing Your Mod");
+
+    await collect(page, sent, consumed);
+
+    // Session 2 — `openExternal`. The shipped manual has no https anchor in any
+    // page body (card 14's journal records that as a finding), so the only way to
+    // reach the real delegated handler's external-link branch is content that has
+    // one: `?docs=links` swaps in a doc set whose page body carries a real link.
+    // Driving a rendered anchor rather than one injected into the document keeps
+    // this a measurement of media/docs.js and not of the test.
+    await armProbe(page);
+    const errors2 = await openPreview(page, "docs", { query: { docs: "links" } });
+    await expect(page.getByTestId("page-title")).toHaveText("Links Page");
+    await page.getByTestId("ext-link").click();
+    await collect(page, sent, consumed);
+
+    assertContract(DOCS_PROTOCOL, sent, consumed);
+    expect(errors).toEqual([]);
+    expect(errors2).toEqual([]);
   });
 });
 

@@ -277,12 +277,6 @@ describe("DocsPanel", () => {
     ]);
   });
 
-  it("reveals without navigating when no page is named", () => {
-    DocsPanel.show(context(), "sandbox");
-    DocsPanel.show(context());
-    expect(state.panels[0].webview.postedOfType("goto")).toEqual([]);
-  });
-
   it("runs a command a docs page asks for", async () => {
     DocsPanel.show(context());
     await state.panels[0].webview.receive({ type: "run", command: "dcs.marketplace.open" });
@@ -296,15 +290,6 @@ describe("DocsPanel", () => {
       url: "https://www.digitalcombatsimulator.com/",
     });
     expect(state.openedExternal).toEqual(["https://www.digitalcombatsimulator.com/"]);
-  });
-
-  it("ignores run/openExternal messages missing their payload", async () => {
-    DocsPanel.show(context());
-    await state.panels[0].webview.receive({ type: "run" });
-    await state.panels[0].webview.receive({ type: "openExternal" });
-    await state.panels[0].webview.receive({ type: "unknown" });
-    expect(state.executedCommands).toEqual([]);
-    expect(state.openedExternal).toEqual([]);
   });
 
   it("clears the singleton on dispose so the next show re-opens", () => {

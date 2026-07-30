@@ -10,6 +10,10 @@
 //   empty     no __DOCS__ at all — what a missing/failed content script leaves
 //   orphan    a doc set whose sections do not own the pages they list, i.e.
 //             content the renderer must survive rather than throw on
+//   links     a page body with an https anchor in it. The shipped manual has
+//             none (see card 14's journal), so this is the only content that
+//             reaches media/docs.js's external-link branch — the one the
+//             declared `openExternal` message comes from.
 // `?page=<id>` sets __INITIAL_PAGE__ the way the host does when a command deep
 // links into a specific doc page.
 (() => {
@@ -29,6 +33,25 @@
         {
           title: "Only Section",
           pages: [{ id: "only", title: "Only Page", body: "<p>The whole manual.</p>" }],
+        },
+      ],
+    };
+    return;
+  }
+
+  if (which === "links") {
+    window.__DOCS__ = {
+      sections: [
+        {
+          title: "Outbound",
+          pages: [
+            {
+              id: "links",
+              title: "Links Page",
+              body: '<p>Read more at <a data-testid="ext-link" href="https://www.digitalcombatsimulator.com/">the DCS site</a>, or at <a href="#local">this page</a>.</p>',
+            },
+            { id: "second", title: "Second Page", body: "<p>Somewhere to navigate to.</p>" },
+          ],
         },
       ],
     };

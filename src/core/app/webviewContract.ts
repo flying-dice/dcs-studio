@@ -47,13 +47,13 @@ import type { Progress } from "./subscriptionService";
 // ## Coverage is deliberately partial
 //
 // Only the panels with a presenter (`console`, `marketplace`, `mymods`, `log`,
-// `publish`, `setup`, `newproject`, `manifest`) are covered. The other three
-// webviews still have both halves under their own gates but no declared contract
-// between them; they are named in
+// `publish`, `setup`, `newproject`, `manifest`, `docs`) are covered. The other
+// two webviews — `nav` and `skills` — still have both halves under their own
+// gates but no declared contract between them; they are named in
 // `UNCOVERED_WEBVIEWS` so the gap is visible in the table rather than silent,
 // and the tests assert that list is exactly "every preview page minus the
 // covered ones". Extending the contract to a panel means giving it a presenter
-// first — an inferred contract for the remaining three would be worse than none.
+// first — an inferred contract for the remaining two would be worse than none.
 //
 // ## Why the payload fields are mostly optional
 //
@@ -530,6 +530,51 @@ const MANIFEST_TO_WEBVIEW_KEYS: { readonly [K in ManifestHostMessage["type"]]: t
   roots: true,
 };
 
+// ── Documentation ────────────────────────────────────────────────────────────
+
+/**
+ * The docs panel's opening state — one field, and, like the manifest form's
+ * bootstrap, deliberately NOT a message.
+ *
+ * `media/docs.js` reads `window.__INITIAL_PAGE__` synchronously at the top of its
+ * IIFE, so a deep link into a page crosses inside the DOCUMENT the host renders.
+ * That is why the `toWebview` union below has no `init`, and why an opening deep
+ * link cannot be lost to the load race the way publish (card 22) and New Project
+ * (card 23) can lose their opening push.
+ *
+ * `""` rather than an absent field is the declaration: it is what "no page named,
+ * open where the reader left off" looks like, and the value the webview's own
+ * page-id test is written against.
+ */
+export interface DocsBootstrap {
+  page: string;
+}
+
+/** A message `media/docs.js` posts. */
+export type DocsWebviewMessage =
+  /** A page body's "try it" button naming an extension command. */
+  | { type: "run"; command?: string }
+  /** An `https:` link in a page body. */
+  | { type: "openExternal"; url?: string };
+
+/**
+ * A message `DocsPresenter` pushes to the docs webview.
+ *
+ * One, and it exists only for the panel that is ALREADY OPEN: opening the panel
+ * on a page puts that page in the document instead (`DocsBootstrap`), so this is
+ * the reveal-and-navigate half of the same rule.
+ */
+export type DocsHostMessage = { type: "goto"; page: string };
+
+const DOCS_TO_HOST_KEYS: { readonly [K in DocsWebviewMessage["type"]]: true } = {
+  run: true,
+  openExternal: true,
+};
+
+const DOCS_TO_WEBVIEW_KEYS: { readonly [K in DocsHostMessage["type"]]: true } = {
+  goto: true,
+};
+
 // ── The table ────────────────────────────────────────────────────────────────
 
 /** One covered panel's half of the contract, as data the tests iterate. */
@@ -629,9 +674,23 @@ export const MANIFEST_PROTOCOL: WebviewProtocol = {
   silent: [],
 };
 
+export const DOCS_PROTOCOL: WebviewProtocol = {
+  preview: "docs.html",
+  // Two scripts, and neither dispatches on its own behalf: `docs-content.js` is
+  // the manual itself (`window.__DOCS__`), read synchronously by `docs.js`, which
+  // owns every listener. It is part of the webview half by being what the page
+  // renders — a docs panel with no content posts nothing at all.
+  scripts: ["docs-content.js", "docs.js"],
+  toHost: Object.keys(DOCS_TO_HOST_KEYS),
+  toWebview: Object.keys(DOCS_TO_WEBVIEW_KEYS),
+  // `goto` re-renders the page pane and re-marks the TOC's active row.
+  silent: [],
+};
+
 /** Every panel whose protocol is declared, keyed by preview page basename. */
 export const WEBVIEW_PROTOCOLS: Readonly<Record<string, WebviewProtocol>> = {
   console: CONSOLE_PROTOCOL,
+  docs: DOCS_PROTOCOL,
   log: LOG_PROTOCOL,
   manifest: MANIFEST_PROTOCOL,
   marketplace: MARKETPLACE_PROTOCOL,
@@ -650,4 +709,4 @@ export const WEBVIEW_PROTOCOLS: Readonly<Record<string, WebviewProtocol>> = {
  * above are only worth anything because a `vscode`-free object on the host side
  * can be driven through every one of them.
  */
-export const UNCOVERED_WEBVIEWS: readonly string[] = ["docs", "nav", "skills"];
+export const UNCOVERED_WEBVIEWS: readonly string[] = ["nav", "skills"];
