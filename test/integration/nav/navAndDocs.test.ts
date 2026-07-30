@@ -18,11 +18,15 @@ import type { SkillsLibrary } from "../../../src/skills/library";
 import { webviewCapabilities } from "../../../src/webview/panel";
 
 // The sidebar and the documentation panel — the two views a user meets first.
-// The sidebar in particular is pure host-side wiring: it subscribes to three
-// independent signals (bridge status, skills freshness, whether a manifest
-// exists) and re-renders rows from them, and every one of those subscriptions
-// has to be torn down when the view goes away or the extension leaks handlers
-// across every reload.
+//
+// The sidebar's DECISIONS moved to `NavPresenter` (card 14) and run with no
+// `vscode` at all in `test/unit/nav/navPresenter.test.ts`: collapsing the two
+// bridges into one footer, counting the outdated skills into a badge, the one
+// manifest boolean behind two rows, and the `run` guard. What is left here is
+// what only a real editor can be wrong about, and it is most of why this file
+// exists: the sidebar subscribes to three independent signals and every one of
+// those subscriptions has to be torn down when the view goes away, or the
+// extension leaks handlers across every reload.
 
 const EXT = "C:\\ext";
 
@@ -125,49 +129,26 @@ describe("NavViewProvider", () => {
     expect(view.webview.html).toContain("window.__LOGO__");
   });
 
-  it("runs the command a nav row asks for", async () => {
+  it("routes a received message to the presenter, whose effect reaches the editor", async () => {
     const view = await resolve();
     await view.webview.receive({ type: "run", command: "dcs.marketplace.open" });
     expect(state.executedCommands).toEqual([{ command: "dcs.marketplace.open", args: [] }]);
   });
 
-  it("ignores a run message with no command, and unknown message types", async () => {
-    const view = await resolve();
-    await view.webview.receive({ type: "run" });
-    await view.webview.receive({ type: "somethingElse", command: "dcs.x" });
-    expect(state.executedCommands).toEqual([]);
-  });
-
-  it("reports the bridge as connected when either bridge is up", async () => {
+  it("delivers the bridge status the router reports to the presenter", async () => {
+    // The collapse itself is the presenter's and tested there; what this
+    // witnesses is that the subscription is wired to it at all.
     const view = await resolve();
     statusListener?.(statusOf({ gui: { connected: true, dcsTime: 0 } } as never));
     expect(view.webview.postedOfType("status").at(-1)).toMatchObject({
       status: { connected: true },
     });
-
-    statusListener?.(statusOf({ mission: { connected: true, dcsTime: 120 } } as never));
-    expect(view.webview.postedOfType("status").at(-1)).toMatchObject({
-      status: { connected: true },
-    });
-  });
-
-  it("reports disconnected when neither bridge is up", async () => {
-    const view = await resolve();
-    statusListener?.(statusOf());
-    expect(view.webview.postedOfType("status").at(-1)).toMatchObject({
-      status: { connected: false },
-    });
-  });
-
-  it("badges the skills row with the number of available updates", async () => {
-    updates = ["dcs-studio"];
-    const view = await resolve();
-    expect(view.webview.postedOfType("skills").at(-1)).toMatchObject({ updates: 1 });
   });
 
   it("re-pushes the skills badge when the library changes", async () => {
+    updates = ["dcs-studio"];
     const view = await resolve();
-    expect(view.webview.postedOfType("skills").at(-1)).toMatchObject({ updates: 0 });
+    expect(view.webview.postedOfType("skills").at(-1)).toMatchObject({ updates: 1 });
 
     updates = ["a", "b"];
     skillsListener?.();

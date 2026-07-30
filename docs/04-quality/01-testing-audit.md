@@ -382,23 +382,28 @@ came out of asking what happens when a user acts at the wrong moment.
 
 ## What is deliberately not done
 
-- ~~**G3's declared message-contract table.**~~ **Since done, for nine of eleven
+- ~~**G3's declared message-contract table.**~~ **Since done, for ALL ELEVEN
   webviews** (board cards `09-typed-webview-message-contract` and
   `14-presenter-rollout-remaining-panels`). The contract is
   declared in `src/core/app/webviewContract.ts` — typed
   `HostMessage`/`WebviewMessage` unions for `console`, `marketplace`, `mymods`,
-  `log`, `publish`, `setup`, `newproject`, `manifest` and `docs`, the panels
-  with a presenter — and checked from three directions: the compiler
+  `log`, `publish`, `setup`, `newproject`, `manifest`, `docs`, `skills` and
+  `nav` — and checked from three directions: the compiler
   (each presenter's `post` is typed to its host union, so an undeclared push
   does not build), the unit layer (every declared inbound message is asserted to
   be acted on, every declared outbound to be produced), and the e2e layer (the
   real `media/*.js` is driven in Chromium and the set it posts and consumes is
   asserted equal to the declaration). Nothing is regex-derived: the parked
   reasoning was right that an inferred contract produces false failures, and the
-  way past it was to observe the webview rather than read it. The other two
-  webviews (`nav`, `skills`) are named in `UNCOVERED_WEBVIEWS` and
-  checked against `previews/`, so the remaining gap is data rather than an
-  absence; closing it means giving those panels presenters first.
+  way past it was to observe the webview rather than read it — `media/skills.js`
+  is the case that settles the argument, because none of its four action message
+  types appears as a literal anywhere in the script (they are `data-act`
+  attributes the click handler reads), so a scanner would declare one message
+  where there are five. `UNCOVERED_WEBVIEWS` is now EMPTY, which is what makes
+  the census in `test/integration/webview/webviewContract.test.ts` a total
+  assertion: the declared set equals the `previews/` directory. The list is kept,
+  empty, as the honest place to name a twelfth webview that arrives without a
+  presenter.
 - ~~**Presenter extraction beyond the marketplace pilot.**~~ **Since done**
   (board card `08-presenter-for-console-panel`; `myModsPanel` was done in the
   clean-code round, issue #40). `consolePanel` is now a 139-line shell over
@@ -419,7 +424,20 @@ came out of asking what happens when a user acts at the wrong moment.
   webview's own — so what moved out is the deep-link rule and two payload guards,
   and what replaced them is the effect dispatch. The point of that one is
   testability rather than size: what was left is 6 `vscode.` references and no
-  decisions. The G5 table above
+  decisions. The rollout finished with the last two webviews: a 128-line shell
+  over `core/app/skillsPresenter.ts` (`skills/skillsPanel`, down from 145), and
+  `core/app/navPresenter.ts` behind `nav/navView` — **the only `WebviewView`, and
+  a decision rather than a repetition.** Card 07 had found that the sidebar does
+  not fit the panel teardown scaffold, because a `WebviewView`'s lifetime is per
+  `resolveWebviewView` and its subscriptions are named fields re-created on each
+  resolve rather than an array a panel owns once. That finding is about DISPOSAL;
+  a presenter is about decisions, and the sidebar has real ones (collapsing two
+  bridges into one footer, counting outdated skills into a badge, one manifest
+  boolean behind two rows). So the presenter landed and the hand-rolled teardown
+  stayed, untouched and still covered — the two questions have two answers. That
+  shell went 125 -> 144 lines, and the growth is the reasoning above written into
+  the file rather than logic staying put: what is left is 15 `vscode.` references
+  and no decisions. The G5 table above
   still reads 309 lines / 22 refs — that is the original audit's measurement at
   `8c45b98` and is left as the record of what was true then, per this
   document's status note.
