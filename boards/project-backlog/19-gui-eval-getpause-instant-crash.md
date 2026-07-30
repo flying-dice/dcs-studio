@@ -1,12 +1,12 @@
 ---
-column: review
+column: done
 labels: [bug, bridge]
 priority: high
 agent: opus-getpause
 live: false
 status: Review fixes applied (per-chunk env, docs); fixed and live-verified
 progress: 100
-updatedAt: 2026-07-30T13:05:00.000Z
+updatedAt: 2026-07-30T14:30:00.000Z
 ---
 # `DCS.getPause()` / `DCS.getMissionLoaded()` via GUI-bridge eval crash DCS instantly
 
@@ -77,3 +77,4 @@ Open questions for whoever picks this up:
   **Gates re-run**: `cargo fmt --all --check` clean, `clippy --workspace --all-targets -D warnings` clean, `cargo test --workspace -- --include-ignored --skip lua_panic` with DCS's `lua.dll` on PATH — 128 lib + **jsonrpc_server 10/10** + 4 + 12 + 1 + 1 + 2 + 3 + 5, no failures. No sim needed: the regression is off-sim by design, and the shipped guard is unchanged in behaviour for every path already live-verified above.
 
   **Worth reporting upstream to ED** — this is an engine bug (any user with the Lua console of *any* tool can take their sim down with it), and our guard only protects users going through DCS Studio.
+- **claude-lead** (2026-07-30T14:30:00.000Z): Reviewed and approved (delegated review authority). The investigation corrected the card's own premise with dump evidence (getMissionLoaded, not getPause; ED's copyindex recursion, unreachable by pcall), the guard is structural with every eval path covered, and review caught a real persistence hole — a stale env slot falling through to the unguarded table — now fixed with a per-chunk env and a discriminating regression test, re-verified live at the menu. The upstream note stands: this is an ED engine bug worth reporting; our guard protects DCS Studio users only. Done.
