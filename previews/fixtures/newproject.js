@@ -1,17 +1,23 @@
-// Fixture for previews/newproject.html. media/newproject.js posts nothing at
-// load and renders only once the host pushes {type:"init"}; NewProjectPanel
-// does that from its constructor (src/project/newProjectPanel.ts#pushInit), so
-// this fixture sends it on DOMContentLoaded.
+// Fixture for previews/newproject.html. media/newproject.js renders only once
+// the host pushes {type:"init"}; NewProjectPanel does that unprompted from its
+// constructor (src/project/newProjectPanel.ts#pushInit), so this fixture sends
+// it on DOMContentLoaded — and the webview also posts {type:"ready"} at the
+// bottom of its IIFE, which the host answers with the same push (card 24), so
+// this fixture answers that too.
 //
-// `?scenario=` picks the two shapes the panel has to tell apart:
+// `?scenario=` picks the shapes the panel has to tell apart:
 //   (default)  no workspace folder — you must pick a location to create under
 //   folder     a folder is already open, so "bootstrap in place" is the default
 //   bare       {type:"init"} with nothing set — no templates, no last location
+//   lostinit   the card 24 race: the unprompted DOMContentLoaded push is
+//              WITHHELD, so the handshake's answer is the only `init` the form
+//              ever gets — without it the page stays a blank <div id="app">.
 //
-// `create` is answered only for two reserved names — "taken" fails the way a
-// real EEXIST does, "done" succeeds — because the interesting default is the
-// one where the host has NOT replied yet: scaffolding takes long enough that
-// the panel's Creating… latch is what stops a second submit.
+// `create` is answered only for the reserved name "taken", which fails the way
+// a real EEXIST does. Every other name goes UNANSWERED, and that is not a gap
+// in the fixture — it is what success looks like on this protocol: the host
+// posts nothing and closes the panel or reloads the window (card 25), so the
+// Creating… latch staying latched is the whole of the webview's success state.
 (() => {
   const scenario = new URLSearchParams(location.search).get("scenario") || "";
 
@@ -66,10 +72,15 @@
     bare: { type: "init" },
   };
 
+  // `lostinit` is the default shape's payload; only its DELIVERY differs.
   window.__FIXTURE__ = { init: INIT[scenario] || INIT[""] };
 
   window.__host.onPost((m) => {
     if (!m) return;
+    if (m.type === "ready") {
+      window.__host.receive(window.__FIXTURE__.init);
+      return;
+    }
     if (m.type === "browse") {
       window.__host.receive({ type: "browsed", path: "D:\\DCS Projects" });
       return;
@@ -80,15 +91,16 @@
           type: "error",
           message: `EEXIST: ${m.location}\\${m.name} already exists`,
         });
-      } else if (m.name === "done") {
-        window.__host.receive({ type: "created" });
       }
+      // No success reply exists to send.
       return;
     }
     window.__toast(`&rarr; posts <b>${m.type}</b>`);
   });
 
   document.addEventListener("DOMContentLoaded", () => {
-    window.__host.receive(window.__FIXTURE__.init);
+    // Withheld under `lostinit`: that scenario is the load race, where the
+    // constructor's push landed before the webview was listening.
+    if (scenario !== "lostinit") window.__host.receive(window.__FIXTURE__.init);
   });
 })();

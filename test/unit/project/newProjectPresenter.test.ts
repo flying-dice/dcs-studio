@@ -130,6 +130,45 @@ describe("the opening render", () => {
   });
 });
 
+describe("the boot handshake", () => {
+  it("answers `ready` with the opening render, so a lost push is recoverable", async () => {
+    // The panel pushes `init` from its constructor, before the webview document
+    // has necessarily attached its `message` listener. This page renders ONLY
+    // from `init`, so without an answerable handshake a lost push left a blank
+    // document with no retry (card 24).
+    const h = harness({ folder: () => FOLDER });
+    await h.presenter.handle({ type: "ready" });
+    expect(h.posted).toHaveLength(1);
+    expect(h.posted[0]).toMatchObject({ type: "init", folder: FOLDER });
+  });
+
+  it("replays `init` after the constructor push rather than refusing a second one", async () => {
+    // Idempotence is the whole reason the unprompted push can stay as the first
+    // chance: the host cannot tell whether the first `init` landed, so the answer
+    // must be safe when it did.
+    const h = harness({ folder: () => FOLDER });
+    h.presenter.pushInit();
+    await h.presenter.handle({ type: "ready" });
+    expect(h.posted).toHaveLength(2);
+    expect(h.posted[1]).toEqual(h.posted[0]);
+    // A handshake is a request for state, not an action: nothing was scaffolded,
+    // picked or persisted on the way.
+    expect([...h.effects, ...h.calls]).toEqual([]);
+  });
+
+  it("re-reads the world, so the answer describes the folder open NOW", async () => {
+    // `pushInit` reads its inputs afresh, which is what makes the replay a
+    // re-render rather than a cached echo of a workspace that has since changed.
+    let folder: string | undefined;
+    const h = harness({ folder: () => folder });
+    h.presenter.pushInit();
+    folder = FOLDER;
+    await h.presenter.handle({ type: "ready" });
+    expect(h.posted[0]).toMatchObject({ folder: null });
+    expect(h.posted[1]).toMatchObject({ folder: FOLDER });
+  });
+});
+
 describe("browsing for a location", () => {
   it("opens the picker at the location the form is showing", async () => {
     picked = "E:\\Chosen";
@@ -180,7 +219,10 @@ describe("creating into a new folder", () => {
       "effect openFolder",
     ]);
     expect(h.effects).toEqual([{ kind: "openFolder", root: NEW_ROOT }]);
-    expect(h.posted).toEqual([{ type: "created" }]);
+    // Nothing is posted to a form that is about to be reloaded away — card 25
+    // removed the `created` message this used to assert. A push here would be
+    // unobservable at best, and at worst would unlatch Create during teardown.
+    expect(h.posted).toEqual([]);
   });
 
   it("substitutes empty strings for missing fields rather than throwing", async () => {
@@ -231,7 +273,9 @@ describe("bootstrapping the open folder in place", () => {
       "effect close",
       "effect authorManifest",
     ]);
-    expect(h.posted).toEqual([{ type: "created" }]);
+    // Nothing is posted here either: the panel is disposed on the way out
+    // (card 25). `error` is the only reply a `create` has.
+    expect(h.posted).toEqual([]);
     // No reload on this branch, so no breadcrumb is needed — and writing one
     // would open the manifest a second time on the next activation.
     expect(h.stored.has("pending")).toBe(false);

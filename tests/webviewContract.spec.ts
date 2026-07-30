@@ -461,10 +461,12 @@ test.describe("newproject ↔ NewProjectPresenter message contract", () => {
     const consumed = new Map<string, boolean>();
 
     await armProbe(page);
-    // Boot: media/newproject.js posts NOTHING at load — this is the one covered
-    // panel with no handshake (card 23) — and renders only when the host pushes
-    // `init`, which the fixture does on DOMContentLoaded as the panel's
-    // constructor does unprompted.
+    // Boot: media/newproject.js renders only when the host pushes `init`, which
+    // the fixture does on DOMContentLoaded as the panel's constructor does
+    // unprompted — and it posts `ready` at the bottom of its IIFE, which the
+    // fixture answers with the same `init`, because the unprompted push can be
+    // lost to the load race and this page has nothing else to render from
+    // (card 24). So the handshake is driven by simply loading the page.
     const errors = await openPreview(page, "newproject");
     await expect(page.getByTestId("template-tile")).toHaveCount(5);
 
@@ -474,19 +476,13 @@ test.describe("newproject ↔ NewProjectPresenter message contract", () => {
     await page.getByTestId("browse-btn").click();
     await expect(page.getByTestId("location-path")).toHaveText("D:\\DCS Projects");
 
-    // `error` first, because it is the only reply that clears the Creating…
-    // latch — the name "taken" is what the fixture fails, the way a real EEXIST
-    // does.
+    // `error` — and it is the ONLY reply a `create` has, because success ends
+    // with the panel closed or the window reloaded and nothing left to tell
+    // (card 25, which removed this protocol's one silent message). The name
+    // "taken" is what the fixture fails, the way a real EEXIST does.
     await page.getByTestId("name-input").fill("taken");
     await page.getByTestId("create-btn").click();
     await expect(page.getByTestId("error-note")).toContainText("already exists");
-
-    // `created` last: it is declared SILENT, so the assertion on it is that the
-    // document does not change — the latch it drops belongs to a form the real
-    // host is about to close or reload away (card 24).
-    await page.getByTestId("name-input").fill("done");
-    await page.getByTestId("create-btn").click();
-    await expect(page.getByTestId("create-btn")).toContainText("Creating…");
 
     await collect(page, sent, consumed);
     assertContract(NEWPROJECT_PROTOCOL, sent, consumed);

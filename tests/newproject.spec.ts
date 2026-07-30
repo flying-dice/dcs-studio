@@ -21,6 +21,30 @@ test.describe("newproject preview", () => {
     expect(errors).toEqual([]);
   });
 
+  test("posts a boot handshake so the opening render can be re-asked for", async ({ page }) => {
+    await openPreview(page, "newproject");
+    await expectSent(page, { type: "ready" });
+  });
+
+  test("the handshake's answer is the whole form when the opening push was lost", async ({
+    page,
+  }) => {
+    // The card 24 race, with the constructor's unprompted `init` withheld: this
+    // page renders NOTHING until an `init` arrives, so before the handshake a
+    // lost push left a blank <div id="app"> with no tile, no button and no way
+    // for the user to ask again.
+    const errors = await openPreview(page, "newproject", { query: { scenario: "lostinit" } });
+
+    await expect(page.getByTestId("template-tile")).toHaveCount(5);
+    await expect(page.getByTestId("location-btn")).toBeVisible();
+    await page.getByTestId("name-input").fill("recovered-mod");
+    await expect(page.getByTestId("path-preview")).toHaveText(
+      "→ C:\\Users\\pilot\\Projects\\recovered-mod",
+    );
+    await expect(page.getByTestId("create-btn")).toBeEnabled();
+    expect(errors).toEqual([]);
+  });
+
   test("choosing a template moves the selection", async ({ page }) => {
     await openPreview(page, "newproject");
     await page.locator('[data-testid="template-tile"][data-template="rust-dll"]').click();
@@ -214,19 +238,27 @@ test.describe("newproject preview", () => {
     await expect(page.getByTestId("error-note")).toHaveCount(0);
   });
 
-  test("a successful create leaves the panel latched for the host to tear down", async ({
+  test("a successful create is told nothing and stays latched for the teardown", async ({
     page,
   }) => {
-    // On success the host disposes the panel (in place) or reloads the window
-    // (new folder), so "created" only drops the internal flag — the button
-    // deliberately stays latched rather than flicking back to armed and
-    // inviting a second scaffold in the moments before the panel disappears.
-    await openPreview(page, "newproject");
+    // Success has no reply on this protocol (card 25): the host disposes the
+    // panel (in place) or reloads the window (new folder), so the form's job is
+    // to stay latched until it disappears rather than flick back to armed and
+    // invite a second scaffold. Typing is the sharp end of that — the in-place
+    // keystroke path re-evaluates the Create button, so a form that had dropped
+    // its `creating` flag would re-arm right here.
+    const errors = await openPreview(page, "newproject");
     await page.getByTestId("name-input").fill("done");
     await page.getByTestId("create-btn").click();
 
     await expect(page.getByTestId("create-btn")).toContainText("Creating…");
     await expect(page.getByTestId("error-note")).toHaveCount(0);
+
+    await page.getByTestId("name-input").fill("done-again");
+    await expect(page.getByTestId("create-btn")).toBeDisabled();
+    await page.getByTestId("name-input").press("Enter");
+    expect((await sentMessages(page)).filter((m) => m.type === "create")).toHaveLength(1);
+    expect(errors).toEqual([]);
   });
 
   test("ignores an empty host message", async ({ page }) => {

@@ -210,8 +210,19 @@
       state.creating = false;
       state.error = m.message || "Something went wrong.";
       render();
-    } else if (m.type === "created") {
-      state.creating = false;
     }
+    // There is deliberately no success message to handle. A scaffold that WORKS
+    // ends with the host closing the panel or reloading the window, so the last
+    // thing this form should do is unlatch Create: the `creating` flag set in
+    // create() stays set until the document goes away, and a second submit is
+    // impossible for the whole of the teardown (card 25).
   });
+
+  // The boot handshake, posted last — after the listener above exists, so the
+  // answer cannot be missed. This page renders NOTHING until `init` arrives, and
+  // the host pushes it unprompted from the panel's constructor, so before this
+  // existed a lost push left a blank `<div id="app">` with no button and no way
+  // to ask again (card 24). The host answers with the same idempotent `pushInit`,
+  // so a second `init` is a re-render rather than a new rule.
+  vscode.postMessage({ type: "ready" });
 })();
