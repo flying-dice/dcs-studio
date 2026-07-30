@@ -8,7 +8,8 @@
      media/newproject.js. newproject.js reads dcsUi.iconPaths at load (so
      shared.js must precede it) and renders nothing until the host pushes
      {type:"init"}, which NewProjectPanel does unprompted from its constructor;
-     the fixture mirrors that on DOMContentLoaded. -->
+     the fixture mirrors that on DOMContentLoaded, and also answers the
+     {type:"ready"} handshake newproject.js posts at the bottom of its IIFE. -->
 <script src="harness.js"></script>
 <script src="fixtures/newproject.js"></script>
 <link rel="stylesheet" href="theme.css" />

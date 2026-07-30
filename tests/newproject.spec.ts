@@ -21,6 +21,30 @@ test.describe("newproject preview", () => {
     expect(errors).toEqual([]);
   });
 
+  test("posts a boot handshake so the opening render can be re-asked for", async ({ page }) => {
+    await openPreview(page, "newproject");
+    await expectSent(page, { type: "ready" });
+  });
+
+  test("the handshake's answer is the whole form when the opening push was lost", async ({
+    page,
+  }) => {
+    // The card 24 race, with the constructor's unprompted `init` withheld: this
+    // page renders NOTHING until an `init` arrives, so before the handshake a
+    // lost push left a blank <div id="app"> with no tile, no button and no way
+    // for the user to ask again.
+    const errors = await openPreview(page, "newproject", { query: { scenario: "lostinit" } });
+
+    await expect(page.getByTestId("template-tile")).toHaveCount(5);
+    await expect(page.getByTestId("location-btn")).toBeVisible();
+    await page.getByTestId("name-input").fill("recovered-mod");
+    await expect(page.getByTestId("path-preview")).toHaveText(
+      "→ C:\\Users\\pilot\\Projects\\recovered-mod",
+    );
+    await expect(page.getByTestId("create-btn")).toBeEnabled();
+    expect(errors).toEqual([]);
+  });
+
   test("choosing a template moves the selection", async ({ page }) => {
     await openPreview(page, "newproject");
     await page.locator('[data-testid="template-tile"][data-template="rust-dll"]').click();

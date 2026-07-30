@@ -103,9 +103,12 @@ export class NewProjectPresenter {
   constructor(private readonly deps: NewProjectPresenterDeps) {}
 
   /**
-   * The opening render. Pushed unprompted, because the webview posts nothing at
-   * load — see the `## Comments` on card 14 and card 23: this panel has no boot
-   * handshake at all, so `init` is the one and only chance the form gets.
+   * The opening render, pushed unprompted from the panel's constructor — the
+   * form's FIRST chance, and, since card 24, no longer its only one: the webview
+   * posts `ready` once its listener exists and `handle` answers with this same
+   * method. Idempotent by construction (it reads its inputs afresh and the
+   * webview re-renders whole), so answering the handshake after the constructor
+   * push has already landed is a re-render rather than a second rule.
    */
   pushInit(): void {
     this.deps.post({
@@ -120,6 +123,12 @@ export class NewProjectPresenter {
 
   async handle(msg: NewProjectInbound): Promise<void> {
     switch (msg.type) {
+      case "ready":
+        // The boot handshake. The constructor's push may have arrived before the
+        // webview's listener existed, in which case this is the only `init` the
+        // form ever sees; if it did arrive, this simply re-renders it.
+        this.pushInit();
+        break;
       case "browse": {
         const start = browseStart(msg.location, this.deps.lastLocation(), this.deps.homeDir);
         const picked = await this.deps.pickFolder(start);

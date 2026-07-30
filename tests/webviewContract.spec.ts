@@ -461,10 +461,12 @@ test.describe("newproject ↔ NewProjectPresenter message contract", () => {
     const consumed = new Map<string, boolean>();
 
     await armProbe(page);
-    // Boot: media/newproject.js posts NOTHING at load — this is the one covered
-    // panel with no handshake (card 23) — and renders only when the host pushes
-    // `init`, which the fixture does on DOMContentLoaded as the panel's
-    // constructor does unprompted.
+    // Boot: media/newproject.js renders only when the host pushes `init`, which
+    // the fixture does on DOMContentLoaded as the panel's constructor does
+    // unprompted — and it posts `ready` at the bottom of its IIFE, which the
+    // fixture answers with the same `init`, because the unprompted push can be
+    // lost to the load race and this page has nothing else to render from
+    // (card 24). So the handshake is driven by simply loading the page.
     const errors = await openPreview(page, "newproject");
     await expect(page.getByTestId("template-tile")).toHaveCount(5);
 

@@ -447,15 +447,23 @@ const SETUP_TO_WEBVIEW_KEYS: { readonly [K in SetupHostMessage["type"]]: true } 
 
 /** A message `media/newproject.js` posts. */
 export type NewProjectWebviewMessage =
+  /**
+   * The boot handshake, posted at the bottom of the IIFE. New Project was the
+   * last webview without one, and the one it cost the most: the page renders
+   * only from `init`, so a push lost to the load race left a blank document
+   * rather than a stale one (card 24).
+   */
+  | { type: "ready" }
   | { type: "browse"; location?: string }
   | { type: "create"; template?: string; name?: string; location?: string; inPlace?: boolean };
 
 /**
  * A message `NewProjectPresenter` pushes to the New Project webview.
  *
- * `init` is the only one the form needs, and the only one it cannot ask for:
- * this is the one covered panel whose webview posts NOTHING at load, so the
- * host's unprompted push is the whole handshake (card 23).
+ * `init` is the only one the form needs, and since card 24 it is also the one it
+ * can ASK for: the webview's `ready` is answered with the same `pushInit()` the
+ * panel's constructor calls unprompted, with the unprompted push kept as the
+ * first chance rather than replaced — the shape cards 22 and 29 converged on.
  */
 export type NewProjectHostMessage =
   | ({
@@ -476,6 +484,7 @@ export type NewProjectHostMessage =
   | { type: "error"; message: string };
 
 const NEWPROJECT_TO_HOST_KEYS: { readonly [K in NewProjectWebviewMessage["type"]]: true } = {
+  ready: true,
   browse: true,
   create: true,
 };
@@ -508,9 +517,9 @@ export interface ManifestRoots {
  *
  * `media/manifest.js` reads `window.__BOOTSTRAP__` synchronously at load, so
  * this crosses inside the DOCUMENT the host renders rather than over the message
- * channel. It is the one covered panel that therefore has no boot handshake and
- * cannot lose one to the load race (cards 22-24), which is also why the
- * `toWebview` union below has no `init` in it.
+ * channel. It is the one covered panel that therefore needs no boot handshake and
+ * cannot lose an opening push to the load race (cards 22-24, 29), which is also
+ * why the `toWebview` union below has no `init` in it.
  */
 export interface ManifestBootstrap {
   /** The bound document's text, as the form's model is parsed from. */
@@ -555,7 +564,8 @@ const MANIFEST_TO_WEBVIEW_KEYS: { readonly [K in ManifestHostMessage["type"]]: t
  * IIFE, so a deep link into a page crosses inside the DOCUMENT the host renders.
  * That is why the `toWebview` union below has no `init`, and why an opening deep
  * link cannot be lost to the load race the way publish (card 22) and New Project
- * (card 23) can lose their opening push.
+ * (card 24) could lose their opening push before each grew a handshake to
+ * re-ask with.
  *
  * `""` rather than an absent field is the declaration: it is what "no page named,
  * open where the reader left off" looks like, and the value the webview's own

@@ -214,4 +214,12 @@
       state.creating = false;
     }
   });
+
+  // The boot handshake, posted last — after the listener above exists, so the
+  // answer cannot be missed. This page renders NOTHING until `init` arrives, and
+  // the host pushes it unprompted from the panel's constructor, so before this
+  // existed a lost push left a blank `<div id="app">` with no button and no way
+  // to ask again (card 24). The host answers with the same idempotent `pushInit`,
+  // so a second `init` is a re-render rather than a new rule.
+  vscode.postMessage({ type: "ready" });
 })();

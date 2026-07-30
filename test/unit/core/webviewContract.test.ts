@@ -857,6 +857,7 @@ const SETUP_DRIVES: Record<SetupInbound["type"], Drive<SetupInbound>> = {
 };
 
 const NEWPROJECT_DRIVES: Record<NewProjectInbound["type"], Drive<NewProjectInbound>> = {
+  ready: { send: { type: "ready" } },
   browse: { send: { type: "browse", location: "E:\\Projects" } },
   create: {
     send: { type: "create", template: "blank", name: "my-mod", location: "E:\\Projects" },
@@ -1273,10 +1274,11 @@ describe("newproject — host -> webview", () => {
   it("produces exactly the declared message set", async () => {
     const posted: NewProjectHostMessage[] = [];
 
-    // `init` — the unprompted opening render; `browsed` — the picker's answer;
+    // `init` — driven through the boot handshake rather than `pushInit()`, since
+    // card 24 made the reply the same push; `browsed` — the picker's answer;
     // `created` — a scaffold that worked.
     const h = newProjectHarness();
-    h.presenter.pushInit();
+    await h.presenter.handle({ type: "ready" });
     await h.presenter.handle({ type: "browse", location: "E:\\Projects" });
     await h.presenter.handle({ type: "create", name: "my-mod", location: "E:\\Projects" });
     posted.push(...h.posted);
