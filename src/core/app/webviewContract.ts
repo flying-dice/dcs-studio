@@ -415,11 +415,19 @@ export type SetupHostMessage =
       installCandidates: DcsCandidate[];
     }
   /**
-   * The result of a picker. `valid` is the host's probe of the role's witness
-   * path — declared because the host sends it, though see card 14's journal:
-   * `media/setup.js` currently ignores it.
+   * The result of a picker.
+   *
+   * `which` is REQUIRED here even though the `browse` that asked for it may name
+   * no role: the host resolves an absent role (to userdata) and echoes what it
+   * resolved, so the webview never has to guess. Both halves used to fall back
+   * separately and to different roles, and the webview's answer was `install`
+   * (card 23).
+   *
+   * `valid` is the host's probe of the role's witness path, and is what puts the
+   * pill under a hand-browsed path — which is by definition not among the
+   * detected candidates the webview can otherwise judge against.
    */
-  | { type: "browsed"; which?: SetupRole; path: string; valid: boolean }
+  | { type: "browsed"; which: SetupRole; path: string; valid: boolean }
   /** Settings written. The webview flashes "Saved ✓" for two seconds. */
   | { type: "saved" };
 

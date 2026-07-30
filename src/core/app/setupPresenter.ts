@@ -101,6 +101,10 @@ const BROWSE_LABELS: Readonly<Record<SetupRole, string>> = {
  * The role a browse with no `which` is treated as. The union declares what may
  * ARRIVE and a stale document may name no role at all; userdata is the panel's
  * first and most important field, so it is the one a nameless browse means.
+ *
+ * This is the ONLY fallback in the round trip: the answer echoes the resolved
+ * role, so `media/setup.js` never has to guess (it used to guess `install`,
+ * disagreeing with this one — card 23).
  */
 const DEFAULT_ROLE: SetupRole = "saved";
 
@@ -147,13 +151,16 @@ export class SetupPresenter {
   }
 
   /** Ask for a path for one role, and answer with it and its validity. */
-  private async browse(which: SetupRole | undefined): Promise<void> {
+  private async browse(requested: SetupRole | undefined): Promise<void> {
+    // Resolved once, here, and used for the dialog, the probe AND the echo, so
+    // the webview is told which field the answer is for rather than deciding.
+    const which = requested ?? DEFAULT_ROLE;
     // Only 7-Zip is a file; every other role is a folder, and asking for the
     // wrong kind makes the right answer unpickable.
     const file = which === "sevenzip";
     const picked = await this.deps.browse({
       file,
-      openLabel: BROWSE_LABELS[which ?? DEFAULT_ROLE],
+      openLabel: BROWSE_LABELS[which],
       extensions: file ? ["exe"] : null,
     });
     // A cancelled dialog is not a choice: nothing is posted, so the form keeps
@@ -169,7 +176,7 @@ export class SetupPresenter {
    * writable folder is fine) is valid by default, and a path the OS refuses to
    * probe is invalid rather than fatal.
    */
-  private validate(which: SetupRole | undefined, target: string): boolean {
+  private validate(which: SetupRole, target: string): boolean {
     try {
       const probe = roleProbePath(which, target);
       return probe === null ? true : this.deps.exists(probe);

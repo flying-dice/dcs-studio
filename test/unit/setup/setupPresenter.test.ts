@@ -216,14 +216,32 @@ describe("browsing", () => {
     const h = harness();
     await h.presenter.handle({ type: "browse" });
     expect(h.requests[0]).toMatchObject({ file: false, openLabel: "Use as DCS userdata" });
-    // …and the role is echoed back exactly as it arrived, not as it was defaulted:
-    // the webview has its own fallback and the two must not fight.
+  });
+
+  it("echoes the role it resolved, not the absent one it was sent", async () => {
+    // This is the whole reconciliation of card 23: the fallback lives here and
+    // nowhere else, so the answer names the field it is for. Echoing `undefined`
+    // let `media/setup.js` apply its own, different fallback (`install`) and
+    // drop a browsed userdata folder into the installation box.
+    files.add("D:\\SG\\DCS\\Config");
+    picked = "D:\\SG\\DCS";
+    const h = harness();
+    await h.presenter.handle({ type: "browse" });
     expect(h.posted[0]).toEqual({
       type: "browsed",
-      which: undefined,
+      which: "saved",
       path: "D:\\SG\\DCS",
-      valid: false,
+      valid: true,
     });
+  });
+
+  it("probes the resolved role's witness path, not nothing, for a role-less browse", async () => {
+    // The verdict now reaches the pill, so a nameless browse that resolves to
+    // userdata has to be judged as userdata.
+    picked = "D:\\SG";
+    const h = harness();
+    await h.presenter.handle({ type: "browse" });
+    expect(h.posted[0]).toMatchObject({ which: "saved", valid: false });
   });
 
   it("validates a userdata folder by its Config dir", async () => {
