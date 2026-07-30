@@ -47,10 +47,9 @@ import type { Progress } from "./subscriptionService";
 // ## Coverage is deliberately partial
 //
 // Only the panels with a presenter (`console`, `marketplace`, `mymods`, `log`,
-// `publish`, `setup`) are covered. The other five webviews still have both halves
-// under their own gates but no declared contract between them; they are named in
-// `publish`, `newproject`) are covered. The other five webviews still have both
-// halves under their own gates but no declared contract between them; they are named in
+// `publish`, `setup`, `newproject`) are covered. The other four webviews still
+// have both halves under their own gates but no declared contract between them;
+// they are named in
 // `UNCOVERED_WEBVIEWS` so the gap is visible in the table rather than silent,
 // and the tests assert that list is exactly "every preview page minus the
 // covered ones". Extending the contract to a panel means giving it a presenter
