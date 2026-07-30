@@ -21,6 +21,12 @@ import type {
 } from "../../../src/core/app/myModsPresenter";
 import { MyModsPresenter } from "../../../src/core/app/myModsPresenter";
 import type {
+  NewProjectEffect,
+  NewProjectInbound,
+  NewProjectPresenterDeps,
+} from "../../../src/core/app/newProjectPresenter";
+import { NewProjectPresenter } from "../../../src/core/app/newProjectPresenter";
+import type {
   PublishEffect,
   PublishInbound,
   PublishPresenterDeps,
@@ -32,6 +38,7 @@ import type {
   LogHostMessage,
   MarketplaceHostMessage,
   MyModsHostMessage,
+  NewProjectHostMessage,
   PublishHostMessage,
 } from "../../../src/core/app/webviewContract";
 import {
@@ -39,6 +46,7 @@ import {
   LOG_PROTOCOL,
   MARKETPLACE_PROTOCOL,
   MYMODS_PROTOCOL,
+  NEWPROJECT_PROTOCOL,
   PUBLISH_PROTOCOL,
   UNCOVERED_WEBVIEWS,
   WEBVIEW_PROTOCOLS,
@@ -440,6 +448,56 @@ function publishHarness(over: Partial<PublishPresenterDeps> = {}): PublishHarnes
   };
 }
 
+// ── New Project harness ──────────────────────────────────────────────────────
+
+interface NewProjectHarness {
+  presenter: NewProjectPresenter;
+  posted: NewProjectHostMessage[];
+  effects: NewProjectEffect[];
+  calls: string[];
+  interactions(): number;
+}
+
+/**
+ * A New Project presenter whose world succeeds: the picker answers a folder and
+ * both scaffolds return. The refusal and failure paths have their own tests in
+ * `test/unit/project/newProjectPresenter.test.ts`.
+ */
+function newProjectHarness(over: Partial<NewProjectPresenterDeps> = {}): NewProjectHarness {
+  const posted: NewProjectHostMessage[] = [];
+  const effects: NewProjectEffect[] = [];
+  const calls: string[] = [];
+  const deps: NewProjectPresenterDeps = {
+    folder: () => undefined,
+    homeDir: "C:\\Users\\pilot",
+    lastLocation: () => "E:\\Projects",
+    rememberLocation: async () => void calls.push("remember"),
+    setPendingOpen: async () => void calls.push("pending"),
+    pickFolder: async () => {
+      calls.push("pick");
+      return "E:\\Chosen";
+    },
+    scaffoldInPlace: async () => {
+      calls.push("inPlace");
+      return { skipped: [] };
+    },
+    scaffoldNewFolder: async () => {
+      calls.push("newFolder");
+      return { root: "E:\\Projects\\my-mod" };
+    },
+    post: (msg) => posted.push(msg),
+    effect: (e) => effects.push(e),
+    ...over,
+  };
+  return {
+    presenter: new NewProjectPresenter(deps),
+    posted,
+    effects,
+    calls,
+    interactions: () => posted.length + effects.length + calls.length,
+  };
+}
+
 /** The message types a run of the presenter actually pushed, de-duplicated. */
 function typesOf(posted: { type: string }[]): string[] {
   return [...new Set(posted.map((m) => m.type))].sort();
@@ -532,6 +590,13 @@ const PUBLISH_DRIVES: Record<PublishInbound["type"], Drive<PublishInbound>> = {
   openExternal: { send: { type: "openExternal", url: "https://github.com/Owner/my-mod" } },
 };
 
+const NEWPROJECT_DRIVES: Record<NewProjectInbound["type"], Drive<NewProjectInbound>> = {
+  browse: { send: { type: "browse", location: "E:\\Projects" } },
+  create: {
+    send: { type: "create", template: "blank", name: "my-mod", location: "E:\\Projects" },
+  },
+};
+
 // ── The contract table itself ────────────────────────────────────────────────
 
 describe("the declared webview contract", () => {
@@ -541,6 +606,7 @@ describe("the declared webview contract", () => {
       "log",
       "marketplace",
       "mymods",
+      "newproject",
       "publish",
     ]);
   });
@@ -833,6 +899,55 @@ describe("publish — host -> webview", () => {
     posted.push(...none.posted);
 
     expect(typesOf(posted)).toEqual([...PUBLISH_PROTOCOL.toWebview].sort());
+  });
+});
+
+// ── New Project: the host half ───────────────────────────────────────────────
+
+describe("newproject — webview -> host", () => {
+  it("drives exactly the declared message set", () => {
+    expect(Object.keys(NEWPROJECT_DRIVES).sort()).toEqual([...NEWPROJECT_PROTOCOL.toHost].sort());
+  });
+
+  it.each(NEWPROJECT_PROTOCOL.toHost)("%s is acted on", async (type) => {
+    const plan = NEWPROJECT_DRIVES[type as NewProjectInbound["type"]];
+    const h = newProjectHarness();
+    for (const m of plan.before ?? []) await h.presenter.handle(m);
+    const before = h.interactions();
+    await h.presenter.handle(plan.send);
+    expect(h.interactions()).toBeGreaterThan(before);
+  });
+
+  it("does nothing at all for a message type the contract does not declare", async () => {
+    const h = newProjectHarness();
+    await h.presenter.handle({ type: "notInTheContract" } as unknown as NewProjectInbound);
+    expect(h.interactions()).toBe(0);
+  });
+});
+
+describe("newproject — host -> webview", () => {
+  it("produces exactly the declared message set", async () => {
+    const posted: NewProjectHostMessage[] = [];
+
+    // `init` — the unprompted opening render; `browsed` — the picker's answer;
+    // `created` — a scaffold that worked.
+    const h = newProjectHarness();
+    h.presenter.pushInit();
+    await h.presenter.handle({ type: "browse", location: "E:\\Projects" });
+    await h.presenter.handle({ type: "create", name: "my-mod", location: "E:\\Projects" });
+    posted.push(...h.posted);
+
+    // `error` — the one path the panel survives, so it needs a world where the
+    // scaffold refuses rather than a second message.
+    const failing = newProjectHarness({
+      scaffoldNewFolder: async () => {
+        throw new Error("Folder already exists and is not empty.");
+      },
+    });
+    await failing.presenter.handle({ type: "create", name: "my-mod", location: "E:\\Projects" });
+    posted.push(...failing.posted);
+
+    expect(typesOf(posted)).toEqual([...NEWPROJECT_PROTOCOL.toWebview].sort());
   });
 });
 
