@@ -40,7 +40,7 @@ _No parameters._
 
 ### `eval`
 
-Run Lua in the GUI/hooks state (DCS.\*, net.\*) and return the result. print() output streams into console_read. For the mission state use the mission bridge on port 25570.
+Run Lua in the GUI/hooks state (DCS.\*, net.\*) and return the result. print() output streams into console_read. For the mission state use the mission bridge on port 25570. DCS.getMissionLoaded() is refused with an explanatory error: calling it with a mission loaded crashes DCS 2.9.27 outright.
 
 | Param | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -241,7 +241,7 @@ Drop every explorer ref held by the chosen environment.
 
 ### `repl_eval`
 
-Console eval in the chosen environment: { ok, result?, err? }.
+Console eval in the chosen environment: { ok, result?, err? }. DCS.getMissionLoaded() is refused with an explanatory error: calling it with a mission loaded crashes DCS 2.9.27 outright.
 
 | Param | Type | Required | Description |
 | --- | --- | --- | --- |

@@ -33,9 +33,13 @@ return function(router, deps)
     if not f then
       error("loadstring: " .. tostring(lerr))
     end
-    return RT.with_print_capture(bridge.console.print, f)
+    -- RT.guard_chunk swaps in the environment whose `DCS` refuses the calls that
+    -- kill the process outright (card 19 — DCS.getMissionLoaded). The console's
+    -- repl_* paths get it inside RT's own compile; this handler loads its chunk
+    -- itself, so it has to ask.
+    return RT.with_print_capture(bridge.console.print, RT.guard_chunk(f))
   end, {
-    description = "Run Lua in the GUI/hooks state (DCS.*, net.*) and return the result. print() output streams into console_read. For the mission state use the mission bridge on port 25570.",
+    description = "Run Lua in the GUI/hooks state (DCS.*, net.*) and return the result. print() output streams into console_read. For the mission state use the mission bridge on port 25570. DCS.getMissionLoaded() is refused with an explanatory error: calling it with a mission loaded crashes DCS 2.9.27 outright.",
     params = { { name = "code", type = "string", required = true, description = "Lua source to run." } },
   })
 
@@ -137,7 +141,7 @@ return function(router, deps)
     local envname = repl_env(params)
     return rt_call_decoded(envname, string.format("eval_json(%q)", (params and params.code) or ""))
   end, {
-    description = "Console eval in the chosen environment: { ok, result?, err? }.",
+    description = "Console eval in the chosen environment: { ok, result?, err? }. DCS.getMissionLoaded() is refused with an explanatory error: calling it with a mission loaded crashes DCS 2.9.27 outright.",
     params = { { name = "code", type = "string", required = true }, REPL_ENV_META },
   })
 

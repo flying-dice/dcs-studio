@@ -92,6 +92,19 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
   -- being the matching build inside a paused, possibly sanitized state. The
   -- key-order comparator in D.expand mirrors rt.lua's key_order the same way.
   -- Kept in sync by hand.
+  -- Globals as a user-facing evaluation should see them: through the console
+  -- runtime's guarded environment when that runtime is installed in this state
+  -- (card 19 — its `DCS` refuses the calls that kill the process outright),
+  -- else plain `_G`. A SOFT dependency by design, like dbg_preview's deliberate
+  -- duplication above: the engine must keep working in a state without the RT.
+  local function RT_GLOBALS()
+    local rt = __DCS_STUDIO_RT
+    if rt and rt.global_env then
+      return rt.global_env()
+    end
+    return _G
+  end
+
   local function dbg_preview(v)
     local t = type(v)
     if t == "string" then
@@ -235,7 +248,11 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
       __index = function(_, k)
         if env.locals_present and env.locals_present[k] then return env.locals[k] end
         if env.upvals_present and env.upvals_present[k] then return env.upvals[k] end
-        return _G[k]
+        -- Globals resolve through the RT's guarded environment when it is
+        -- installed (card 19): a watch or console line on
+        -- DCS.getMissionLoaded() must raise, not kill the process. Falls back
+        -- to _G in a state without the RT.
+        return RT_GLOBALS()[k]
       end,
       -- A bare-name write inside an evaluated statement would land in this
       -- throwaway proxy and silently vanish — the worst kind of "worked".
@@ -464,6 +481,12 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
     local chunk, lerr = loadstring(code or "", source)
     if not chunk then
       return { ran = false, error = "loadstring: " .. tostring(lerr) }
+    end
+    -- Same guarded globals the watches use: F5 on a line calling one of the
+    -- process-killing DCS getters must raise, not take the sim down (card 19).
+    local rt = __DCS_STUDIO_RT
+    if rt and rt.guard_chunk then
+      chunk = rt.guard_chunk(chunk)
     end
     -- Pause at an uncaught error with the frames still inspectable (the IDE
     -- opts in). Headless callers keep report-and-return: an unattended error
