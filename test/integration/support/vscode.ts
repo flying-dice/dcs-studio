@@ -28,9 +28,10 @@ export interface VscodeState {
   /** Queued replies for showOpenDialog, in order — each an array of fsPaths. */
   openDialogReplies: (string[] | undefined)[];
   /** Every showOpenDialog call's options, in order. What a panel ASKS for —
-   * files versus folders, the confirm label, the extension filter — decides
-   * whether the right answer is pickable at all, so it is part of its contract. */
-  openDialogOptions: unknown[];
+   * files versus folders, the confirm label, the extension filter, where the
+   * picker starts — decides whether the right answer is pickable at all, so it
+   * is part of its contract. */
+  openDialogOptions: ({ defaultUri?: { fsPath: string } } & Record<string, unknown>)[];
   /** Queued replies for showSaveDialog, in order — an fsPath, or undefined for
    * a cancelled save. */
   saveDialogReplies: (string | undefined)[];
@@ -624,8 +625,8 @@ export function vscodeMock() {
         state.errors.push(message);
         return Promise.resolve(state.messageReplies.shift());
       },
-      showOpenDialog: (options?: unknown) => {
-        state.openDialogOptions.push(options);
+      showOpenDialog: (options?: { defaultUri?: { fsPath: string } } & Record<string, unknown>) => {
+        state.openDialogOptions.push(options ?? {});
         const reply = state.openDialogReplies.shift();
         return Promise.resolve(reply?.map((p) => FakeUri.file(p)));
       },

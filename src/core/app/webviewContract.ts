@@ -3,6 +3,8 @@ import type { DcsCandidate, SetupRole } from "../domain/dcsDetect";
 import type { LogEntry, ModIdentity } from "../domain/dcsLog";
 import type { LuaEnv, ReplVariable } from "../domain/debugProtocol";
 import type { InstallManifestView } from "../domain/installManifestView";
+import type { InitialForm } from "../domain/projectForm";
+import type { TemplateMeta } from "../domain/projectTemplates";
 import type { Check } from "../domain/publishChecks";
 import type { RepoRef } from "../domain/repoRemote";
 import type { ModDto } from "../domain/subscriptions";
@@ -47,6 +49,8 @@ import type { Progress } from "./subscriptionService";
 // Only the panels with a presenter (`console`, `marketplace`, `mymods`, `log`,
 // `publish`, `setup`) are covered. The other five webviews still have both halves
 // under their own gates but no declared contract between them; they are named in
+// `publish`, `newproject`) are covered. The other five webviews still have both
+// halves under their own gates but no declared contract between them; they are named in
 // `UNCOVERED_WEBVIEWS` so the gap is visible in the table rather than silent,
 // and the tests assert that list is exactly "every preview page minus the
 // covered ones". Extending the contract to a panel means giving it a presenter
@@ -425,6 +429,50 @@ const SETUP_TO_WEBVIEW_KEYS: { readonly [K in SetupHostMessage["type"]]: true } 
   saved: true,
 };
 
+// ── New Project ─────────────────────────────────────────────────────
+
+/** A message `media/newproject.js` posts. */
+export type NewProjectWebviewMessage =
+  | { type: "browse"; location?: string }
+  | { type: "create"; template?: string; name?: string; location?: string; inPlace?: boolean };
+
+/**
+ * A message `NewProjectPresenter` pushes to the New Project webview.
+ *
+ * `init` is the only one the form needs, and the only one it cannot ask for:
+ * this is the one covered panel whose webview posts NOTHING at load, so the
+ * host's unprompted push is the whole handshake (card 23).
+ */
+export type NewProjectHostMessage =
+  | ({
+      type: "init";
+      /** The template tiles, in the order they are offered. */
+      templates: readonly TemplateMeta[];
+      /** The separator the webview joins location + name with for its preview. */
+      sep: string;
+    } & InitialForm)
+  | { type: "browsed"; path: string }
+  /**
+   * The scaffold finished. Declared because both halves implement it, and
+   * `silent` in `NEWPROJECT_PROTOCOL` because all it does is drop the webview's
+   * "Creating…" latch — a latch nothing can outlive, since the host closes the
+   * panel or reloads the window immediately after (card 24).
+   */
+  | { type: "created" }
+  | { type: "error"; message: string };
+
+const NEWPROJECT_TO_HOST_KEYS: { readonly [K in NewProjectWebviewMessage["type"]]: true } = {
+  browse: true,
+  create: true,
+};
+
+const NEWPROJECT_TO_WEBVIEW_KEYS: { readonly [K in NewProjectHostMessage["type"]]: true } = {
+  init: true,
+  browsed: true,
+  created: true,
+  error: true,
+};
+
 // ── The table ────────────────────────────────────────────────────────────────
 
 /** One covered panel's half of the contract, as data the tests iterate. */
@@ -500,12 +548,23 @@ export const SETUP_PROTOCOL: WebviewProtocol = {
   silent: [],
 };
 
+export const NEWPROJECT_PROTOCOL: WebviewProtocol = {
+  preview: "newproject.html",
+  scripts: ["newproject.js"],
+  toHost: Object.keys(NEWPROJECT_TO_HOST_KEYS),
+  toWebview: Object.keys(NEWPROJECT_TO_WEBVIEW_KEYS),
+  // `created` only clears the script-local `creating` flag; the form it would
+  // re-enable is about to be closed or reloaded away, so it renders nothing.
+  silent: ["created"],
+};
+
 /** Every panel whose protocol is declared, keyed by preview page basename. */
 export const WEBVIEW_PROTOCOLS: Readonly<Record<string, WebviewProtocol>> = {
   console: CONSOLE_PROTOCOL,
   log: LOG_PROTOCOL,
   marketplace: MARKETPLACE_PROTOCOL,
   mymods: MYMODS_PROTOCOL,
+  newproject: NEWPROJECT_PROTOCOL,
   publish: PUBLISH_PROTOCOL,
   setup: SETUP_PROTOCOL,
 };
@@ -519,10 +578,4 @@ export const WEBVIEW_PROTOCOLS: Readonly<Record<string, WebviewProtocol>> = {
  * above are only worth anything because a `vscode`-free object on the host side
  * can be driven through every one of them.
  */
-export const UNCOVERED_WEBVIEWS: readonly string[] = [
-  "docs",
-  "manifest",
-  "nav",
-  "newproject",
-  "skills",
-];
+export const UNCOVERED_WEBVIEWS: readonly string[] = ["docs", "manifest", "nav", "skills"];

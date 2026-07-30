@@ -4,6 +4,7 @@ import {
   LOG_PROTOCOL,
   MARKETPLACE_PROTOCOL,
   MYMODS_PROTOCOL,
+  NEWPROJECT_PROTOCOL,
   PUBLISH_PROTOCOL,
   SETUP_PROTOCOL,
   type WebviewProtocol,
@@ -444,6 +445,45 @@ test.describe("setup ↔ SetupPresenter message contract", () => {
 
     await collect(page, sent, consumed);
     assertContract(SETUP_PROTOCOL, sent, consumed);
+    expect(errors).toEqual([]);
+  });
+});
+
+test.describe("newproject ↔ NewProjectPresenter message contract", () => {
+  test("the webview posts and consumes exactly the declared message set", async ({ page }) => {
+    const sent = new Set<string>();
+    const consumed = new Map<string, boolean>();
+
+    await armProbe(page);
+    // Boot: media/newproject.js posts NOTHING at load — this is the one covered
+    // panel with no handshake (card 23) — and renders only when the host pushes
+    // `init`, which the fixture does on DOMContentLoaded as the panel's
+    // constructor does unprompted.
+    const errors = await openPreview(page, "newproject");
+    await expect(page.getByTestId("template-tile")).toHaveCount(5);
+
+    // A tile click is local to the document; the location button and Browse are
+    // the two wirings of `browse`, and the fixture answers `browsed`.
+    await page.getByTestId("template-tile").first().click();
+    await page.getByTestId("browse-btn").click();
+    await expect(page.getByTestId("location-path")).toHaveText("D:\\DCS Projects");
+
+    // `error` first, because it is the only reply that clears the Creating…
+    // latch — the name "taken" is what the fixture fails, the way a real EEXIST
+    // does.
+    await page.getByTestId("name-input").fill("taken");
+    await page.getByTestId("create-btn").click();
+    await expect(page.getByTestId("error-note")).toContainText("already exists");
+
+    // `created` last: it is declared SILENT, so the assertion on it is that the
+    // document does not change — the latch it drops belongs to a form the real
+    // host is about to close or reload away (card 24).
+    await page.getByTestId("name-input").fill("done");
+    await page.getByTestId("create-btn").click();
+    await expect(page.getByTestId("create-btn")).toContainText("Creating…");
+
+    await collect(page, sent, consumed);
+    assertContract(NEWPROJECT_PROTOCOL, sent, consumed);
     expect(errors).toEqual([]);
   });
 });

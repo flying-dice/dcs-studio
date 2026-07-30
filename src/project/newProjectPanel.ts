@@ -1,16 +1,17 @@
-import { win32 as path } from "node:path";
 import * as os from "os";
 import * as vscode from "vscode";
-import { browseStart, initialForm } from "../core/domain/projectForm";
-import { TEMPLATES } from "../core/domain/projectTemplates";
+import { type NewProjectEffect, NewProjectPresenter } from "../core/app/newProjectPresenter";
+import type { NewProjectWebviewMessage } from "../core/app/webviewContract";
 import { renderWebviewHtml } from "../webview/html";
 import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
 import { scaffoldInPlace, scaffoldNewFolder } from "./scaffold";
 
 // The guided New Project experience — the VS Code port of the real app's
 // launcher card: template tiles, name, location with live path preview,
-// Create. Scaffolds via src/project/scaffold.ts, then opens the new folder
-// (the pending-open flag makes the manifest + form appear after the reload).
+// Create. This is the shell: the panel, the workspace-folder read, the two
+// `globalState` keys, the folder dialog, the scaffold adapters and the
+// presenter's effects. Every decision is in
+// `src/core/app/newProjectPresenter.ts`.
 
 const LAST_LOCATION_KEY = "dcs.lastProjectLocation";
 export const PENDING_OPEN_KEY = "dcs.pendingProjectOpen";
@@ -20,6 +21,7 @@ export class NewProjectPanel {
   private static readonly viewType = "dcsStudio.newProject";
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[];
+  private readonly presenter: NewProjectPresenter;
 
   static show(context: vscode.ExtensionContext): void {
     const column = activeColumn();
@@ -39,9 +41,29 @@ export class NewProjectPanel {
     this.disposables = disposeWithPanel(panel, () => {
       NewProjectPanel.current = undefined;
     });
+    this.presenter = new NewProjectPresenter({
+      folder: () => this.workspaceFolder(),
+      homeDir: os.homedir(),
+      lastLocation: () => this.context.globalState.get<string>(LAST_LOCATION_KEY),
+      rememberLocation: (location) =>
+        Promise.resolve(this.context.globalState.update(LAST_LOCATION_KEY, location)),
+      setPendingOpen: (root) =>
+        Promise.resolve(this.context.globalState.update(PENDING_OPEN_KEY, root)),
+      pickFolder: (start) => this.pickFolder(start),
+      scaffoldInPlace: (template, name, folder) =>
+        scaffoldInPlace(this.context.extensionUri, template, name, folder),
+      scaffoldNewFolder: (template, name, location) =>
+        scaffoldNewFolder(this.context.extensionUri, template, name, location),
+      post: (msg) => void this.panel.webview.postMessage(msg),
+      effect: (effect) => this.run(effect),
+    });
     this.panel.webview.html = this.html();
-    this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
-    void this.pushInit();
+    this.panel.webview.onDidReceiveMessage(
+      (m: NewProjectWebviewMessage) => void this.presenter.handle(m),
+      null,
+      this.disposables,
+    );
+    this.presenter.pushInit();
   }
 
   /** The open workspace folder to bootstrap in place, if any. */
@@ -50,82 +72,34 @@ export class NewProjectPanel {
     return folder?.uri.scheme === "file" ? folder.uri.fsPath : undefined;
   }
 
-  private pushInit(): void {
-    const folder = this.workspaceFolder();
-    const last = this.context.globalState.get<string>(LAST_LOCATION_KEY);
-    this.post({
-      type: "init",
-      templates: TEMPLATES,
-      sep: path.sep,
-      ...initialForm(folder, last, os.homedir()),
+  private async pickFolder(start: string): Promise<string | undefined> {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+      openLabel: "Use as location",
+      defaultUri: vscode.Uri.file(start),
     });
+    return picked?.[0]?.fsPath;
   }
 
-  private async onMessage(msg: {
-    type: string;
-    template?: string;
-    name?: string;
-    location?: string;
-    inPlace?: boolean;
-  }): Promise<void> {
-    switch (msg.type) {
-      case "browse": {
-        const last = this.context.globalState.get<string>(LAST_LOCATION_KEY);
-        const start = browseStart(msg.location, last, os.homedir());
-        const picked = await vscode.window.showOpenDialog({
-          canSelectFiles: false,
-          canSelectFolders: true,
-          canSelectMany: false,
-          openLabel: "Use as location",
-          defaultUri: vscode.Uri.file(start),
-        });
-        if (picked?.[0]) this.post({ type: "browsed", path: picked[0].fsPath });
-        break;
-      }
-      case "create":
-        await this.create(msg.template ?? "", msg.name ?? "", msg.location ?? "", !!msg.inPlace);
-        break;
-    }
-  }
-
-  private async create(
-    template: string,
-    name: string,
-    location: string,
-    inPlace: boolean,
-  ): Promise<void> {
-    try {
-      const folder = this.workspaceFolder();
-      if (inPlace && folder) {
-        // Bootstrap the open folder itself — no reload needed.
-        const result = await scaffoldInPlace(this.context.extensionUri, template, name, folder);
-        this.post({ type: "created" });
+  private run(effect: NewProjectEffect): void {
+    switch (effect.kind) {
+      case "close":
         this.panel.dispose();
-        if (result.skipped.length) {
-          void vscode.window.showInformationMessage(
-            `Kept ${result.skipped.length} existing file(s) the template also provides: ${result.skipped.join(", ")}`,
-          );
-        }
-        await vscode.commands.executeCommand("dcs.manifest.author");
-        return;
-      }
-
-      const result = await scaffoldNewFolder(this.context.extensionUri, template, name, location);
-      await this.context.globalState.update(LAST_LOCATION_KEY, location);
-      this.post({ type: "created" });
-      // Opening the folder reloads the extension host; the pending flag
-      // tells the next activation to open the manifest + form.
-      await this.context.globalState.update(PENDING_OPEN_KEY, result.root);
-      await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(result.root), {
-        forceNewWindow: false,
-      });
-    } catch (err) {
-      this.post({ type: "error", message: err instanceof Error ? err.message : String(err) });
+        break;
+      case "notice":
+        void vscode.window.showInformationMessage(effect.message);
+        break;
+      case "authorManifest":
+        void vscode.commands.executeCommand("dcs.manifest.author");
+        break;
+      case "openFolder":
+        void vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(effect.root), {
+          forceNewWindow: false,
+        });
+        break;
     }
-  }
-
-  private post(msg: unknown): void {
-    void this.panel.webview.postMessage(msg);
   }
 
   private html(): string {

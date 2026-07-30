@@ -28,10 +28,16 @@ vi.mock("../../../src/project/scaffold", () => ({
 import * as vscode from "vscode";
 import { NewProjectPanel, PENDING_OPEN_KEY } from "../../../src/project/newProjectPanel";
 
-// The guided New Project flow. Creating into a new folder reloads the
-// extension host, so the panel has to leave a breadcrumb in globalState before
-// the reload or the manifest and form never appear — that handover, and the
-// in-place branch that avoids the reload entirely, are the load-bearing parts.
+// The New Project panel's WIRING — the shell around
+// `src/core/app/newProjectPresenter.ts`, which is where every decision now
+// lives and is tested with no `vscode` at all
+// (test/unit/project/newProjectPresenter.test.ts).
+//
+// What only this layer can witness: the workspace-folder read and what counts
+// as a folder, the two `globalState` keys by name, the folder dialog's options,
+// the four presenter effects becoming real editor calls (and the ORDER of the
+// two that matter — the pending-open breadcrumb is written before the reload),
+// and card 07's teardown.
 
 const globalState = new Map<string, unknown>();
 
@@ -64,42 +70,24 @@ beforeEach(() => {
   NewProjectPanel.current = undefined;
 });
 
-describe("initial state", () => {
-  it("offers the template catalogue and the platform separator", async () => {
+describe("the opening push", () => {
+  it("reaches the webview unprompted, with the catalogue and the separator", async () => {
+    // The webview posts nothing at load, so this push is the whole handshake
+    // (card 23) — if the panel did not send it from its constructor the form
+    // would never render at all.
     const panel = await show();
     const init = panel.webview.postedOfType("init")[0];
     expect((init.templates as unknown[]).length).toBeGreaterThan(0);
-    // The webview builds the live path preview by joining with this.
     expect(init.sep).toBe("\\");
   });
 
-  it("reports the open workspace folder and pre-names the project after it", async () => {
-    // With a folder open the form offers "bootstrap this folder" as well as
-    // creating a new one, so the folder and its basename both go across.
+  it("reports the open workspace folder", async () => {
     resetVscode({ workspaceFolders: ["C:\\proj"] });
     const panel = await show();
     expect(panel.webview.postedOfType("init")[0]).toMatchObject({
       folder: "C:\\proj",
       name: "proj",
     });
-  });
-
-  it("offers the remembered location once a folder is open", async () => {
-    resetVscode({ workspaceFolders: ["C:\\proj"] });
-    globalState.set("dcs.lastProjectLocation", "E:\\Projects");
-    const panel = await show();
-    expect(panel.webview.postedOfType("init")[0]).toMatchObject({ location: "E:\\Projects" });
-  });
-
-  it("offers the default location under the home dir when nothing is remembered", async () => {
-    resetVscode({ workspaceFolders: ["C:\\proj"] });
-    const panel = await show();
-    expect(panel.webview.postedOfType("init")[0].location).toContain("C:\\Users\\pilot");
-  });
-
-  it("reports no folder and an empty location when none is open", async () => {
-    const panel = await show();
-    expect(panel.webview.postedOfType("init")[0]).toMatchObject({ folder: null, location: "" });
   });
 
   it("treats a non-file workspace as no folder at all", async () => {
@@ -111,18 +99,33 @@ describe("initial state", () => {
     const panel = await show();
     expect(panel.webview.postedOfType("init")[0]).toMatchObject({ folder: null });
   });
+
+  it("reads the remembered location out of globalState by name", async () => {
+    resetVscode({ workspaceFolders: ["C:\\proj"] });
+    globalState.set("dcs.lastProjectLocation", "E:\\Projects");
+    const panel = await show();
+    expect(panel.webview.postedOfType("init")[0]).toMatchObject({ location: "E:\\Projects" });
+  });
 });
 
-describe("browsing for a location", () => {
-  it("posts the picked folder back", async () => {
+describe("the folder dialog", () => {
+  it("asks for a single folder, opening where the presenter said", async () => {
     state.openDialogReplies.push(["E:\\Chosen"]);
     const panel = await show();
     await panel.webview.receive({ type: "browse", location: "E:\\Projects" });
     await flush();
+
+    expect(state.openDialogOptions[0]).toMatchObject({
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+      openLabel: "Use as location",
+    });
+    expect(state.openDialogOptions[0].defaultUri?.fsPath).toBe("E:\\Projects");
     expect(panel.webview.postedOfType("browsed")[0]).toMatchObject({ path: "E:\\Chosen" });
   });
 
-  it("posts nothing when the dialog is cancelled", async () => {
+  it("hands back nothing when the dialog is cancelled", async () => {
     state.openDialogReplies.push(undefined);
     const panel = await show();
     await panel.webview.receive({ type: "browse" });
@@ -132,11 +135,11 @@ describe("browsing for a location", () => {
 });
 
 describe("creating into a new folder", () => {
-  it("scaffolds, records the location, flags the pending open and opens the folder", async () => {
+  it("scaffolds through the adapter, writes both keys and then opens the folder", async () => {
     const panel = await show();
     await panel.webview.receive({
       type: "create",
-      template: "mission-script",
+      template: "lua-mission",
       name: "my-mod",
       location: "C:\\Users\\pilot\\DCSStudio",
     });
@@ -145,7 +148,7 @@ describe("creating into a new folder", () => {
     expect(scaffoldCalls).toEqual([
       {
         kind: "newFolder",
-        template: "mission-script",
+        template: "lua-mission",
         name: "my-mod",
         target: "C:\\Users\\pilot\\DCSStudio",
       },
@@ -154,18 +157,13 @@ describe("creating into a new folder", () => {
     // Opening the folder reloads the extension host, so the breadcrumb has to
     // be written first or the manifest and form never appear afterwards.
     expect(globalState.get(PENDING_OPEN_KEY)).toBe("C:\\Users\\pilot\\DCSStudio\\my-mod");
-    expect(state.executedCommands.at(-1)?.command).toBe("vscode.openFolder");
-    expect(panel.webview.postedOfType("created")).toHaveLength(1);
+    const opened = state.executedCommands[state.executedCommands.length - 1];
+    expect(opened.command).toBe("vscode.openFolder");
+    expect((opened.args[0] as vscode.Uri).fsPath).toBe("C:\\Users\\pilot\\DCSStudio\\my-mod");
+    expect(opened.args[1]).toEqual({ forceNewWindow: false });
   });
 
-  it("substitutes empty strings for missing fields rather than throwing", async () => {
-    const panel = await show();
-    await panel.webview.receive({ type: "create" });
-    await flush();
-    expect(scaffoldCalls[0]).toMatchObject({ template: "", name: "", target: "" });
-  });
-
-  it("reports a scaffold failure to the form instead of closing it", async () => {
+  it("leaves the panel open when the scaffold adapter throws", async () => {
     newFolderImpl = async () => {
       throw new Error("Folder already exists and is not empty.");
     };
@@ -179,38 +177,22 @@ describe("creating into a new folder", () => {
     expect(panel.disposed).toBe(false);
     expect(globalState.get(PENDING_OPEN_KEY)).toBeUndefined();
   });
-
-  it("renders a non-Error scaffold failure", async () => {
-    newFolderImpl = async () => {
-      throw "nope";
-    };
-    const panel = await show();
-    await panel.webview.receive({ type: "create", name: "x", location: "C:\\x" });
-    await flush();
-    expect(panel.webview.postedOfType("error")[0]).toMatchObject({ message: "nope" });
-  });
 });
 
 describe("bootstrapping the open folder in place", () => {
-  it("scaffolds in place, closes the panel and opens the manifest without a reload", async () => {
+  it("closes the panel and opens the manifest form, with no reload", async () => {
     resetVscode({ workspaceFolders: ["C:\\proj"] });
     const panel = await show();
-    await panel.webview.receive({
-      type: "create",
-      template: "mission-script",
-      name: "my-mod",
-      inPlace: true,
-    });
+    await panel.webview.receive({ type: "create", name: "my-mod", inPlace: true });
     await flush();
 
     expect(scaffoldCalls[0]).toMatchObject({ kind: "inPlace", target: "C:\\proj" });
     expect(panel.disposed).toBe(true);
     expect(state.executedCommands.at(-1)?.command).toBe("dcs.manifest.author");
-    // No reload, so no pending-open breadcrumb is needed.
     expect(globalState.get(PENDING_OPEN_KEY)).toBeUndefined();
   });
 
-  it("names the files it refused to overwrite", async () => {
+  it("shows the kept-files notice as an information message", async () => {
     resetVscode({ workspaceFolders: ["C:\\proj"] });
     inPlaceImpl = async () => ({ root: "C:\\proj", skipped: ["README.md", ".gitignore"] });
     const panel = await show();
@@ -227,18 +209,6 @@ describe("bootstrapping the open folder in place", () => {
     await panel.webview.receive({ type: "create", inPlace: true });
     await flush();
     expect(state.info).toEqual([]);
-  });
-
-  it("falls back to the new-folder path when in-place is asked for with no folder open", async () => {
-    const panel = await show();
-    await panel.webview.receive({
-      type: "create",
-      name: "my-mod",
-      location: "C:\\x",
-      inPlace: true,
-    });
-    await flush();
-    expect(scaffoldCalls[0]).toMatchObject({ kind: "newFolder" });
   });
 });
 

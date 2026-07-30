@@ -387,7 +387,7 @@ came out of asking what happens when a user acts at the wrong moment.
   `14-presenter-rollout-remaining-panels`). The contract is
   declared in `src/core/app/webviewContract.ts` — typed
   `HostMessage`/`WebviewMessage` unions for `console`, `marketplace`, `mymods`,
-  `log`, `publish` and `setup`, the panels with a presenter — and checked from three directions: the compiler
+  `log`, `publish`, `setup` and `newproject`, the panels with a presenter — and checked from three directions: the compiler
   (each presenter's `post` is typed to its host union, so an undeclared push
   does not build), the unit layer (every declared inbound message is asserted to
   be acted on, every declared outbound to be produced), and the e2e layer (the
@@ -406,8 +406,9 @@ came out of asking what happens when a user acts at the wrong moment.
   `publishPanel` followed the same way (board card
   `14-presenter-rollout-remaining-panels`): a 130-line shell over
   `core/app/logPresenter.ts`, a 90-line shell over
-  `core/app/publishPresenter.ts`, and a 127-line shell over
-  `core/app/setupPresenter.ts`. The G5 table above
+  `core/app/publishPresenter.ts`, a 127-line shell over
+  `core/app/setupPresenter.ts`, and a 115-line shell over
+  `core/app/newProjectPresenter.ts` (`newProjectPanel`). The G5 table above
   still reads 309 lines / 22 refs — that is the original audit's measurement at
   `8c45b98` and is left as the record of what was true then, per this
   document's status note.
