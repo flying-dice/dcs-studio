@@ -2,8 +2,11 @@ import type { DualBridgeStatus } from "../domain/bridgeProtocol";
 import type { LogEntry, ModIdentity } from "../domain/dcsLog";
 import type { LuaEnv, ReplVariable } from "../domain/debugProtocol";
 import type { InstallManifestView } from "../domain/installManifestView";
+import type { Check } from "../domain/publishChecks";
+import type { RepoRef } from "../domain/repoRemote";
 import type { ModDto } from "../domain/subscriptions";
 import type { MarketListing, ProductDetail } from "../domain/types";
+import type { ReleaseOpts, ReleaseResult, ShareOpts, ShareResult } from "./publishService";
 import type { Progress } from "./subscriptionService";
 
 // The **declared** webview ↔ panel message contract (testing-audit gap G3).
@@ -40,13 +43,13 @@ import type { Progress } from "./subscriptionService";
 //
 // ## Coverage is deliberately partial
 //
-// Only the panels with a presenter (`console`, `marketplace`, `mymods`, `log`)
-// are covered. The other seven webviews still have both halves under their own gates but no
-// declared contract between them; they are named in `UNCOVERED_WEBVIEWS` so the
-// gap is visible in the table rather than silent, and the tests assert that
-// list is exactly "every preview page minus the covered ones". Extending the
-// contract to a panel means giving it a presenter first — an inferred contract
-// for the remaining seven would be worse than none.
+// Only the panels with a presenter (`console`, `marketplace`, `mymods`, `log`,
+// `publish`) are covered. The other six webviews still have both halves under
+// their own gates but no declared contract between them; they are named in
+// `UNCOVERED_WEBVIEWS` so the gap is visible in the table rather than silent,
+// and the tests assert that list is exactly "every preview page minus the
+// covered ones". Extending the contract to a panel means giving it a presenter
+// first — an inferred contract for the remaining six would be worse than none.
 //
 // ## Why the payload fields are mostly optional
 //
@@ -304,6 +307,53 @@ const LOG_TO_WEBVIEW_KEYS: { readonly [K in LogHostMessage["type"]]: true } = {
   mod: true,
 };
 
+// ── Publish ──────────────────────────────────────────────────────────────────
+
+/** Which button a `busy` latch belongs to. The webview looks the element up off
+ * this, so the two spellings cannot drift apart. */
+export type PublishBusyScope = "share" | "release";
+
+/** The manifest-seeded values the publish form opens with. */
+export interface PublishDefaults {
+  name: string;
+  description: string;
+  version: string;
+}
+
+/** A message `media/publish.js` posts. */
+export type PublishWebviewMessage =
+  | { type: "refresh" }
+  | { type: "share"; opts?: ShareOpts }
+  | { type: "release"; opts?: ReleaseOpts }
+  | { type: "openExternal"; url?: string };
+
+/** A message `PublishPresenter` pushes to the publish webview. */
+export type PublishHostMessage =
+  /** No workspace folder — a different view entirely, with no form and no log. */
+  | { type: "nofolder" }
+  | { type: "init"; checks: Check[]; repo: RepoRef | null; defaults: PublishDefaults }
+  /** One streamed progress line, or a refusal. Appended to the log pane. */
+  | { type: "log"; line: string }
+  | { type: "busy"; scope: PublishBusyScope; busy: boolean }
+  | { type: "shareDone"; result: ShareResult }
+  | { type: "releaseDone"; result: ReleaseResult };
+
+const PUBLISH_TO_HOST_KEYS: { readonly [K in PublishWebviewMessage["type"]]: true } = {
+  refresh: true,
+  share: true,
+  release: true,
+  openExternal: true,
+};
+
+const PUBLISH_TO_WEBVIEW_KEYS: { readonly [K in PublishHostMessage["type"]]: true } = {
+  nofolder: true,
+  init: true,
+  log: true,
+  busy: true,
+  shareDone: true,
+  releaseDone: true,
+};
+
 // ── The table ────────────────────────────────────────────────────────────────
 
 /** One covered panel's half of the contract, as data the tests iterate. */
@@ -363,12 +413,21 @@ export const LOG_PROTOCOL: WebviewProtocol = {
   silent: [],
 };
 
+export const PUBLISH_PROTOCOL: WebviewProtocol = {
+  preview: "publish.html",
+  scripts: ["publish.js"],
+  toHost: Object.keys(PUBLISH_TO_HOST_KEYS),
+  toWebview: Object.keys(PUBLISH_TO_WEBVIEW_KEYS),
+  silent: [],
+};
+
 /** Every panel whose protocol is declared, keyed by preview page basename. */
 export const WEBVIEW_PROTOCOLS: Readonly<Record<string, WebviewProtocol>> = {
   console: CONSOLE_PROTOCOL,
   log: LOG_PROTOCOL,
   marketplace: MARKETPLACE_PROTOCOL,
   mymods: MYMODS_PROTOCOL,
+  publish: PUBLISH_PROTOCOL,
 };
 
 /**
@@ -385,7 +444,6 @@ export const UNCOVERED_WEBVIEWS: readonly string[] = [
   "manifest",
   "nav",
   "newproject",
-  "publish",
   "setup",
   "skills",
 ];
