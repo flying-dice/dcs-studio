@@ -21,21 +21,31 @@ import type {
 } from "../../../src/core/app/myModsPresenter";
 import { MyModsPresenter } from "../../../src/core/app/myModsPresenter";
 import type {
+  PublishEffect,
+  PublishInbound,
+  PublishPresenterDeps,
+} from "../../../src/core/app/publishPresenter";
+import { PublishPresenter } from "../../../src/core/app/publishPresenter";
+import type { ReleaseResult, ShareResult } from "../../../src/core/app/publishService";
+import type {
   ConsoleHostMessage,
   LogHostMessage,
   MarketplaceHostMessage,
   MyModsHostMessage,
+  PublishHostMessage,
 } from "../../../src/core/app/webviewContract";
 import {
   CONSOLE_PROTOCOL,
   LOG_PROTOCOL,
   MARKETPLACE_PROTOCOL,
   MYMODS_PROTOCOL,
+  PUBLISH_PROTOCOL,
   UNCOVERED_WEBVIEWS,
   WEBVIEW_PROTOCOLS,
 } from "../../../src/core/app/webviewContract";
 import type { DualBridgeStatus } from "../../../src/core/domain/bridgeProtocol";
-import type { ProductDetail, Subscription } from "../../../src/core/domain/types";
+import type { Check } from "../../../src/core/domain/publishChecks";
+import type { ManifestModel, ProductDetail, Subscription } from "../../../src/core/domain/types";
 
 // The HOST half of the declared webview contract
 // (`src/core/app/webviewContract.ts`), both directions, table-driven.
@@ -362,6 +372,74 @@ function logHarness(over: Partial<LogPresenterDeps> = {}): LogHarness {
   };
 }
 
+// ── Publish harness ──────────────────────────────────────────────────────────
+
+const PUBLISH_ROOT = "C:\\proj";
+
+const PUBLISH_MANIFEST: ManifestModel = {
+  project: { name: "my-mod", version: "1.2.3", author: "", description: "Does a thing" },
+  bundle: [{ path: "Scripts" }],
+  symlink: [],
+  requires_module: [],
+  entrypoint: [],
+  mission_script: [],
+  extras: [],
+};
+
+interface PublishHarness {
+  presenter: PublishPresenter;
+  posted: PublishHostMessage[];
+  effects: PublishEffect[];
+  calls: string[];
+  interactions(): number;
+}
+
+/**
+ * A publish presenter whose world is green: preflight passes, so `share` and
+ * `release` reach the service rather than being refused by the re-check. The
+ * refusal paths have their own tests in
+ * `test/unit/publish/publishPresenter.test.ts`.
+ */
+function publishHarness(over: Partial<PublishPresenterDeps> = {}): PublishHarness {
+  const posted: PublishHostMessage[] = [];
+  const effects: PublishEffect[] = [];
+  const calls: string[] = [];
+  const ok: Check[] = [{ label: "7-Zip", level: "ok", detail: "C:\\7z\\7z.exe" }];
+  const deps: PublishPresenterDeps = {
+    root: PUBLISH_ROOT,
+    preflight: async () => {
+      calls.push("preflight");
+      return ok;
+    },
+    readManifest: () => PUBLISH_MANIFEST,
+    remoteUrl: async () => "https://github.com/Owner/my-mod.git",
+    share: async (_root, _opts, log): Promise<ShareResult> => {
+      calls.push("share");
+      log("Creating repository…");
+      return { owner: "Owner", name: "my-mod", url: "https://github.com/Owner/my-mod" };
+    },
+    cutRelease: async (_root, opts, log): Promise<ReleaseResult> => {
+      calls.push("release");
+      log("Packaging payload…");
+      return {
+        assets: ["dcs-studio.toml"],
+        url: `https://github.com/Owner/my-mod/releases/tag/${opts.tag}`,
+        packaged: { volumes: [], totalBytes: 1, split: false },
+      };
+    },
+    post: (msg) => posted.push(msg),
+    effect: (e) => effects.push(e),
+    ...over,
+  };
+  return {
+    presenter: new PublishPresenter(deps),
+    posted,
+    effects,
+    calls,
+    interactions: () => posted.length + effects.length + calls.length,
+  };
+}
+
 /** The message types a run of the presenter actually pushed, de-duplicated. */
 function typesOf(posted: { type: string }[]): string[] {
   return [...new Set(posted.map((m) => m.type))].sort();
@@ -442,6 +520,18 @@ const LOG_DRIVES: Record<LogInbound["type"], LogDrive> = {
   openSettings: { send: { type: "openSettings" } },
 };
 
+const PUBLISH_DRIVES: Record<PublishInbound["type"], Drive<PublishInbound>> = {
+  refresh: { send: { type: "refresh" } },
+  share: { send: { type: "share", opts: { name: "my-mod", description: "A mod" } } },
+  release: {
+    send: {
+      type: "release",
+      opts: { owner: "Owner", name: "my-mod", tag: "v1.2.3", notes: "" },
+    },
+  },
+  openExternal: { send: { type: "openExternal", url: "https://github.com/Owner/my-mod" } },
+};
+
 // ── The contract table itself ────────────────────────────────────────────────
 
 describe("the declared webview contract", () => {
@@ -451,6 +541,7 @@ describe("the declared webview contract", () => {
       "log",
       "marketplace",
       "mymods",
+      "publish",
     ]);
   });
 
@@ -694,6 +785,54 @@ describe("log — host -> webview", () => {
     h.presenter.handle({ type: "ready" });
 
     expect(typesOf(h.posted)).toEqual([...LOG_PROTOCOL.toWebview].sort());
+  });
+});
+
+// ── Publish: the host half ───────────────────────────────────────────────────
+
+describe("publish — webview -> host", () => {
+  it("drives exactly the declared message set", () => {
+    expect(Object.keys(PUBLISH_DRIVES).sort()).toEqual([...PUBLISH_PROTOCOL.toHost].sort());
+  });
+
+  it.each(PUBLISH_PROTOCOL.toHost)("%s is acted on", async (type) => {
+    const plan = PUBLISH_DRIVES[type as PublishInbound["type"]];
+    const h = publishHarness();
+    for (const m of plan.before ?? []) await h.presenter.handle(m);
+    const before = h.interactions();
+    await h.presenter.handle(plan.send);
+    expect(h.interactions()).toBeGreaterThan(before);
+  });
+
+  it("does nothing at all for a message type the contract does not declare", async () => {
+    const h = publishHarness();
+    await h.presenter.handle({ type: "notInTheContract" } as unknown as PublishInbound);
+    expect(h.interactions()).toBe(0);
+  });
+});
+
+describe("publish — host -> webview", () => {
+  it("produces exactly the declared message set", async () => {
+    const posted: PublishHostMessage[] = [];
+
+    // `init` — the opening render; `busy`, `log` and `shareDone`/`releaseDone` —
+    // the two long actions, bracketed.
+    const h = publishHarness();
+    await h.presenter.refresh();
+    await h.presenter.handle({ type: "share", opts: { name: "my-mod", description: "" } });
+    await h.presenter.handle({
+      type: "release",
+      opts: { owner: "Owner", name: "my-mod", tag: "v1.2.3", notes: "" },
+    });
+    posted.push(...h.posted);
+
+    // `nofolder` — a different presenter entirely, because a folderless window
+    // is a state the panel is CONSTRUCTED in rather than one it can reach.
+    const none = publishHarness({ root: null });
+    await none.presenter.refresh();
+    posted.push(...none.posted);
+
+    expect(typesOf(posted)).toEqual([...PUBLISH_PROTOCOL.toWebview].sort());
   });
 });
 

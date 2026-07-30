@@ -24,12 +24,18 @@ import { VsCodeManifest } from "../../../src/adapters/vscode/manifest";
 import type { PublishService } from "../../../src/core/app/publishService";
 import { PublishPanel } from "../../../src/publish/publishPanel";
 
-// The publish flow's host side. This is the panel with the least margin for
-// error in the product: share creates a real GitHub repository and pushes, and
-// a release packages assets and uploads them onto a tag. The panel itself never
-// decides any of that — but it decides what the user is shown before they press
-// the button, whether the checks are re-run before an action is allowed to
-// start, and whether a failure leaves the buttons stuck busy.
+// The publish flow's WIRING — what only this layer can witness now that the
+// decisions live in `src/core/app/publishPresenter.ts` (covered without any
+// `vscode` double by `test/unit/publish/publishPresenter.test.ts` and driven
+// through the declared contract by `test/unit/core/webviewContract.test.ts`).
+//
+// What is left here is the shell: the panel and its singleton, the workspace
+// root the presenter is constructed with, the fs-and-spawn `preflight`/
+// `readManifest` adapters reaching the real manifest core and the real check
+// policy, the `openExternal` effect being performed, and teardown. The busy
+// bracket, the blocker message and the fallback defaults are asserted in the
+// unit layer; what is asserted here is that the wiring delivers the facts those
+// decisions are made from.
 
 // The repo root, so `require(<extensionUri>/media/manifest-core.js)` resolves
 // the real UMD module rather than a stub — the manifest parse under test is the
@@ -46,13 +52,23 @@ let toolFacts = {
 let remote: string | null = "https://github.com/Owner/Repo.git";
 let shareImpl: (log: (l: string) => void) => Promise<unknown> = async () => ({ url: "u" });
 let releaseImpl: (log: (l: string) => void) => Promise<unknown> = async () => ({ url: "u" });
+/** What the panel actually handed the service, so the wiring is asserted on
+ *  values rather than on the fact that something came back. */
+let shareArgs: unknown[] = [];
+let releaseArgs: unknown[] = [];
 
 function publishService(): PublishService {
   return {
     toolFacts: async () => toolFacts,
     remoteUrl: async () => remote,
-    share: async (_root: string, _opts: unknown, log: (l: string) => void) => shareImpl(log),
-    cutRelease: async (_root: string, _opts: unknown, log: (l: string) => void) => releaseImpl(log),
+    share: async (root: string, opts: unknown, log: (l: string) => void) => {
+      shareArgs = [root, opts];
+      return shareImpl(log);
+    },
+    cutRelease: async (root: string, opts: unknown, log: (l: string) => void) => {
+      releaseArgs = [root, opts];
+      return releaseImpl(log);
+    },
   } as unknown as PublishService;
 }
 
@@ -91,6 +107,8 @@ path = "Scripts"
   remote = "https://github.com/Owner/Repo.git";
   shareImpl = async () => ({ url: "u" });
   releaseImpl = async () => ({ url: "u" });
+  shareArgs = [];
+  releaseArgs = [];
   PublishPanel.current = undefined;
 });
 
@@ -136,14 +154,13 @@ describe("initial state", () => {
     });
   });
 
-  it("blocks on a missing manifest and falls back to empty defaults", async () => {
+  it("blocks on a missing manifest", async () => {
+    // The fallback defaults are the presenter's decision and asserted there;
+    // what this layer witnesses is the fs adapter reporting the absence at all.
     files.delete(MANIFEST);
     const panel = await show();
     const init = panel.webview.postedOfType("init")[0];
-
     expect((init.checks as { level: string }[]).some((c) => c.level === "error")).toBe(true);
-    // Version still gets a sensible starting point rather than an empty box.
-    expect(init.defaults).toEqual({ name: "", description: "", version: "0.1.0" });
   });
 
   it("blocks when a declared bundle path has not been built", async () => {
@@ -179,15 +196,6 @@ describe("initial state", () => {
     expect(panel.webview.postedOfType("init")).toHaveLength(0);
   });
 
-  it("ignores every action when there is no folder", async () => {
-    resetVscode({});
-    const panel = await show();
-    await panel.webview.receive({ type: "share", opts: {} });
-    await panel.webview.receive({ type: "release", opts: {} });
-    await flush();
-    expect(panel.webview.postedOfType("busy")).toHaveLength(0);
-  });
-
   it("re-runs preflight on refresh", async () => {
     const panel = await show();
     await panel.webview.receive({ type: "refresh" });
@@ -217,10 +225,6 @@ describe("preflight gates the action, not just the button", () => {
     expect(panel.webview.postedOfType("log").at(-1)?.line).toBe(
       "✖ Manifest: dcs-studio.toml not found in the workspace root.",
     );
-    // The refusal re-renders the checks, so the panel now shows why.
-    expect(panel.webview.postedOfType("init")).toHaveLength(2);
-    // And the busy latch still clears, or the button would be left dead.
-    expect(panel.webview.postedOfType("busy").map((m) => m.busy)).toEqual([true, false]);
   });
 
   it("refuses a release when a bundle path was cleaned since the panel last checked", async () => {
@@ -252,97 +256,37 @@ describe("preflight gates the action, not just the button", () => {
   });
 });
 
-describe("share and release", () => {
-  it("brackets a share with busy true/false and reports the result", async () => {
+// The service calls themselves: that the workspace root and the webview's opts
+// arrive at the real `PublishService` methods, and that the log callback the
+// service streams through reaches the webview. The bracket around them, the
+// failure mapping and the scoping are the presenter's, and are asserted there.
+describe("the service wiring", () => {
+  it("hands share the workspace root, the webview's opts and a live log sink", async () => {
+    shareImpl = async (log) => {
+      log("Creating repository…");
+      return { url: "u" };
+    };
     const panel = await show();
     await panel.webview.receive({ type: "share", opts: { name: "my-mod" } });
     await flush();
 
-    expect(panel.webview.postedOfType("busy").map((m) => m.busy)).toEqual([true, false]);
+    expect(shareArgs).toEqual([ROOT, { name: "my-mod" }]);
+    expect(panel.webview.postedOfType("log").map((m) => m.line)).toEqual(["Creating repository…"]);
     expect(panel.webview.postedOfType("shareDone")).toHaveLength(1);
   });
 
-  it("streams progress lines from the service to the log", async () => {
-    shareImpl = async (log) => {
-      log("Creating repository…");
-      log("Pushing…");
-      return { url: "u" };
-    };
-    const panel = await show();
-    await panel.webview.receive({ type: "share", opts: {} });
-    await flush();
-
-    expect(panel.webview.postedOfType("log").map((m) => m.line)).toEqual([
-      "Creating repository…",
-      "Pushing…",
-    ]);
-  });
-
-  it("logs a share failure and always clears busy", async () => {
-    // The finally-clause matters more than the message: a stuck busy flag
-    // leaves the user with a dead button and no way to retry.
-    shareImpl = async () => {
-      throw new Error("repo already exists");
-    };
-    const panel = await show();
-    await panel.webview.receive({ type: "share", opts: {} });
-    await flush();
-
-    expect(panel.webview.postedOfType("log").at(-1)?.line).toBe("✖ repo already exists");
-    expect(panel.webview.postedOfType("busy").map((m) => m.busy)).toEqual([true, false]);
-    expect(panel.webview.postedOfType("shareDone")).toHaveLength(0);
-  });
-
-  it("renders a non-Error share failure", async () => {
-    shareImpl = async () => {
-      throw "boom";
-    };
-    const panel = await show();
-    await panel.webview.receive({ type: "share", opts: {} });
-    await flush();
-    expect(panel.webview.postedOfType("log").at(-1)?.line).toBe("✖ boom");
-  });
-
-  it("scopes busy to the button that was pressed", async () => {
-    const panel = await show();
-    await panel.webview.receive({ type: "release", opts: {} });
-    await flush();
-    expect(panel.webview.postedOfType("busy").every((m) => m.scope === "release")).toBe(true);
-  });
-
-  it("brackets a release and reports the result", async () => {
-    const panel = await show();
-    await panel.webview.receive({ type: "release", opts: { tag: "v1.2.3" } });
-    await flush();
-    expect(panel.webview.postedOfType("releaseDone")).toHaveLength(1);
-  });
-
-  it("streams release progress lines to the log", async () => {
+  it("hands cutRelease the same, and reports its result", async () => {
     releaseImpl = async (log) => {
       log("Packaging payload…");
-      log("Uploading assets…");
       return { url: "u" };
     };
     const panel = await show();
     await panel.webview.receive({ type: "release", opts: { tag: "v1.2.3" } });
     await flush();
 
-    expect(panel.webview.postedOfType("log").map((m) => m.line)).toEqual([
-      "Packaging payload…",
-      "Uploading assets…",
-    ]);
-  });
-
-  it("logs a release failure and clears busy", async () => {
-    releaseImpl = async () => {
-      throw new Error("tag exists");
-    };
-    const panel = await show();
-    await panel.webview.receive({ type: "release", opts: {} });
-    await flush();
-
-    expect(panel.webview.postedOfType("log").at(-1)?.line).toBe("✖ tag exists");
-    expect(panel.webview.postedOfType("busy").map((m) => m.busy)).toEqual([true, false]);
+    expect(releaseArgs).toEqual([ROOT, { tag: "v1.2.3" }]);
+    expect(panel.webview.postedOfType("log").map((m) => m.line)).toEqual(["Packaging payload…"]);
+    expect(panel.webview.postedOfType("releaseDone")).toHaveLength(1);
   });
 });
 
@@ -351,13 +295,6 @@ describe("panel plumbing", () => {
     const panel = await show();
     await panel.webview.receive({ type: "openExternal", url: "https://github.com/Owner/Repo" });
     expect(state.openedExternal).toEqual(["https://github.com/Owner/Repo"]);
-  });
-
-  it("ignores openExternal with no url and unknown types", async () => {
-    const panel = await show();
-    await panel.webview.receive({ type: "openExternal" });
-    await panel.webview.receive({ type: "mystery" });
-    expect(state.openedExternal).toEqual([]);
   });
 
   it("reveals the existing panel rather than opening a second", async () => {

@@ -4,6 +4,7 @@ import {
   LOG_PROTOCOL,
   MARKETPLACE_PROTOCOL,
   MYMODS_PROTOCOL,
+  PUBLISH_PROTOCOL,
   type WebviewProtocol,
 } from "../src/core/app/webviewContract";
 import { expect, test } from "./fixtures";
@@ -40,8 +41,8 @@ import { hostSend, openPreview, sentMessages } from "./helpers";
 //
 // ## Scope
 //
-// Console, marketplace, My Mods and log only — the panels with a presenter. The
-// other seven webviews are named in `UNCOVERED_WEBVIEWS` and checked against the
+// Console, marketplace, My Mods, log and publish only — the panels with a
+// presenter. The other six webviews are named in `UNCOVERED_WEBVIEWS` and checked against the
 // preview directory by test/integration/webview/webviewContract.test.ts, so
 // the uncovered set is data rather than an omission.
 
@@ -366,6 +367,51 @@ test.describe("log ↔ LogPresenter message contract", () => {
     await collect(page, sent, consumed);
     assertContract(LOG_PROTOCOL, sent, consumed);
     expect(errors).toEqual([]);
+  });
+});
+
+test.describe("publish ↔ PublishPresenter message contract", () => {
+  test("the webview posts and consumes exactly the declared message set", async ({ page }) => {
+    const sent = new Set<string>();
+    const consumed = new Map<string, boolean>();
+
+    // Session 1 — a workspace with a folder. media/publish.js posts `refresh`
+    // from the bottom of its IIFE and the fixture answers `init`.
+    await armProbe(page);
+    const errors = await openPreview(page, "publish");
+    await expect(page.getByTestId("check-row")).toHaveCount(3);
+
+    // Share: the fixture scripts the real bracket the host sends — busy on, a
+    // progress `log` line, `shareDone`, busy off.
+    await page.getByTestId("share-btn").click();
+    await expect(page.getByTestId("share-result")).toBeVisible();
+
+    // `openExternal` — the repo link the share result just rendered. (The
+    // already-shared note carries the same message, but this scenario's project
+    // is not on GitHub yet, which is the state that reaches Share at all.)
+    await page.getByTestId("share-repo-link").click();
+
+    // Release: the tag box is prefilled from the manifest version and the repo
+    // box was auto-filled by `shareDone`, so the webview's own owner/name+tag
+    // validation passes and the message is posted.
+    await page.getByTestId("release-btn").click();
+    await expect(page.getByTestId("release-result")).toBeVisible();
+
+    // Re-check is the second, explicit source of `refresh`.
+    await page.getByTestId("recheck-btn").click();
+    await collect(page, sent, consumed);
+
+    // Session 2 — `nofolder` is the one host push that cannot be reached from a
+    // page that has a folder: it replaces the whole panel, so it is the fixture's
+    // answer to the boot handshake in its own load.
+    await armProbe(page);
+    const errors2 = await openPreview(page, "publish", { query: { scenario: "nofolder" } });
+    await expect(page.getByTestId("no-folder-note")).toBeVisible();
+    await collect(page, sent, consumed);
+
+    assertContract(PUBLISH_PROTOCOL, sent, consumed);
+    expect(errors).toEqual([]);
+    expect(errors2).toEqual([]);
   });
 });
 
