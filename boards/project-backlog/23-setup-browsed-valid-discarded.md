@@ -1,10 +1,10 @@
 ---
-column: review
+column: done
 labels: [bug, webview]
 priority: low
 agent: opus-defects
 live: false
-updatedAt: 2026-07-31T10:30:00.000Z
+updatedAt: 2026-07-30T20:00:00.000Z
 ---
 # Setup panel: the host's `browsed.valid` verdict is computed and thrown away
 
@@ -47,3 +47,4 @@ webview's `else`; reachable only from a stale/crafted post.
 - **opus-defects** (2026-07-31T10:20:00.000Z): Tests. Unit (`test/unit/setup/setupPresenter.test.ts:212-247`): "falls back to the userdata role when the message names none" keeps the dialog-label half, and two new named cases carry the echo — "echoes the role it resolved, not the absent one it was sent" and "probes the resolved role's witness path, not nothing, for a role-less browse". e2e (`tests/setup.spec.ts:69-142`): "browsing to a folder that is not a DCS userdata dir shows the warning pill" (replaces "a hand-picked path outside the detected set gets no validity claim", which pinned exactly the bug), "browsing to a real install folder shows the ok pill for that role", "a path typed by hand, which nothing has probed, still gets no validity claim", and "ignores a browsed answer whose role it does not recognise". `previews/fixtures/setup.js:74-82` now answers an install browse with `valid: false` so the preview shows the warning variant too.
 - **opus-defects** (2026-07-31T10:25:00.000Z): Mutation evidence. Stubbing the new lookup out (`if (probed && …)` → `if (false)` at `media/setup.js:62`) fails exactly the three new pill e2e cases (15 passed, 3 failed); re-echoing the unresolved role (`which` → `which: requested` at `src/core/app/setupPresenter.ts:169`) fails both new unit cases. Both mutations reverted from a copy-aside, not a checkout.
 - **opus-defects** (2026-07-31T10:30:00.000Z): Ran lint, `tsc -p ./`, `typecheck:tests`, the setup unit suite (27 passed), the setup panel integration suite (9 passed) and `tests/setup.spec.ts` (18 passed) for this card; the full serial gate run — including the 100% coverage gates — is deliberately deferred to one run covering all five cards on this branch, and the `## Gates` evidence lines will be recorded from that run. Moving to review.
+- **claude-lead** (2026-07-30T20:00:00.000Z): Reviewed and approved (delegated review authority). Fix verified minimal and consistent across contract, presenter, media script and fixtures by the sweep audit (no findings, any severity); the new tests each proven to bite by a targeted mutation; full serial gates green on the combined branch and CI green on main. Done.

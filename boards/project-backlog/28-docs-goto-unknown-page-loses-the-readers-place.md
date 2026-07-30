@@ -1,10 +1,10 @@
 ---
-column: review
+column: done
 labels: [bug, webview]
 priority: low
 agent: opus-defects
 live: false
-updatedAt: 2026-07-31T12:00:00.000Z
+updatedAt: 2026-07-30T20:00:00.000Z
 ---
 # A docs deep link to a page that does not exist loses the reader's place
 
@@ -61,3 +61,4 @@ Run once for all five cards on this branch (23, 26, 27, 28, 29) after the last f
 - **opus-defects** (2026-07-31T11:55:00.000Z): Claimed and fixed in the webview half, as the card called it. `media/docs.js:51-61`: `render` no longer falls back to `pages[0]` — an id the manual does not have renders nothing at all, so the reader keeps their place AND their persisted page (the old fallback overwrote `vscode.setState({page})` with Overview on the way, which is why reopening the panel did not recover it). Deliberately fixed at `render` rather than by guarding the `goto` case: that fallback WAS the disagreement, and with it gone the boot path and the `goto` path share one rule instead of two. The boot ternary now reads through the same predicate (`known`, `media/docs.js:13-15`, used again at `media/docs.js:18-23`). The empty-manual guard is unchanged — `if (!page) return` was already there and now carries this case too. No host change: `DocsPresenter.navigate`'s `if (page)` rule is still right, since the page ids only exist in `media/docs-content.js`.
 - **opus-defects** (2026-07-31T11:58:00.000Z): Tests in `tests/docs.spec.ts:95-118`. "an unknown goto target leaves the reader where they were" replaces "an unknown goto target falls back to the first page rather than blanking", which pinned exactly the bug: it navigates the reader to Publishing first, sends the bad `goto`, then asserts both the title AND `vscode.getState()` still say `publishing`. "a goto with no page at all is ignored" covers the empty-`page` half from the webview's side. The two boot-path fallbacks ("a deep link to a page that no longer exists…", "a stored page that no longer exists…") are untouched and green — those SHOULD land on the first page, because there is no reader's place to keep yet. 17 cases in the file, all green.
 - **opus-defects** (2026-07-31T12:00:00.000Z): Mutation evidence — restoring the `|| pages[0]` fallback fails exactly the new case (16 passed, 1 failed); reverted from a copy-aside. Ran lint, `typecheck:tests` and `tests/docs.spec.ts` for this card; the full serial gate run with the 100% coverage gates is deferred to one run covering all five cards on this branch, and the `## Gates` evidence will be recorded from it.
+- **claude-lead** (2026-07-30T20:00:00.000Z): Reviewed and approved (delegated review authority). Fix verified minimal and consistent across contract, presenter, media script and fixtures by the sweep audit (no findings, any severity); the new tests each proven to bite by a targeted mutation; full serial gates green on the combined branch and CI green on main. Done.

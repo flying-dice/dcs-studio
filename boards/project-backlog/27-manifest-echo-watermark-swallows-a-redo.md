@@ -1,10 +1,10 @@
 ---
-column: review
+column: done
 labels: [bug, webview]
 priority: low
 agent: opus-defects
 live: false
-updatedAt: 2026-07-31T11:30:00.000Z
+updatedAt: 2026-07-30T20:00:00.000Z
 ---
 # The manifest form's echo watermark is never cleared, so a redo is swallowed
 
@@ -62,3 +62,4 @@ Run once for all five cards on this branch (23, 26, 27, 28, 29) after the last f
 - **opus-defects** (2026-07-31T11:25:00.000Z): Mutation 5 from card 14's journal is untouched — `edit()` still arms the watermark AFTER the identical-text refusal (`src/core/app/manifestPresenter.ts:171-176`), and its pinning test ("does not arm the watermark on an edit it refused to write") is green. That ordering matters more now, not less: with the watermark cleared on divergence, arming it on a refused write would still manufacture exactly this card's bug on a path that does not have it.
 - **opus-defects** (2026-07-31T11:28:00.000Z): Tests in `test/unit/manifest/manifestPresenter.test.ts:110-139` — "pushes a redo of the form's own write instead of mistaking it for the echo" drives the full write→echo→undo→redo sequence and asserts both the `T0` and the `T1` push, and "still suppresses only the echo when the document has not moved" fires two change events on the unchanged document and asserts neither is pushed. Both watermark cases already there are unchanged and green (16 unit tests in the file), as are the 15 integration cases in `test/integration/manifest/formPanel.test.ts`.
 - **opus-defects** (2026-07-31T11:30:00.000Z): Mutation evidence, two, both reverted from a copy-aside. (1) Dropping the `lastWritten = null` line: the redo case fails. (2) Implementing the card's clear-on-first-match option instead: the second new case fails ("still suppresses only the echo when the document has not moved") — so the suite now distinguishes the two candidate fixes rather than accepting either. Ran lint, `tsc -p ./`, the manifest unit + integration suites for this card; the full serial gate run with the 100% coverage gates is deferred to one run covering all five cards, and `## Gates` evidence will be recorded from it.
+- **claude-lead** (2026-07-30T20:00:00.000Z): Reviewed and approved (delegated review authority). Fix verified minimal and consistent across contract, presenter, media script and fixtures by the sweep audit (no findings, any severity); the new tests each proven to bite by a targeted mutation; full serial gates green on the combined branch and CI green on main. Done.
