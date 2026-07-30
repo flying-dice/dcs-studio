@@ -60,6 +60,18 @@ mod tests {
         "/openrpc/dcs_studio_mission.openrpc.json"
     );
 
+    /// One turnstile for every test that runs the real `luaopen`, because each
+    /// one binds (or reuses) 127.0.0.1:25570 through this crate's single set of
+    /// DLL statics. It matters more since card 18's server stop: a mission end
+    /// now STOPS that server, so two tests overlapping would have one tearing the
+    /// other's bridge down mid-assertion.
+    fn serially() -> std::sync::MutexGuard<'static, ()> {
+        static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn live() -> String {
         emit_surface_dlua(&Lua::new(), BridgeKind::Mission, env!("CARGO_PKG_VERSION"))
             .expect("surface")
@@ -102,6 +114,7 @@ mod tests {
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn the_module_entry_point_runs_the_embedded_mission_init() {
+        let _serial = serially();
         let lua = Lua::new();
         // The mission state's `env` and `timer`, which the init logs through
         // and schedules its queue pump on.
@@ -164,6 +177,7 @@ mod tests {
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn the_mission_init_releases_the_state_when_the_mission_ends() {
+        let _serial = serially();
         let lua = Lua::new();
         // The mission state's `env`, `timer` and `world`, as the init uses them.
         lua.load(
@@ -255,6 +269,16 @@ mod tests {
             reported.contains("released") && reported.contains("Lua handler(s)"),
             "the release must say what it let go of: {reported}"
         );
+        // Card 18's second iteration: the release also stops this DLL's HTTP
+        // server, and it must SAY SO through env.info. The Rust-side log line is
+        // at info level and the shipped logger level is `warn`, so this dcs.log
+        // line is the only diagnostic a live unload gets — and which of the two
+        // branches it prints is what tells the next live session whether the
+        // server stop actually ran.
+        assert!(
+            reported.contains("stopped its HTTP server on port 25570"),
+            "the release must report the server it stopped: {reported}"
+        );
         assert!(
             !reported.contains("teardown failed"),
             "the release must not have raised: {reported}"
@@ -294,6 +318,7 @@ mod tests {
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn a_state_the_bridge_cannot_be_installed_into_fails_the_require() {
+        let _serial = serially();
         let hostile = Lua::new();
         hostile
             .load(
