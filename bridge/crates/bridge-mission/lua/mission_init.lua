@@ -74,6 +74,13 @@ bridge.register_methods(router, {
 --
 -- torn_down also stops the pumps: a released router answers nothing, and
 -- dispatching into a state DCS is unloading is the behaviour being removed.
+--
+-- The release ALSO stops this DLL's HTTP server (card 18, second iteration):
+-- releasing the handlers was live-verified necessary and insufficient — DCS still
+-- died whenever the mission bridge's actix worker had accepted connections during
+-- the mission, including in a run that was paused throughout so nothing was ever
+-- dispatched into Lua. So the worker and its connections must not span the unload
+-- either. The next mission's require → jsonrpc.serve binds a fresh server.
 local torn_down = false
 
 local function teardown(why)
@@ -81,10 +88,16 @@ local function teardown(why)
     return
   end
   torn_down = true
-  local ok, released_or_err, failed = pcall(bridge.jsonrpc.teardown, router, why)
+  local ok, released_or_err, failed, stopped_port = pcall(bridge.jsonrpc.teardown, router, why)
   if ok then
-    report_info(string.format("mission bridge released %s Lua handler(s) and failed %s queued request(s) on %s",
-      tostring(released_or_err), tostring(failed), tostring(why)))
+    -- The stopped port is reported through env.info deliberately: the shipped
+    -- logger level is `warn`, so the Rust-side info line does not reach
+    -- dcs_studio_mission.log, and this is the diagnostic a live unload needs.
+    local server = stopped_port
+        and ("stopped its HTTP server on port " .. tostring(stopped_port))
+        or "had no HTTP server to stop"
+    report_info(string.format("mission bridge released %s Lua handler(s), failed %s queued request(s) and %s on %s",
+      tostring(released_or_err), tostring(failed), server, tostring(why)))
   else
     -- Never fatal: this runs on DCS's way out of the mission, and a raise here
     -- would land in the engine's event dispatcher with nothing to catch it.

@@ -130,7 +130,10 @@ pub fn register(sub: &mut Sub) -> LuaResult<()> {
 /// Registered on BOTH bridges because the whole `jsonrpc` namespace is shared,
 /// and **inert on the GUI bridge by design**: the `GameGUI` state is created once
 /// at DCS start and lives until the process exits, so it has no teardown to run
-/// and the hook parks no sentinel. Only `dcs_studio_mission` uses these.
+/// and the hook parks no sentinel. Only `dcs_studio_mission` uses these — and
+/// `teardown`'s server stop refuses the GUI bridge's server even if someone
+/// evaluates it there, since stopping it would cut the editor off for the rest of
+/// the DCS session.
 fn register_teardown(sub: &mut Sub, router_ty: &str) -> LuaResult<()> {
     sub.func(
         "teardown",
@@ -138,14 +141,19 @@ fn register_teardown(sub: &mut Sub, router_ty: &str) -> LuaResult<()> {
         &[
             r_named("number", "handlers_released"),
             r_named("number", "requests_failed"),
+            r_named("number|nil", "stopped_port"),
         ],
         "Release everything this DLL holds in the CURRENT Lua state, while that \
-         state is still alive: drop every handler registered on `router` (each \
-         one is a live reference into this state) and fail every request \
-         stranded in the server's queue with a truthful error. Call it from the \
-         state's own end-of-life signal — the mission bridge does, on \
-         S_EVENT_MISSION_END — so DCS's lua_close finds nothing of ours left to \
-         collect. Idempotent.",
+         state is still alive, and stop serving from outside it: drop every \
+         handler registered on `router` (each one is a live reference into this \
+         state), fail every request stranded in the server's queue with a \
+         truthful error, and stop the MISSION bridge's HTTP server so its actix \
+         worker and the connections it accepted do not outlive the state either \
+         (the GUI bridge's server is left alone — its state is never destroyed). \
+         Call it from the state's own end-of-life signal — the mission bridge \
+         does, on S_EVENT_MISSION_END — so DCS's lua_close finds nothing of ours \
+         left to collect and nothing of ours still serving. Returns the port that \
+         was stopped, or nil if there was no mission server to stop. Idempotent.",
         |lua, (mut router, reason): (UserDataRefMut<JsonRpcRouter>, Option<String>)| {
             let reason = reason.unwrap_or_else(|| "requested".to_string());
             teardown::release(&mut router, &reason).into_lua_multi(lua)
@@ -161,7 +169,9 @@ fn register_teardown(sub: &mut Sub, router_ty: &str) -> LuaResult<()> {
          destroys the state, Lua's lua_close collects it and the DLL fails every \
          stranded request. It is the BACKSTOP for a state that dies without \
          calling `teardown` — it cannot drop Lua handles, because by then \
-         touching Lua is exactly what must not happen.",
+         touching Lua is exactly what must not happen, and it does not stop the \
+         server either, because blocking inside lua_close on the sim thread would \
+         trade a crash for a freeze.",
         |lua, ()| teardown::StateGuard.into_lua_multi(lua),
     )?;
 

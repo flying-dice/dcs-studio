@@ -302,14 +302,15 @@ function dcs_studio_mission_jsonrpc.serve(config) end
 ---@return boolean served
 function dcs_studio_mission_jsonrpc.process_queue(router) end
 
---- Release everything this DLL holds in the CURRENT Lua state, while that state is still alive: drop every handler registered on `router` (each one is a live reference into this state) and fail every request stranded in the server's queue with a truthful error. Call it from the state's own end-of-life signal — the mission bridge does, on S_EVENT_MISSION_END — so DCS's lua_close finds nothing of ours left to collect. Idempotent.
+--- Release everything this DLL holds in the CURRENT Lua state, while that state is still alive, and stop serving from outside it: drop every handler registered on `router` (each one is a live reference into this state), fail every request stranded in the server's queue with a truthful error, and stop the MISSION bridge's HTTP server so its actix worker and the connections it accepted do not outlive the state either (the GUI bridge's server is left alone — its state is never destroyed). Call it from the state's own end-of-life signal — the mission bridge does, on S_EVENT_MISSION_END — so DCS's lua_close finds nothing of ours left to collect and nothing of ours still serving. Returns the port that was stopped, or nil if there was no mission server to stop. Idempotent.
 ---@param router dcs_studio_mission.jsonrpc.JsonRpcRouter
 ---@param reason? string
 ---@return number handlers_released
 ---@return number requests_failed
+---@return number|nil stopped_port
 function dcs_studio_mission_jsonrpc.teardown(router, reason) end
 
---- Create the teardown sentinel for this Lua state. Keep the returned userdata reachable (the mission bridge parks it in a global): when DCS destroys the state, Lua's lua_close collects it and the DLL fails every stranded request. It is the BACKSTOP for a state that dies without calling `teardown` — it cannot drop Lua handles, because by then touching Lua is exactly what must not happen.
+--- Create the teardown sentinel for this Lua state. Keep the returned userdata reachable (the mission bridge parks it in a global): when DCS destroys the state, Lua's lua_close collects it and the DLL fails every stranded request. It is the BACKSTOP for a state that dies without calling `teardown` — it cannot drop Lua handles, because by then touching Lua is exactly what must not happen, and it does not stop the server either, because blocking inside lua_close on the sim thread would trade a crash for a freeze.
 ---@return userdata guard
 function dcs_studio_mission_jsonrpc.state_guard() end
 
