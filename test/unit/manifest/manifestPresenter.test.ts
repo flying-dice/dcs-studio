@@ -107,6 +107,37 @@ describe("document to form", () => {
     expect(h.posted).toEqual([{ type: "external", rawText: "someone-else-typed-this" }]);
   });
 
+  it("pushes a redo of the form's own write instead of mistaking it for the echo", async () => {
+    // The watermark absorbs the ONE document change our own write provokes. Kept
+    // past an undo it also swallows the redo, which reproduces the same text —
+    // leaving the form rendering T0 while the document holds T1, so the next form
+    // edit quietly undoes the redo (card 27).
+    const h = harness();
+    await h.presenter.handle({ type: "edit", text: "T1" });
+    h.presenter.onDocumentChanged(); // the echo of our own write
+    expect(h.posted).toEqual([]);
+
+    h.setText("T0"); // the user hits undo
+    h.presenter.onDocumentChanged();
+    h.setText("T1"); // …and then redo
+    h.presenter.onDocumentChanged();
+
+    expect(h.posted).toEqual([
+      { type: "external", rawText: "T0" },
+      { type: "external", rawText: "T1" },
+    ]);
+  });
+
+  it("still suppresses only the echo when the document has not moved", async () => {
+    // Clearing on divergence must not weaken the rule the watermark exists for:
+    // while the document still holds our write, every change carrying it is ours.
+    const h = harness();
+    await h.presenter.handle({ type: "edit", text: "written-by-form" });
+    h.presenter.onDocumentChanged();
+    h.presenter.onDocumentChanged();
+    expect(h.posted).toEqual([]);
+  });
+
   it("keeps each document's watermark to itself", () => {
     // Why there is one presenter per PANEL and not one per session: this panel is
     // keyed by document in a Map, so two manifests can be open at once. A shared
