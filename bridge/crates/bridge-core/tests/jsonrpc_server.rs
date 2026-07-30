@@ -65,7 +65,25 @@ struct Bridge {
 impl Bridge {
     /// Bind a bridge on a free port with `timeout` seconds per request and
     /// wire a router with the handlers the tests exercise.
+    ///
+    /// The card-17 pump-staleness refusal is **disabled** here (`pump_stale_ms =
+    /// 0`), because the design of this harness is that a test decides when the
+    /// queue is drained and several of them deliberately leave a request undrained
+    /// for seconds — with the refusal on, those requests would be answered
+    /// `-32002` instead of exercising the paths they are about. The refusal has
+    /// its own bridge, [`Bridge::start_failing_fast`].
     fn start(timeout: u64) -> Bridge {
+        Bridge::bind(timeout, 0)
+    }
+
+    /// A bridge that refuses requests once its queue has gone `pump_stale_ms`
+    /// without a drain — the shipped behaviour, with the threshold shortened so
+    /// the test does not have to wait out the real one.
+    fn start_failing_fast(timeout: u64, pump_stale_ms: u64) -> Bridge {
+        Bridge::bind(timeout, pump_stale_ms)
+    }
+
+    fn bind(timeout: u64, pump_stale_ms: u64) -> Bridge {
         let port = free_port();
         let (commands, inbox) = mpsc::channel::<Command>();
         let (ready, is_ready) = mpsc::channel::<()>();
@@ -80,7 +98,7 @@ impl Bridge {
             let glue = format!(
                 r#"
 local bridge = ...
-server = bridge.jsonrpc.serve({{ host = "127.0.0.1", port = {port}, timeout = {timeout}, env = "mission" }})
+server = bridge.jsonrpc.serve({{ host = "127.0.0.1", port = {port}, timeout = {timeout}, env = "mission", pump_stale_ms = {pump_stale_ms} }})
 router = bridge.jsonrpc.JsonRpcRouter.new()
 router:add_method("echo", function(p) return p end, {{ description = "Echo the params back." }})
 router:add_method("bump", function(p) bumped = (bumped or 0) + 1; return {{ n = bumped }} end)
@@ -248,6 +266,100 @@ fn health_identifies_the_bridge_without_the_sim_pumping() {
     assert!(body.contains(r#""env":"mission""#), "{body}");
     assert!(body.contains(r#""status":"OK""#), "{body}");
     assert!(body.contains(r#""version""#), "{body}");
+
+    bridge.shutdown(true);
+}
+
+/// **Card 17, end to end.** While a mission breakpoint is held, the GUI bridge's
+/// `onSimulationFrame` drain stops while its socket stays perfectly healthy, and
+/// every `/rpc` used to burn the full 30 s request deadline — the status bar and
+/// every GUI feature looking broken for as long as the user inspects state.
+///
+/// So over a real socket: a request the sim is pumping is served, the same request
+/// once the pump has stalled comes back immediately as `-32002` with a truthful
+/// cause, `/health` says so too (a client must be able to tell "listening" from
+/// "alive"), the WebSocket session survives the refusal, and the next drain
+/// restores service.
+///
+/// The bridge is given a 60 s request timeout on purpose: any answer at all proves
+/// the refusal did not wait, and the whole test is bounded well under it.
+#[test]
+#[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+fn a_stalled_pump_is_reported_at_once_instead_of_burning_the_request_deadline() {
+    let _serial = serially();
+    let bridge = Bridge::start_failing_fast(60, 1000);
+
+    // Served while the sim pumps.
+    let port = bridge.port;
+    let (done, answer) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(post_rpc(port, &rpc("pumped", "echo", r#"{"n":1}"#)));
+    });
+    let (status, body) = bridge
+        .pump_until(
+            || answer.recv_timeout(Duration::from_millis(10)).ok(),
+            Duration::from_secs(10),
+        )
+        .expect("a pumped request is answered normally");
+    assert!(status.contains("200"), "{status}");
+    assert!(body.contains(r#""n":1"#), "{body}");
+
+    // The sim stops pumping — the held-breakpoint state. Nothing else changes:
+    // the same listener, the same worker, the same open connections.
+    std::thread::sleep(Duration::from_millis(1500));
+
+    let started = std::time::Instant::now();
+    let (status, body) = post_rpc(bridge.port, &rpc("stalled", "echo", "{}"));
+    let waited = started.elapsed();
+    assert!(
+        status.contains("200"),
+        "a JSON-RPC error is an answer: {status}"
+    );
+    assert!(body.contains("-32002"), "{body}");
+    assert!(body.contains("sim not pumping"), "{body}");
+    assert!(body.contains(r#""id":"stalled""#), "{body}");
+    assert!(
+        waited < Duration::from_secs(5),
+        "the refusal must be immediate, not a wait on the 60 s deadline: {waited:?}"
+    );
+
+    // `/health` reports the same fact, so a client can distinguish a listening
+    // bridge from a live one instead of inferring liveness from the socket.
+    let (status, body) = get(bridge.port, "/health");
+    assert!(status.contains("200"), "{status}");
+    assert!(
+        body.contains(r#""status":"OK""#),
+        "the listener is fine: {body}"
+    );
+    assert!(body.contains(r#""pump_stalled":true"#), "{body}");
+
+    // The editor's WebSocket gets the same refusal, and the session survives it.
+    let mut ws = connect_ws(bridge.port);
+    ws.send(&rpc("ws-stalled", "echo", "{}")).expect("send");
+    let refused = ws
+        .await_id("ws-stalled", Duration::from_secs(5))
+        .expect("a stalled WS request must be answered, not left to expire");
+    assert!(refused.contains("-32002"), "{refused}");
+
+    // Resuming is one drain: the stall lifted 3 ms after resume live, so recovery
+    // must need nothing more than a pump. `eval` is the barrier — the sim thread
+    // takes its commands in order, so a reply to it proves the pump before it has
+    // already run, and the request below arrives against a fresh stamp rather than
+    // racing one.
+    bridge.pump();
+    assert_eq!(bridge.eval("return 'pumped'"), "pumped");
+    ws.send(&rpc("resumed", "echo", "{}")).expect("send");
+    assert!(
+        bridge
+            .pump_until(
+                || ws.await_id("resumed", Duration::from_millis(50)),
+                Duration::from_secs(10)
+            )
+            .is_some_and(|answer| !answer.contains("-32002")),
+        "a pumped bridge serves again immediately"
+    );
+    let (_status, body) = get(bridge.port, "/health");
+    assert!(body.contains(r#""pump_stalled":false"#), "{body}");
 
     bridge.shutdown(true);
 }

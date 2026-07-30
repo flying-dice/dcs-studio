@@ -28,7 +28,7 @@ use actix_ws::{Message, Session};
 use crate::jsonrpc::router::JsonRpcRouter;
 use crate::jsonrpc::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, JSON_RPC_BRIDGE_TORN_DOWN,
-    JSON_RPC_INTERNAL_ERROR, JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_VERSION,
+    JSON_RPC_INTERNAL_ERROR, JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_PUMP_STALLED, JSON_RPC_VERSION,
 };
 use crate::lua_utils::serialize_lua_to_json;
 use actix_web::{get, middleware, post, App, HttpRequest, HttpResponse, HttpServer};
@@ -47,7 +47,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::mpsc;
 use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Receiver;
@@ -64,6 +64,27 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_mins(5);
 /// the startup `pcall` an error, not the sim its frame loop forever. Binding a
 /// loopback port is microseconds; ten seconds is "something is badly wrong".
 const BIND_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long this server's queue may go undrained before an arriving request is
+/// refused outright rather than queued (card 17). Overridable per server with
+/// `pump_stale_ms` in the config; `0` disables the check.
+///
+/// The number has to sit above the longest gap a *serving* bridge legitimately
+/// leaves between drains, and far below the 30 s request deadline it exists to
+/// avoid waiting out. The two pumps set the floor: the GUI hook drains once per
+/// simulation frame (16 ms at 60 fps, 100 ms at a miserable 10) and the mission
+/// state drains per 0.1 s of *model* time. The debugger's pause loop drains every
+/// 50 ms through `process_rpc` while it holds the sim thread, so a held breakpoint
+/// keeps the bridge the debug engine serves fresh and only the *other* bridge goes
+/// stale — which is exactly the split card 17 measured.
+///
+/// Two seconds is ~20x the slowest healthy drain interval and 15x faster to
+/// answer than the deadline. It does mean a multi-second frame hitch — a mission
+/// load, a `repl_export` serialising a huge table on the sim thread — reads as
+/// stalled; that is why the message says the queue is not being drained rather
+/// than claiming the sim is paused. A truthful "not being served right now" in
+/// 2 s beats an indistinguishable silence for 30.
+const PUMP_STALE_AFTER: Duration = Duration::from_secs(2);
 
 /// The bounded waits one [`JsonRpcServer::stop`] is allowed to spend, and the
 /// reason there are two of them.
@@ -124,11 +145,20 @@ pub(crate) struct AppRequest {
     pub(crate) response_sender: Option<oneshot::Sender<JsonRpcResponse>>,
 }
 
-#[derive(Default)]
 pub(crate) struct AppData {
     pub(crate) rpc_queue: VecDeque<AppRequest>,
     pub(crate) timeout: Duration,
     pub(crate) service: ServiceInfo,
+    /// When the Lua-side pump last drained this queue — stamped by
+    /// [`drain_queue`], the one funnel every pump goes through: the hook's frame
+    /// callback, the mission state's model-time timer, and the debug engine's
+    /// `DBG.pump`, all of which reach it through `process_rpc` on the server
+    /// userdata their own state holds. Seeded at bind, so a bridge gets its
+    /// [`AppData::pump_stale_after`] worth of grace to start pumping.
+    pub(crate) last_drained: Instant,
+    /// How stale that stamp may get before an arriving request is refused
+    /// instead of queued. `None` disables the check.
+    pub(crate) pump_stale_after: Option<Duration>,
 }
 
 /// Identity reported by `/health` and `rpc.discover`, so an agent probing
@@ -162,12 +192,32 @@ impl ServiceInfo {
     }
 }
 
+/// The `/health` payload.
+///
+/// `status`/`name`/`env`/`version` describe the *listener*: this endpoint is
+/// answered by the actix worker and needs nothing from Lua, which is why it kept
+/// answering in 1-2 ms throughout card 17's held breakpoint while `/rpc` could
+/// not be dispatched at all. Reachability is not liveness, so the last two fields
+/// report the other half — how long ago the Lua-side pump last drained this
+/// server's queue, and whether that is now stale enough that requests are being
+/// refused with `-32002` (see [`JSON_RPC_PUMP_STALLED`]).
+///
+/// This is the single "the pump is alive" signal card 17 and card 04 both asked
+/// for: a client that wants to know whether a call will be *served*, rather than
+/// merely accepted, reads `pump_stalled` — not `status`, and not the socket's
+/// connectedness.
 #[derive(Serialize, Deserialize, Debug)]
 struct Health {
     name: String,
     env: String,
     status: String,
     version: String,
+    /// Milliseconds since the Lua-side pump last drained this server's queue.
+    pump_idle_ms: u64,
+    /// Whether that idle time has passed the refusal threshold, i.e. whether a
+    /// request arriving now would be answered `-32002` rather than dispatched.
+    /// Always `false` when the check is disabled.
+    pump_stalled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -178,6 +228,11 @@ pub(crate) struct ServerConfig {
     /// The environment this bridge serves ("gui" / "mission") — names the
     /// service in `/health` and `rpc.discover`.
     env: Option<String>,
+    /// How long this server's queue may go undrained before arriving requests are
+    /// refused with [`JSON_RPC_PUMP_STALLED`] instead of queued. Absent uses
+    /// [`PUMP_STALE_AFTER`]; `0` disables the check, which is what a test wanting
+    /// a request to sit undrained in the queue asks for.
+    pump_stale_ms: Option<u64>,
 }
 
 impl FromLua for ServerConfig {
@@ -228,12 +283,44 @@ pub(crate) struct ServerStop {
 }
 
 impl AppData {
+    /// Test-only: the production path is [`AppData::with_stale_after`], which
+    /// takes the threshold from the server's config.
+    #[cfg(test)]
     fn new(timeout: Duration, service: ServiceInfo) -> Self {
+        AppData::with_stale_after(timeout, service, Some(PUMP_STALE_AFTER))
+    }
+
+    fn with_stale_after(
+        timeout: Duration,
+        service: ServiceInfo,
+        pump_stale_after: Option<Duration>,
+    ) -> Self {
         AppData {
             rpc_queue: VecDeque::new(),
             timeout,
             service,
+            last_drained: Instant::now(),
+            pump_stale_after,
         }
+    }
+
+    /// Record that the Lua-side pump just ran.
+    fn mark_drained(&mut self) {
+        self.last_drained = Instant::now();
+    }
+
+    /// How long the pump has been idle.
+    fn pump_idle(&self) -> Duration {
+        self.last_drained.elapsed()
+    }
+
+    /// How long the pump has been idle, but only when that is long enough to say
+    /// a request arriving now would never be dispatched — `None` while the pump
+    /// is fresh, and always `None` when the check is disabled.
+    fn pump_stall(&self) -> Option<Duration> {
+        let after = self.pump_stale_after?;
+        let idle = self.pump_idle();
+        (idle >= after).then_some(idle)
     }
 }
 
@@ -259,9 +346,10 @@ impl JsonRpcServer {
     ///    hat.
     pub(crate) fn new(config: ServerConfig) -> Result<Self, actix_web::Error> {
         let service = ServiceInfo::new(config.env.as_deref(), &config.host, config.port);
-        let app_data = Data::new(Mutex::new(AppData::new(
+        let app_data = Data::new(Mutex::new(AppData::with_stale_after(
             get_timeout_duration_from_config(&config),
             service,
+            get_pump_stale_after_from_config(&config),
         )));
         let app_data_2 = app_data.clone();
 
@@ -584,9 +672,19 @@ impl UserData for JsonRpcServer {
 
 /// Swap the queue out under the lock, then run the Lua handlers unlocked: a
 /// slow eval must not block the WS/HTTP tasks that are queueing new requests.
+///
+/// This is the single funnel every pump goes through — the hook's
+/// `onSimulationFrame`, the mission state's model-time timer, and the debug
+/// engine's `DBG.pump`, all of them `process_rpc` on the server userdata their
+/// own state holds — so it is where the "the pump is alive" stamp belongs (card
+/// 17). Stamped whether or not there was anything to drain: an empty queue
+/// drained is still a pump that ran. Stamped again afterwards so a drain that
+/// spent tens of seconds inside one handler does not leave the bridge looking
+/// stalled the instant it finishes.
 fn drain_queue(lua: &Lua, app_data: &Data<Mutex<AppData>>, router: &JsonRpcRouter) {
     let (queue, service) = {
         let mut data_guard = lock_app_data(app_data);
+        data_guard.mark_drained();
         (
             std::mem::take(&mut data_guard.rpc_queue),
             data_guard.service.clone(),
@@ -596,6 +694,8 @@ fn drain_queue(lua: &Lua, app_data: &Data<Mutex<AppData>>, router: &JsonRpcRoute
     for app_request in queue {
         respond(lua, router, app_request, &service);
     }
+
+    lock_app_data(app_data).mark_drained();
 }
 
 /// The envelope a caller gets when the Lua state that would have answered it is
@@ -651,6 +751,71 @@ pub(crate) fn queue_against(
     push_rpc_request(&mut guard, request)
 }
 
+/// What offering a request to the queue produced.
+enum Queued {
+    /// Queued, and something is expected to answer it: await this channel.
+    Waiting(Receiver<JsonRpcResponse>),
+    /// Queued as a notification — no id, so there is nothing to await.
+    Accepted,
+    /// NOT queued. The Lua-side pump has not drained for long enough that
+    /// nothing would have answered it, so here is that answer instead — now,
+    /// rather than after the request deadline (card 17).
+    PumpStalled(Box<JsonRpcResponse>),
+}
+
+/// Offer `request` to the queue, refusing it outright when the pump is stale.
+///
+/// The refusal is deliberately limited to requests carrying an id. A
+/// notification has no caller waiting and no deadline to burn, so queueing it is
+/// free and its side effect still runs on the frame the sim resumes.
+fn accept_request(data: &mut AppData, request: JsonRpcRequest) -> Queued {
+    if let (Some(idle), Some(id)) = (data.pump_stall(), request.id.clone()) {
+        warn!(
+            "jsonrpc: refusing '{}' [{id}] - the {} bridge's queue has not been drained \
+             for {idle:?}",
+            request.method, data.service.env
+        );
+        let response = pump_stalled_response(id, &data.service, idle);
+        return Queued::PumpStalled(Box::new(response));
+    }
+    match push_rpc_request(data, request) {
+        Some(receiver) => Queued::Waiting(receiver),
+        None => Queued::Accepted,
+    }
+}
+
+/// The envelope a caller gets when the transport is healthy but nothing is
+/// draining the queue.
+///
+/// The `data` string names the observable fact — the queue is not being drained,
+/// and for how long — rather than asserting a cause. The causes it covers are not
+/// distinguishable from here and not all of them are a pause: a held breakpoint
+/// in the other bridge's state, a paused sim, a mission sitting on the briefing
+/// screen with model time frozen (card 04's residual), a mission load, or a
+/// handler that has owned the sim thread for seconds. What the editor needs to
+/// know is the same in every case: not now, but nothing is broken.
+fn pump_stalled_response(id: String, service: &ServiceInfo, idle: Duration) -> JsonRpcResponse {
+    let detail = format!(
+        "the {} bridge's queue has not been drained for {} ms - DCS is not running \
+         the pump that dispatches requests into Lua (the sim is paused, loading, or \
+         a debug session or long call holds the sim thread). The bridge is listening \
+         and will serve again as soon as it is pumped.",
+        service.env,
+        idle.as_millis()
+    );
+    JsonRpcResponse {
+        jsonrpc: JSON_RPC_VERSION.to_string(),
+        id,
+        result: None,
+        error: serde_json::to_value(JsonRpcError {
+            code: JSON_RPC_PUMP_STALLED,
+            message: "sim not pumping".to_string(),
+            data: serde_json::to_value(detail).ok(),
+        })
+        .ok(),
+    }
+}
+
 #[post("/rpc")]
 async fn post_rpc(
     _req: HttpRequest,
@@ -662,14 +827,21 @@ async fn post_rpc(
     // Hold the std Mutex only to enqueue the request and read the timeout, in a
     // block that ends before any `.await` — a guard must never span an await
     // point (it would block the executor / risk a deadlock inside the sim).
-    let (maybe_receiver, request_timeout) = {
+    let (queued, request_timeout) = {
         let mut data_guard = lock_app_data(&data);
-        let maybe_receiver = push_rpc_request(&mut data_guard, request);
-        (maybe_receiver, data_guard.timeout)
+        let queued = accept_request(&mut data_guard, request);
+        (queued, data_guard.timeout)
     };
 
-    let Some(receiver) = maybe_receiver else {
-        return Ok(HttpResponse::Accepted().body("OK"));
+    let receiver = match queued {
+        Queued::Waiting(receiver) => receiver,
+        Queued::Accepted => return Ok(HttpResponse::Accepted().body("OK")),
+        // A JSON-RPC error is still a delivered answer, so 200 with the envelope
+        // — exactly as an error from a handler is returned below.
+        Queued::PumpStalled(response) => {
+            let body = serde_json::to_string(&response).map_err(ErrorInternalServerError)?;
+            return Ok(HttpResponse::Ok().body(body));
+        }
     };
 
     let result = timeout(request_timeout, receiver).await.map_err(|_| {
@@ -709,13 +881,31 @@ async fn get_ws(
                     // unread in the socket until `debug_run`'s server-side
                     // timeout fired. See notify_session; matching by id keeps
                     // out-of-order responses correct.
-                    if let Some((receiver, request_timeout)) = enqueue_text_frame(&text, &data) {
-                        let session = session.clone();
-                        spawn_local(async move {
-                            notify_session(session, receiver, request_timeout)
-                                .await
-                                .unwrap_or_else(|e| error!("{e}"));
-                        });
+                    match enqueue_text_frame(&text, &data) {
+                        Some((Queued::Waiting(receiver), request_timeout)) => {
+                            let session = session.clone();
+                            spawn_local(async move {
+                                notify_session(session, receiver, request_timeout)
+                                    .await
+                                    .unwrap_or_else(|e| error!("{e}"));
+                            });
+                        }
+                        // Answered here rather than in a detached task: the
+                        // answer already exists, and writing it in the read loop
+                        // keeps it ahead of any later frame's reply (card 17).
+                        Some((Queued::PumpStalled(response), _)) => {
+                            match serde_json::to_string(&response) {
+                                Ok(body) => {
+                                    if let Err(cause) = session.text(body).await {
+                                        error!("could not report a stalled pump: {cause}");
+                                    }
+                                }
+                                Err(cause) => error!("could not encode the refusal: {cause}"),
+                            }
+                        }
+                        // A notification, or a frame that was not a request at
+                        // all: nothing to await and nothing to answer.
+                        Some((Queued::Accepted, _)) | None => {}
                     }
                 }
                 Message::Ping(bytes) => {
@@ -737,35 +927,44 @@ async fn get_ws(
     Ok(response)
 }
 
-/// Parse one WS text frame and enqueue it as a JSON-RPC request, returning the
-/// response channel + timeout for a non-notification (the caller awaits it in a
-/// detached task) or `None` for a notification / a malformed frame. The enqueue
-/// is synchronous so frames keep their arrival order in the queue; only the
-/// wait-and-reply is deferred. A malformed frame (bad JSON, numeric id, …) is
+/// Parse one WS text frame and offer it to the queue, returning what that
+/// produced plus the request timeout — or `None` for a malformed frame. The
+/// enqueue is synchronous so frames keep their arrival order in the queue; only
+/// the wait-and-reply is deferred. A malformed frame (bad JSON, numeric id, …) is
 /// logged and skipped, never fatal: the session must survive one bad client
 /// frame.
-fn enqueue_text_frame(
-    message: &str,
-    data: &Data<Mutex<AppData>>,
-) -> Option<(Receiver<JsonRpcResponse>, Duration)> {
+fn enqueue_text_frame(message: &str, data: &Data<Mutex<AppData>>) -> Option<(Queued, Duration)> {
     let Ok(request) = serde_json::from_str::<JsonRpcRequest>(message) else {
         error!("Failed to parse request, skipping frame: {message}");
         return None;
     };
 
     let mut data_guard = lock_app_data(data);
-    let receiver = push_rpc_request(&mut data_guard, request)?;
-    Some((receiver, data_guard.timeout))
+    let queued = accept_request(&mut data_guard, request);
+    Some((queued, data_guard.timeout))
 }
 
 #[get("/health")]
 async fn get_health(data: Data<Mutex<AppData>>) -> Json<Health> {
-    let service = lock_app_data(&data).service.clone();
+    let (service, pump_idle, pump_stalled) = {
+        let guard = lock_app_data(&data);
+        (
+            guard.service.clone(),
+            guard.pump_idle(),
+            guard.pump_stall().is_some(),
+        )
+    };
     Json(Health {
         name: service.name,
         env: service.env,
         status: "OK".to_string(),
         version: service.version,
+        // Saturating because this is a report, not a computation: a `u64` of
+        // milliseconds is ~584 million years, but a clock that ever hands back
+        // something absurd must not cost the only endpoint that still works when
+        // the sim is wedged.
+        pump_idle_ms: u64::try_from(pump_idle.as_millis()).unwrap_or(u64::MAX),
+        pump_stalled,
     })
 }
 
@@ -987,15 +1186,34 @@ fn get_timeout_duration_from_config(config: &ServerConfig) -> Duration {
     }
 }
 
+/// The configured pump-staleness threshold, or [`PUMP_STALE_AFTER`] when the
+/// config is silent. An explicit `0` disables the check: the request queues and
+/// waits out the request timeout, which is the pre-card-17 behaviour and the one
+/// a test that wants a request left undrained needs.
+fn get_pump_stale_after_from_config(config: &ServerConfig) -> Option<Duration> {
+    match config.pump_stale_ms {
+        Some(0) => {
+            warn!(
+                "jsonrpc: pump_stale_ms = 0 - requests arriving while the sim is not \
+                 draining will wait out the request timeout instead of failing fast"
+            );
+            None
+        }
+        Some(millis) => Some(Duration::from_millis(millis)),
+        None => Some(PUMP_STALE_AFTER),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod tests {
     use super::{
-        drain_queue, enqueue_text_frame, error_response, free_port,
-        get_timeout_duration_from_config, health_over_tcp, lock_app_data, post_rpc,
-        process_request, push_rpc_request, respond, response_for, success_response, AppData,
-        AppRequest, JsonRpcServer, ServerConfig, ServiceInfo, DEFAULT_TIMEOUT,
-        JSON_RPC_INTERNAL_ERROR, JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_VERSION,
+        accept_request, drain_queue, enqueue_text_frame, error_response, free_port, get_health,
+        get_pump_stale_after_from_config, get_timeout_duration_from_config, health_over_tcp,
+        lock_app_data, post_rpc, process_request, push_rpc_request, respond, response_for,
+        success_response, AppData, AppRequest, JsonRpcServer, Queued, ServerConfig, ServiceInfo,
+        DEFAULT_TIMEOUT, JSON_RPC_INTERNAL_ERROR, JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_PUMP_STALLED,
+        JSON_RPC_VERSION, PUMP_STALE_AFTER,
     };
     use crate::jsonrpc::router::{JsonRpcRouter, MethodMeta};
     use crate::jsonrpc::{JsonRpcRequest, JsonRpcResponse};
@@ -1181,11 +1399,27 @@ mod tests {
         );
     }
 
+    /// A queue with a 1 s request timeout and the pump-staleness refusal **off**,
+    /// so a test can leave a request undrained for as long as it likes and still
+    /// exercise the timeout path. The staleness behaviour has its own tests below,
+    /// where the stamp is set deliberately rather than raced against the wall
+    /// clock.
     fn app_data() -> Data<Mutex<AppData>> {
-        Data::new(Mutex::new(AppData::new(
+        Data::new(Mutex::new(AppData::with_stale_after(
             Duration::from_secs(1),
             ServiceInfo::new(Some("mission"), "127.0.0.1", 25570),
+            None,
         )))
+    }
+
+    /// Backdate the pump stamp by `idle`, i.e. "nothing has drained this queue for
+    /// `idle`" — the state a held breakpoint or a paused sim leaves the other
+    /// bridge in, without waiting for real time to pass.
+    fn pretend_idle_for(data: &Data<Mutex<AppData>>, idle: Duration) {
+        let mut guard = lock_app_data(data);
+        guard.last_drained = std::time::Instant::now()
+            .checked_sub(idle)
+            .expect("a monotonic clock that has not been running for `idle` yet");
     }
 
     fn request(
@@ -1627,6 +1861,240 @@ mod tests {
         );
     }
 
+    /// **Card 17, the fix.** A request arriving while nothing is draining the
+    /// queue is answered NOW, with the reason, instead of being parked for the
+    /// server's whole deadline. Live, that deadline is 30 s and it was being
+    /// burned by every GUI-bridge call for as long as a mission breakpoint was
+    /// held — the transport perfectly healthy throughout, `/health` answering in
+    /// 1-2 ms, and only the Lua-side drain stopped.
+    ///
+    /// Both transports, because the editor uses both: the status-bar poll is a
+    /// `POST /rpc` and everything else rides the WebSocket.
+    #[actix_web::test]
+    async fn a_request_arriving_while_nothing_drains_the_queue_is_refused_at_once() {
+        use actix_web::{test, App};
+
+        let data = Data::new(Mutex::new(AppData::with_stale_after(
+            // A 30 s deadline exactly as the hook configures, so the assertion
+            // "this answered at all" is itself the proof it did not wait.
+            Duration::from_secs(30),
+            ServiceInfo::new(Some("gui"), "127.0.0.1", 25569),
+            Some(Duration::from_secs(2)),
+        )));
+        let app =
+            test::init_service(App::new().service(post_rpc).app_data(Data::clone(&data))).await;
+        let post = || {
+            test::TestRequest::post()
+                .uri("/rpc")
+                .set_json(serde_json::json!({ "jsonrpc": "2.0", "id": "1", "method": "eval" }))
+                .to_request()
+        };
+
+        // Fresh pump: the request queues and waits, as it always did. Asserted
+        // through the handler's own accept step rather than by calling the
+        // service, because calling it would genuinely wait out the 30 s deadline
+        // — which is precisely what the refusal below must not do.
+        assert!(matches!(
+            accept_request(&mut lock_app_data(&data), request(Some("q"), "eval", None)),
+            Queued::Waiting(_)
+        ));
+        assert_eq!(lock_app_data(&data).rpc_queue.len(), 1);
+        lock_app_data(&data).rpc_queue.clear();
+
+        // The sim stops pumping — a held breakpoint in the mission state, or a
+        // pause. Nothing else changes: the same listener, the same worker.
+        pretend_idle_for(&data, Duration::from_secs(5));
+
+        let refused = test::call_service(&app, post()).await;
+        assert_eq!(refused.status(), 200, "a JSON-RPC error is still an answer");
+        let body = test::read_body(refused).await;
+        let answer: JsonRpcResponse = serde_json::from_slice(&body).expect("an envelope");
+        assert_eq!(answer.id, "1");
+        assert!(answer.result.is_none());
+        let error = answer.error.expect("an error envelope");
+        assert_eq!(error["code"], JSON_RPC_PUMP_STALLED);
+        assert_eq!(error["message"], "sim not pumping");
+        let detail = error["data"].as_str().expect("a cause");
+        assert!(detail.contains("gui"), "names the bridge: {detail}");
+        assert!(
+            detail.contains("not been drained"),
+            "names the observable fact rather than guessing the cause: {detail}"
+        );
+        assert!(
+            detail.contains("listening"),
+            "says the bridge is not broken, only unpumped: {detail}"
+        );
+        assert!(
+            lock_app_data(&data).rpc_queue.is_empty(),
+            "the refused request must NOT also be queued — a later drain \
+             answering it would be a second reply to one call"
+        );
+
+        // The WS path refuses identically, and a notification is still queued: it
+        // has no caller waiting and no deadline to burn, and its side effect must
+        // still run on the frame the sim resumes.
+        let (queued, _) =
+            enqueue_text_frame(r#"{"jsonrpc":"2.0","id":"w","method":"eval"}"#, &data)
+                .expect("a well-formed frame");
+        let Queued::PumpStalled(response) = queued else {
+            panic!("a stalled pump must refuse the frame, not queue it");
+        };
+        assert_eq!(response.id, "w");
+        assert_eq!(
+            response.error.expect("error")["code"],
+            JSON_RPC_PUMP_STALLED
+        );
+        assert!(matches!(
+            enqueue_text_frame(r#"{"jsonrpc":"2.0","method":"bump"}"#, &data),
+            Some((Queued::Accepted, _))
+        ));
+        assert_eq!(lock_app_data(&data).rpc_queue.len(), 1, "the notification");
+
+        // Nothing here is sticky: recovery is the stamp's job, and that a real
+        // drain restores it is pinned by
+        // `every_pump_stamps_the_liveness_clock_including_the_debuggers_drain` —
+        // which needs a Lua state, and so cannot live in this test if this one is
+        // to run on every platform.
+    }
+
+    /// The stamp itself: every pump goes through `drain_queue`, and since card
+    /// 18's third iteration there is exactly one way to reach it — `process_rpc`
+    /// on the server userdata the pumping state holds. The hook's
+    /// `onSimulationFrame`, the mission state's model-time timer and BOTH bridges'
+    /// `DBG.pump` all call that one method.
+    ///
+    /// That is what scopes the fix correctly for the debugger, and the reason no
+    /// bridge needs exempting: while a debug session holds the sim thread, the
+    /// engine pumps ITS bridge every 50 ms, so that bridge stays fresh and keeps
+    /// answering `debug_state`/`debug_continue`. Only the bridge nobody is pumping
+    /// — the GUI one, during a mission breakpoint — goes stale, which is exactly
+    /// card 17's measured split.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn every_pump_stamps_the_liveness_clock_including_the_debuggers_drain() {
+        let _serial = crate::jsonrpc::serially();
+        let lua = Lua::new();
+        let router = router(&lua);
+
+        // A drain of an empty queue is still a pump that ran.
+        let data = app_data();
+        pretend_idle_for(&data, Duration::from_secs(5));
+        assert!(lock_app_data(&data).pump_idle() >= Duration::from_secs(5));
+        drain_queue(&lua, &data, &router);
+        assert!(
+            lock_app_data(&data).pump_idle() < Duration::from_secs(1),
+            "the drain stamps the clock"
+        );
+
+        // A drain with something in the queue stamps it too — and stamps it AFTER
+        // the handlers run, so a slow drain does not finish looking stale.
+        pretend_idle_for(&data, Duration::from_secs(5));
+        lock_app_data(&data).rpc_queue.push_back(AppRequest {
+            request: request(None, "echo", None),
+            response_sender: None,
+        });
+        drain_queue(&lua, &data, &router);
+        assert!(lock_app_data(&data).pump_idle() < Duration::from_secs(1));
+
+        // And the same through the userdata method every pump actually calls —
+        // the one the debugger's pause loop drives while it holds the sim thread.
+        let port = free_port();
+        let server = JsonRpcServer::new(config(&format!(
+            r#"{{"host":"127.0.0.1","port":{port},"env":"mission"}}"#
+        )))
+        .expect("bind");
+        pretend_idle_for(&server.app_data, Duration::from_secs(5));
+        assert!(
+            lock_app_data(&server.app_data).pump_stall().is_some(),
+            "the harness really did make it stale"
+        );
+        drain_queue(&lua, &server.app_data, &router);
+        assert!(
+            lock_app_data(&server.app_data).pump_stall().is_none(),
+            "the debugger's own pump counts as the pump being alive, so a held \
+             breakpoint must not make its bridge refuse debug_continue"
+        );
+        drop(server);
+    }
+
+    /// The threshold, and its escape hatch. Configurable because the two pumps
+    /// have different natural cadences and a user with a pathological setup must
+    /// be able to opt out; `0` means "never refuse", i.e. the pre-card-17
+    /// behaviour of waiting out the request timeout.
+    #[test]
+    fn the_staleness_threshold_defaults_and_can_be_disabled() {
+        let base = r#"{"host":"127.0.0.1","port":0"#;
+        assert_eq!(
+            get_pump_stale_after_from_config(&config(&format!("{base}}}"))),
+            Some(PUMP_STALE_AFTER),
+            "a config that says nothing gets the default"
+        );
+        assert_eq!(
+            get_pump_stale_after_from_config(&config(&format!("{base},\"pump_stale_ms\":250}}"))),
+            Some(Duration::from_millis(250))
+        );
+        assert_eq!(
+            get_pump_stale_after_from_config(&config(&format!("{base},\"pump_stale_ms\":0}}"))),
+            None,
+            "0 disables the refusal"
+        );
+
+        // Disabled means a queue that has not been drained all session still
+        // accepts requests, rather than refusing them.
+        let data = app_data();
+        pretend_idle_for(&data, Duration::from_mins(10));
+        assert!(lock_app_data(&data).pump_stall().is_none());
+        assert!(matches!(
+            accept_request(&mut lock_app_data(&data), request(Some("1"), "echo", None)),
+            Queued::Waiting(_)
+        ));
+    }
+
+    /// `/health` is answered by the actix worker and needs nothing from Lua, which
+    /// is why it stayed healthy in 1-2 ms throughout card 17's held breakpoint
+    /// while `/rpc` could not be dispatched at all. So it has to carry the OTHER
+    /// half — whether the pump is alive — or a client reading it concludes
+    /// "listening" means "will be served", which is the inference card 04 / #32 is
+    /// still built on.
+    #[actix_web::test]
+    async fn health_reports_pump_freshness_so_listening_is_not_read_as_alive() {
+        use actix_web::{test, App};
+
+        let data = Data::new(Mutex::new(AppData::with_stale_after(
+            Duration::from_secs(30),
+            ServiceInfo::new(Some("gui"), "127.0.0.1", 25569),
+            Some(Duration::from_secs(2)),
+        )));
+        let app =
+            test::init_service(App::new().service(get_health).app_data(Data::clone(&data))).await;
+        let probe = || test::TestRequest::get().uri("/health").to_request();
+
+        let fresh = test::call_service(&app, probe()).await;
+        let body = test::read_body(fresh).await;
+        let health: serde_json::Value = serde_json::from_slice(&body).expect("health json");
+        assert_eq!(health["status"], "OK");
+        assert_eq!(health["name"], "dcs-studio-gui");
+        assert_eq!(health["pump_stalled"], false);
+        assert!(
+            health["pump_idle_ms"].as_u64().expect("idle ms") < 2_000,
+            "{health}"
+        );
+
+        pretend_idle_for(&data, Duration::from_secs(5));
+        let stalled = test::call_service(&app, probe()).await;
+        let body = test::read_body(stalled).await;
+        let health: serde_json::Value = serde_json::from_slice(&body).expect("health json");
+        assert_eq!(
+            health["status"], "OK",
+            "the LISTENER is still fine — that is the whole point of the split"
+        );
+        assert_eq!(health["pump_stalled"], true);
+        assert!(
+            health["pump_idle_ms"].as_u64().expect("idle ms") >= 5_000,
+            "{health}"
+        );
+    }
+
     /// An error envelope carries code, message and optional data, and omits
     /// `result` entirely — the wire shape the editor client parses.
     #[test]
@@ -1734,7 +2202,10 @@ mod tests {
 
         // The WS read path still queues ...
         assert!(
-            enqueue_text_frame(r#"{"jsonrpc":"2.0","id":"1","method":"echo"}"#, &data).is_some(),
+            matches!(
+                enqueue_text_frame(r#"{"jsonrpc":"2.0","id":"1","method":"echo"}"#, &data),
+                Some((Queued::Waiting(_), _))
+            ),
             "a poisoned lock must not cost the session its frames"
         );
 
@@ -1766,11 +2237,15 @@ mod tests {
         );
 
         // A notification enqueues but yields no channel to await.
-        assert!(enqueue_text_frame(r#"{"jsonrpc":"2.0","method":"echo"}"#, &data).is_none());
+        assert!(matches!(
+            enqueue_text_frame(r#"{"jsonrpc":"2.0","method":"echo"}"#, &data),
+            Some((Queued::Accepted, _))
+        ));
         // A well-formed request yields the channel and the configured timeout.
-        let (_receiver, request_timeout) =
+        let (queued, request_timeout) =
             enqueue_text_frame(r#"{"jsonrpc":"2.0","id":"1","method":"echo"}"#, &data)
                 .expect("a request must queue");
+        assert!(matches!(queued, Queued::Waiting(_)));
         assert_eq!(request_timeout, Duration::from_secs(1));
 
         let queued = data.lock().expect("lock").rpc_queue.len();
