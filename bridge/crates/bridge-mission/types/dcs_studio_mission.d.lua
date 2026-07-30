@@ -258,12 +258,12 @@ function dcs_studio_mission_logger.error(msg, ns) end
 ---@class dcs_studio_mission.jsonrpc.JsonRpcServer
 local dcs_studio_mission_jsonrpc_JsonRpcServer = {}
 
---- Bind a server. `config = { host = string, port = number, timeout? = number, env? = string }`. The same thing `serve` does — prefer `serve`, which is what both bridges' boot code calls.
+--- Bind a server. `config = { host = string, port = number, timeout? = number, env? = string, pump_stale_ms? = number }`. pump_stale_ms is how long this server's queue may go undrained before arriving requests are refused with -32002 'sim not pumping' instead of queueing into the request timeout (default 2000; 0 disables). The same thing `serve` does — prefer `serve`, which is what both bridges' boot code calls.
 ---@param config table
 ---@return dcs_studio_mission.jsonrpc.JsonRpcServer
 function dcs_studio_mission_jsonrpc_JsonRpcServer.new(config) end
 
---- Drain this server's queued requests, dispatching each through `router`. Call once per simulation frame.
+--- Drain this server's queued requests, dispatching each through `router`. Call once per simulation frame. Each call also stamps this server's pump-liveness clock, which is what /health reports and what keeps arriving requests from being refused as un-dispatchable — so the debugger's pause loop, which pumps through this method, keeps its own bridge serving while it holds the sim thread.
 ---@param router dcs_studio_mission.jsonrpc.JsonRpcRouter
 ---@return boolean
 function dcs_studio_mission_jsonrpc_JsonRpcServer:process_rpc(router) end

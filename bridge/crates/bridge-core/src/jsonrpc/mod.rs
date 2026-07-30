@@ -23,6 +23,20 @@ pub const JSON_RPC_INTERNAL_ERROR: i32 = -32603;
 /// is broken".
 pub const JSON_RPC_BRIDGE_TORN_DOWN: i32 = -32001;
 
+/// Implementation-defined server error (the same `-32000..-32099` band): the
+/// transport is healthy and the request was understood, but the Lua-side pump
+/// that would dispatch it has not drained this server's queue for long enough
+/// that queueing the request would only end in the server's own timeout.
+///
+/// Card 17's whole finding, in one code. A held mission breakpoint stops the GUI
+/// bridge's `onSimulationFrame` drain while its socket keeps answering `/health`
+/// in 1-2 ms, so every `/rpc` burned the full 30 s deadline for as long as the
+/// user inspected state. There is nothing to repair there — only something to
+/// report — so the request is refused immediately with the reason instead.
+/// Distinguishable from [`JSON_RPC_BRIDGE_TORN_DOWN`] on purpose: nothing has
+/// gone away, and the very next frame will serve again.
+pub const JSON_RPC_PUMP_STALLED: i32 = -32002;
+
 /// One turnstile for every test in this crate that binds a server. Since card
 /// 18's third iteration there are no server statics to collide over, but the
 /// *ports* still are shared: libtest runs a binary's tests in parallel, several
@@ -51,14 +65,19 @@ pub fn register(sub: &mut Sub) -> LuaResult<()> {
                 "new",
                 &[p("config", "table")],
                 &[r(&server_ty)],
-                "Bind a server. `config = { host = string, port = number, timeout? = number, env? = string }`. \
+                "Bind a server. `config = { host = string, port = number, timeout? = number, env? = string, pump_stale_ms? = number }`. \
+                 pump_stale_ms is how long this server's queue may go undrained before arriving requests are refused with \
+                 -32002 'sim not pumping' instead of queueing into the request timeout (default 2000; 0 disables). \
                  The same thing `serve` does — prefer `serve`, which is what both bridges' boot code calls.",
             )
             .method(
                 "process_rpc",
                 &[p("router", &router_ty)],
                 &[r("boolean")],
-                "Drain this server's queued requests, dispatching each through `router`. Call once per simulation frame.",
+                "Drain this server's queued requests, dispatching each through `router`. Call once per simulation frame. \
+                 Each call also stamps this server's pump-liveness clock, which is what /health reports and what keeps \
+                 arriving requests from being refused as un-dispatchable — so the debugger's pause loop, which pumps \
+                 through this method, keeps its own bridge serving while it holds the sim thread.",
             )
             .method(
                 "stop",

@@ -65,15 +65,46 @@ Endpoints on each port (both transports carry the same JSON-RPC protocol):
 
 - `POST /rpc` — JSON-RPC over HTTP
 - `GET /ws` — JSON-RPC over WebSocket
-- `GET /health` — identity + liveness (`name`, `env`, `status`, `version`)
+- `GET /health` — identity + pump liveness (`name`, `env`, `status`, `version`,
+  `pump_idle_ms`, `pump_stalled`)
 
-Two rules that bite first-time callers:
+Three rules that bite first-time callers:
 
 - The request `id` **must be a string** (or absent for a notification) — a
   numeric id is rejected by the server's parser.
-- Requests are answered on the sim thread, so they stall while the sim is paused
-  at the escape menu and time out after ~30s; keep the sim in the foreground and
-  a mission running (for 25570).
+- Requests are answered on the sim thread, so they cannot be served while the sim
+  is not running its callbacks (paused at the escape menu, held at a breakpoint,
+  loading, or between missions on 25570). Keep the sim in the foreground and a
+  mission running (for 25570).
+- **`status: "OK"` is about the listener, not the sim.** `/health` is answered by
+  the bridge's HTTP worker and needs nothing from Lua, so it answers in 1-2 ms
+  even when no request can be dispatched at all. The two fields that tell you
+  whether a call will actually be *served* are `pump_idle_ms` (how long since the
+  Lua-side queue drain last ran) and `pump_stalled` (whether that is now past the
+  refusal threshold). Reachability is not liveness — read these, not the socket.
+
+### `-32002 sim not pumping`
+
+When the queue has gone unpumped for longer than the threshold (2 s by default),
+an arriving request is refused **immediately** with an implementation-defined
+error instead of being parked until the request timeout:
+
+```json
+{ "jsonrpc": "2.0", "id": "1", "error": {
+  "code": -32002, "message": "sim not pumping",
+  "data": "the gui bridge's queue has not been drained for 4310 ms — …" } }
+```
+
+Nothing is broken when you see it, and nothing needs reconnecting: the bridge is
+listening and serves again on the very next frame it is pumped. Treat it as "not
+right now" — the sim is paused, loading, or a debug session or long call owns the
+sim thread. It is distinct from `-32001 bridge torn down`, which means the Lua
+state that would have answered has gone away (mission end).
+
+Both bridges have their own pump, and they stall independently: a held **mission**
+breakpoint stops the GUI bridge's per-frame drain while the mission bridge keeps
+serving `debug_state`/`debug_continue` from the debug engine's own drain — so a
+`-32002` from 25569 during a debug pause is expected while 25570 stays live.
 
 Copy-pasteable — discover the GUI bridge's full surface:
 
