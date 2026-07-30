@@ -1,9 +1,11 @@
-import { win32 as path } from "node:path";
 import * as fs from "fs";
 import * as os from "os";
 import * as vscode from "vscode";
 import type { DetectService } from "../core/app/detectService";
-import { type DcsCandidate, roleProbePath } from "../core/domain/dcsDetect";
+import type { SetupEffect, SetupInbound } from "../core/app/setupPresenter";
+import { SetupPresenter } from "../core/app/setupPresenter";
+import type { SetupPaths } from "../core/app/webviewContract";
+import { type DcsCandidate, defaultDataDir } from "../core/domain/dcsDetect";
 import type { ArchivePort } from "../core/ports/archive";
 import { renderWebviewHtml } from "../webview/html";
 import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
@@ -12,11 +14,19 @@ import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
 // installation folders, with auto-detected candidates. Saves to the
 // dcsStudio.savedGamesPath / gameInstallPath settings (global) that inject,
 // launch and the manifest form's {SavedGames}/{GameInstall} resolution read.
+//
+// Everything the host decides — what seeds the form and what each field falls
+// back to, which role a browse dialog is for, how a hand-picked path is
+// validated, and that saving writes all four settings even when a box was
+// cleared — lives in `SetupPresenter`, which knows nothing about VS Code. This
+// class is the shell around it: the panel, the settings read/write, the open
+// dialog, the existence probe, and the one effect the presenter describes.
 export class SetupPanel {
   public static current: SetupPanel | undefined;
   private static readonly viewType = "dcsStudio.setup";
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[];
+  private readonly presenter: SetupPresenter;
 
   static show(context: vscode.ExtensionContext, detect: DetectService, archive: ArchivePort): void {
     const column = activeColumn();
@@ -31,120 +41,74 @@ export class SetupPanel {
   private constructor(
     panel: vscode.WebviewPanel,
     private readonly context: vscode.ExtensionContext,
-    private readonly detect: DetectService,
+    detect: DetectService,
     // The port, not `find7z`: this panel only needs to answer "where would we
     // find 7-Zip", which is exactly `available()`, and naming the concrete
     // adapter from a feature was a boundary violation (#61). The adapter reads
     // the same `sevenZipPath` setting this panel displays, so the answer is
     // the one the installer will actually get.
-    private readonly archive: ArchivePort,
+    archive: ArchivePort,
   ) {
     this.panel = panel;
     this.disposables = disposeWithPanel(panel, () => {
       SetupPanel.current = undefined;
     });
+    this.presenter = new SetupPresenter({
+      detectSavedGames: () => detect.detectSavedGames(),
+      detectGameInstalls: () => detect.detectGameInstalls(),
+      settings: () => ({
+        savedGamesPath: this.cfg().get<string>("savedGamesPath"),
+        gameInstallPath: this.cfg().get<string>("gameInstallPath"),
+        dataDir: this.cfg().get<string>("dataDir"),
+        sevenZipPath: this.cfg().get<string>("sevenZipPath"),
+      }),
+      // Global, not workspace: these paths describe the machine's DCS install,
+      // and a per-folder value would silently stop applying elsewhere.
+      saveSetting: (key, value) =>
+        Promise.resolve(this.cfg().update(key, value, vscode.ConfigurationTarget.Global)),
+      defaultDataDir: () => defaultDataDir(process.env.USERPROFILE || os.homedir()),
+      detectedSevenZip: () => archive.available(),
+      browse: (request) => this.browse(request),
+      exists: (p) => fs.existsSync(p),
+      post: (msg) => void this.panel.webview.postMessage(msg),
+      effect: (effect) => this.perform(effect),
+    });
     this.panel.webview.html = this.html();
-    this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
-    void this.pushInit();
+    this.panel.webview.onDidReceiveMessage(
+      (m: SetupInbound) => void this.presenter.handle(m),
+      null,
+      this.disposables,
+    );
+    void this.presenter.refresh();
   }
 
   private cfg() {
     return vscode.workspace.getConfiguration("dcsStudio");
   }
 
-  private async pushInit(): Promise<void> {
-    const saved = await this.detect.detectSavedGames();
-    const installs = await this.detect.detectGameInstalls();
-    const home = process.env.USERPROFILE || os.homedir();
-    this.post({
-      type: "init",
-      savedGames: this.cfg().get<string>("savedGamesPath")?.trim() ?? "",
-      gameInstall: this.cfg().get<string>("gameInstallPath")?.trim() ?? "",
-      dataDir: this.cfg().get<string>("dataDir")?.trim() ?? "",
-      dataDirDefault: path.join(home, "DCSStudio", "mods"),
-      sevenZip: this.cfg().get<string>("sevenZipPath")?.trim() ?? "",
-      sevenZipDetected: (await this.archive.available()) ?? "",
-      savedCandidates: saved,
-      installCandidates: installs,
+  /** Show the picker the presenter asked for, and report what was chosen. */
+  private async browse(request: {
+    file: boolean;
+    openLabel: string;
+    extensions: readonly string[] | null;
+  }): Promise<string | null> {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectFiles: request.file,
+      canSelectFolders: !request.file,
+      canSelectMany: false,
+      openLabel: request.openLabel,
+      filters: request.extensions ? { Executable: [...request.extensions] } : undefined,
     });
+    return picked?.[0]?.fsPath ?? null;
   }
 
-  private async onMessage(msg: {
-    type: string;
-    which?: "saved" | "install" | "data" | "sevenzip";
-    savedGames?: string;
-    gameInstall?: string;
-    dataDir?: string;
-    sevenZip?: string;
-  }): Promise<void> {
-    switch (msg.type) {
-      case "redetect":
-        await this.pushInit();
-        break;
-      case "browse": {
-        const isFile = msg.which === "sevenzip";
-        const labels: Record<string, string> = {
-          install: "Use as DCS install",
-          data: "Use as data dir",
-          sevenzip: "Use this 7z.exe",
-          saved: "Use as DCS userdata",
-        };
-        const picked = await vscode.window.showOpenDialog({
-          canSelectFiles: isFile,
-          canSelectFolders: !isFile,
-          canSelectMany: false,
-          openLabel: labels[msg.which ?? "saved"],
-          filters: isFile ? { Executable: ["exe"] } : undefined,
-        });
-        if (picked?.[0]) {
-          this.post({
-            type: "browsed",
-            which: msg.which,
-            path: picked[0].fsPath,
-            valid: this.validate(msg.which, picked[0].fsPath),
-          });
-        }
-        break;
-      }
-      case "save":
-        await this.cfg().update(
-          "savedGamesPath",
-          msg.savedGames ?? "",
-          vscode.ConfigurationTarget.Global,
-        );
-        await this.cfg().update(
-          "gameInstallPath",
-          msg.gameInstall ?? "",
-          vscode.ConfigurationTarget.Global,
-        );
-        await this.cfg().update("dataDir", msg.dataDir ?? "", vscode.ConfigurationTarget.Global);
-        await this.cfg().update(
-          "sevenZipPath",
-          msg.sevenZip ?? "",
-          vscode.ConfigurationTarget.Global,
-        );
-        this.post({ type: "saved" });
-        void vscode.window.showInformationMessage("DCS paths saved.");
+  /** Carry out one presenter-described effect. */
+  private perform(effect: SetupEffect): void {
+    switch (effect.kind) {
+      case "notify":
+        void vscode.window.showInformationMessage(effect.message);
         break;
     }
-  }
-
-  /** Whether a hand-picked path looks right for its role. The per-role path rule
-   *  is pure (core/domain/dcsDetect); the panel only performs the existence probe. */
-  private validate(
-    which: "saved" | "install" | "data" | "sevenzip" | undefined,
-    target: string,
-  ): boolean {
-    try {
-      const probe = roleProbePath(which, target);
-      return probe === null ? true : fs.existsSync(probe);
-    } catch {
-      return false;
-    }
-  }
-
-  private post(msg: unknown): void {
-    void this.panel.webview.postMessage(msg);
   }
 
   private html(): string {
@@ -159,5 +123,5 @@ export class SetupPanel {
   }
 }
 
-// Convenience for a type used by the webview payload.
-export type { DcsCandidate };
+// Convenience for types used by the webview payload.
+export type { DcsCandidate, SetupPaths };
