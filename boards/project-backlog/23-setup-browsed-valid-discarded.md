@@ -31,6 +31,15 @@ webview's `else`; reachable only from a stale/crafted post.
 - [x] Reconcile the role-less `browse` default (pick one side, pin it in the contract types) — and restore a named test for the echo-which behaviour; the old panel suite's negative case was not carried into the presenter suite (audit note, 2026-07-30)
 - [x] e2e: browse to an invalid path shows the warning pill
 
+## Gates
+
+- [x] lint — biome check, 300 files, no fixes applied (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] compile — tsc -p ./ clean (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] typecheck:tests — tsc -p tsconfig.test.json --noEmit clean (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] coverage:unit — 1401 tests passed, 100% stmts/branch/func/line (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] coverage:integration — 884 passed, only the 6 pre-existing EPERM symlink failures in linkerStrategies.test.ts (box note) (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] coverage:e2e — 264 passed, 100% across all 14 webview scripts (opus-defects, 2026-07-31T13:00:00.000Z)
+
 ## Comments
 
 - **opus-defects** (2026-07-31T10:05:00.000Z): Claimed. The pill now consumes the verdict: `media/setup.js:16-19` keeps a per-role record of the last browsed path and its `valid`, `media/setup.js:52-69` looks it up when the path is not a detected candidate, and `media/setup.js:24-34` names what the boolean means per role in the same words the candidates use (`has Config` / `has bin\DCS.exe`). The verdict is keyed by PATH, not by field, so typing over a browsed path drops the claim again rather than carrying it to a path nothing probed.

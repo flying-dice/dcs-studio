@@ -45,6 +45,17 @@ The fix is one line in the webview half — clear `editTimer` when re-seeding fr
 - [x] e2e: a keystroke and an `external` push inside the debounce window post no `edit`
 - [x] e2e: the form is still live afterwards (a later keystroke reaches the document)
 
+## Gates
+
+Run once for all five cards on this branch (23, 26, 27, 28, 29) after the last fix landed.
+
+- [x] lint — biome check, 300 files, no fixes applied (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] compile — tsc -p ./ clean (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] typecheck:tests — tsc -p tsconfig.test.json --noEmit clean (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] coverage:unit — 1401 tests passed, 100% stmts/branch/func/line (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] coverage:integration — 884 passed, only the 6 pre-existing EPERM symlink failures in linkerStrategies.test.ts (box note) (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] coverage:e2e — 264 passed, 100% across all 14 webview scripts (opus-defects, 2026-07-31T13:00:00.000Z)
+
 ## Comments
 
 - **opus-defects** (2026-07-31T10:50:00.000Z): Claimed and fixed at `media/manifest.js:369-378` — the `external` handler now clears `editTimer` (and nulls it) before re-seeding the model. Chose CANCEL over flush-first, deliberately: the pending timer emits from `state.model`, which is the very object being replaced on the next line, so a "flush" would not carry the user's keystroke anywhere — it would post the NEW model's canonical TOML back over a file that had just changed on disk. There is no ordering in which the keystroke survives (step 1 of the card, the model being replaced, is correct on its own terms), so the only question was whether the file gets a spurious rewrite, and it now does not. For undo / revert / `git checkout` that is exactly the right UX: the document wins, and the editor's own undo stack keeps one step per external change instead of gaining a phantom form-formatting commit on top.

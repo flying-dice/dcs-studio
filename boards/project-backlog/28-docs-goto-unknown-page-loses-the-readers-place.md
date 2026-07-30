@@ -44,6 +44,17 @@ Preserved verbatim by card 14: `DocsPresenter.navigate` reproduces the old
 - [x] The reader's persisted page is not overwritten on the way
 - [x] e2e: the unknown-goto case pins the reader's place instead of Overview
 
+## Gates
+
+Run once for all five cards on this branch (23, 26, 27, 28, 29) after the last fix landed.
+
+- [x] lint — biome check, 300 files, no fixes applied (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] compile — tsc -p ./ clean (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] typecheck:tests — tsc -p tsconfig.test.json --noEmit clean (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] coverage:unit — 1401 tests passed, 100% stmts/branch/func/line (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] coverage:integration — 884 passed, only the 6 pre-existing EPERM symlink failures in linkerStrategies.test.ts (box note) (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] coverage:e2e — 264 passed, 100% across all 14 webview scripts (opus-defects, 2026-07-31T13:00:00.000Z)
+
 ## Comments
 
 - **opus-docs** (2026-07-31T05:00:00.000Z): Raised from card 14's `docs` item, journaled there and not fixed, because fixing it is a behaviour change and that card is a move. Both entry paths are covered today — `tests/docs.spec.ts` asserts the boot path's fallback explicitly — which is how the asymmetry survived: each half is right on its own terms.

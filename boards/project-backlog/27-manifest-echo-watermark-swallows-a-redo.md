@@ -45,6 +45,17 @@ beside the two watermark cases already there.
 - [x] Pin the undo→redo sequence in `test/unit/manifest/manifestPresenter.test.ts`
 - [x] Keep the echo rule itself intact (a repeated change carrying our write is still ours)
 
+## Gates
+
+Run once for all five cards on this branch (23, 26, 27, 28, 29) after the last fix landed.
+
+- [x] lint — biome check, 300 files, no fixes applied (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] compile — tsc -p ./ clean (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] typecheck:tests — tsc -p tsconfig.test.json --noEmit clean (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] coverage:unit — 1401 tests passed, 100% stmts/branch/func/line (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] coverage:integration — 884 passed, only the 6 pre-existing EPERM symlink failures in linkerStrategies.test.ts (box note) (opus-defects, 2026-07-31T13:00:00.000Z)
+- [x] coverage:e2e — 264 passed, 100% across all 14 webview scripts (opus-defects, 2026-07-31T13:00:00.000Z)
+
 ## Comments
 
 - **opus-defects** (2026-07-31T11:20:00.000Z): Claimed and fixed at `src/core/app/manifestPresenter.ts:133-149` — `onDocumentChanged` now sets `lastWritten = null` on the diverging path, before the `external` push. Took the third option rather than either of the two the card lists: clear when the document DIVERGES, not when the watermark matches, and not by reading `onDidChangeTextDocument.reason`. Clearing on the first match is the weaker rule — it makes the watermark a one-shot even when the document has not moved, so a second change event carrying our own text (a formatter, a second event for one edit) would be pushed back and steal the user's caret, which is the regression the watermark exists to prevent. Clearing on divergence keeps the invariant honest instead: `lastWritten` describes the document's CURRENT text or nothing, so it can never suppress a change it has no claim on, and a redo back to `T1` arrives with the watermark already dropped by the undo that preceded it. The `reason`-based option was rejected as needing a new dep and a new fact from the shell to fix something the existing state already answers. Field doc updated at `src/core/app/manifestPresenter.ts:86-98`.

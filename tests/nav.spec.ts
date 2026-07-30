@@ -37,6 +37,19 @@ test.describe("nav preview", () => {
     expect(errors).toEqual([]);
   });
 
+  test("ignores an empty host message and one it has no case for", async ({ page }) => {
+    // The sidebar is the longest-lived webview in the extension — registered at
+    // activation, alive for the whole session — so a message it does not
+    // understand has to be inert rather than take the router down with it.
+    const errors = await openPreview(page, "nav");
+    await hostSend(page, null);
+    await hostSend(page, { type: "notInTheContract" });
+
+    await expect(page.getByTestId("nav-item")).toHaveCount(10);
+    await expect(page.getByTestId("status-label")).toHaveText("Bridge offline");
+    expect(errors).toEqual([]);
+  });
+
   test("clicking a row posts {type: run, command} and activates the row", async ({ page }) => {
     await openPreview(page, "nav");
     const browse = page.locator('[data-testid="nav-item"][data-id="browse"]');
