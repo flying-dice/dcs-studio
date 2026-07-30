@@ -6,6 +6,8 @@ import type {
   ConsoleInbound,
 } from "../../../src/core/app/consolePresenter";
 import { ConsolePresenter } from "../../../src/core/app/consolePresenter";
+import type { DocsEffect, DocsInbound } from "../../../src/core/app/docsPresenter";
+import { DocsPresenter } from "../../../src/core/app/docsPresenter";
 import type { LogEffect, LogInbound, LogPresenterDeps } from "../../../src/core/app/logPresenter";
 import { LogPresenter } from "../../../src/core/app/logPresenter";
 import type {
@@ -46,6 +48,7 @@ import type {
 import { SetupPresenter } from "../../../src/core/app/setupPresenter";
 import type {
   ConsoleHostMessage,
+  DocsHostMessage,
   LogHostMessage,
   ManifestHostMessage,
   MarketplaceHostMessage,
@@ -56,6 +59,7 @@ import type {
 } from "../../../src/core/app/webviewContract";
 import {
   CONSOLE_PROTOCOL,
+  DOCS_PROTOCOL,
   LOG_PROTOCOL,
   MANIFEST_PROTOCOL,
   MARKETPLACE_PROTOCOL,
@@ -619,6 +623,35 @@ function manifestHarness(over: Partial<ManifestPresenterDeps> = {}): ManifestHar
   };
 }
 
+// ── Docs harness ─────────────────────────────────────────────────────────────
+
+interface DocsHarness {
+  presenter: DocsPresenter;
+  posted: DocsHostMessage[];
+  effects: DocsEffect[];
+  interactions(): number;
+}
+
+/**
+ * The simplest harness in the file, and deliberately so: the docs presenter has
+ * no state and no dependency beyond its two outputs. The guards and the
+ * reveal-without-navigating rule have their own tests in
+ * `test/unit/docs/docsPresenter.test.ts`.
+ */
+function docsHarness(): DocsHarness {
+  const posted: DocsHostMessage[] = [];
+  const effects: DocsEffect[] = [];
+  return {
+    presenter: new DocsPresenter({
+      post: (msg) => posted.push(msg),
+      effect: (e) => effects.push(e),
+    }),
+    posted,
+    effects,
+    interactions: () => posted.length + effects.length,
+  };
+}
+
 /** The message types a run of the presenter actually pushed, de-duplicated. */
 function typesOf(posted: { type: string }[]): string[] {
   return [...new Set(posted.map((m) => m.type))].sort();
@@ -730,12 +763,20 @@ const MANIFEST_DRIVES: Record<ManifestInbound["type"], Drive<ManifestInbound>> =
   edit: { send: { type: "edit", text: '[project]\nname = "renamed-in-the-form"\n' } },
 };
 
+const DOCS_DRIVES: Record<DocsInbound["type"], Drive<DocsInbound>> = {
+  run: { send: { type: "run", command: "dcs.marketplace.open" } },
+  openExternal: {
+    send: { type: "openExternal", url: "https://www.digitalcombatsimulator.com/" },
+  },
+};
+
 // ── The contract table itself ────────────────────────────────────────────────
 
 describe("the declared webview contract", () => {
   it("names a protocol for every presenter-backed panel and nothing else", () => {
     expect(Object.keys(WEBVIEW_PROTOCOLS).sort()).toEqual([
       "console",
+      "docs",
       "log",
       "manifest",
       "marketplace",
@@ -1161,6 +1202,42 @@ describe("manifest — host -> webview", () => {
     h.presenter.pushRoots();
 
     expect(typesOf(h.posted)).toEqual([...MANIFEST_PROTOCOL.toWebview].sort());
+  });
+});
+
+// ── Docs: the host half ──────────────────────────────────────────────────────
+
+describe("docs — webview -> host", () => {
+  it("drives exactly the declared message set", () => {
+    expect(Object.keys(DOCS_DRIVES).sort()).toEqual([...DOCS_PROTOCOL.toHost].sort());
+  });
+
+  it.each(DOCS_PROTOCOL.toHost)("%s is acted on", (type) => {
+    const plan = DOCS_DRIVES[type as DocsInbound["type"]];
+    const h = docsHarness();
+    for (const m of plan.before ?? []) h.presenter.handle(m);
+    const before = h.interactions();
+    h.presenter.handle(plan.send);
+    expect(h.interactions()).toBeGreaterThan(before);
+  });
+
+  it("does nothing at all for a message type the contract does not declare", () => {
+    const h = docsHarness();
+    h.presenter.handle({ type: "notInTheContract" } as unknown as DocsInbound);
+    expect(h.interactions()).toBe(0);
+  });
+});
+
+describe("docs — host -> webview", () => {
+  it("produces exactly the declared message set", () => {
+    // One presenter and one call, because this panel pushes one message. Its
+    // opening state is not among them: like the manifest form's bootstrap, the
+    // deep link crosses inside the DOCUMENT rather than over the channel, so the
+    // only thing the host ever sends is the navigate half of that same rule.
+    const h = docsHarness();
+    h.presenter.navigate("sandbox");
+
+    expect(typesOf(h.posted)).toEqual([...DOCS_PROTOCOL.toWebview].sort());
   });
 });
 

@@ -382,21 +382,21 @@ came out of asking what happens when a user acts at the wrong moment.
 
 ## What is deliberately not done
 
-- ~~**G3's declared message-contract table.**~~ **Since done, for eight of eleven
+- ~~**G3's declared message-contract table.**~~ **Since done, for nine of eleven
   webviews** (board cards `09-typed-webview-message-contract` and
   `14-presenter-rollout-remaining-panels`). The contract is
   declared in `src/core/app/webviewContract.ts` — typed
   `HostMessage`/`WebviewMessage` unions for `console`, `marketplace`, `mymods`,
-  `log`, `publish`, `setup`, `newproject` and `manifest`, the panels with a
-  presenter — and checked from three directions: the compiler
+  `log`, `publish`, `setup`, `newproject`, `manifest` and `docs`, the panels
+  with a presenter — and checked from three directions: the compiler
   (each presenter's `post` is typed to its host union, so an undeclared push
   does not build), the unit layer (every declared inbound message is asserted to
   be acted on, every declared outbound to be produced), and the e2e layer (the
   real `media/*.js` is driven in Chromium and the set it posts and consumes is
   asserted equal to the declaration). Nothing is regex-derived: the parked
   reasoning was right that an inferred contract produces false failures, and the
-  way past it was to observe the webview rather than read it. The other three
-  webviews (`docs`, `nav`, `skills`) are named in `UNCOVERED_WEBVIEWS` and
+  way past it was to observe the webview rather than read it. The other two
+  webviews (`nav`, `skills`) are named in `UNCOVERED_WEBVIEWS` and
   checked against `previews/`, so the remaining gap is data rather than an
   absence; closing it means giving those panels presenters first.
 - ~~**Presenter extraction beyond the marketplace pilot.**~~ **Since done**
@@ -410,9 +410,16 @@ came out of asking what happens when a user acts at the wrong moment.
   `core/app/publishPresenter.ts`, a 127-line shell over
   `core/app/setupPresenter.ts`, a 115-line shell over
   `core/app/newProjectPresenter.ts` (`newProjectPanel`), and a 104-line shell over
-  `core/app/manifestPresenter.ts` (`manifest/formPanel`) — the last of which is
-  the first NON-singleton to get one: it is keyed per document in a Map, so it
-  takes one presenter per panel instance rather than one per session. The G5 table above
+  `core/app/manifestPresenter.ts` (`manifest/formPanel`) — the first
+  NON-singleton to get one: it is keyed per document in a Map, so it
+  takes one presenter per panel instance rather than one per session — and a
+  75-line shell over `core/app/docsPresenter.ts` (`docs/docsPanel`), the one
+  panel whose shell got LONGER (67 -> 75) rather than shorter: the docs panel
+  holds no state at all — its content, its TOC and its navigation are the
+  webview's own — so what moved out is the deep-link rule and two payload guards,
+  and what replaced them is the effect dispatch. The point of that one is
+  testability rather than size: what was left is 6 `vscode.` references and no
+  decisions. The G5 table above
   still reads 309 lines / 22 refs — that is the original audit's measurement at
   `8c45b98` and is left as the record of what was true then, per this
   document's status note.

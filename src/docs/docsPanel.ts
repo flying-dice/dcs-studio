@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import type { DocsInbound } from "../core/app/docsPresenter";
+import { DocsPresenter } from "../core/app/docsPresenter";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
 import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
@@ -6,19 +8,23 @@ import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
 // The Documentation experience: a webview panel with a table-of-contents
 // sidebar and per-feature guide pages (Mod Manager, manifest reference,
 // publishing, console, debugger…). Content lives in media/docs-content.js;
-// this class is only the host shell. Pages can deep-link each other and run
-// extension commands ("Open Marketplace") via postMessage.
+// this class is only the host shell over `core/app/docsPresenter.ts`. Pages can
+// deep-link each other and run extension commands ("Open Marketplace") via
+// postMessage.
 export class DocsPanel {
   public static current: DocsPanel | undefined;
   private static readonly viewType = "dcsStudio.docs";
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[];
+  private readonly presenter: DocsPresenter;
 
   static show(context: vscode.ExtensionContext, page?: string): void {
     const column = activeColumn();
     if (DocsPanel.current) {
       DocsPanel.current.panel.reveal(column);
-      if (page) DocsPanel.current.post({ type: "goto", page });
+      // Whether a reveal also navigates is the presenter's rule, not the
+      // panel's — see the note on `navigate`.
+      DocsPanel.current.presenter.navigate(page);
       return;
     }
     const panel = createPanel(context, DocsPanel.viewType, "Documentation", column);
@@ -34,32 +40,34 @@ export class DocsPanel {
     this.disposables = disposeWithPanel(panel, () => {
       DocsPanel.current = undefined;
     });
-    this.panel.webview.html = this.html(initialPage);
-    this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
+    this.presenter = new DocsPresenter({
+      post: (msg) => void this.panel.webview.postMessage(msg),
+      effect: (e) => {
+        switch (e.kind) {
+          case "runCommand":
+            void vscode.commands.executeCommand(e.command);
+            break;
+          case "openExternal":
+            openExternal(e.url);
+            break;
+        }
+      },
+    });
+    this.panel.webview.html = this.html(this.presenter.bootstrap(initialPage).page);
+    this.panel.webview.onDidReceiveMessage(
+      (m: DocsInbound) => this.presenter.handle(m),
+      null,
+      this.disposables,
+    );
   }
 
-  private async onMessage(msg: { type: string; command?: string; url?: string }): Promise<void> {
-    switch (msg.type) {
-      case "run":
-        if (msg.command) void vscode.commands.executeCommand(msg.command);
-        break;
-      case "openExternal":
-        if (msg.url) openExternal(msg.url);
-        break;
-    }
-  }
-
-  private post(msg: unknown): void {
-    void this.panel.webview.postMessage(msg);
-  }
-
-  private html(initialPage?: string): string {
+  private html(initialPage: string): string {
     return renderWebviewHtml({
       webview: this.panel.webview,
       extensionUri: this.context.extensionUri,
       title: "Documentation",
       styles: ["docs.css"],
-      inlineScripts: [`window.__INITIAL_PAGE__ = ${JSON.stringify(initialPage ?? "")};`],
+      inlineScripts: [`window.__INITIAL_PAGE__ = ${JSON.stringify(initialPage)};`],
       scripts: ["docs-content.js", "docs.js"],
       csp: { img: "data:" },
     });
