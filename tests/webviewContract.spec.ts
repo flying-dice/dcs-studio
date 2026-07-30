@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 import {
   CONSOLE_PROTOCOL,
   LOG_PROTOCOL,
+  MANIFEST_PROTOCOL,
   MARKETPLACE_PROTOCOL,
   MYMODS_PROTOCOL,
   NEWPROJECT_PROTOCOL,
@@ -10,7 +11,7 @@ import {
   type WebviewProtocol,
 } from "../src/core/app/webviewContract";
 import { expect, test } from "./fixtures";
-import { hostSend, openPreview, sentMessages } from "./helpers";
+import { expectSent, hostSend, openPreview, sentMessages } from "./helpers";
 
 // The WEBVIEW half of the declared message contract
 // (`src/core/app/webviewContract.ts`), both directions, observed in Chromium.
@@ -43,8 +44,9 @@ import { hostSend, openPreview, sentMessages } from "./helpers";
 //
 // ## Scope
 //
-// Console, marketplace, My Mods, log, publish and setup only — the panels with a
-// presenter. The other five webviews are named in `UNCOVERED_WEBVIEWS` and checked against the
+// Console, marketplace, My Mods, log, publish, setup, New Project and the
+// manifest form only — the panels with a presenter. The other three webviews are
+// named in `UNCOVERED_WEBVIEWS` and checked against the
 // preview directory by test/integration/webview/webviewContract.test.ts, so
 // the uncovered set is data rather than an omission.
 
@@ -484,6 +486,51 @@ test.describe("newproject ↔ NewProjectPresenter message contract", () => {
 
     await collect(page, sent, consumed);
     assertContract(NEWPROJECT_PROTOCOL, sent, consumed);
+    expect(errors).toEqual([]);
+  });
+});
+
+test.describe("manifest ↔ ManifestPresenter message contract", () => {
+  test("the webview posts and consumes exactly the declared message set", async ({ page }) => {
+    const sent = new Set<string>();
+    const consumed = new Map<string, boolean>();
+
+    await armProbe(page);
+    // Boot: media/manifest.js posts nothing and needs nothing pushed at it — the
+    // one covered panel whose opening state crosses inside the DOCUMENT, as the
+    // inline `window.__BOOTSTRAP__` the host renders and the fixture stands in
+    // for. So there is no handshake here to lose (cf. cards 22-24).
+    const errors = await openPreview(page, "manifest");
+    await expect(page.getByTestId("bundle-row")).toHaveCount(1);
+
+    // `edit` — the form's only message, and debounced: it re-emits the WHOLE
+    // file 200ms after the last keystroke, which is why this waits for the post
+    // rather than reading the log straight after typing.
+    await page.locator('[data-sec="project"][data-key="name"]').fill("renamed-in-the-form");
+    await expect(page.getByTestId("toml-preview")).toContainText("renamed-in-the-form");
+    await expectSent(page, { type: "edit" });
+
+    // `roots` — the DCS paths changed under the open form. The resolved-dest line
+    // is what consumes it: the fixture's symlink is anchored at {SavedGames}, so
+    // re-rooting it re-renders where that link would land.
+    await hostSend(page, {
+      type: "roots",
+      roots: { savedGames: "E:\\Re-rooted\\DCS", gameInstall: "" },
+    });
+    await expect(page.getByTestId("resolved-dest")).toContainText("E:\\Re-rooted\\DCS");
+
+    // `external` — the document changed outside the form (a raw-text edit, an
+    // undo, a revert, a git checkout), which re-seeds the whole model.
+    await hostSend(page, {
+      type: "external",
+      rawText: '[project]\nname = "changed-in-the-editor"\n\n[[bundle]]\npath = "Scripts"\n',
+    });
+    await expect(page.locator('[data-sec="project"][data-key="name"]')).toHaveValue(
+      "changed-in-the-editor",
+    );
+
+    await collect(page, sent, consumed);
+    assertContract(MANIFEST_PROTOCOL, sent, consumed);
     expect(errors).toEqual([]);
   });
 });

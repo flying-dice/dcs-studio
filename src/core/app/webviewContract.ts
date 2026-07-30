@@ -47,13 +47,13 @@ import type { Progress } from "./subscriptionService";
 // ## Coverage is deliberately partial
 //
 // Only the panels with a presenter (`console`, `marketplace`, `mymods`, `log`,
-// `publish`, `setup`, `newproject`) are covered. The other four webviews still
-// have both halves under their own gates but no declared contract between them;
-// they are named in
+// `publish`, `setup`, `newproject`, `manifest`) are covered. The other three
+// webviews still have both halves under their own gates but no declared contract
+// between them; they are named in
 // `UNCOVERED_WEBVIEWS` so the gap is visible in the table rather than silent,
 // and the tests assert that list is exactly "every preview page minus the
 // covered ones". Extending the contract to a panel means giving it a presenter
-// first — an inferred contract for the remaining five would be worse than none.
+// first — an inferred contract for the remaining three would be worse than none.
 //
 // ## Why the payload fields are mostly optional
 //
@@ -472,6 +472,64 @@ const NEWPROJECT_TO_WEBVIEW_KEYS: { readonly [K in NewProjectHostMessage["type"]
   error: true,
 };
 
+// ── Manifest form ────────────────────────────────────────────────────────────
+
+/**
+ * The two DCS roots a `dest` resolves against, as the form is told them.
+ *
+ * `gameInstall` is `""` rather than absent when unconfigured: the form renders
+ * `{GameInstall}` as *unresolvable on this machine* off exactly that emptiness,
+ * which is a different message from "this dest is wrong" (`media/manifest.js`
+ * keeps the two apart deliberately), so the falsy value is the declaration.
+ */
+export interface ManifestRoots {
+  savedGames: string;
+  gameInstall: string;
+}
+
+/**
+ * The manifest form's opening state — declared here beside its messages because
+ * it is this panel's `init`, and the only reason it is not one.
+ *
+ * `media/manifest.js` reads `window.__BOOTSTRAP__` synchronously at load, so
+ * this crosses inside the DOCUMENT the host renders rather than over the message
+ * channel. It is the one covered panel that therefore has no boot handshake and
+ * cannot lose one to the load race (cards 22-24), which is also why the
+ * `toWebview` union below has no `init` in it.
+ */
+export interface ManifestBootstrap {
+  /** The bound document's text, as the form's model is parsed from. */
+  rawText: string;
+  /** The document's path; the form names itself after its basename. */
+  targetPath: string;
+  roots: ManifestRoots;
+}
+
+/**
+ * A message `media/manifest.js` posts.
+ *
+ * One, and debounced: the form re-emits the WHOLE file 200ms after the last
+ * keystroke, and the host applies it as a `WorkspaceEdit` so save, dirty state
+ * and undo belong to VS Code rather than to the form.
+ */
+export type ManifestWebviewMessage = { type: "edit"; text?: string };
+
+/** A message `ManifestPresenter` pushes to the manifest form. */
+export type ManifestHostMessage =
+  /** The document changed under the form (raw-text edit, undo, revert, git). */
+  | { type: "external"; rawText: string }
+  /** The DCS paths changed, so every resolved-dest line is stale. */
+  | { type: "roots"; roots: ManifestRoots };
+
+const MANIFEST_TO_HOST_KEYS: { readonly [K in ManifestWebviewMessage["type"]]: true } = {
+  edit: true,
+};
+
+const MANIFEST_TO_WEBVIEW_KEYS: { readonly [K in ManifestHostMessage["type"]]: true } = {
+  external: true,
+  roots: true,
+};
+
 // ── The table ────────────────────────────────────────────────────────────────
 
 /** One covered panel's half of the contract, as data the tests iterate. */
@@ -557,10 +615,25 @@ export const NEWPROJECT_PROTOCOL: WebviewProtocol = {
   silent: ["created"],
 };
 
+export const MANIFEST_PROTOCOL: WebviewProtocol = {
+  preview: "manifest.html",
+  // Two scripts, and the only covered panel with more than one that is not the
+  // console: `manifest-core.js` is the parse/emit/resolve core the form and the
+  // extension host BOTH run, so it is part of the webview half by being loaded
+  // beside `manifest.js`, not by dispatching anything itself.
+  scripts: ["manifest-core.js", "manifest.js"],
+  toHost: Object.keys(MANIFEST_TO_HOST_KEYS),
+  toWebview: Object.keys(MANIFEST_TO_WEBVIEW_KEYS),
+  // Both pushes re-render the whole form — there is nothing the form keeps that
+  // it does not draw.
+  silent: [],
+};
+
 /** Every panel whose protocol is declared, keyed by preview page basename. */
 export const WEBVIEW_PROTOCOLS: Readonly<Record<string, WebviewProtocol>> = {
   console: CONSOLE_PROTOCOL,
   log: LOG_PROTOCOL,
+  manifest: MANIFEST_PROTOCOL,
   marketplace: MARKETPLACE_PROTOCOL,
   mymods: MYMODS_PROTOCOL,
   newproject: NEWPROJECT_PROTOCOL,
@@ -577,4 +650,4 @@ export const WEBVIEW_PROTOCOLS: Readonly<Record<string, WebviewProtocol>> = {
  * above are only worth anything because a `vscode`-free object on the host side
  * can be driven through every one of them.
  */
-export const UNCOVERED_WEBVIEWS: readonly string[] = ["docs", "manifest", "nav", "skills"];
+export const UNCOVERED_WEBVIEWS: readonly string[] = ["docs", "nav", "skills"];

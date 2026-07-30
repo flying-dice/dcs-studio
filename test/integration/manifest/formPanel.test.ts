@@ -20,11 +20,16 @@ import * as vscode from "vscode";
 import { installRoots } from "../../../src/adapters/vscode/installRoots";
 import { ManifestFormPanel } from "../../../src/manifest/formPanel";
 
-// The manifest form is two-way bound to a real text document, which makes the
-// echo rule the whole game: an edit the form makes comes straight back through
-// onDidChangeTextDocument, and re-pushing it would overwrite what the user is
-// typing and steal focus mid-keystroke. That loop, and the one-panel-per-
-// document rule, are what these tests pin.
+// The wiring `src/manifest/formPanel.ts` is now the only witness for: the panel
+// itself, the one-form-per-DOCUMENT map (card 07 — this panel's teardown frees a
+// map entry, not a `current` slot), the three workspace listeners with their
+// per-document filters, the `WorkspaceEdit`, and the roots resolved through the
+// real installer helpers over a mocked disk.
+//
+// The echo rule itself — that a change carrying the form's own text is not
+// pushed back — is the presenter's, and is tested with no `vscode` at all in
+// test/unit/manifest/manifestPresenter.test.ts. What is left here is that each
+// listener REACHES the presenter, which no unit test can see.
 
 const EXT = "C:\\ext";
 const DOC_PATH = "C:\\proj\\dcs-studio.toml";
@@ -146,30 +151,6 @@ describe("document to form", () => {
     expect(panel.webview.postedOfType("external")).toHaveLength(0);
   });
 
-  it("does not echo the form's own edit back into the form", async () => {
-    // The critical case: the form writes, the write comes back as a document
-    // change, and re-pushing it would clobber what the user is typing.
-    const { doc, panel } = open();
-    const next = '[project]\nname = "typed-in-form"\n';
-
-    await panel.webview.receive({ type: "edit", text: next });
-    doc.setText(next);
-    fireDocumentChanged({ document: doc });
-    await flush();
-
-    expect(panel.webview.postedOfType("external")).toHaveLength(0);
-  });
-
-  it("resumes pushing once the document diverges from what the form wrote", async () => {
-    const { doc, panel } = open();
-    await panel.webview.receive({ type: "edit", text: "written-by-form" });
-    doc.setText("someone-else-typed-this");
-    fireDocumentChanged({ document: doc });
-    await flush();
-
-    expect(panel.webview.postedOfType("external")).toHaveLength(1);
-  });
-
   it("closes the form when its document's editor closes", async () => {
     const { doc, panel } = open();
     fireDocumentClosed(doc);
@@ -205,33 +186,14 @@ describe("document to form", () => {
 
 describe("form to document", () => {
   it("replaces the whole document with the form's text", async () => {
+    // The `WorkspaceEdit` is the shell's, and it is what makes save, dirty state
+    // and undo belong to VS Code rather than to the form.
     const { panel } = open();
     await panel.webview.receive({ type: "edit", text: '[project]\nname = "new"\n' });
 
     expect(state.appliedEdits).toEqual([
       { uri: `file://${DOC_PATH}`, text: '[project]\nname = "new"\n' },
     ]);
-  });
-
-  it("skips an edit identical to the document's current text", async () => {
-    // Debounced form edits fire on every keystroke pause; writing an identical
-    // buffer would mark the file dirty for nothing.
-    const { doc, panel } = open();
-    await panel.webview.receive({ type: "edit", text: doc.getText() });
-    expect(state.appliedEdits).toEqual([]);
-  });
-
-  it("ignores an edit carrying no text", async () => {
-    const { panel } = open();
-    await panel.webview.receive({ type: "edit" });
-    await panel.webview.receive({ type: "edit", text: 42 as unknown as string });
-    expect(state.appliedEdits).toEqual([]);
-  });
-
-  it("ignores unknown message types", async () => {
-    const { panel } = open();
-    await panel.webview.receive({ type: "mystery", text: "x" });
-    expect(state.appliedEdits).toEqual([]);
   });
 });
 

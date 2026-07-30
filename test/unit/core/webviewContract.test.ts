@@ -9,6 +9,11 @@ import { ConsolePresenter } from "../../../src/core/app/consolePresenter";
 import type { LogEffect, LogInbound, LogPresenterDeps } from "../../../src/core/app/logPresenter";
 import { LogPresenter } from "../../../src/core/app/logPresenter";
 import type {
+  ManifestInbound,
+  ManifestPresenterDeps,
+} from "../../../src/core/app/manifestPresenter";
+import { ManifestPresenter } from "../../../src/core/app/manifestPresenter";
+import type {
   MarketplaceEffect,
   MarketplaceInbound,
   MarketplacePresenterDeps,
@@ -42,6 +47,7 @@ import { SetupPresenter } from "../../../src/core/app/setupPresenter";
 import type {
   ConsoleHostMessage,
   LogHostMessage,
+  ManifestHostMessage,
   MarketplaceHostMessage,
   MyModsHostMessage,
   NewProjectHostMessage,
@@ -51,6 +57,7 @@ import type {
 import {
   CONSOLE_PROTOCOL,
   LOG_PROTOCOL,
+  MANIFEST_PROTOCOL,
   MARKETPLACE_PROTOCOL,
   MYMODS_PROTOCOL,
   NEWPROJECT_PROTOCOL,
@@ -63,7 +70,6 @@ import type { DualBridgeStatus } from "../../../src/core/domain/bridgeProtocol";
 import type { DcsCandidate } from "../../../src/core/domain/dcsDetect";
 import type { Check } from "../../../src/core/domain/publishChecks";
 import type { ManifestModel, ProductDetail, Subscription } from "../../../src/core/domain/types";
-
 
 // The HOST half of the declared webview contract
 // (`src/core/app/webviewContract.ts`), both directions, table-driven.
@@ -564,6 +570,55 @@ function newProjectHarness(over: Partial<NewProjectPresenterDeps> = {}): NewProj
   };
 }
 
+// ── Manifest harness ─────────────────────────────────────────────────────────
+
+const MANIFEST_TOML = '[project]\nname = "my-mod"\n';
+
+interface ManifestHarness {
+  presenter: ManifestPresenter;
+  posted: ManifestHostMessage[];
+  calls: string[];
+  /** The bound document, mutable the way a real one is while the form is open. */
+  setText: (text: string) => void;
+  interactions(): number;
+}
+
+/**
+ * A manifest presenter over a document that starts as `MANIFEST_TOML`. The write
+ * lands in that document, as the real `WorkspaceEdit` does — an `edit` whose
+ * write went nowhere would make the echo rule pass for the wrong reason. The
+ * guards and the watermark have their own tests in
+ * `test/unit/manifest/manifestPresenter.test.ts`.
+ */
+function manifestHarness(over: Partial<ManifestPresenterDeps> = {}): ManifestHarness {
+  let text = MANIFEST_TOML;
+  const posted: ManifestHostMessage[] = [];
+  const calls: string[] = [];
+  const deps: ManifestPresenterDeps = {
+    text: () => text,
+    targetPath: "C:\\proj\\dcs-studio.toml",
+    installRoots: {
+      savedGames: () => "C:\\Users\\pilot\\Saved Games\\DCS",
+      gameInstall: () => "C:\\DCS World",
+    },
+    write: async (next) => {
+      calls.push("write");
+      text = next;
+    },
+    post: (msg) => posted.push(msg),
+    ...over,
+  };
+  return {
+    presenter: new ManifestPresenter(deps),
+    posted,
+    calls,
+    setText: (next) => {
+      text = next;
+    },
+    interactions: () => posted.length + calls.length,
+  };
+}
+
 /** The message types a run of the presenter actually pushed, de-duplicated. */
 function typesOf(posted: { type: string }[]): string[] {
   return [...new Set(posted.map((m) => m.type))].sort();
@@ -669,6 +724,12 @@ const NEWPROJECT_DRIVES: Record<NewProjectInbound["type"], Drive<NewProjectInbou
   },
 };
 
+const MANIFEST_DRIVES: Record<ManifestInbound["type"], Drive<ManifestInbound>> = {
+  // Deliberately not the document's current text: an identical buffer is refused
+  // by design, so driving with one would test the refusal, not the handler.
+  edit: { send: { type: "edit", text: '[project]\nname = "renamed-in-the-form"\n' } },
+};
+
 // ── The contract table itself ────────────────────────────────────────────────
 
 describe("the declared webview contract", () => {
@@ -676,6 +737,7 @@ describe("the declared webview contract", () => {
     expect(Object.keys(WEBVIEW_PROTOCOLS).sort()).toEqual([
       "console",
       "log",
+      "manifest",
       "marketplace",
       "mymods",
       "newproject",
@@ -1059,6 +1121,46 @@ describe("newproject — host -> webview", () => {
     posted.push(...failing.posted);
 
     expect(typesOf(posted)).toEqual([...NEWPROJECT_PROTOCOL.toWebview].sort());
+  });
+});
+
+// ── Manifest: the host half ──────────────────────────────────────────────────
+
+describe("manifest — webview -> host", () => {
+  it("drives exactly the declared message set", () => {
+    expect(Object.keys(MANIFEST_DRIVES).sort()).toEqual([...MANIFEST_PROTOCOL.toHost].sort());
+  });
+
+  it.each(MANIFEST_PROTOCOL.toHost)("%s is acted on", async (type) => {
+    const plan = MANIFEST_DRIVES[type as ManifestInbound["type"]];
+    const h = manifestHarness();
+    for (const m of plan.before ?? []) await h.presenter.handle(m);
+    const before = h.interactions();
+    await h.presenter.handle(plan.send);
+    expect(h.interactions()).toBeGreaterThan(before);
+  });
+
+  it("does nothing at all for a message type the contract does not declare", async () => {
+    const h = manifestHarness();
+    await h.presenter.handle({ type: "notInTheContract" } as unknown as ManifestInbound);
+    expect(h.interactions()).toBe(0);
+  });
+});
+
+describe("manifest — host -> webview", () => {
+  it("produces exactly the declared message set", async () => {
+    // One presenter is enough, and the reason is worth recording: this panel has
+    // no `init` to produce, because its opening state crosses inside the document
+    // as `window.__BOOTSTRAP__` rather than as a message. So both declared pushes
+    // are reachable from the state the form opens in.
+    const h = manifestHarness();
+    // `external` — the document changed under the form, and not by the form.
+    h.setText("[project]\nname = 'edited-in-editor'\n");
+    h.presenter.onDocumentChanged();
+    // `roots` — the DCS paths changed while the form was open.
+    h.presenter.pushRoots();
+
+    expect(typesOf(h.posted)).toEqual([...MANIFEST_PROTOCOL.toWebview].sort());
   });
 });
 
