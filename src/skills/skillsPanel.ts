@@ -1,24 +1,32 @@
 import * as vscode from "vscode";
-import { requiresOverwriteConfirm } from "../core/domain/skillsStatus";
+import type { SkillsConfirm, SkillsEffect, SkillsInbound } from "../core/app/skillsPresenter";
+import { SkillsPresenter } from "../core/app/skillsPresenter";
 import { renderWebviewHtml } from "../webview/html";
 import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
-import { INSTALL_DIR, type SkillsLibrary } from "./library";
+import type { SkillsLibrary } from "./library";
 
 // The Agent Skills experience: a webview panel listing the skill files the
 // extension ships (skills/<id>/SKILL.md) with their installed state in the
 // workspace repo — install, update, open, view-bundled and remove actions.
-// State lives in SkillsLibrary; this class is only the host shell.
+//
+// Everything the host decides — the one payload the screen renders from, the
+// overwrite gate on a locally-edited skill, that a failure still refreshes the
+// list while a refusal does not, and the two different ways a file is opened —
+// lives in `SkillsPresenter`, which knows nothing about VS Code. This class is
+// the shell around it: the panel, the `SkillsLibrary` adapter, the
+// workspace-folder read, the modal, the document opens and the toast.
 export class SkillsPanel {
   public static current: SkillsPanel | undefined;
   private static readonly viewType = "dcsStudio.skills";
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[];
+  private readonly presenter: SkillsPresenter;
 
   static show(context: vscode.ExtensionContext, manager: SkillsLibrary): void {
     const column = activeColumn();
     if (SkillsPanel.current) {
       SkillsPanel.current.panel.reveal(column);
-      void SkillsPanel.current.postSkills();
+      void SkillsPanel.current.presenter.refresh();
       return;
     }
     const panel = createPanel(context, SkillsPanel.viewType, "Agent Skills", column);
@@ -28,96 +36,72 @@ export class SkillsPanel {
   private constructor(
     panel: vscode.WebviewPanel,
     private readonly context: vscode.ExtensionContext,
-    private readonly manager: SkillsLibrary,
+    manager: SkillsLibrary,
   ) {
     this.panel = panel;
     this.disposables = disposeWithPanel(panel, () => {
       SkillsPanel.current = undefined;
     });
+    this.presenter = new SkillsPresenter({
+      list: () => manager.list(),
+      hasWorkspace: () => !!vscode.workspace.workspaceFolders?.length,
+      install: async (id) => {
+        const uri = await manager.install(id);
+        // The ref is the uri's own round-trippable text, not `fsPath`: skills
+        // install into the workspace repo, which may be remote or virtual.
+        return { ref: uri.toString(), label: vscode.workspace.asRelativePath(uri) };
+      },
+      remove: (id) => manager.remove(id),
+      installedRef: (id) => manager.installedUri(id)?.toString(),
+      bundledRef: (id) => manager.bundledUri(id).toString(),
+      confirm: (question) => this.confirm(question),
+      post: (msg) => void this.panel.webview.postMessage(msg),
+      effect: (effect) => this.perform(effect),
+    });
     this.panel.webview.html = this.html();
-    this.panel.webview.onDidReceiveMessage((m) => void this.onMessage(m), null, this.disposables);
-    this.disposables.push(this.manager.onDidChange(() => void this.postSkills()));
-    void this.postSkills();
+    this.panel.webview.onDidReceiveMessage(
+      (m: SkillsInbound) => void this.presenter.handle(m),
+      null,
+      this.disposables,
+    );
+    this.disposables.push(manager.onDidChange(() => void this.presenter.refresh()));
+    void this.presenter.refresh();
   }
 
-  private async onMessage(msg: { type: string; id?: string }): Promise<void> {
-    switch (msg.type) {
-      case "refresh":
-        await this.postSkills();
+  /** Ask the presenter's question as a modal, and report the button pressed. */
+  private async confirm(question: SkillsConfirm): Promise<string | undefined> {
+    return vscode.window.showWarningMessage(
+      question.message,
+      { modal: true },
+      question.confirmLabel,
+    );
+  }
+
+  /** Carry out one presenter-described effect. */
+  private perform(effect: SkillsEffect): void {
+    switch (effect.kind) {
+      case "installed":
+        void vscode.window.showInformationMessage(effect.message, "Open File").then((choice) => {
+          if (choice) void vscode.window.showTextDocument(vscode.Uri.parse(effect.ref));
+        });
         break;
-      case "install":
-        if (msg.id) await this.install(msg.id);
+      case "installFailed":
+        showInstallFailed(effect.error);
         break;
-      case "open":
-        if (msg.id) await this.openInstalled(msg.id);
+      case "openInstalled":
+        void this.openDocument(effect.ref, false);
         break;
       case "viewBundled":
-        if (msg.id) {
-          const doc = await vscode.workspace.openTextDocument(this.manager.bundledUri(msg.id));
-          await vscode.window.showTextDocument(doc, { preview: true });
-        }
-        break;
-      case "remove":
-        if (msg.id) await this.remove(msg.id);
+        // A preview tab: the bundled copy is the extension's, not the user's, so
+        // peeking at it must not consume a tab the way opening theirs does.
+        void this.openDocument(effect.ref, true);
         break;
     }
   }
 
-  private async install(id: string): Promise<void> {
-    // Installing over a locally-edited copy loses the user's changes —
-    // confirm before overwriting (fresh installs and version updates don't ask).
-    const state = (await this.manager.list()).find((s) => s.id === id);
-    if (state && requiresOverwriteConfirm(state.status)) {
-      const choice = await vscode.window.showWarningMessage(
-        `The installed "${id}" skill has local edits. Overwrite them with the bundled v${state.bundledVersion}?`,
-        { modal: true },
-        "Overwrite",
-      );
-      if (choice !== "Overwrite") return;
-    }
-    try {
-      const uri = await this.manager.install(id);
-      const rel = vscode.workspace.asRelativePath(uri);
-      void vscode.window
-        .showInformationMessage(
-          `Skill installed to ${rel} — commit it with your repo.`,
-          "Open File",
-        )
-        .then((choice) => {
-          if (choice) void vscode.window.showTextDocument(uri);
-        });
-    } catch (err) {
-      showInstallFailed(err);
-    }
-    await this.postSkills();
-  }
-
-  private async openInstalled(id: string): Promise<void> {
-    const uri = this.manager.installedUri(id);
-    if (!uri) return;
-    const doc = await vscode.workspace.openTextDocument(uri);
-    await vscode.window.showTextDocument(doc);
-  }
-
-  private async remove(id: string): Promise<void> {
-    const choice = await vscode.window.showWarningMessage(
-      `Remove the "${id}" skill from ${INSTALL_DIR}/${id} in your repo?`,
-      { modal: true },
-      "Remove",
-    );
-    if (choice !== "Remove") return;
-    await this.manager.remove(id);
-    await this.postSkills();
-  }
-
-  private async postSkills(): Promise<void> {
-    const skills = await this.manager.list();
-    void this.panel.webview.postMessage({
-      type: "skills",
-      skills,
-      installDir: INSTALL_DIR,
-      hasWorkspace: !!vscode.workspace.workspaceFolders?.length,
-    });
+  private async openDocument(ref: string, preview: boolean): Promise<void> {
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(ref));
+    await vscode.window.showTextDocument(doc, preview ? { preview: true } : undefined);
   }
 
   private html(): string {
@@ -134,7 +118,7 @@ export class SkillsPanel {
 
 /**
  * The one place a failed skill install is reported. Both entry points — the
- * panel's Install/Update buttons and the activation nudge's "Update" — land
+ * panel's `installFailed` effect and the activation nudge's "Update" — land
  * here, so a repo that cannot be written to says the same thing either way.
  */
 export function showInstallFailed(err: unknown): void {

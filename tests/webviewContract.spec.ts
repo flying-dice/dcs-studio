@@ -6,9 +6,11 @@ import {
   MANIFEST_PROTOCOL,
   MARKETPLACE_PROTOCOL,
   MYMODS_PROTOCOL,
+  NAV_PROTOCOL,
   NEWPROJECT_PROTOCOL,
   PUBLISH_PROTOCOL,
   SETUP_PROTOCOL,
+  SKILLS_PROTOCOL,
   type WebviewProtocol,
 } from "../src/core/app/webviewContract";
 import { expect, test } from "./fixtures";
@@ -45,12 +47,12 @@ import { expectSent, hostSend, openPreview, sentMessages } from "./helpers";
 //
 // ## Scope
 //
-// Console, marketplace, My Mods, log, publish, setup, New Project, the manifest
-// form and the docs panel only — the panels with a presenter. The other two
-// webviews (`nav`, `skills`) are
-// named in `UNCOVERED_WEBVIEWS` and checked against the
-// preview directory by test/integration/webview/webviewContract.test.ts, so
-// the uncovered set is data rather than an omission.
+// All ELEVEN webviews — every page in `previews/`, which is what
+// test/integration/webview/webviewContract.test.ts asserts by holding the
+// declared set plus the (now empty) `UNCOVERED_WEBVIEWS` to that directory. Nine
+// are panels cards 08, 09 and 14 rolled presenters out to; the last two are the
+// Agent Skills panel and the sidebar, which is a `WebviewView` and behaves
+// differently enough in both directions to be worth reading as its own case.
 
 interface Received {
   type: string;
@@ -578,6 +580,104 @@ test.describe("docs ↔ DocsPresenter message contract", () => {
     assertContract(DOCS_PROTOCOL, sent, consumed);
     expect(errors).toEqual([]);
     expect(errors2).toEqual([]);
+  });
+});
+
+test.describe("skills ↔ SkillsPresenter message contract", () => {
+  const card = (page: Page, id: string) =>
+    page.locator(`[data-testid="skill-card"][data-id="${id}"]`);
+
+  test("the webview posts and consumes exactly the declared message set", async ({ page }) => {
+    const sent = new Set<string>();
+    const consumed = new Map<string, boolean>();
+
+    await armProbe(page);
+    // Boot: media/skills.js posts `refresh` from the bottom of its IIFE and the
+    // fixture answers `skills` with one card per status, which is what makes all
+    // four action buttons reachable in a single load.
+    const errors = await openPreview(page, "skills");
+    await expect(page.getByTestId("skill-card")).toHaveCount(4);
+
+    // The four `data-act` buttons, one per card, and deliberately spread across
+    // DIFFERENT cards: which buttons a card draws depends on its status, so
+    // Install lives on the not-installed one and Open/Remove only on cards that
+    // reported an installed version. None of these four types appears as a
+    // literal in media/skills.js at all — the click handler posts
+    // `{ type: el.dataset.act }`, so the drive is the only thing that can
+    // enumerate them.
+    await card(page, "dcs-studio").getByTestId("install-btn").click();
+    await card(page, "dcs-studio-2").getByTestId("open-installed-btn").click();
+    await card(page, "dcs-studio-3").getByTestId("remove-btn").click();
+    await card(page, "dcs-studio-4").getByTestId("view-bundled-btn").click();
+    await expectSent(page, { type: "viewBundled", id: "dcs-studio-4" });
+
+    // `skills` again, as a state no button can reach: with no folder open the
+    // cards lose Install entirely and the note takes its place. The same message
+    // type, and the reason it is the panel's only one — it is the whole screen.
+    await hostSend(page, {
+      type: "skills",
+      installDir: ".claude/skills",
+      hasWorkspace: false,
+      skills: [],
+    });
+    await expect(page.getByTestId("no-workspace-note")).toBeVisible();
+    await expect(page.getByTestId("empty-note")).toBeVisible();
+
+    await collect(page, sent, consumed);
+    assertContract(SKILLS_PROTOCOL, sent, consumed);
+    expect(errors).toEqual([]);
+  });
+});
+
+test.describe("nav ↔ NavPresenter message contract", () => {
+  test("the webview posts and consumes exactly the declared message set", async ({ page }) => {
+    const sent = new Set<string>();
+    const consumed = new Map<string, boolean>();
+
+    await armProbe(page);
+    // Boot: media/nav.js posts nothing and is sent nothing. It renders its rows
+    // and its "Bridge offline" footer from static data in the script itself, so
+    // unlike every panel the sidebar is COMPLETE at load — which is why all three
+    // host pushes below are the host volunteering rather than answering.
+    const errors = await openPreview(page, "nav");
+    await expect(page.getByTestId("nav-item")).toHaveCount(10);
+    await expect(page.getByTestId("status-label")).toHaveText("Bridge offline");
+
+    // `status` — the footer, from the coarse shape the presenter collapses the two
+    // bridges into. A running mission is the state that changes the most of it.
+    await hostSend(page, { type: "status", status: { connected: true, dcsTime: 213 } });
+    await expect(page.getByTestId("status-label")).toHaveText("Mission running");
+    await expect(page.getByTestId("status-time")).toHaveText("t 213s");
+
+    // `skills` — the badge on the Agent Skills row, which is drawn only above zero.
+    await hostSend(page, { type: "skills", updates: 2 });
+    const skillsRow = page.locator('[data-testid="nav-item"][data-id="skills"]');
+    await expect(skillsRow.getByTestId("nav-badge")).toHaveText("2");
+
+    // `manifest` — one boolean behind two rows: "Create a Mod" becomes "Edit
+    // Project", and Publish Mod stops being hidden.
+    const publishRow = page.locator('[data-testid="nav-item"][data-id="publish"]');
+    await expect(publishRow).toBeHidden();
+    await hostSend(page, { type: "manifest", hasManifest: true });
+    await expect(publishRow).toBeVisible();
+    await expect(page.locator('[data-testid="nav-item"][data-id="create"] .label')).toHaveText(
+      "Edit Project",
+    );
+
+    // `run` — the sidebar's whole host-bound half, from one delegated handler over
+    // every row. The command id comes off the clicked row's own `data-command`.
+    //
+    // Driven through a row that is on screen from the FIRST paint, deliberately
+    // not through Publish Mod: a `run` that could only be reached after the
+    // `manifest` push had been consumed would make the two halves of this drive
+    // depend on each other, and a mutation that broke the manifest handler would
+    // then fail on a missing click rather than on the message it actually broke.
+    await skillsRow.click();
+    await expectSent(page, { type: "run", command: "dcs.skills.open" });
+
+    await collect(page, sent, consumed);
+    assertContract(NAV_PROTOCOL, sent, consumed);
+    expect(errors).toEqual([]);
   });
 });
 

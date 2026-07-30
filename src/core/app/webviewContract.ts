@@ -7,6 +7,7 @@ import type { InitialForm } from "../domain/projectForm";
 import type { TemplateMeta } from "../domain/projectTemplates";
 import type { Check } from "../domain/publishChecks";
 import type { RepoRef } from "../domain/repoRemote";
+import type { SkillInfo } from "../domain/skillsStatus";
 import type { ModDto } from "../domain/subscriptions";
 import type { MarketListing, ProductDetail } from "../domain/types";
 import type { ReleaseOpts, ReleaseResult, ShareOpts, ShareResult } from "./publishService";
@@ -44,16 +45,22 @@ import type { Progress } from "./subscriptionService";
 //     pushed at it was consumed. Both directions of the WEBVIEW half, observed
 //     — never read off the source.
 //
-// ## Coverage is deliberately partial
+// ## Coverage is now total
 //
-// Only the panels with a presenter (`console`, `marketplace`, `mymods`, `log`,
-// `publish`, `setup`, `newproject`, `manifest`, `docs`) are covered. The other
-// two webviews — `nav` and `skills` — still have both halves under their own
-// gates but no declared contract between them; they are named in
-// `UNCOVERED_WEBVIEWS` so the gap is visible in the table rather than silent,
-// and the tests assert that list is exactly "every preview page minus the
-// covered ones". Extending the contract to a panel means giving it a presenter
-// first — an inferred contract for the remaining two would be worse than none.
+// All ELEVEN webviews are covered: the nine panels cards 08, 09 and 14 rolled
+// presenters out to (`console`, `marketplace`, `mymods`, `log`, `publish`,
+// `setup`, `newproject`, `manifest`, `docs`), the Agent Skills panel, and the
+// sidebar — which is a `WebviewView` rather than a panel and got here last on
+// purpose, as a decision rather than a repetition (card 14's journal records the
+// reasoning). `UNCOVERED_WEBVIEWS` is therefore empty, which is what makes the
+// census assertion in `test/integration/webview/webviewContract.test.ts` TOTAL:
+// the covered names equal the `previews/` directory, so a twelfth webview
+// arriving fails until someone declares it or says out loud that it is not
+// declared. The list is kept, empty, as the place that second answer would go.
+//
+// Coverage was reached one webview at a time and in that order for a reason:
+// declaring a union for a panel whose host half is welded to `vscode` would
+// leave that half unexecutable, so every entry below has a presenter behind it.
 //
 // ## Why the payload fields are mostly optional
 //
@@ -575,6 +582,110 @@ const DOCS_TO_WEBVIEW_KEYS: { readonly [K in DocsHostMessage["type"]]: true } = 
   goto: true,
 };
 
+// ── Agent Skills ─────────────────────────────────────────────────────────────
+
+/**
+ * A message `media/skills.js` posts.
+ *
+ * Four of the five come from ONE listener, and the type is not a literal
+ * anywhere in the script: every button carries a `data-act`, and the click
+ * handler posts `{ type: el.dataset.act, id: el.dataset.id }`
+ * (`media/skills.js:101-105`). The enumeration lives in the DOM the script
+ * builds, which is exactly the dispatch shape the audit says a regex contract
+ * gets wrong — a scanner would find no `install` at all.
+ */
+export type SkillsWebviewMessage =
+  /** The boot handshake, posted at the bottom of the IIFE. */
+  | { type: "refresh" }
+  /** Install, update or reset-to-bundled — one `data-act` for all three buttons. */
+  | { type: "install"; id?: string }
+  /** Open the installed copy for editing. */
+  | { type: "open"; id?: string }
+  /** Peek at the copy the extension ships. */
+  | { type: "viewBundled"; id?: string }
+  /** Delete the installed copy from the repo. */
+  | { type: "remove"; id?: string };
+
+/**
+ * A message `SkillsPresenter` pushes to the skills webview.
+ *
+ * One, and it is the whole screen: `media/skills.js` re-renders every card from
+ * scratch off this, so there is no partial update in this protocol at all.
+ */
+export type SkillsHostMessage = {
+  type: "skills";
+  skills: readonly SkillInfo[];
+  /** Where installs land, named on screen so the user knows what to commit. */
+  installDir: string;
+  /** Whether there is a repo to install into; with none the cards lose Install. */
+  hasWorkspace: boolean;
+};
+
+const SKILLS_TO_HOST_KEYS: { readonly [K in SkillsWebviewMessage["type"]]: true } = {
+  refresh: true,
+  install: true,
+  open: true,
+  viewBundled: true,
+  remove: true,
+};
+
+const SKILLS_TO_WEBVIEW_KEYS: { readonly [K in SkillsHostMessage["type"]]: true } = {
+  skills: true,
+};
+
+// ── Sidebar nav ──────────────────────────────────────────────────────────────
+
+/**
+ * The bridge status as the SIDEBAR is told it — one dot, one clock, both
+ * bridges collapsed into them.
+ *
+ * Deliberately not `DualBridgeStatus`, which is what the console's `status`
+ * carries. The sidebar's footer has room for neither bridge separately, so
+ * "connected" is either of them being up and `dcsTime` is `displayTime`'s pick
+ * between them. `null` is "no time to show", and the webview reads `> 0` as a
+ * mission running.
+ */
+export interface NavStatus {
+  connected: boolean;
+  dcsTime: number | null;
+}
+
+/**
+ * A message `media/nav.js` posts.
+ *
+ * One, from one delegated wiring over every row: each row carries its own
+ * `data-command` and the click handler posts it (`media/nav.js:140-147`). So the
+ * sidebar is the one webview whose entire host-bound half is a single message
+ * carrying a command id the DOM chose — which is why the presenter guards it.
+ */
+export type NavWebviewMessage = { type: "run"; command?: string };
+
+/**
+ * A message `NavPresenter` pushes to the sidebar.
+ *
+ * All three are UNPROMPTED, and the sidebar is the only webview where that is
+ * not a hazard: `media/nav.js` renders its rows and its "Bridge offline" footer
+ * from static data at load and posts no handshake, so a push lost to the load
+ * race leaves a page that is complete and merely stale, not blank (cf. cards
+ * 22-24). See card 29 for the one place that staleness is user-visible.
+ */
+export type NavHostMessage =
+  | { type: "status"; status: NavStatus }
+  /** How many installed skill files the extension ships a newer version of. */
+  | { type: "skills"; updates: number }
+  /** Whether the workspace is already a mod project. */
+  | { type: "manifest"; hasManifest: boolean };
+
+const NAV_TO_HOST_KEYS: { readonly [K in NavWebviewMessage["type"]]: true } = {
+  run: true,
+};
+
+const NAV_TO_WEBVIEW_KEYS: { readonly [K in NavHostMessage["type"]]: true } = {
+  status: true,
+  skills: true,
+  manifest: true,
+};
+
 // ── The table ────────────────────────────────────────────────────────────────
 
 /** One covered panel's half of the contract, as data the tests iterate. */
@@ -687,7 +798,25 @@ export const DOCS_PROTOCOL: WebviewProtocol = {
   silent: [],
 };
 
-/** Every panel whose protocol is declared, keyed by preview page basename. */
+export const SKILLS_PROTOCOL: WebviewProtocol = {
+  preview: "skills.html",
+  scripts: ["skills.js"],
+  toHost: Object.keys(SKILLS_TO_HOST_KEYS),
+  toWebview: Object.keys(SKILLS_TO_WEBVIEW_KEYS),
+  // The one push is the whole screen; there is nothing it does not draw.
+  silent: [],
+};
+
+export const NAV_PROTOCOL: WebviewProtocol = {
+  preview: "nav.html",
+  scripts: ["nav.js"],
+  toHost: Object.keys(NAV_TO_HOST_KEYS),
+  toWebview: Object.keys(NAV_TO_WEBVIEW_KEYS),
+  // All three change a row or the footer. `manifest` changes two rows at once.
+  silent: [],
+};
+
+/** Every webview whose protocol is declared, keyed by preview page basename. */
 export const WEBVIEW_PROTOCOLS: Readonly<Record<string, WebviewProtocol>> = {
   console: CONSOLE_PROTOCOL,
   docs: DOCS_PROTOCOL,
@@ -695,18 +824,25 @@ export const WEBVIEW_PROTOCOLS: Readonly<Record<string, WebviewProtocol>> = {
   manifest: MANIFEST_PROTOCOL,
   marketplace: MARKETPLACE_PROTOCOL,
   mymods: MYMODS_PROTOCOL,
+  nav: NAV_PROTOCOL,
   newproject: NEWPROJECT_PROTOCOL,
   publish: PUBLISH_PROTOCOL,
   setup: SETUP_PROTOCOL,
+  skills: SKILLS_PROTOCOL,
 };
 
 /**
- * The webviews with NO declared contract, named so the gap is data rather than
- * an absence. Each still has both halves under a coverage gate; what none of
- * them has is a shared name for the messages crossing between them.
+ * The webviews with NO declared contract — now none of them.
  *
- * A panel joins `WEBVIEW_PROTOCOLS` by growing a presenter first — the unions
+ * The list is kept rather than deleted, and that is the point of it: the census
+ * (`test/integration/webview/webviewContract.test.ts`) asserts that the covered
+ * names plus this one equal the `previews/` directory exactly, so a TWELFTH
+ * webview arriving has to be put on one side of the line or the other. An empty
+ * array makes that assertion total — every webview in the repo is covered — while
+ * still leaving somewhere honest to name a new one that is not yet.
+ *
+ * A webview joins `WEBVIEW_PROTOCOLS` by growing a presenter first — the unions
  * above are only worth anything because a `vscode`-free object on the host side
  * can be driven through every one of them.
  */
-export const UNCOVERED_WEBVIEWS: readonly string[] = ["nav", "skills"];
+export const UNCOVERED_WEBVIEWS: readonly string[] = [];

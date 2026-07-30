@@ -27,6 +27,8 @@ import type {
   MyModsPresenterDeps,
 } from "../../../src/core/app/myModsPresenter";
 import { MyModsPresenter } from "../../../src/core/app/myModsPresenter";
+import type { NavEffect, NavInbound, NavPresenterDeps } from "../../../src/core/app/navPresenter";
+import { NavPresenter } from "../../../src/core/app/navPresenter";
 import type {
   NewProjectEffect,
   NewProjectInbound,
@@ -47,15 +49,23 @@ import type {
 } from "../../../src/core/app/setupPresenter";
 import { SetupPresenter } from "../../../src/core/app/setupPresenter";
 import type {
+  SkillsEffect,
+  SkillsInbound,
+  SkillsPresenterDeps,
+} from "../../../src/core/app/skillsPresenter";
+import { SkillsPresenter } from "../../../src/core/app/skillsPresenter";
+import type {
   ConsoleHostMessage,
   DocsHostMessage,
   LogHostMessage,
   ManifestHostMessage,
   MarketplaceHostMessage,
   MyModsHostMessage,
+  NavHostMessage,
   NewProjectHostMessage,
   PublishHostMessage,
   SetupHostMessage,
+  SkillsHostMessage,
 } from "../../../src/core/app/webviewContract";
 import {
   CONSOLE_PROTOCOL,
@@ -64,15 +74,18 @@ import {
   MANIFEST_PROTOCOL,
   MARKETPLACE_PROTOCOL,
   MYMODS_PROTOCOL,
+  NAV_PROTOCOL,
   NEWPROJECT_PROTOCOL,
   PUBLISH_PROTOCOL,
   SETUP_PROTOCOL,
+  SKILLS_PROTOCOL,
   UNCOVERED_WEBVIEWS,
   WEBVIEW_PROTOCOLS,
 } from "../../../src/core/app/webviewContract";
 import type { DualBridgeStatus } from "../../../src/core/domain/bridgeProtocol";
 import type { DcsCandidate } from "../../../src/core/domain/dcsDetect";
 import type { Check } from "../../../src/core/domain/publishChecks";
+import type { SkillInfo } from "../../../src/core/domain/skillsStatus";
 import type { ManifestModel, ProductDetail, Subscription } from "../../../src/core/domain/types";
 
 // The HOST half of the declared webview contract
@@ -652,6 +665,98 @@ function docsHarness(): DocsHarness {
   };
 }
 
+// ── Agent Skills harness ─────────────────────────────────────────────────────
+
+const SKILL_ID = "dcs-studio";
+const SKILL_REF = "file:///c%3A/proj/.claude/skills/dcs-studio/SKILL.md";
+
+/**
+ * A skill the user has EDITED, so the overwrite gate is in play for `install` —
+ * the case that takes the most to make happen, and therefore the one worth
+ * driving here. The per-status rules have their own tests in
+ * `test/unit/skills/skillsPresenter.test.ts`.
+ */
+const EDITED_SKILL: SkillInfo = {
+  id: SKILL_ID,
+  name: SKILL_ID,
+  description: "",
+  bundledVersion: "1.2.0",
+  installedVersion: "1.2.0",
+  status: "modified",
+};
+
+interface SkillsHarness {
+  presenter: SkillsPresenter;
+  posted: SkillsHostMessage[];
+  effects: SkillsEffect[];
+  calls: string[];
+  interactions(): number;
+}
+
+/** A skills presenter over a repo that accepts writes and a user who says yes. */
+function skillsHarness(over: Partial<SkillsPresenterDeps> = {}): SkillsHarness {
+  const posted: SkillsHostMessage[] = [];
+  const effects: SkillsEffect[] = [];
+  const calls: string[] = [];
+  const deps: SkillsPresenterDeps = {
+    list: async () => [EDITED_SKILL],
+    hasWorkspace: () => true,
+    install: async (id) => {
+      calls.push(`install ${id}`);
+      return { ref: SKILL_REF, label: `.claude\\skills\\${id}\\SKILL.md` };
+    },
+    remove: async (id) => void calls.push(`remove ${id}`),
+    installedRef: () => SKILL_REF,
+    bundledRef: () => "file:///c%3A/ext/skills/dcs-studio/SKILL.md",
+    confirm: async (question) => {
+      calls.push("confirm");
+      return question.confirmLabel;
+    },
+    post: (msg) => posted.push(msg),
+    effect: (e) => effects.push(e),
+    ...over,
+  };
+  return {
+    presenter: new SkillsPresenter(deps),
+    posted,
+    effects,
+    calls,
+    interactions: () => posted.length + effects.length + calls.length,
+  };
+}
+
+// ── Sidebar nav harness ──────────────────────────────────────────────────────
+
+interface NavHarness {
+  presenter: NavPresenter;
+  posted: NavHostMessage[];
+  effects: NavEffect[];
+  interactions(): number;
+}
+
+/**
+ * The sidebar's presenter. Like the docs panel's it holds no state — the sidebar
+ * pushes what its three subscriptions tell it and keeps nothing — so the harness
+ * is its two outputs and the two questions it asks.
+ */
+function navHarness(over: Partial<NavPresenterDeps> = {}): NavHarness {
+  const posted: NavHostMessage[] = [];
+  const effects: NavEffect[] = [];
+  const deps: NavPresenterDeps = {
+    updatesAvailable: async () => [EDITED_SKILL],
+    manifestExists: async () => true,
+    post: (msg) => posted.push(msg),
+    effect: (e) => effects.push(e),
+    ...over,
+  };
+  return {
+    presenter: new NavPresenter(deps),
+    posted,
+    effects,
+    interactions: () => posted.length + effects.length,
+  };
+}
+
 /** The message types a run of the presenter actually pushed, de-duplicated. */
 function typesOf(posted: { type: string }[]): string[] {
   return [...new Set(posted.map((m) => m.type))].sort();
@@ -770,10 +875,22 @@ const DOCS_DRIVES: Record<DocsInbound["type"], Drive<DocsInbound>> = {
   },
 };
 
+const SKILLS_DRIVES: Record<SkillsInbound["type"], Drive<SkillsInbound>> = {
+  refresh: { send: { type: "refresh" } },
+  install: { send: { type: "install", id: SKILL_ID } },
+  open: { send: { type: "open", id: SKILL_ID } },
+  viewBundled: { send: { type: "viewBundled", id: SKILL_ID } },
+  remove: { send: { type: "remove", id: SKILL_ID } },
+};
+
+const NAV_DRIVES: Record<NavInbound["type"], Drive<NavInbound>> = {
+  run: { send: { type: "run", command: "dcs.marketplace.open" } },
+};
+
 // ── The contract table itself ────────────────────────────────────────────────
 
 describe("the declared webview contract", () => {
-  it("names a protocol for every presenter-backed panel and nothing else", () => {
+  it("names a protocol for every presenter-backed webview and nothing else", () => {
     expect(Object.keys(WEBVIEW_PROTOCOLS).sort()).toEqual([
       "console",
       "docs",
@@ -781,10 +898,21 @@ describe("the declared webview contract", () => {
       "manifest",
       "marketplace",
       "mymods",
+      "nav",
       "newproject",
       "publish",
       "setup",
+      "skills",
     ]);
+  });
+
+  it("leaves nothing uncovered", () => {
+    // The end of card 14's rollout, asserted rather than described: every webview
+    // in `previews/` is now declared, which is what makes the census in
+    // `test/integration/webview/webviewContract.test.ts` a total assertion. The
+    // list survives, empty, as the honest place to name a twelfth webview that
+    // arrives without a presenter — so this is not the same test as the census.
+    expect(UNCOVERED_WEBVIEWS).toEqual([]);
   });
 
   it("declares a non-empty message set in both directions", () => {
@@ -1238,6 +1366,79 @@ describe("docs — host -> webview", () => {
     h.presenter.navigate("sandbox");
 
     expect(typesOf(h.posted)).toEqual([...DOCS_PROTOCOL.toWebview].sort());
+  });
+});
+
+// ── Agent Skills: the host half ──────────────────────────────────────────────
+
+describe("skills — webview -> host", () => {
+  it("drives exactly the declared message set", () => {
+    expect(Object.keys(SKILLS_DRIVES).sort()).toEqual([...SKILLS_PROTOCOL.toHost].sort());
+  });
+
+  it.each(SKILLS_PROTOCOL.toHost)("%s is acted on", async (type) => {
+    const plan = SKILLS_DRIVES[type as SkillsInbound["type"]];
+    const h = skillsHarness();
+    for (const m of plan.before ?? []) await h.presenter.handle(m);
+    const before = h.interactions();
+    await h.presenter.handle(plan.send);
+    expect(h.interactions()).toBeGreaterThan(before);
+  });
+
+  it("does nothing at all for a message type the contract does not declare", async () => {
+    const h = skillsHarness();
+    await h.presenter.handle({ type: "notInTheContract" } as unknown as SkillsInbound);
+    expect(h.interactions()).toBe(0);
+  });
+});
+
+describe("skills — host -> webview", () => {
+  it("produces exactly the declared message set", async () => {
+    // One presenter and one call, because this panel pushes one message — and that
+    // one message is the whole screen, which is why there is no second state to
+    // reach for the way publish and New Project need a second world.
+    const h = skillsHarness();
+    await h.presenter.refresh();
+
+    expect(typesOf(h.posted)).toEqual([...SKILLS_PROTOCOL.toWebview].sort());
+  });
+});
+
+// ── Sidebar nav: the host half ───────────────────────────────────────────────
+
+describe("nav — webview -> host", () => {
+  it("drives exactly the declared message set", () => {
+    expect(Object.keys(NAV_DRIVES).sort()).toEqual([...NAV_PROTOCOL.toHost].sort());
+  });
+
+  it.each(NAV_PROTOCOL.toHost)("%s is acted on", (type) => {
+    const plan = NAV_DRIVES[type as NavInbound["type"]];
+    const h = navHarness();
+    for (const m of plan.before ?? []) h.presenter.handle(m);
+    const before = h.interactions();
+    h.presenter.handle(plan.send);
+    expect(h.interactions()).toBeGreaterThan(before);
+  });
+
+  it("does nothing at all for a message type the contract does not declare", () => {
+    const h = navHarness();
+    h.presenter.handle({ type: "notInTheContract" } as unknown as NavInbound);
+    expect(h.interactions()).toBe(0);
+  });
+});
+
+describe("nav — host -> webview", () => {
+  it("produces exactly the declared message set", async () => {
+    // Three pushes from three independent signals, and none of them is a reply:
+    // the sidebar's webview posts nothing but `run`, so every message here is the
+    // host volunteering. One presenter is enough — unlike publish, the sidebar has
+    // no state it is CONSTRUCTED in that it cannot also reach.
+    const h = navHarness();
+    h.presenter.pushStatus(STATUS);
+    await h.presenter.pushSkills();
+    await h.presenter.pushManifest();
+
+    expect(typesOf(h.posted)).toEqual([...NAV_PROTOCOL.toWebview].sort());
   });
 });
 

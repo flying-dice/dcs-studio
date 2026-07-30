@@ -8,9 +8,16 @@ import type { SkillInfo } from "../../../src/core/domain/skillsStatus";
 import type { SkillsLibrary } from "../../../src/skills/library";
 import { SkillsPanel } from "../../../src/skills/skillsPanel";
 
-// The Agent Skills panel. Its one genuinely dangerous action is installing over
-// a skill file the user has edited: that overwrite is unrecoverable, so the
-// confirmation rules are asserted per status rather than in aggregate.
+// The Agent Skills panel's SHELL — the wiring this layer is now the only witness
+// for. Every decision the panel makes (the overwrite gate, what a failure versus
+// a refusal does to the list, whether there is anything to open) moved to
+// `SkillsPresenter` and runs with no `vscode` at all in
+// `test/unit/skills/skillsPresenter.test.ts`.
+//
+// What is left here is what only a real editor can be wrong about: that the
+// library's uris survive the round trip through the presenter's opaque refs, that
+// the modal the presenter asked for is a MODAL, that the installed copy takes a
+// tab while the bundled one does not, and card 07's teardown.
 
 const EXT = "C:\\ext";
 let skills: SkillInfo[] = [];
@@ -55,8 +62,8 @@ function skill(over: Partial<SkillInfo> = {}): SkillInfo {
 }
 
 /**
- * The panel's message handler is wired as `(m) => void this.onMessage(m)`, so
- * receive() resolves before the async work behind it finishes. Flush a macro
+ * The panel's message handler is wired as `(m) => void this.presenter.handle(m)`,
+ * so receive() resolves before the async work behind it finishes. Flush a macro
  * task when asserting on what that work produced.
  */
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -77,8 +84,38 @@ beforeEach(() => {
   SkillsPanel.current = undefined;
 });
 
-describe("rendering", () => {
-  it("pushes the skill list, install dir and workspace state on open", async () => {
+describe("the panel and its document", () => {
+  it("opens a scripted webview titled Agent Skills", async () => {
+    const panel = await show();
+    expect(panel.title).toBe("Agent Skills");
+    expect(panel.webview.html).toContain("skills.js");
+    expect(panel.webview.html).toContain("Content-Security-Policy");
+  });
+
+  it("reveals and refreshes the existing panel instead of opening a second", async () => {
+    const panel = await show();
+    const before = panel.webview.postedOfType("skills").length;
+    SkillsPanel.show(context(), library());
+    await flush();
+
+    expect(state.panels).toHaveLength(1);
+    // Revealing re-pushes: the repo may have moved while the panel sat behind
+    // another tab, and nothing else would tell it.
+    expect(panel.webview.postedOfType("skills").length).toBe(before + 1);
+  });
+
+  it("clears the singleton on dispose so the next show re-opens", async () => {
+    const panel = await show();
+    panel.dispose();
+    expect(SkillsPanel.current).toBeUndefined();
+
+    await show();
+    expect(state.panels).toHaveLength(2);
+  });
+});
+
+describe("what reaches the presenter", () => {
+  it("pushes the list, install dir and workspace state on open", async () => {
     const panel = await show();
     expect(panel.webview.postedOfType("skills").at(-1)).toMatchObject({
       skills,
@@ -87,14 +124,13 @@ describe("rendering", () => {
     });
   });
 
-  it("reports no workspace when none is open", async () => {
-    // The webview swaps the whole card list for a "open a folder first" note.
+  it("reads the real workspace-folder state, not a constant", async () => {
     resetVscode({});
     const panel = await show();
     expect(panel.webview.postedOfType("skills").at(-1)).toMatchObject({ hasWorkspace: false });
   });
 
-  it("re-pushes on an explicit refresh", async () => {
+  it("routes a received message to the presenter", async () => {
     const panel = await show();
     const before = panel.webview.postedOfType("skills").length;
     await panel.webview.receive({ type: "refresh" });
@@ -109,48 +145,25 @@ describe("rendering", () => {
     await flush();
     expect(panel.webview.postedOfType("skills").length).toBe(before + 1);
   });
-
-  it("reveals and refreshes the existing panel instead of opening a second", async () => {
-    await show();
-    SkillsPanel.show(context(), library());
-    await flush();
-    expect(state.panels).toHaveLength(1);
-  });
 });
 
-describe("install", () => {
-  it("installs a fresh skill without asking", async () => {
-    const panel = await show();
-    await panel.webview.receive({ type: "install", id: "dcs-studio" });
-
-    expect(installed).toEqual(["dcs-studio"]);
-    expect(state.warnings).toEqual([]);
-  });
-
-  it("installs a version update without asking", async () => {
-    // An outdated copy the user has not edited carries nothing to lose.
-    skills = [skill({ status: "outdated", installedVersion: "1.0.0" })];
-    const panel = await show();
-    await panel.webview.receive({ type: "install", id: "dcs-studio" });
-
-    expect(installed).toEqual(["dcs-studio"]);
-    expect(state.warnings).toEqual([]);
-  });
-
-  it("confirms before overwriting a locally-edited skill", async () => {
+describe("the modal the presenter asks for", () => {
+  it("asks about an overwrite as a modal with one button", async () => {
+    // Modal on purpose: the overwrite is unrecoverable, and a dismissible toast
+    // would let it happen behind a user who never saw the question.
     skills = [skill({ status: "modified", installedVersion: "1.2.0" })];
     state.messageReplies.push("Overwrite");
     const panel = await show();
     await panel.webview.receive({ type: "install", id: "dcs-studio" });
+    await flush();
 
     expect(state.warnings[0]).toContain("has local edits");
-    expect(state.warnings[0]).toContain("v1.2.0");
     expect(installed).toEqual(["dcs-studio"]);
   });
 
-  it("does not overwrite local edits when the user declines", async () => {
-    // The overwrite is unrecoverable, so anything other than an explicit
-    // "Overwrite" — including dismissing the modal — must abort.
+  it("reports the button that was pressed, so a dismissal is not a yes", async () => {
+    // The rule lives in the presenter; what this layer witnesses is that the
+    // editor's `undefined` for a dismissed modal actually reaches it.
     skills = [skill({ status: "modified", installedVersion: "1.2.0" })];
     state.messageReplies.push(undefined);
     const panel = await show();
@@ -159,6 +172,18 @@ describe("install", () => {
     expect(installed).toEqual([]);
   });
 
+  it("asks about a removal the same way, and removes when accepted", async () => {
+    state.messageReplies.push("Remove");
+    const panel = await show();
+    await panel.webview.receive({ type: "remove", id: "dcs-studio" });
+    await flush();
+
+    expect(state.warnings[0]).toContain(".claude/skills/dcs-studio");
+    expect(removed).toEqual(["dcs-studio"]);
+  });
+});
+
+describe("the effects", () => {
   it("offers to open the file after installing, and does when accepted", async () => {
     state.messageReplies.push("Open File");
     const panel = await show();
@@ -167,6 +192,8 @@ describe("install", () => {
 
     expect(state.info[0]).toContain(".claude\\skills\\dcs-studio\\SKILL.md");
     expect(state.info[0]).toContain("commit it with your repo");
+    // The whole point of the uri round trip: the presenter only ever held an
+    // opaque string, and what opens has to be the file the library wrote.
     expect(state.shownDocuments).toEqual(["C:\\proj\\.claude\\skills\\dcs-studio\\SKILL.md"]);
   });
 
@@ -178,88 +205,33 @@ describe("install", () => {
     expect(state.shownDocuments).toEqual([]);
   });
 
-  it("surfaces an install failure and still refreshes the list", async () => {
+  it("reports an install failure through the one place that reports them", async () => {
     installThrows = new Error("read-only workspace");
     const panel = await show();
-    const before = panel.webview.postedOfType("skills").length;
     await panel.webview.receive({ type: "install", id: "dcs-studio" });
     await flush();
-
     expect(state.errors[0]).toBe("Skill install failed: read-only workspace");
-    expect(panel.webview.postedOfType("skills").length).toBe(before + 1);
   });
 
-  it("renders a non-Error install failure", async () => {
-    installThrows = "nope" as unknown as Error;
-    const panel = await show();
-    await panel.webview.receive({ type: "install", id: "dcs-studio" });
-    expect(state.errors[0]).toBe("Skill install failed: nope");
-  });
-
-  it("installs an id the library does not know without prompting", async () => {
-    // No state to consult means no edits to protect.
-    skills = [];
-    const panel = await show();
-    await panel.webview.receive({ type: "install", id: "other" });
-    expect(installed).toEqual(["other"]);
-  });
-});
-
-describe("open and view", () => {
-  it("opens the installed copy in an editor", async () => {
+  it("opens the installed copy as a document the user keeps", async () => {
     const panel = await show();
     await panel.webview.receive({ type: "open", id: "dcs-studio" });
+    await flush();
+    expect(state.openedDocuments).toEqual(["C:\\proj\\.claude\\skills\\dcs-studio\\SKILL.md"]);
     expect(state.shownDocuments).toEqual(["C:\\proj\\.claude\\skills\\dcs-studio\\SKILL.md"]);
-  });
-
-  it("does nothing when there is no installed copy to open", async () => {
-    const panel = await show();
-    await panel.webview.receive({ type: "open", id: "missing" });
-    expect(state.shownDocuments).toEqual([]);
   });
 
   it("opens the bundled copy as a preview, so it does not take a tab", async () => {
     const panel = await show();
     await panel.webview.receive({ type: "viewBundled", id: "dcs-studio" });
+    await flush();
     expect(state.openedDocuments).toEqual([`${EXT}\\skills\\dcs-studio\\SKILL.md`]);
   });
-});
 
-describe("remove", () => {
-  it("confirms before removing, then removes and refreshes", async () => {
-    state.messageReplies.push("Remove");
+  it("has nothing to open when the library knows no installed copy", async () => {
     const panel = await show();
-    const before = panel.webview.postedOfType("skills").length;
-    await panel.webview.receive({ type: "remove", id: "dcs-studio" });
+    await panel.webview.receive({ type: "open", id: "missing" });
     await flush();
-
-    expect(state.warnings[0]).toContain(".claude/skills/dcs-studio");
-    expect(removed).toEqual(["dcs-studio"]);
-    expect(panel.webview.postedOfType("skills").length).toBe(before + 1);
-  });
-
-  it("keeps the skill when the user declines", async () => {
-    state.messageReplies.push(undefined);
-    const panel = await show();
-    await panel.webview.receive({ type: "remove", id: "dcs-studio" });
-    expect(removed).toEqual([]);
-  });
-});
-
-describe("message guards", () => {
-  it("ignores actions with no id and unknown message types", async () => {
-    const panel = await show();
-    for (const type of ["install", "open", "viewBundled", "remove", "mystery"]) {
-      await panel.webview.receive({ type });
-    }
-    expect(installed).toEqual([]);
-    expect(removed).toEqual([]);
-    expect(state.shownDocuments).toEqual([]);
-  });
-
-  it("clears the singleton on dispose", async () => {
-    const panel = await show();
-    panel.dispose();
-    expect(SkillsPanel.current).toBeUndefined();
+    expect(state.openedDocuments).toEqual([]);
   });
 });
