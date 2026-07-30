@@ -295,7 +295,7 @@ describe("the rest of the router", () => {
     expect(h.effects).toEqual([]);
   });
 
-  it("ignores every action when there is no folder to publish", async () => {
+  it("ignores every action but refresh when there is no folder to publish", async () => {
     // Not a guess at a root: a share against `undefined` would run git in
     // whatever directory the extension host happened to be in.
     const h = harness({ root: null });
@@ -304,11 +304,23 @@ describe("the rest of the router", () => {
       type: "release",
       opts: { owner: "Owner", name: "my-mod", tag: "v1", notes: "" },
     });
-    await h.presenter.handle({ type: "refresh" });
     await h.presenter.handle({ type: "openExternal", url: "https://github.com" });
 
     expect(h.posted).toEqual([]);
     expect(h.effects).toEqual([]);
+    expect(h.calls).toEqual([]);
+  });
+
+  it("answers a boot refresh with nofolder even with no folder open, so a lost initial push is not the only chance", async () => {
+    // The race the card is about: if the constructor-time `nofolder` push
+    // reaches the webview before its message listener is attached, the
+    // webview's own boot `{type:"refresh"}` must still get an answer — every
+    // other covered panel answers its boot handshake unconditionally, and the
+    // no-folder state should be no different.
+    const h = harness({ root: null });
+    await h.presenter.handle({ type: "refresh" });
+
+    expect(h.typed("nofolder")).toHaveLength(1);
     expect(h.calls).toEqual([]);
   });
 });

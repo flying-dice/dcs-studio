@@ -10,6 +10,10 @@
 //   shared     origin already points at a GitHub repo — the re-push path
 //   bare       an empty manifest, so every `|| default` fallback shows
 //   nofolder   no workspace folder open at all
+//   nofolder-late  no workspace folder, but the fixture withholds its reply to
+//                  the boot `refresh` — the test pushes `nofolder` itself, to
+//                  prove a late reply still renders correctly rather than the
+//                  panel staying stuck empty (card 22's handshake race).
 //
 // Share/Release replies are scripted end-to-end (busy on -> log -> done ->
 // busy off) exactly as PublishPanel#guard sequences them, so clicking through
@@ -72,6 +76,10 @@
   window.__host.onPost((m) => {
     if (!m) return;
     if (m.type === "refresh") {
+      // "nofolder-late" withholds the reply on purpose — the test drives the
+      // late `nofolder` push itself via hostSend, to prove the panel does not
+      // stay stuck on its empty initial `<div id="app">` forever.
+      if (scenario === "nofolder-late") return;
       window.__host.receive(
         scenario === "nofolder" ? { type: "nofolder" } : window.__FIXTURE__.init,
       );

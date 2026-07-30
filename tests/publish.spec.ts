@@ -265,6 +265,23 @@ test.describe("publish preview", () => {
     expect(errors).toEqual([]);
   });
 
+  test("a late nofolder push still shows the no-folder pane, not a stuck empty panel", async ({
+    page,
+  }) => {
+    // Card 22: the panel posts its boot `{type:"refresh"}` before the host's
+    // reply is guaranteed to have listeners attached. This fixture scenario
+    // withholds the reply entirely to model that lost race, then the test
+    // sends `nofolder` itself — standing in for the presenter now answering
+    // the no-folder state unconditionally rather than relying only on a
+    // constructor-time push that could have already been missed.
+    const errors = await openPreview(page, "publish", { query: { scenario: "nofolder-late" } });
+    await expect(page.getByTestId("no-folder-note")).toHaveCount(0);
+
+    await hostSend(page, { type: "nofolder" });
+    await expect(page.getByTestId("no-folder-note")).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
   test("ignores an empty host message", async ({ page }) => {
     const errors = await openPreview(page, "publish");
     await hostSend(page, null);

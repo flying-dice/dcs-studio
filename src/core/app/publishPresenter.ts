@@ -137,14 +137,19 @@ export class PublishPresenter {
   }
 
   async handle(msg: PublishInbound): Promise<void> {
+    // `refresh` is answered unconditionally, folder or not — it is the boot
+    // handshake every other covered panel answers regardless of state, and
+    // the webview's own boot `refresh` must not lose the race against a
+    // `nofolder` push that happened before its listener was attached.
+    if (msg.type === "refresh") {
+      await this.refresh();
+      return;
+    }
     // Every action below is about `root`; without one there is nothing to
     // publish, so a message arriving anyway is ignored rather than guessed at.
     if (this.deps.root === null) return;
     const root = this.deps.root;
     switch (msg.type) {
-      case "refresh":
-        await this.refresh();
-        break;
       case "share":
         await this.guard("share", async () => {
           if (await this.blocked(root)) return;
