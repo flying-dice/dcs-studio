@@ -18,10 +18,10 @@ mod support;
 use std::sync::{mpsc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-/// Every test here binds a loopback port and touches the DLL-wide server and
-/// queue statics, which are shared across the whole test binary — exactly as
-/// they are shared across a DLL inside DCS. Running them one at a time keeps
-/// each test's assertions about "the running server" true.
+/// Every test here binds loopback ports and drives one Lua state's bridge from
+/// outside it. Running them one at a time keeps each test's assertions about
+/// "this port" true — several assert that a port is refused once its owning state
+/// has let go, which a sibling rebinding meanwhile would falsify.
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn serially() -> MutexGuard<'static, ()> {
@@ -44,15 +44,16 @@ use support::{connect_ws, free_port, get, notification, post_rpc, rpc};
 enum Command {
     /// Drain the server's queue through the router (one simulation frame).
     Pump,
-    /// Drain the RUNNING server's queue from anywhere in this state — what the
-    /// debugger's pause loop uses when it holds the sim thread.
-    PumpGlobal,
-    /// Run `jsonrpc.serve` again, as the mission DLL's init does per mission.
-    Reserve(u16, mpsc::Sender<bool>),
+    /// Bind ANOTHER server through `jsonrpc.serve`, as the next mission's init
+    /// does — parked in a Lua global the harness can then drop.
+    Reserve(u16, mpsc::Sender<Result<(), String>>),
+    /// Drop the server `Reserve` parked, and collect it.
+    ReleaseNext(mpsc::Sender<()>),
     /// Evaluate a Lua chunk and hand back its string result.
     Eval(String, mpsc::Sender<String>),
-    /// Stop the server and drop the userdata, then exit the thread.
-    Shutdown(Option<bool>),
+    /// End the bridge and exit the thread. `true` calls `server:stop()` first;
+    /// `false` only drops the userdata, so `Drop` is what stops it.
+    Shutdown(bool),
 }
 
 struct Bridge {
@@ -79,15 +80,17 @@ impl Bridge {
             let glue = format!(
                 r#"
 local bridge = ...
-server = bridge.jsonrpc.JsonRpcServer.new({{ host = "127.0.0.1", port = {port}, timeout = {timeout}, env = "mission" }})
+server = bridge.jsonrpc.serve({{ host = "127.0.0.1", port = {port}, timeout = {timeout}, env = "mission" }})
 router = bridge.jsonrpc.JsonRpcRouter.new()
 router:add_method("echo", function(p) return p end, {{ description = "Echo the params back." }})
 router:add_method("bump", function(p) bumped = (bumped or 0) + 1; return {{ n = bumped }} end)
 router:add_method("boom", function() error("handler exploded") end)
 router:add_method("cyclic", function() local t = {{}}; t.self = t; return t end)
 pump = function() server:process_rpc(router) end
-pump_global = function() return bridge.jsonrpc.process_queue(router) end
-reserve = function(port) return bridge.jsonrpc.serve({{ host = "127.0.0.1", port = port, env = "mission" }}) end
+-- Each `serve` binds its OWN server: a state parks each one it means to keep,
+-- and letting go of it is what stops that one.
+reserve = function(port) NEXT = bridge.jsonrpc.serve({{ host = "127.0.0.1", port = port, env = "mission" }}) end
+release_next = function() NEXT = nil; collectgarbage("collect"); collectgarbage("collect") end
 "#
             );
             lua.load(&glue)
@@ -103,32 +106,32 @@ reserve = function(port) return bridge.jsonrpc.serve({{ host = "127.0.0.1", port
                         .get::<Function>("pump")
                         .and_then(|f| f.call::<()>(()))
                         .expect("pump"),
-                    Command::PumpGlobal => {
-                        let served: bool = globals
-                            .get::<Function>("pump_global")
-                            .and_then(|f| f.call(()))
-                            .expect("pump_global");
-                        assert!(served, "a server is running, so the drain served it");
-                    }
                     Command::Reserve(port, reply) => {
-                        let started: bool = globals
+                        let outcome = globals
                             .get::<Function>("reserve")
-                            .and_then(|f| f.call(port))
-                            .expect("reserve");
-                        let _ = reply.send(started);
+                            .and_then(|f| f.call::<()>(port))
+                            .map_err(|e| e.to_string());
+                        let _ = reply.send(outcome);
+                    }
+                    Command::ReleaseNext(reply) => {
+                        globals
+                            .get::<Function>("release_next")
+                            .and_then(|f| f.call::<()>(()))
+                            .expect("release the parked server");
+                        let _ = reply.send(());
                     }
                     Command::Eval(chunk, reply) => {
                         let out: String = lua.load(&chunk).eval().expect("eval");
                         let _ = reply.send(out);
                     }
-                    Command::Shutdown(graceful) => {
-                        let stop = match graceful {
-                            Some(g) => format!("server:stop({g})"),
-                            None => "server:stop()".to_string(),
-                        };
-                        lua.load(&stop).exec().expect("stop");
+                    Command::Shutdown(explicit_stop) => {
+                        if explicit_stop {
+                            lua.load("server:stop()").exec().expect("stop");
+                        }
                         // Drop the userdata and collect it, so `Drop` runs here
-                        // rather than at process exit.
+                        // rather than at process exit. For a server nobody
+                        // stopped, `Drop` is the ONLY thing that stops it —
+                        // exactly as DCS's lua_close is inside the sim.
                         lua.globals()
                             .set("server", mlua::Value::Nil)
                             .expect("clear");
@@ -154,13 +157,8 @@ reserve = function(port) return bridge.jsonrpc.serve({{ host = "127.0.0.1", port
         self.commands.send(Command::Pump).expect("pump");
     }
 
-    fn pump_global(&self) {
-        self.commands
-            .send(Command::PumpGlobal)
-            .expect("pump global");
-    }
-
-    fn reserve(&self, port: u16) -> bool {
+    /// Bind another server on `port`, parked in the state as `NEXT`.
+    fn reserve(&self, port: u16) -> Result<(), String> {
         let (reply, answer) = mpsc::channel();
         self.commands
             .send(Command::Reserve(port, reply))
@@ -170,14 +168,25 @@ reserve = function(port) return bridge.jsonrpc.serve({{ host = "127.0.0.1", port
             .expect("reserved")
     }
 
+    /// Let the state stop holding `NEXT`, and collect it.
+    fn release_next(&self) {
+        let (reply, answer) = mpsc::channel();
+        self.commands
+            .send(Command::ReleaseNext(reply))
+            .expect("release");
+        answer
+            .recv_timeout(Duration::from_secs(10))
+            .expect("released");
+    }
+
     /// `jsonrpc.serve` through `pcall`, so a refused bind can be inspected
     /// rather than unwinding the harness thread.
-    fn try_reserve(&self, port: u16) -> Result<bool, String> {
+    fn try_reserve(&self, port: u16) -> Result<(), String> {
         let out = self.eval(&format!(
             "local ok, res = pcall(reserve, {port}); return tostring(ok) .. '|' .. tostring(res)"
         ));
         match out.split_once('|') {
-            Some(("true", started)) => Ok(started == "true"),
+            Some(("true", _)) => Ok(()),
             Some((_, cause)) => Err(cause.to_string()),
             None => panic!("malformed reserve result: {out}"),
         }
@@ -207,8 +216,8 @@ reserve = function(port) return bridge.jsonrpc.serve({{ host = "127.0.0.1", port
         None
     }
 
-    fn shutdown(mut self, graceful: Option<bool>) {
-        let _ = self.commands.send(Command::Shutdown(graceful));
+    fn shutdown(mut self, explicit_stop: bool) {
+        let _ = self.commands.send(Command::Shutdown(explicit_stop));
         if let Some(handle) = self.joined.take() {
             let _ = handle.join();
         }
@@ -218,7 +227,7 @@ reserve = function(port) return bridge.jsonrpc.serve({{ host = "127.0.0.1", port
 impl Drop for Bridge {
     fn drop(&mut self) {
         if let Some(handle) = self.joined.take() {
-            let _ = self.commands.send(Command::Shutdown(Some(false)));
+            let _ = self.commands.send(Command::Shutdown(true));
             let _ = handle.join();
         }
     }
@@ -240,7 +249,7 @@ fn health_identifies_the_bridge_without_the_sim_pumping() {
     assert!(body.contains(r#""status":"OK""#), "{body}");
     assert!(body.contains(r#""version""#), "{body}");
 
-    bridge.shutdown(Some(false));
+    bridge.shutdown(true);
 }
 
 /// `POST /rpc` is the transport the MCP tools use. A request waits for the sim
@@ -278,7 +287,7 @@ fn posting_a_request_waits_for_the_sim_while_a_notification_is_accepted_at_once(
     bridge.pump();
     assert_eq!(bridge.eval("return tostring(bumped)"), "1");
 
-    bridge.shutdown(Some(true));
+    bridge.shutdown(true);
 }
 
 /// A request nobody drains must time out with an error rather than pin the
@@ -326,7 +335,7 @@ fn an_undrained_request_times_out_instead_of_hanging_the_caller() {
         "the session must outlive one expired request"
     );
 
-    bridge.shutdown(None);
+    bridge.shutdown(false);
 }
 
 /// `GET /ws` is only a WebSocket when the client asks for the upgrade. A plain
@@ -362,7 +371,7 @@ fn a_plain_get_on_the_websocket_route_is_refused_and_the_bridge_survives() {
         "a real upgrade still works after the refusal"
     );
 
-    bridge.shutdown(Some(false));
+    bridge.shutdown(true);
 }
 
 /// The WebSocket read loop is the editor's long-lived connection. Requests,
@@ -425,7 +434,7 @@ fn the_websocket_session_survives_every_frame_the_editor_can_send() {
     // The side effect of the notification still ran.
     assert_eq!(bridge.eval("return tostring(bumped)"), "1");
 
-    bridge.shutdown(Some(false));
+    bridge.shutdown(true);
 }
 
 /// Control frames: a Ping must be ponged (the editor's keepalive — an
@@ -465,7 +474,7 @@ fn a_ping_is_ponged_and_a_close_ends_the_session() {
         "the read loop must end on the binary frame"
     );
 
-    bridge.shutdown(Some(false));
+    bridge.shutdown(true);
 }
 
 /// An editor that closes the socket while a request is still queued is
@@ -508,16 +517,18 @@ fn a_client_that_closes_mid_request_costs_only_that_request() {
         "the bridge must still serve the next connection"
     );
 
-    bridge.shutdown(Some(false));
+    bridge.shutdown(true);
 }
 
-/// `jsonrpc.serve` is what the mission DLL's init calls on EVERY mission load.
-/// The first call binds; later ones reuse the running server — even when the
-/// requested port differs — and swap-drop whatever was stranded in the queue
-/// between missions, so a fresh mission never answers a stale request.
+/// `jsonrpc.serve` is what the mission DLL's init calls on EVERY mission load,
+/// and since card 18's third iteration each call binds a server the CALLING LUA
+/// STATE owns. So the mission-reload contract is ownership, not reuse: the state
+/// lets go, the listener goes with it and its stranded callers are told, and the
+/// port is free for the next mission to bind. Over a real socket, because
+/// "accepted connections" is the condition the crash tracked.
 #[test]
 #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
-fn reserving_across_a_mission_reload_reuses_the_server_and_drops_stale_requests() {
+fn serving_per_mission_hands_the_port_back_when_the_state_lets_go() {
     let _serial = serially();
     let bridge = Bridge::start(30);
 
@@ -532,59 +543,60 @@ fn reserving_across_a_mission_reload_reuses_the_server_and_drops_stale_requests(
     assert!(!refused.is_empty(), "the bind failure must carry a cause");
     drop(taken);
 
-    // The first serve in this process binds the port and parks the server for
-    // the process lifetime.
+    // One mission's serve binds its own listener, and it really serves.
     let served = free_port();
-    assert!(bridge.reserve(served), "the first serve starts the server");
+    bridge.reserve(served).expect("the first serve binds");
+    assert!(
+        get(served, "/health").1.contains("dcs-studio-mission"),
+        "the mission's own server answers on its own port"
+    );
 
-    // The same port again is the ordinary mission-reload case: reuse, no
-    // warning, and nothing stranded to drop.
-    assert!(!bridge.reserve(served), "the same port reuses the server");
-
-    // Strand a request in that server's queue: the sim never pumps it, which
-    // is exactly what a mission ending mid-request looks like. Both transports
-    // strand — the editor's WebSocket and an MCP tool's POST — and both callers
-    // have to be let go rather than left waiting on the new mission.
+    // Strand a request in that server's queue: the sim never pumps it, which is
+    // exactly what a mission ending mid-request looks like.
     let mut ws = connect_ws(served);
     ws.send(&rpc("stranded", "echo", "{}")).expect("send");
-    // It must be QUEUED before the reload, or there is nothing stale to drop and
-    // the test proves nothing. The barrier is that proof: one connection's
+    // It must be QUEUED before the state lets go, or there is nothing stranded
+    // and the test proves nothing. The barrier is that proof: one connection's
     // frames are read in order, so a Pong means the request is already in the
     // queue. (A sleep here proved nothing — on a loaded runner the frame can
     // still be unread when it expires.)
-    //
-    // Only the WebSocket side is driven from out here. The POST caller's half
-    // of this contract — a stranded request released with an error instead of
-    // waiting out its timeout — is pinned in process by
-    // `the_post_transport_accepts_answers_and_fails_a_request_in_process`,
-    // where the enqueue cannot lose a race with the reload.
     assert!(
         ws.barrier(Duration::from_secs(10)),
-        "the server must have queued the stranded request before the reload"
+        "the server must have queued the stranded request before the release"
     );
 
-    // The next mission's serve reuses the running server — even though it asks
-    // for a different port — and drops whatever was stranded, so the stale
-    // caller errors out instead of being answered by the new mission.
+    // The mission ends: the state stops holding the userdata, and that alone —
+    // no stop call, no event — must end the server. Its stranded caller is told
+    // the truth on the way out rather than left to age out or be answered by a
+    // later mission: over the WebSocket, before the socket is cut.
+    bridge.release_next();
+    let answer = ws
+        .await_id("stranded", Duration::from_secs(5))
+        .expect("the stranded caller must be answered, not left waiting");
     assert!(
-        !bridge.reserve(free_port()),
-        "a second serve reuses the running server rather than re-binding"
+        answer.contains("-32001") && answer.contains("bridge torn down"),
+        "and answered with the reason, not a result: {answer}"
     );
-    assert!(
-        ws.await_id("stranded", Duration::from_secs(1)).is_none(),
-        "the stranded request must be dropped, not answered later"
-    );
-    // The debugger's pump reaches the running server's queue from this state,
-    // without holding the server userdata.
-    bridge.pump_global();
 
-    bridge.shutdown(Some(false));
+    // The next mission binds the SAME port, which is only possible because the
+    // previous one's listener is genuinely gone.
+    bridge
+        .reserve(served)
+        .expect("the port came back with the state that owned it");
+    assert!(
+        get(served, "/health").1.contains("dcs-studio-mission"),
+        "the next mission is served by its own fresh server"
+    );
+    bridge.release_next();
+
+    bridge.shutdown(true);
 }
 
-/// Teardown has to work from Lua (`server:stop()`), with and without an
-/// explicit graceful flag, and again from `Drop` when the userdata is
-/// collected. A failure in either is a panic inside DCS: `Drop` runs while the
-/// sim is unwinding, and a panic there aborts the process.
+/// A server has to stop when Lua says so (`server:stop()`) and again when the
+/// userdata is merely collected — the second being the path DCS takes for a
+/// mission that never fires its end event. A failure in either is a panic inside
+/// DCS: `Drop` runs from `__gc` during `lua_close`, and a panic there aborts the
+/// process.
 #[test]
 #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
 fn a_server_stops_from_lua_and_again_when_it_is_collected() {
@@ -600,8 +612,8 @@ fn a_server_stops_from_lua_and_again_when_it_is_collected() {
     assert!(routed.contains("echo"), "{routed}");
     // `shutdown` stops the server and then drops + collects the userdata, so
     // both the explicit stop and `Drop`'s own stop run.
-    bridge.shutdown(Some(true));
+    bridge.shutdown(true);
 
     let again = Bridge::start(5);
-    again.shutdown(None);
+    again.shutdown(false);
 }

@@ -1,3 +1,25 @@
+//! The JSON-RPC server, and who owns it.
+//!
+//! **A resource this DLL creates in a Lua call is handed back to the Lua
+//! environment as userdata, and Lua's GC drives its shutdown.** The Lua state is
+//! never used as a mere DLL loader with process-scoped statics — that is the
+//! repository owner's architectural directive for Lua-extension DLLs, from prior
+//! art with actix inside DCS, and card 18's crash is one of the "all sorts of
+//! issues" it exists to prevent.
+//!
+//! So [`ensure_server`] (`jsonrpc.serve`) constructs a [`JsonRpcServer`] and
+//! RETURNS it as userdata. Both bridges' boot code parks that userdata in their
+//! own state — the hook in its frame callbacks, the mission init in its pump
+//! closures — so the server lives exactly as long as the state that asked for
+//! it, and no longer: `Drop` stops the listener and takes the actix `System`
+//! thread with it, whether it is reached from an explicit mission-end teardown or
+//! from `__gc` inside DCS's own `lua_close`. There is **no server static and no
+//! queue static**; see [`crate::jsonrpc::teardown`] for the lifecycle and card
+//! 18 / issue #69 for the evidence.
+//!
+//! Every wait on the shutdown path is bounded, because the caller is the sim
+//! thread — see [`StopBudget`].
+
 use actix_web::dev::ServerHandle;
 use actix_web::error::ErrorInternalServerError;
 use actix_web::web::{Data, Json, Payload};
@@ -14,12 +36,14 @@ use log::{debug, error, info, warn};
 use mlua::prelude::{LuaError, LuaNil, LuaValue};
 use mlua::{
     FromLua, IntoLuaMulti, Lua, LuaSerdeExt, MetaMethod, UserData, UserDataMethods, UserDataRef,
+    UserDataRefMut,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::error::Error;
 use std::io;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::mpsc;
 use std::sync::Mutex;
 use std::thread;
@@ -41,51 +65,46 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_mins(5);
 /// loopback port is microseconds; ten seconds is "something is badly wrong".
 const BIND_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// How long a stop waits for actix to acknowledge that the server has stopped.
+/// The bounded waits one [`JsonRpcServer::stop`] is allowed to spend, and the
+/// reason there are two of them.
 ///
-/// Short on purpose, and for a harder reason than [`BIND_TIMEOUT`]: the caller
-/// is the sim thread *during mission teardown*. A teardown that blocks the sim
-/// trades a crash for a freeze, which is not a trade worth making — so the wait
-/// is bounded and the stop is left to finish detached if it overruns. See
-/// [`stop_on_thread`].
-const STOP_TIMEOUT: Duration = Duration::from_secs(2);
+/// Every wait on this path is bounded because the caller is the DCS Lua thread —
+/// the sim's main loop. A teardown that blocks the sim trades a crash for a
+/// freeze, which is not a trade worth making, so an overrunning stop is left to
+/// finish detached and reported rather than waited out.
+///
+/// `acknowledge` waits for actix to say the server has stopped; `system_exit`
+/// then waits for the server's own thread — the one that owns the actix
+/// `System` — to leave it and return. The second is the one card 18 cares about:
+/// closing the listener is not the same as the worker being gone, and what the
+/// evidence indicts is worker/connection state outliving the mission state.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StopBudget {
+    acknowledge: Duration,
+    system_exit: Duration,
+}
 
-/// How long a stop then waits for the server's own thread — the one that owns
-/// the actix `System` — to leave that `System` and return.
-///
-/// This is the wait that matters for card 18: stopping the listener is not the
-/// same as the worker being gone, and what the evidence indicts is worker/
-/// connection state outliving the mission. Bounded for the same reason as
-/// [`STOP_TIMEOUT`]; a timeout is reported, never waited out.
-const SYSTEM_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
+/// The budget for a stop the Lua code asked for by name — a mission-end
+/// teardown, or `server:stop()`. The state is whole, the sim is between frames,
+/// and 2 s is "something is badly wrong" for cutting loopback connections.
+pub(crate) const EXPLICIT_STOP: StopBudget = StopBudget {
+    acknowledge: Duration::from_secs(2),
+    system_exit: Duration::from_secs(2),
+};
 
-/// The running server's request queue, reachable DLL-wide so any code in this
-/// DLL's Lua state can drain it — not just the holder of the `JsonRpcServer`
-/// userdata. The debugger depends on this: while a chunk is paused at a
-/// breakpoint the sim thread is blocked inside that state, the frame/timer
-/// pump never fires, and the only code that can answer the editor's
-/// resume/inspect requests is the pause loop itself, via
-/// [`process_global_queue`]. Per DLL by construction — each cdylib compiles
-/// its own copy of this static.
-static GLOBAL_APP_DATA: Mutex<Option<Data<Mutex<AppData>>>> = Mutex::new(None);
-
-/// The DLL-owned server slot behind [`ensure_server`] (`jsonrpc.serve`): the
-/// DLL's `luaopen` re-runs in a fresh Lua state on every mission load, but the
-/// DLL image (and this static) persists, so a later load finds whatever the
-/// previous one parked here.
+/// The budget for a stop that `Drop` had to do, which in DCS means `__gc`
+/// **inside `lua_close`**: the state is already dying, on the sim thread, and
+/// this frame is reached from a C callback. Blocking meaningfully there is the
+/// freeze the bounds exist to prevent, so the budget is an order of magnitude
+/// tighter than [`EXPLICIT_STOP`] — enough for a non-graceful actix stop of a
+/// loopback listener (microseconds in practice), not enough to be felt.
 ///
-/// The two bridges want opposite things from that, and card 18 is why:
-///
-/// * The **GUI** bridge's state is created once at DCS start and lives until the
-///   process exits, so its server spans the process. The slot is filled once.
-/// * The **mission** bridge's state is destroyed on every unload, and DCS dies
-///   ~8-12 s later whenever that bridge's actix worker had accepted connections
-///   during the mission — 6 crashes against 4 clean non-serving runs, with Lua
-///   re-entry and the handler references both already ruled out (issue #69). So
-///   the mission bridge empties this slot at mission end
-///   ([`stop_mission_server`]) and the next mission binds a fresh server, rather
-///   than letting one worker and its connections span missions.
-static SERVER: Mutex<Option<JsonRpcServer>> = Mutex::new(None);
+/// It only ever gets spent when the primary trigger did not run: after a
+/// mission-end teardown the server is already `Stopped` and `Drop` is a no-op.
+const COLLECTED_STOP: StopBudget = StopBudget {
+    acknowledge: Duration::from_millis(250),
+    system_exit: Duration::from_millis(250),
+};
 
 /// Take the queue lock, recovering it if a previous holder panicked.
 ///
@@ -168,27 +187,43 @@ impl FromLua for ServerConfig {
     }
 }
 
+/// A JSON-RPC server owned by the Lua state that asked for it. Handed to Lua as
+/// userdata by [`ensure_server`]; stops when that state stops holding it.
 pub(crate) struct JsonRpcServer {
     config: ServerConfig,
-    handle: ServerHandle,
+    /// This server's OWN request queue — no longer reachable through a static.
+    /// Whoever holds this userdata can drain it (`process_rpc`) or fail it
+    /// ([`JsonRpcServer::fail_queued`]), and nobody else can, which is the point:
+    /// a queue no dead state can be reached through.
     app_data: Data<Mutex<AppData>>,
-    /// Goes `Disconnected` when the server's thread returns — see
-    /// [`wait_for_system_exit`]. Nothing is ever sent on it, which is why its
-    /// item type is uninhabited: the *end* of the channel is the whole signal.
-    system_exited: mpsc::Receiver<Infallible>,
-    /// Whether [`JsonRpcServer::stop_and_wait`] has already run, so `Drop`
-    /// following an explicit stop does not spend the bounded waits twice.
-    stopped: bool,
+    /// `Serving` or `Stopped`, rather than a `stopped` flag beside a live handle:
+    /// a stopped server has no handle and no thread to observe, and the type
+    /// says so. Taking the state is what makes every stop idempotent.
+    state: ServerState,
 }
 
-/// What [`stop_mission_server`] managed to do, for the caller's log line.
+/// Whether a [`JsonRpcServer`] still has a listener and a thread behind it.
+enum ServerState {
+    Serving {
+        handle: ServerHandle,
+        /// Goes `Disconnected` when the server's thread returns — see
+        /// [`wait_for_system_exit`]. Nothing is ever sent on it, which is why its
+        /// item type is uninhabited: the *end* of the channel is the whole
+        /// signal.
+        system_exited: mpsc::Receiver<Infallible>,
+    },
+    Stopped,
+}
+
+/// What one [`JsonRpcServer::stop`] managed to do, for the caller's log line.
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct ServerStop {
     /// The port the stopped server had been serving on.
     pub(crate) port: u16,
     /// Whether the server's thread was observed to leave its actix `System`
-    /// within [`SYSTEM_EXIT_TIMEOUT`]. `false` means the stop was left running
-    /// detached rather than blocking the sim thread — the honest answer, and the
-    /// one a live session needs to see in the log.
+    /// within the budget. `false` means the stop was left running detached
+    /// rather than blocking the sim thread — the honest answer, and the one a
+    /// live session needs to see in the log.
     pub(crate) system_exited: bool,
 }
 
@@ -222,7 +257,7 @@ impl JsonRpcServer {
     ///    bind off the caller would otherwise turn "the port is taken" into a
     ///    silent success, which is the same failure mode wearing a different
     ///    hat.
-    fn new(config: ServerConfig) -> Result<Self, actix_web::Error> {
+    pub(crate) fn new(config: ServerConfig) -> Result<Self, actix_web::Error> {
         let service = ServiceInfo::new(config.env.as_deref(), &config.host, config.port);
         let app_data = Data::new(Mutex::new(AppData::new(
             get_timeout_duration_from_config(&config),
@@ -312,123 +347,120 @@ impl JsonRpcServer {
             }
         };
 
-        // Publish the queue for process_global_queue (any-state drains). The
-        // newest server wins; realistically there is exactly one per process.
-        {
-            let mut slot = GLOBAL_APP_DATA
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *slot = Some(app_data.clone());
-        }
-
         Ok(Self {
             config,
-            handle,
             app_data,
-            system_exited,
-            stopped: false,
+            state: ServerState::Serving {
+                handle,
+                system_exited,
+            },
         })
     }
 
-    fn stop(&self, graceful: Option<bool>) {
-        info!("Stopping server...");
-        stop_on_thread(self.handle.clone(), graceful.unwrap_or(false));
-        info!("Server fully stopped (blocking)");
-    }
-
     /// Whether this server belongs to the mission bridge — the only one whose
-    /// Lua state DCS destroys, and so the only one that stops per mission. See
-    /// [`SERVER`] for why the two bridges differ.
-    fn serves_mission_state(&self) -> bool {
+    /// Lua state DCS destroys mid-process, and so the only one an explicit
+    /// teardown stops. See [`crate::jsonrpc::teardown`] for why the two bridges
+    /// differ.
+    pub(crate) fn serves_mission_state(&self) -> bool {
         self.config.env.as_deref() == Some("mission")
     }
 
-    /// Stop this server and wait, bounded, for its thread to leave its actix
-    /// `System`. Returns whether that exit was actually observed.
+    /// Fail every request stranded in THIS server's queue, telling each caller
+    /// `reason`. Returns how many callers were actually told (a caller that had
+    /// already given up, and a notification, have nobody to tell).
     ///
-    /// Idempotent, and infallible on purpose: `Drop` is one of the callers.
+    /// **Touches no Lua**, which is what makes it callable from `Drop` while
+    /// `lua_close` is running: a queue entry is a serde [`JsonRpcRequest`] and a
+    /// `oneshot` sender, and the response is built from a string. The Lua state
+    /// that would have answered these requests is going away or already gone, so
+    /// the honest outcome is an error naming that — not a silent drop the caller
+    /// reads as a closed channel, and not the server timeout it would otherwise
+    /// wait out.
+    pub(crate) fn fail_queued(&self, reason: &str) -> usize {
+        let queue = std::mem::take(&mut lock_app_data(&self.app_data).rpc_queue);
+
+        // A plain loop rather than a chain: each entry has to be consumed to
+        // move its sender out, and the only interesting outcome is the side
+        // effect.
+        let mut told = 0;
+        for app_request in queue {
+            // A notification has no id and no channel — nowhere to report to. A
+            // `send` that fails means the caller already gave up, which is
+            // likewise nothing to report.
+            if let (Some(sender), Some(id)) = (app_request.response_sender, app_request.request.id)
+            {
+                if sender.send(torn_down_response(id, reason)).is_ok() {
+                    told += 1;
+                }
+            }
+        }
+        told
+    }
+
+    /// Stop this server and wait, within `budget`, for its thread to leave its
+    /// actix `System`. `None` when it had already stopped.
+    ///
+    /// Idempotent by construction — the state is *taken*, so there is no second
+    /// handle to stop — and infallible on purpose: `Drop` is one of the callers.
     ///
     /// **Immediate, not graceful.** A graceful stop waits for open connections
     /// to finish, and the editor holds a WebSocket open for the whole session
     /// plus a poll every 2 s — exactly the connections whose survival across the
     /// unload card 18 indicts. Waiting on them would be waiting on the client,
     /// on the sim thread, mid-teardown. So the connections are cut.
-    fn stop_and_wait(&mut self) -> bool {
-        if self.stopped {
-            return true;
-        }
-        self.stopped = true;
-        stop_on_thread(self.handle.clone(), false);
-        wait_for_system_exit(self.config.port, &self.system_exited)
+    pub(crate) fn stop(&mut self, budget: StopBudget) -> Option<ServerStop> {
+        let ServerState::Serving {
+            handle,
+            system_exited,
+        } = std::mem::replace(&mut self.state, ServerState::Stopped)
+        else {
+            return None;
+        };
+        let port = self.config.port;
+        stop_on_thread(handle, budget);
+        Some(ServerStop {
+            port,
+            system_exited: wait_for_system_exit(port, &system_exited, budget),
+        })
     }
 }
 
-/// Start this DLL's server if none is running, else reuse the running one —
-/// exposed to Lua as `jsonrpc.serve(config)`. The mission DLL calls this from
-/// its embedded init on EVERY mission load.
+/// Bind a server and hand it to Lua — exposed as `jsonrpc.serve(config)`, which
+/// both bridges' boot code calls. The mission DLL calls it from its embedded init
+/// on EVERY mission load, into a fresh Lua state each time.
 ///
-/// Which branch a mission takes is decided by whether the previous mission's
-/// teardown ran: since card 18 the mission bridge stops its server at mission
-/// end ([`stop_mission_server`]), so the normal path for every mission is to
-/// bind a **fresh** server. The reuse branch remains, and remains correct, for
-/// the cases where nothing stopped it — the GUI bridge (whose server spans the
-/// process by design), and a mission whose end event never fired, where the
-/// `lua_close` backstop fails the queue but deliberately does not stop the
-/// server. Reuse swap-drops anything stranded in the queue between missions:
-/// dropping their oneshot senders errors those callers out, so a fresh mission
-/// never answers a stale request. Returns `true` when the server was newly
-/// started.
-pub(crate) fn ensure_server(config: ServerConfig) -> Result<bool, actix_web::Error> {
-    // Every caller of `serve` is a Lua state that has just come up — the first
-    // mission's, or a later one's after the previous state was torn down. Arm
-    // the teardown for it, or a mission following a released one would spend
-    // its whole life looking already gone (see `crate::jsonrpc::teardown`).
-    crate::jsonrpc::teardown::rearm();
-
-    let mut slot = SERVER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(server) = slot.as_ref() {
-        if server.config.port != config.port {
-            warn!(
-                "jsonrpc.serve: reusing the running server on port {} (requested {})",
-                server.config.port, config.port
-            );
-        }
-        let stale = std::mem::take(&mut lock_app_data(&server.app_data).rpc_queue);
-        if !stale.is_empty() {
-            info!(
-                "jsonrpc.serve: dropped {} stale queued request(s)",
-                stale.len()
-            );
-        }
-        return Ok(false);
-    }
-    *slot = Some(JsonRpcServer::new(config)?);
-    Ok(true)
+/// The returned server is **owned by the Lua state that asked for it** (see the
+/// module docs): there is no DLL-wide slot to reuse, so every mission binds its
+/// own listener with its own worker and its own connections, and the previous
+/// mission's are gone with the previous mission's state. A mission whose port is
+/// somehow still held gets a bind error its init reports, rather than silently
+/// inheriting a stranger's server.
+pub(crate) fn ensure_server(config: ServerConfig) -> Result<JsonRpcServer, actix_web::Error> {
+    JsonRpcServer::new(config)
 }
 
-/// Stop the server from a dedicated thread, waiting at most [`STOP_TIMEOUT`] for
-/// it to finish. `ServerHandle::stop` is async and `block_on` must never run on
-/// the caller: blocking inside a tokio runtime would panic, and the caller here
-/// is the DCS Lua thread, which has no runtime at all.
+/// Stop the server from a dedicated thread, waiting at most
+/// `budget.acknowledge` for it to finish. `ServerHandle::stop` is async and
+/// `block_on` must never run on the caller: blocking inside a tokio runtime
+/// would panic, and the caller here is the DCS Lua thread, which has no runtime
+/// at all.
 ///
-/// The stop thread is deliberately **not** joined. Card 18's fix runs this from
-/// the sim thread during mission teardown, where an unbounded join would turn a
-/// crash into a freeze; if the stop overruns the budget it is left to finish
-/// detached, which costs a thread and nothing else.
+/// The stop thread is deliberately **not** joined. This runs from the sim thread
+/// during mission teardown — and from `__gc` inside `lua_close` — where an
+/// unbounded join would turn a crash into a freeze; if the stop overruns the
+/// budget it is left to finish detached, which costs a thread and nothing else.
 ///
 /// Infallible on purpose. The only ways this can go wrong are the OS refusing a
 /// thread and tokio refusing a runtime, neither of which a caller could act on —
 /// and one of the callers is `Drop`, where a failure would have to become a
 /// panic. A panic while unwinding aborts the process, and inside DCS that takes
 /// the sim down. The outcome is logged instead.
-fn stop_on_thread(handle: ServerHandle, graceful: bool) {
+fn stop_on_thread(handle: ServerHandle, budget: StopBudget) {
     let (done_tx, done_rx) = mpsc::sync_channel::<()>(1);
     if let Err(cause) = thread::Builder::new()
         .name("dcs-studio-jsonrpc-stop".to_string())
         .spawn(move || {
-            let outcome = Runtime::new().map(|runtime| runtime.block_on(handle.stop(graceful)));
+            let outcome = Runtime::new().map(|runtime| runtime.block_on(handle.stop(false)));
             info!("Server stop thread finished: {outcome:?}");
             // The receiver may already be gone (see the timeout arm below);
             // there is then nobody to tell, which is not a failure.
@@ -439,33 +471,39 @@ fn stop_on_thread(handle: ServerHandle, graceful: bool) {
         return;
     }
 
-    match done_rx.recv_timeout(STOP_TIMEOUT) {
+    match done_rx.recv_timeout(budget.acknowledge) {
         Ok(()) => info!("Server stop acknowledged"),
         Err(cause) => warn!(
-            "jsonrpc: the server did not stop within {STOP_TIMEOUT:?} ({cause}); \
-             leaving the stop to finish detached rather than blocking the caller"
+            "jsonrpc: the server did not stop within {:?} ({cause}); leaving the \
+             stop to finish detached rather than blocking the caller",
+            budget.acknowledge
         ),
     }
 }
 
-/// Wait, bounded, for a stopped server's thread to leave its actix `System`.
+/// Wait, within `budget`, for a stopped server's thread to leave its actix
+/// `System`.
 ///
 /// Nothing is ever sent on this channel: the sender lives in the server thread's
 /// closure, so the channel disconnecting IS the thread returning — its `System`
 /// shut down, its worker gone. That is the half of "stopped" that
 /// [`ServerHandle::stop`] alone does not promise, and the half card 18 cares
 /// about.
-fn wait_for_system_exit(port: u16, system_exited: &mpsc::Receiver<Infallible>) -> bool {
-    match system_exited.recv_timeout(SYSTEM_EXIT_TIMEOUT) {
+fn wait_for_system_exit(
+    port: u16,
+    system_exited: &mpsc::Receiver<Infallible>,
+    budget: StopBudget,
+) -> bool {
+    match system_exited.recv_timeout(budget.system_exit) {
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             info!("jsonrpc: the server thread for port {port} has exited");
             true
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
             warn!(
-                "jsonrpc: the server thread for port {port} had not exited after \
-                 {SYSTEM_EXIT_TIMEOUT:?}; not waiting any longer — a blocked caller \
-                 here is the sim thread"
+                "jsonrpc: the server thread for port {port} had not exited after {:?}; \
+                 not waiting any longer — a blocked caller here is the sim thread",
+                budget.system_exit
             );
             false
         }
@@ -474,69 +512,34 @@ fn wait_for_system_exit(port: u16, system_exited: &mpsc::Receiver<Infallible>) -
     }
 }
 
-/// Stop and unpark the MISSION bridge's server, so the next mission's
-/// `jsonrpc.serve` binds a fresh one. Returns what happened, or `None` when
-/// there is no server parked or the parked one is the GUI bridge's.
-///
-/// This is card 18's second half. `teardown::release` deals with what the bridge
-/// holds *inside* the mission Lua state; this deals with what it runs *outside*
-/// it — the actix `System` thread, its single worker, and the connections that
-/// worker accepted during the mission. Those are what every crashing run had and
-/// every clean run lacked, so they must not outlive the state either.
-///
-/// The GUI bridge is excluded by identity rather than by trusting its callers:
-/// its Lua state is never destroyed before the process exits, its server is the
-/// editor's only way in at the main menu, and stopping it would break the
-/// extension for the rest of the DCS session.
-pub(crate) fn stop_mission_server() -> Option<ServerStop> {
-    let mut parked = {
-        let mut slot = SERVER
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Take it under the lock, but do the waiting outside: `jsonrpc.serve`
-        // wants this lock, and holding it across a bounded wait would make the
-        // next mission's boot wait too.
-        if slot
-            .as_ref()
-            .is_some_and(JsonRpcServer::serves_mission_state)
-        {
-            slot.take()
-        } else {
-            None
-        }
-    }?;
-
-    let port = parked.config.port;
-    let system_exited = parked.stop_and_wait();
-    drop(parked); // retires this server's queue from GLOBAL_APP_DATA
-    Some(ServerStop {
-        port,
-        system_exited,
-    })
-}
-
 impl Drop for JsonRpcServer {
+    /// The guarantee the whole design rests on: when the Lua state stops holding
+    /// this userdata, the server stops. In DCS that means `__gc` **inside
+    /// `lua_close`** for a mission that never fired its end event — so this frame
+    /// touches no Lua, spends only the tight [`COLLECTED_STOP`] budget, and must
+    /// never panic: a panic in `Drop` during unwinding aborts the process, and
+    /// inside DCS an abort is the sim closing itself.
+    ///
+    /// A no-op for the server half when the state ran its teardown first, which
+    /// is the normal path — the state is `Stopped` by then.
     fn drop(&mut self) {
-        info!("Dropping server...");
-        // Retire this server's queue from the global slot (unless a newer
-        // server already replaced it) so process_global_queue can't drain a
-        // dead server's queue.
-        {
-            let mut slot = GLOBAL_APP_DATA
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if slot
-                .as_ref()
-                .is_some_and(|d| std::ptr::eq(d.get_ref(), self.app_data.get_ref()))
-            {
-                *slot = None;
+        // The discarded `Err` is the point: there is nowhere left to report to.
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let failed = self.fail_queued(crate::jsonrpc::teardown::STATE_GONE);
+            match self.stop(COLLECTED_STOP) {
+                Some(stop) => info!(
+                    "jsonrpc: the server on port {} was collected with its Lua state \
+                     — stopped it (thread exited: {}) and failed {failed} queued \
+                     request(s)",
+                    stop.port, stop.system_exited
+                ),
+                None => debug!(
+                    "jsonrpc: dropping the already-stopped server on port {} \
+                     (failed {failed} queued request(s))",
+                    self.config.port
+                ),
             }
-        }
-        // Best effort, bounded, and must never panic: a panic in Drop during
-        // unwinding aborts the process — inside DCS that takes the sim down. A
-        // no-op when the server was already stopped explicitly.
-        let exited = self.stop_and_wait();
-        info!("Server fully dropped (system thread exited: {exited})");
+        }));
     }
 }
 
@@ -558,11 +561,22 @@ impl UserData for JsonRpcServer {
             },
         );
 
-        methods.add_method(
-            "stop",
-            |_lua: &Lua, this: &JsonRpcServer, graceful: Option<bool>| {
-                this.stop(graceful);
-                Ok(())
+        methods.add_method_mut("stop", |lua: &Lua, this: &mut JsonRpcServer, ()| match this
+            .stop(EXPLICIT_STOP)
+        {
+            Some(stop) => (true, stop.system_exited).into_lua_multi(lua),
+            None => (false, true).into_lua_multi(lua),
+        });
+
+        // The mission bridge's end-of-life, in the order live verification
+        // pinned: handlers, then the queue's -32001s, then the listener.
+        methods.add_method_mut(
+            "teardown",
+            |lua: &Lua,
+             this: &mut JsonRpcServer,
+             (mut router, reason): (UserDataRefMut<JsonRpcRouter>, Option<String>)| {
+                let reason = reason.unwrap_or_else(|| "requested".to_string());
+                crate::jsonrpc::teardown::release(this, &mut router, &reason).into_lua_multi(lua)
             },
         );
     }
@@ -584,60 +598,6 @@ fn drain_queue(lua: &Lua, app_data: &Data<Mutex<AppData>>, router: &JsonRpcRoute
     }
 }
 
-/// Drain the RUNNING server's queue through `router`, from whatever Lua state
-/// the caller lives in. This is `process_rpc` minus the server handle: the
-/// mission-state debugger pumps the editor's requests with its own router
-/// while its pause (or its running chunk) holds the sim thread and the `GameGUI`
-/// hook cannot run. Returns false when no server is up (nothing to drain).
-pub(crate) fn process_global_queue(lua: &Lua, router: &JsonRpcRouter) -> bool {
-    let Some(app_data) = current_app_data() else {
-        return false;
-    };
-    drain_queue(lua, &app_data, router);
-    true
-}
-
-/// The running server's queue, or `None` when no server is bound.
-fn current_app_data() -> Option<Data<Mutex<AppData>>> {
-    GLOBAL_APP_DATA
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
-}
-
-/// Fail every request stranded in the running server's queue, telling each
-/// caller `reason`. Returns how many callers were actually told (a caller that
-/// had already given up, and a notification, have nobody to tell).
-///
-/// **Touches no Lua**, which is what makes it callable from the sentinel's
-/// destructor while `lua_close` is running: a queue entry is a serde
-/// [`JsonRpcRequest`] and a `oneshot` sender, and the response is built from a
-/// string. The Lua state that would have answered these requests is going away
-/// or already gone, so the honest outcome is an error naming that — not a
-/// silent drop the caller reads as a closed channel, and not the 30 s server
-/// timeout it would otherwise wait out.
-pub(crate) fn fail_queued(reason: &str) -> usize {
-    let Some(app_data) = current_app_data() else {
-        return 0;
-    };
-    let queue = std::mem::take(&mut lock_app_data(&app_data).rpc_queue);
-
-    // A plain loop rather than a chain: each entry has to be consumed to move
-    // its sender out, and the only interesting outcome is the side effect.
-    let mut told = 0;
-    for app_request in queue {
-        // A notification has no id and no channel — nowhere to report to. A
-        // `send` that fails means the caller already gave up, which is likewise
-        // nothing to report.
-        if let (Some(sender), Some(id)) = (app_request.response_sender, app_request.request.id) {
-            if sender.send(torn_down_response(id, reason)).is_ok() {
-                told += 1;
-            }
-        }
-    }
-    told
-}
-
 /// The envelope a caller gets when the Lua state that would have answered it is
 /// being destroyed.
 fn torn_down_response(id: String, reason: &str) -> JsonRpcResponse {
@@ -654,27 +614,6 @@ fn torn_down_response(id: String, reason: &str) -> JsonRpcResponse {
     }
 }
 
-/// Stop and drop the parked server whatever bridge it belongs to, leaving this
-/// DLL as it was before anything called [`ensure_server`].
-///
-/// Test-only. [`stop_mission_server`] is the production counterpart and refuses
-/// the GUI bridge's server on purpose; this one exists so a test that binds
-/// *either* can hand the statics back pristine, rather than leaving the next
-/// test's assertions about "the running server" depending on which one libtest
-/// happened to run first.
-#[cfg(test)]
-pub(crate) fn retire_server() {
-    let parked = SERVER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take();
-    drop(parked); // `Drop` stops it and retires its queue from GLOBAL_APP_DATA
-}
-
-/// Queue `request` against the RUNNING server, as the HTTP/WS handlers do,
-/// returning the channel a caller would await. Lets the crate's own tests drive
-/// the mission lifecycle — where the interesting moment is a request the sim
-/// never drains — without standing up a socket.
 /// A loopback port nothing is listening on: bind one, read its number, let it
 /// go. Racy in principle, fine in a serialized test.
 #[cfg(test)]
@@ -700,12 +639,15 @@ pub(crate) fn health_over_tcp(port: u16) -> std::io::Result<String> {
     Ok(answer)
 }
 
+/// Queue `request` against a server as its HTTP/WS handlers do, returning the
+/// channel a caller would await. Lets the crate's own tests drive the mission
+/// lifecycle — where the interesting moment is a request the sim never drains.
 #[cfg(test)]
-pub(crate) fn queue_against_running_server(
+pub(crate) fn queue_against(
+    server: &JsonRpcServer,
     request: JsonRpcRequest,
 ) -> Option<Receiver<JsonRpcResponse>> {
-    let app_data = current_app_data()?;
-    let mut guard = lock_app_data(&app_data);
+    let mut guard = lock_app_data(&server.app_data);
     push_rpc_request(&mut guard, request)
 }
 
@@ -1051,9 +993,9 @@ mod tests {
     use super::{
         drain_queue, enqueue_text_frame, error_response, free_port,
         get_timeout_duration_from_config, health_over_tcp, lock_app_data, post_rpc,
-        process_global_queue, process_request, push_rpc_request, respond, response_for,
-        success_response, AppData, AppRequest, JsonRpcServer, ServerConfig, ServiceInfo,
-        DEFAULT_TIMEOUT, JSON_RPC_INTERNAL_ERROR, JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_VERSION,
+        process_request, push_rpc_request, respond, response_for, success_response, AppData,
+        AppRequest, JsonRpcServer, ServerConfig, ServiceInfo, DEFAULT_TIMEOUT,
+        JSON_RPC_INTERNAL_ERROR, JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_VERSION,
     };
     use crate::jsonrpc::router::{JsonRpcRouter, MethodMeta};
     use crate::jsonrpc::{JsonRpcRequest, JsonRpcResponse};
@@ -1115,10 +1057,7 @@ mod tests {
         let port = free_port();
         let mission = format!(r#"{{"host":"127.0.0.1","port":{port},"env":"mission"}}"#);
 
-        assert!(
-            super::ensure_server(config(&mission)).expect("a free port binds"),
-            "the first mission starts the server"
-        );
+        let mut server = super::ensure_server(config(&mission)).expect("a free port binds");
         assert!(
             health_over_tcp(port)
                 .expect("the mission bridge must serve")
@@ -1127,7 +1066,7 @@ mod tests {
              every crashing run shared"
         );
 
-        let stopped = super::stop_mission_server().expect("the mission bridge's server is parked");
+        let stopped = server.stop(super::EXPLICIT_STOP).expect("it was serving");
         assert_eq!(stopped.port, port);
         assert!(
             stopped.system_exited,
@@ -1137,37 +1076,79 @@ mod tests {
             health_over_tcp(port).is_err(),
             "the listener must be gone — without the stop this connect still succeeds"
         );
-
-        // The next mission's `require` → `jsonrpc.serve` builds a fresh one.
         assert!(
-            super::ensure_server(config(&mission)).expect("the port is free again"),
-            "a stopped server is rebuilt, not reused"
+            server.stop(super::EXPLICIT_STOP).is_none(),
+            "a stopped server has no handle left to stop — idempotent by type, \
+             not by flag"
         );
+
+        // The next mission's `require` → `jsonrpc.serve` binds a fresh one on the
+        // freed port.
+        let next = super::ensure_server(config(&mission)).expect("the port is free again");
         assert!(
             health_over_tcp(port)
                 .expect("the next mission must be served too")
                 .contains("200 OK"),
             "the fresh server serves on the same port"
         );
-        super::retire_server();
+        drop(next);
     }
 
-    /// The split card 18 turns on: only the MISSION bridge stops per mission.
-    /// The GUI state is created once at DCS start and lives until the process
-    /// exits, and its server is the editor's only way in at the main menu — so a
-    /// release evaluated against it must leave the listener up.
+    /// **Card 18, iteration 3.** The guarantee the ownership refactor rests on:
+    /// dropping the server — which in DCS is `__gc` inside `lua_close` for a
+    /// mission that never fired its end event — stops the listener and takes the
+    /// `System` thread with it, with nothing else asked of anyone.
+    ///
+    /// Mutation check for this path: neuter `Drop` (make it return before the
+    /// `stop`) and this test fails on the refused-connect assertion, as does
+    /// `teardown::tests::a_mission_state_is_released_before_it_dies_and_the_next_one_boots_over_it`.
     #[test]
-    fn stopping_leaves_the_gui_bridges_server_alone() {
+    fn dropping_the_server_stops_it_even_though_nobody_asked() {
         let _serial = crate::jsonrpc::serially();
         let port = free_port();
-        assert!(super::ensure_server(config(&format!(
-            r#"{{"host":"127.0.0.1","port":{port},"env":"gui"}}"#
+        let server = super::ensure_server(config(&format!(
+            r#"{{"host":"127.0.0.1","port":{port},"env":"mission"}}"#
         )))
-        .expect("a free port binds"));
+        .expect("a free port binds");
+        assert!(
+            health_over_tcp(port)
+                .expect("the mission bridge must serve")
+                .contains("200 OK"),
+            "connections are accepted while the owner holds it"
+        );
+
+        drop(server);
 
         assert!(
-            super::stop_mission_server().is_none(),
-            "the parked server is the GUI bridge's, so there is nothing to stop"
+            health_over_tcp(port).is_err(),
+            "the owner let go, so the listener is gone — no event, no teardown \
+             call, just the value dying with its state"
+        );
+    }
+
+    /// The split card 18 turns on: only the MISSION bridge's listener is stopped
+    /// by an explicit teardown. The GUI state is created once at DCS start and
+    /// lives until the process exits, and its server is the editor's only way in
+    /// at the main menu — so a release evaluated against it must leave the
+    /// listener up, decided on the server's own `env` identity rather than on
+    /// trusting the caller.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_release_leaves_the_gui_bridges_server_alone() {
+        let _serial = crate::jsonrpc::serially();
+        let port = free_port();
+        let mut server = super::ensure_server(config(&format!(
+            r#"{{"host":"127.0.0.1","port":{port},"env":"gui"}}"#
+        )))
+        .expect("a free port binds");
+        assert!(!server.serves_mission_state());
+
+        let lua = Lua::new();
+        let mut router = router(&lua);
+        let released = crate::jsonrpc::teardown::release(&mut server, &mut router, "requested");
+        assert_eq!(
+            released.stopped_port, None,
+            "the GUI bridge's listener is not the teardown's to stop"
         );
         assert!(
             health_over_tcp(port)
@@ -1175,7 +1156,6 @@ mod tests {
                 .contains("dcs-studio-gui"),
             "the GUI bridge spans the process by design"
         );
-        super::retire_server();
     }
 
     /// The other half of card 20: making the bind outcome travel back from the
@@ -1797,41 +1777,31 @@ mod tests {
         assert_eq!(queued, 2, "only the two well-formed frames were queued");
     }
 
-    /// The debugger's pause loop calls this every iteration, from whatever
-    /// state it is stuck in, and it must answer honestly at every point in a
-    /// server's life: nothing to drain before one is bound, the running one
-    /// while it is up, and nothing again once it has been dropped. Draining a
-    /// dead server's queue would hand the editor responses from the mission
-    /// that just ended.
+    /// **Card 18, iteration 3.** A request stranded in the queue when the owner
+    /// lets go must be ANSWERED, not left to hang or to time out: the queue dies
+    /// with the server, and the caller is told which of the two happened.
     ///
-    /// Serialized against every other test that binds a server or arms a
-    /// teardown, so the "before" and "after" assertions about the DLL-wide slot
-    /// are about THIS server.
+    /// This is the half that used to need a DLL-wide queue static and a separate
+    /// sentinel userdata to reach. Now the queue belongs to the server, and the
+    /// server belongs to the state, so `Drop` is the only place it has to happen.
     #[test]
-    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
-    fn the_global_drain_follows_the_running_server_in_and_out_of_existence() {
+    fn a_dropped_server_answers_the_callers_stranded_in_its_queue() {
         let _serial = crate::jsonrpc::serially();
-        let lua = Lua::new();
-        let router = router(&lua);
-        assert!(
-            !process_global_queue(&lua, &router),
-            "no server bound yet, so there is nothing to serve"
-        );
-
         let port = free_port();
         let server = JsonRpcServer::new(config(&format!(
             r#"{{"host":"127.0.0.1","port":{port},"env":"mission"}}"#
         )))
         .expect("bind");
-        assert!(
-            process_global_queue(&lua, &router),
-            "the running server's queue is reachable from any state"
-        );
+        let stranded = super::queue_against(&server, request(Some("stranded"), "echo", None))
+            .expect("a request queues");
 
         drop(server);
-        assert!(
-            !process_global_queue(&lua, &router),
-            "a dropped server retires its queue rather than leaving it drainable"
-        );
+
+        let answer = stranded
+            .blocking_recv()
+            .expect("the caller must be answered, not dropped");
+        let error = answer.error.expect("an error envelope");
+        assert_eq!(error["code"], super::JSON_RPC_BRIDGE_TORN_DOWN);
+        assert_eq!(error["data"], crate::jsonrpc::teardown::STATE_GONE);
     }
 }

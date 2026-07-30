@@ -45,7 +45,15 @@ local started, err = pcall(function()
   -- request can never wedge the WS read loop for minutes, but long enough for
   -- console calls that serialize big tables on the sim thread (repl_export and
   -- db_export can take tens of seconds).
-  local server = bridge.jsonrpc.JsonRpcServer.new({ host = "127.0.0.1", port = 25569, timeout = 30, env = "gui" })
+  --
+  -- `serve` hands back userdata that OWNS the server; this state parks it in the
+  -- frame callbacks below (DCS.setUserCallbacks holds them for the life of the
+  -- GameGUI state, which is the life of the process), so the listener lives
+  -- exactly as long as the state that asked for it. Same pattern as the mission
+  -- bridge — card 18's Lua-lifecycle directive — with the same shape here even
+  -- though this state is never destroyed before DCS exits, so behaviour is
+  -- unchanged: uniformity, not a fix.
+  local server = bridge.jsonrpc.serve({ host = "127.0.0.1", port = 25569, timeout = 30, env = "gui" })
   local router = bridge.jsonrpc.JsonRpcRouter.new()
 
   -- Debugger for GUI sessions. The engine (__DCS_STUDIO_DBG) is installed
