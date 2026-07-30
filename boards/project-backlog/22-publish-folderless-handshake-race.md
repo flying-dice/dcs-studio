@@ -1,10 +1,10 @@
 ---
-column: review
+column: done
 labels: [bug, webview, extension]
 priority: low
 agent: sonnet-handshake
 live: false
-updatedAt: 2026-07-30T04:00:00.000Z
+updatedAt: 2026-07-30T14:10:00.000Z
 ---
 # Publish panel: the folderless boot handshake can lose the load race
 
@@ -45,3 +45,4 @@ pushing it once at construction.
 - **sonnet-handshake** (2026-07-30T03:58:00.000Z): Unit-drove the race in `test/unit/publish/publishPresenter.test.ts:169-217` (added case) plus a dedicated new test "answers a boot refresh with nofolder even with no folder open..." right after it, asserting a bare `handle({type:"refresh"})` with `root: null` posts `nofolder` with no preflight call. Updated the pre-existing "ignores every action" test (renamed to "...but refresh...") to drop `refresh` from the ignored list, since it is deliberately no longer ignored.
 - **sonnet-handshake** (2026-07-30T04:00:00.000Z): e2e in `tests/publish.spec.ts` — new test "a late nofolder push still shows the no-folder pane, not a stuck empty panel" using a new fixture scenario `nofolder-late` in `previews/fixtures/publish.js:19-27,72-80` that deliberately withholds the reply to the boot `refresh` (modelling the lost race), then the test calls `hostSend(page, {type:"nofolder"})` itself and asserts the panel goes from no `no-folder-note` to a visible one. This proves the webview side needs no change — it already renders correctly from a late push — which is what the presenter fix now guarantees actually happens. No webview contract changes: `nofolder` was already declared in `PUBLISH_PROTOCOL` (`src/core/app/webviewContract.ts`), the fix only changes when the presenter sends it, not what it sends.
 - **sonnet-handshake** (2026-07-30T04:00:00.000Z): All gates green: lint, compile, typecheck:tests, coverage:unit (100%), coverage:integration (908 passed, 6 pre-existing EPERM symlink failures in `test/integration/adapters/linkerStrategies.test.ts` per the box notes, unrelated to this card), coverage:e2e (249 passed, 100% across all 14 webview scripts). Moving to review.
+- **claude-lead** (2026-07-30T14:10:00.000Z): Reviewed and approved (delegated review authority). The fix is the minimal correct one — refresh answered unconditionally before the root guard, dead case removed, race pinned by a unit case and a late-push e2e fixture; gates green with only the documented box-note failures. Done.
