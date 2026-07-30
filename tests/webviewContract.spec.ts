@@ -5,6 +5,7 @@ import {
   MARKETPLACE_PROTOCOL,
   MYMODS_PROTOCOL,
   PUBLISH_PROTOCOL,
+  SETUP_PROTOCOL,
   type WebviewProtocol,
 } from "../src/core/app/webviewContract";
 import { expect, test } from "./fixtures";
@@ -41,8 +42,8 @@ import { hostSend, openPreview, sentMessages } from "./helpers";
 //
 // ## Scope
 //
-// Console, marketplace, My Mods, log and publish only — the panels with a
-// presenter. The other six webviews are named in `UNCOVERED_WEBVIEWS` and checked against the
+// Console, marketplace, My Mods, log, publish and setup only — the panels with a
+// presenter. The other five webviews are named in `UNCOVERED_WEBVIEWS` and checked against the
 // preview directory by test/integration/webview/webviewContract.test.ts, so
 // the uncovered set is data rather than an omission.
 
@@ -412,6 +413,38 @@ test.describe("publish ↔ PublishPresenter message contract", () => {
     assertContract(PUBLISH_PROTOCOL, sent, consumed);
     expect(errors).toEqual([]);
     expect(errors2).toEqual([]);
+  });
+});
+
+test.describe("setup ↔ SetupPresenter message contract", () => {
+  test("the webview posts and consumes exactly the declared message set", async ({ page }) => {
+    const sent = new Set<string>();
+    const consumed = new Map<string, boolean>();
+
+    await armProbe(page);
+    // Boot: unlike every other covered panel, media/setup.js posts NO handshake
+    // — it renders an empty form at load and waits. `init` is pushed unprompted,
+    // which the fixture does on DOMContentLoaded as SetupPanel does from its
+    // constructor.
+    const errors = await openPreview(page, "setup");
+    await expect(page.getByTestId("cand-row")).toHaveCount(4);
+
+    // `browse` -> `browsed`, driven through the userdata picker. The fixture
+    // answers with a path, and the input taking it is what proves consumption.
+    await page.locator('[data-browse="saved"]').click();
+    await expect(page.getByTestId("saved-input")).toHaveValue("E:\\Saved Games\\DCS");
+
+    // `save` -> `saved`, which flashes the note beside the button.
+    await page.getByTestId("save-btn").click();
+    await expect(page.getByTestId("saved-note")).toBeVisible();
+
+    // `redetect` — the toolbar's second, explicit source of `init`.
+    await page.getByTestId("redetect-btn").click();
+    await expect(page.getByTestId("cand-row")).toHaveCount(4);
+
+    await collect(page, sent, consumed);
+    assertContract(SETUP_PROTOCOL, sent, consumed);
+    expect(errors).toEqual([]);
   });
 });
 

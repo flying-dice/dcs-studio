@@ -28,11 +28,18 @@ import type {
 import { PublishPresenter } from "../../../src/core/app/publishPresenter";
 import type { ReleaseResult, ShareResult } from "../../../src/core/app/publishService";
 import type {
+  SetupEffect,
+  SetupInbound,
+  SetupPresenterDeps,
+} from "../../../src/core/app/setupPresenter";
+import { SetupPresenter } from "../../../src/core/app/setupPresenter";
+import type {
   ConsoleHostMessage,
   LogHostMessage,
   MarketplaceHostMessage,
   MyModsHostMessage,
   PublishHostMessage,
+  SetupHostMessage,
 } from "../../../src/core/app/webviewContract";
 import {
   CONSOLE_PROTOCOL,
@@ -40,10 +47,12 @@ import {
   MARKETPLACE_PROTOCOL,
   MYMODS_PROTOCOL,
   PUBLISH_PROTOCOL,
+  SETUP_PROTOCOL,
   UNCOVERED_WEBVIEWS,
   WEBVIEW_PROTOCOLS,
 } from "../../../src/core/app/webviewContract";
 import type { DualBridgeStatus } from "../../../src/core/domain/bridgeProtocol";
+import type { DcsCandidate } from "../../../src/core/domain/dcsDetect";
 import type { Check } from "../../../src/core/domain/publishChecks";
 import type { ManifestModel, ProductDetail, Subscription } from "../../../src/core/domain/types";
 
@@ -440,6 +449,62 @@ function publishHarness(over: Partial<PublishPresenterDeps> = {}): PublishHarnes
   };
 }
 
+// ── Setup harness ────────────────────────────────────────────────────────────
+
+const SETUP_CANDIDATE: DcsCandidate = {
+  path: "C:\\Users\\pilot\\Saved Games\\DCS",
+  name: "DCS",
+  valid: true,
+  detail: "has Config",
+};
+
+interface SetupHarness {
+  presenter: SetupPresenter;
+  posted: SetupHostMessage[];
+  effects: SetupEffect[];
+  calls: string[];
+  interactions(): number;
+}
+
+/**
+ * A setup presenter whose browse dialog always answers, so `browse` reaches its
+ * reply rather than being a cancellation. The validation rules have their own
+ * tests in `test/unit/setup/setupPresenter.test.ts`.
+ */
+function setupHarness(over: Partial<SetupPresenterDeps> = {}): SetupHarness {
+  const posted: SetupHostMessage[] = [];
+  const effects: SetupEffect[] = [];
+  const calls: string[] = [];
+  const deps: SetupPresenterDeps = {
+    detectSavedGames: async () => {
+      calls.push("detectSavedGames");
+      return [SETUP_CANDIDATE];
+    },
+    detectGameInstalls: async () => [],
+    settings: () => ({
+      savedGamesPath: SETUP_CANDIDATE.path,
+      gameInstallPath: undefined,
+      dataDir: undefined,
+      sevenZipPath: undefined,
+    }),
+    saveSetting: async (key) => void calls.push(`save ${key}`),
+    defaultDataDir: () => "C:\\Users\\pilot\\DCSStudio\\mods",
+    detectedSevenZip: async () => "C:\\Program Files\\7-Zip\\7z.exe",
+    browse: async () => "D:\\SG\\DCS",
+    exists: () => true,
+    post: (msg) => posted.push(msg),
+    effect: (e) => effects.push(e),
+    ...over,
+  };
+  return {
+    presenter: new SetupPresenter(deps),
+    posted,
+    effects,
+    calls,
+    interactions: () => posted.length + effects.length + calls.length,
+  };
+}
+
 /** The message types a run of the presenter actually pushed, de-duplicated. */
 function typesOf(posted: { type: string }[]): string[] {
   return [...new Set(posted.map((m) => m.type))].sort();
@@ -532,6 +597,12 @@ const PUBLISH_DRIVES: Record<PublishInbound["type"], Drive<PublishInbound>> = {
   openExternal: { send: { type: "openExternal", url: "https://github.com/Owner/my-mod" } },
 };
 
+const SETUP_DRIVES: Record<SetupInbound["type"], Drive<SetupInbound>> = {
+  redetect: { send: { type: "redetect" } },
+  browse: { send: { type: "browse", which: "saved" } },
+  save: { send: { type: "save", savedGames: "D:\\SG\\DCS" } },
+};
+
 // ── The contract table itself ────────────────────────────────────────────────
 
 describe("the declared webview contract", () => {
@@ -542,6 +613,7 @@ describe("the declared webview contract", () => {
       "marketplace",
       "mymods",
       "publish",
+      "setup",
     ]);
   });
 
@@ -833,6 +905,44 @@ describe("publish — host -> webview", () => {
     posted.push(...none.posted);
 
     expect(typesOf(posted)).toEqual([...PUBLISH_PROTOCOL.toWebview].sort());
+  });
+});
+
+// ── Setup: the host half ─────────────────────────────────────────────────────
+
+describe("setup — webview -> host", () => {
+  it("drives exactly the declared message set", () => {
+    expect(Object.keys(SETUP_DRIVES).sort()).toEqual([...SETUP_PROTOCOL.toHost].sort());
+  });
+
+  it.each(SETUP_PROTOCOL.toHost)("%s is acted on", async (type) => {
+    const plan = SETUP_DRIVES[type as SetupInbound["type"]];
+    const h = setupHarness();
+    for (const m of plan.before ?? []) await h.presenter.handle(m);
+    const before = h.interactions();
+    await h.presenter.handle(plan.send);
+    expect(h.interactions()).toBeGreaterThan(before);
+  });
+
+  it("does nothing at all for a message type the contract does not declare", async () => {
+    const h = setupHarness();
+    await h.presenter.handle({ type: "notInTheContract" } as unknown as SetupInbound);
+    expect(h.interactions()).toBe(0);
+  });
+});
+
+describe("setup — host -> webview", () => {
+  it("produces exactly the declared message set", async () => {
+    const h = setupHarness();
+    // `init` — the opening push, which is the only thing that fills the form:
+    // media/setup.js renders empty at load and posts no handshake.
+    await h.presenter.refresh();
+    // `browsed` — a picker that answered.
+    await h.presenter.handle({ type: "browse", which: "saved" });
+    // `saved` — the acknowledgement the "Saved ✓" note flashes off.
+    await h.presenter.handle({ type: "save" });
+
+    expect(typesOf(h.posted)).toEqual([...SETUP_PROTOCOL.toWebview].sort());
   });
 });
 

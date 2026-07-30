@@ -70,7 +70,15 @@
       return;
     }
     if (m.type === "browse") {
-      window.__host.receive({ type: "browsed", which: m.which, path: BROWSED[m.which] });
+      // `valid` is part of the declared payload (the host probes the role's
+      // witness path), so the fixture sends it even though media/setup.js
+      // currently renders nothing off it — see card 14's journal.
+      window.__host.receive({
+        type: "browsed",
+        which: m.which,
+        path: BROWSED[m.which],
+        valid: true,
+      });
       return;
     }
     if (m.type === "save") {

@@ -1,4 +1,5 @@
 import type { DualBridgeStatus } from "../domain/bridgeProtocol";
+import type { DcsCandidate, SetupRole } from "../domain/dcsDetect";
 import type { LogEntry, ModIdentity } from "../domain/dcsLog";
 import type { LuaEnv, ReplVariable } from "../domain/debugProtocol";
 import type { InstallManifestView } from "../domain/installManifestView";
@@ -44,12 +45,12 @@ import type { Progress } from "./subscriptionService";
 // ## Coverage is deliberately partial
 //
 // Only the panels with a presenter (`console`, `marketplace`, `mymods`, `log`,
-// `publish`) are covered. The other six webviews still have both halves under
-// their own gates but no declared contract between them; they are named in
+// `publish`, `setup`) are covered. The other five webviews still have both halves
+// under their own gates but no declared contract between them; they are named in
 // `UNCOVERED_WEBVIEWS` so the gap is visible in the table rather than silent,
 // and the tests assert that list is exactly "every preview page minus the
 // covered ones". Extending the contract to a panel means giving it a presenter
-// first — an inferred contract for the remaining six would be worse than none.
+// first — an inferred contract for the remaining five would be worse than none.
 //
 // ## Why the payload fields are mostly optional
 //
@@ -354,6 +355,76 @@ const PUBLISH_TO_WEBVIEW_KEYS: { readonly [K in PublishHostMessage["type"]]: tru
   releaseDone: true,
 };
 
+// ── Setup ────────────────────────────────────────────────────────────────────
+
+/**
+ * The four `dcsStudio` path settings the Setup panel owns, keyed by their real
+ * setting ids. Declared here because the panel's `save` writes exactly these and
+ * its `init` echoes exactly these back — under shorter names, which is itself a
+ * mapping worth having one home for.
+ */
+export interface SetupPaths {
+  savedGamesPath: string;
+  gameInstallPath: string;
+  dataDir: string;
+  sevenZipPath: string;
+}
+
+/** A message `media/setup.js` posts. */
+export type SetupWebviewMessage =
+  | { type: "redetect" }
+  /** Open a picker for one role. `which` may be absent, and the host decides
+   *  what a nameless browse means. */
+  | { type: "browse"; which?: SetupRole }
+  | {
+      type: "save";
+      savedGames?: string;
+      gameInstall?: string;
+      dataDir?: string;
+      sevenZip?: string;
+    };
+
+/** A message `SetupPresenter` pushes to the setup webview. */
+export type SetupHostMessage =
+  /**
+   * The whole form's state. Pushed unprompted — `media/setup.js` renders an empty
+   * form at load and posts no handshake, so this is the only thing that fills it.
+   */
+  | {
+      type: "init";
+      /** The four configured paths, trimmed, `""` rather than absent. */
+      savedGames: string;
+      gameInstall: string;
+      dataDir: string;
+      sevenZip: string;
+      /** The data-dir input's placeholder, so it is never blank. */
+      dataDirDefault: string;
+      /** Where the archiver was found, or `""` for "not found". */
+      sevenZipDetected: string;
+      savedCandidates: DcsCandidate[];
+      installCandidates: DcsCandidate[];
+    }
+  /**
+   * The result of a picker. `valid` is the host's probe of the role's witness
+   * path — declared because the host sends it, though see card 14's journal:
+   * `media/setup.js` currently ignores it.
+   */
+  | { type: "browsed"; which?: SetupRole; path: string; valid: boolean }
+  /** Settings written. The webview flashes "Saved ✓" for two seconds. */
+  | { type: "saved" };
+
+const SETUP_TO_HOST_KEYS: { readonly [K in SetupWebviewMessage["type"]]: true } = {
+  redetect: true,
+  browse: true,
+  save: true,
+};
+
+const SETUP_TO_WEBVIEW_KEYS: { readonly [K in SetupHostMessage["type"]]: true } = {
+  init: true,
+  browsed: true,
+  saved: true,
+};
+
 // ── The table ────────────────────────────────────────────────────────────────
 
 /** One covered panel's half of the contract, as data the tests iterate. */
@@ -421,6 +492,14 @@ export const PUBLISH_PROTOCOL: WebviewProtocol = {
   silent: [],
 };
 
+export const SETUP_PROTOCOL: WebviewProtocol = {
+  preview: "setup.html",
+  scripts: ["setup.js"],
+  toHost: Object.keys(SETUP_TO_HOST_KEYS),
+  toWebview: Object.keys(SETUP_TO_WEBVIEW_KEYS),
+  silent: [],
+};
+
 /** Every panel whose protocol is declared, keyed by preview page basename. */
 export const WEBVIEW_PROTOCOLS: Readonly<Record<string, WebviewProtocol>> = {
   console: CONSOLE_PROTOCOL,
@@ -428,6 +507,7 @@ export const WEBVIEW_PROTOCOLS: Readonly<Record<string, WebviewProtocol>> = {
   marketplace: MARKETPLACE_PROTOCOL,
   mymods: MYMODS_PROTOCOL,
   publish: PUBLISH_PROTOCOL,
+  setup: SETUP_PROTOCOL,
 };
 
 /**
@@ -444,6 +524,5 @@ export const UNCOVERED_WEBVIEWS: readonly string[] = [
   "manifest",
   "nav",
   "newproject",
-  "setup",
   "skills",
 ];
