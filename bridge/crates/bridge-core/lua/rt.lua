@@ -245,6 +245,12 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 3) then
   -- table. Writes to keys present in the snapshot stay sandbox-local — which is
   -- the harmless direction, and it means a user cannot un-block a fatal getter
   -- for the rest of the process by assigning over it.
+  --
+  -- Not a sandbox: `getmetatable(DCS).__index` (or `debug.getregistry`, or
+  -- `rawset` on `getfenv()`) reaches the real table, and that is fine. The
+  -- threat model is the ACCIDENT — the console user, the extension, or a script
+  -- typing a documented-looking getter — not an author determined to call
+  -- something that crashes their own sim.
   local function guarded_dcs(real)
     local proxy = {}
     for k, v in pairs(real) do
@@ -258,36 +264,80 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 3) then
     return setmetatable(proxy, { __index = real, __newindex = real })
   end
 
-  -- Environment for chunks the user asked us to run (console eval, inspect,
-  -- export, the `eval` RPC). It reads and writes through to `_G`, so global
-  -- side effects behave exactly as before; the single difference is `DCS`.
-  -- Memoized against the live `DCS` table so a state that swaps it gets a fresh
-  -- guard. nil in a state without a `DCS` table (every mission state), where the
-  -- chunk then runs in the plain global environment as it always did.
-  local guard_for, guard_env
+  -- The guarded view of the live `DCS`, memoized against its identity so a state
+  -- that swaps the table gets a fresh snapshot. Anything that is not a table
+  -- (nil in a mission state, or a value a chunk assigned) passes through
+  -- untouched — there is nothing to guard and pretending otherwise would lie
+  -- about what the name holds.
+  local guard_for, guard_dcs
 
+  local function guarded_dcs_for(real)
+    if type(real) ~= "table" then
+      return real
+    end
+    if guard_for ~= real then
+      guard_for = real
+      guard_dcs = guarded_dcs(real)
+    end
+    return guard_dcs
+  end
+
+  -- Environment for chunks the user asked us to run (console eval, inspect,
+  -- export, the `eval` RPC). Everything but `DCS` reads and writes straight
+  -- through to `_G`, so global side effects behave exactly as before the guard
+  -- existed. nil in a state without a `DCS` table (every mission state), where
+  -- the chunk runs in the plain global environment as it always did.
+  --
+  -- Built FRESH per chunk, and that is load-bearing (review of card 19). The
+  -- table itself must stay empty — `__newindex` forwards, so nothing is ever
+  -- stored in it — because a `DCS` key PRESENT in a shared env would be
+  -- overwritten in place by a chunk's bare `DCS = x` without `__newindex` ever
+  -- firing, and that overwrite would then disable the guard for every later
+  -- eval/inspect/export/watch in the state. One accidental console line must not
+  -- be able to do that. So `DCS` is served from `__index` (always the current
+  -- guarded view) and a bare `DCS = x` is captured here instead: **sandbox-local
+  -- to the one chunk that wrote it** — that chunk reads back its own value, the
+  -- state's real `DCS` is left intact, and the next chunk gets the guard back.
+  -- The expensive part (the ~230-key snapshot) is memoized above; this is one
+  -- empty table and one metatable per chunk.
   local function chunk_env()
     if type(DCS) ~= "table" then
       return nil
     end
-    if guard_for ~= DCS then
-      guard_for = DCS
-      guard_env = setmetatable({ DCS = guarded_dcs(DCS) }, { __index = _G, __newindex = _G })
-    end
-    return guard_env
+    local dcs_local, dcs_written = nil, false
+    return setmetatable({}, {
+      __index = function(_, k)
+        if k == "DCS" then
+          if dcs_written then
+            return dcs_local
+          end
+          return guarded_dcs_for(_G.DCS)
+        end
+        return _G[k]
+      end,
+      __newindex = function(_, k, v)
+        if k == "DCS" then
+          dcs_local, dcs_written = v, true
+          return
+        end
+        _G[k] = v
+      end,
+    })
   end
 
-  -- Run `f` (a freshly loaded chunk) with the guarded environment. Exposed
-  -- because gui_methods.lua's `eval` loads its own chunk and must not be the
-  -- one hole in the guard.
   -- The globals table a user-facing evaluation should resolve names through:
   -- the guarded environment where there is a `DCS` table, else plain `_G`. The
   -- debug engine's watch/hover/console evaluations chain their frame-locals
-  -- proxy onto this rather than onto `_G` directly.
+  -- proxy onto this rather than onto `_G` directly. A fresh table per call (see
+  -- chunk_env), so callers hold ONE for the whole evaluation rather than asking
+  -- per name lookup.
   function RT.global_env()
     return chunk_env() or _G
   end
 
+  -- Run `f` (a freshly loaded chunk) in that environment. Exposed because
+  -- gui_methods.lua's `eval` and the debug engine load their own chunks, and
+  -- neither may be the one hole in the guard.
   function RT.guard_chunk(f)
     local env = chunk_env()
     if env then

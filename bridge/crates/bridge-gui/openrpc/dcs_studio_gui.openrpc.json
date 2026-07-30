@@ -421,7 +421,7 @@
       }
     },
     {
-      "description": "Write the full JSON of a value (by ref or expression) to a file under <writedir>Temp\\ and return { path, bytes }.",
+      "description": "Write the full JSON of a value (by ref or expression) to a file under <writedir>Temp\\ and return { path, bytes }. DCS.getMissionLoaded() is refused with an explanatory error: calling it with a mission loaded crashes DCS 2.9.27 outright.",
       "name": "repl_export",
       "params": [
         {
@@ -453,7 +453,7 @@
       }
     },
     {
-      "description": "Evaluate an expression and register the result for lazy drill-down: { ok, type, value, ref }.",
+      "description": "Evaluate an expression and register the result for lazy drill-down: { ok, type, value, ref }. DCS.getMissionLoaded() is refused with an explanatory error: calling it with a mission loaded crashes DCS 2.9.27 outright.",
       "name": "repl_inspect",
       "params": [
         {

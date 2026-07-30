@@ -244,15 +244,16 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
     if not f then
       return false, err or "compile error"
     end
+    -- Globals resolve through the RT's guarded environment when it is installed
+    -- (card 19): a watch or console line on DCS.getMissionLoaded() must raise,
+    -- not kill the process. Falls back to _G in a state without the RT. Taken
+    -- ONCE per evaluation — it is a fresh table per call over there.
+    local globals = RT_GLOBALS()
     local proxy = setmetatable({}, {
       __index = function(_, k)
         if env.locals_present and env.locals_present[k] then return env.locals[k] end
         if env.upvals_present and env.upvals_present[k] then return env.upvals[k] end
-        -- Globals resolve through the RT's guarded environment when it is
-        -- installed (card 19): a watch or console line on
-        -- DCS.getMissionLoaded() must raise, not kill the process. Falls back
-        -- to _G in a state without the RT.
-        return RT_GLOBALS()[k]
+        return globals[k]
       end,
       -- A bare-name write inside an evaluated statement would land in this
       -- throwaway proxy and silently vanish — the worst kind of "worked".

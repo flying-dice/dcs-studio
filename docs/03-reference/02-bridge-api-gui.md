@@ -263,7 +263,7 @@ Expand a ref handed out by repl_inspect/repl_expand: { ok, variables }.
 
 ### `repl_export`
 
-Write the full JSON of a value (by ref or expression) to a file under \<writedir>Temp\ and return { path, bytes }.
+Write the full JSON of a value (by ref or expression) to a file under \<writedir>Temp\ and return { path, bytes }. DCS.getMissionLoaded() is refused with an explanatory error: calling it with a mission loaded crashes DCS 2.9.27 outright.
 
 | Param | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -275,7 +275,7 @@ Write the full JSON of a value (by ref or expression) to a file under \<writedir
 
 ### `repl_inspect`
 
-Evaluate an expression and register the result for lazy drill-down: { ok, type, value, ref }.
+Evaluate an expression and register the result for lazy drill-down: { ok, type, value, ref }. DCS.getMissionLoaded() is refused with an explanatory error: calling it with a mission loaded crashes DCS 2.9.27 outright.
 
 | Param | Type | Required | Description |
 | --- | --- | --- | --- |

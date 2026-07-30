@@ -4,9 +4,9 @@ labels: [bug, bridge]
 priority: high
 agent: opus-getpause
 live: false
-status: Fixed and live-verified — getMissionLoaded is the killer (getPause is innocent)
+status: Review fixes applied (per-chunk env, docs); fixed and live-verified
 progress: 100
-updatedAt: 2026-07-30T12:10:00.000Z
+updatedAt: 2026-07-30T13:05:00.000Z
 ---
 # `DCS.getPause()` / `DCS.getMissionLoaded()` via GUI-bridge eval crash DCS instantly
 
@@ -61,5 +61,19 @@ Open questions for whoever picks this up:
   **Gates.** `cargo fmt --all`, `cargo clippy --workspace --all-targets -D warnings` clean; `cargo test --workspace -- --include-ignored --skip lua_panic` with DCS's `lua.dll` on PATH: **128 lib + 10/10 jsonrpc_server + 4 + 12 + 1 + 1 + 2 + 3 + 5 all pass**. New coverage: `surface.rs::rt_guards_the_process_killing_dcs_getters` (block, dynamic spelling, pass-through, `pairs`, global read/write-through, late keys, DCS-swap re-guard, no-DCS state) and `tests/eval_guard.rs` (the `eval` RPC through the real registered handler). The real getter is untestable off-sim by definition, so a stub records whether it was ever called — it never is. OpenRPC goldens + `docs/03-reference/02-bridge-api-gui.md` regenerated for the two amended descriptions.
 
   **Live verification** (deployed from this tree, mission loaded, one launch, sim alive throughout and **no new `.crash`/`.dmp`**): `eval "return DCS.getMissionLoaded()"` → truthful `-32603`; under `pcall` → `ok=false` with the same message; `DCS["get".."MissionLoaded"]()` → blocked; `repl_eval` in `gui` **and** in `server` → `{ ok = false, err = … }`; `debug_run` on a chunk calling it → `ran = false` with a traceback, and its earlier `print("before")` still streamed to the console; `DCS.getMissionName()/getPause()/getModelTime()` → `A-10A - IA - Caucasus - Free flight/true/0`; `pairs(DCS)` → 223. Torn down with `DCS.exitProcess()`; deployment left as this tree's build. Logs archived in the session scratchpad as `c19-run1-CRASH-getMissionLoaded-{dcs,gui}.log` and `c19-verify-{dcs,gui}.log`.
+
+- **opus-getpause** (2026-07-30T13:05:00.000Z): **Review fixes — the blocker was real and the guard was one console line from being disabled for the rest of the session.**
+
+  **(1) The leak.** The memoized env table held `DCS` as a *present key*, so a chunk's bare `DCS = x` overwrote that slot in place — `__newindex` never fired — and the overwrite outlived the chunk: every later eval/inspect/export/watch in the state inherited it. Worse than "guard disabled": with the slot nil'd, reads of `DCS` fell through `__index` to `_G` and got the **real** table back, so the very next line could crash the sim. `chunk_env()` now builds a fresh env per chunk whose table stays permanently EMPTY (`__newindex` forwards, so nothing is ever stored in it): `DCS` is served from `__index` — always the current guarded view, via the still-memoized ~230-key snapshot — and a bare `DCS = x` is captured in a per-chunk local. Decided and documented semantics: **`DCS = x` is sandbox-local to the chunk that wrote it** — that chunk reads back its own value, the state's real `DCS` is left intact, and the next chunk gets the guard back. A user still cannot un-block the fatal getter for anyone but themselves, for one chunk. `RT.global_env()` now returns a fresh table too, so the debug engine takes it **once per evaluation** instead of per name lookup.
+
+  **Proved it discriminates**: with the old shared-env shape patched back in, the new assertions fail on the first one — `DCS = nil return type(DCS)` answered `"table"`, i.e. the real table, exactly the bypass described. Restored, and the suite passes.
+
+  **(2) Docs.** `repl_inspect` and `repl_export` now carry the guard note as well. The sentence is one `GUARD_NOTE` local in `gui_methods.lua` applied to all four Lua-running methods (`eval`, `repl_eval`, `repl_inspect`, `repl_export`) rather than four copies — and deliberately NOT added to `SHARED_META`, which the mission bridge shares and where there is no `DCS` table to guard. OpenRPC golden + `docs/03-reference/02-bridge-api-gui.md` regenerated; the mission doc is correctly unchanged.
+
+  **(3)** `guarded_dcs` now says out loud that `getmetatable(DCS).__index` (or `rawset` on `getfenv()`) reaches the real table, and that the threat model is the accident, not an adversary.
+
+  **Live sanity pass anyway** (main menu only, where the getter is harmless, so no crash risk was taken): redeployed from the tree, the block still answers with its full message, `DCS = nil return type(DCS)` → `"nil"` in that chunk while the next chunk sees `"table"` and is **still blocked**, and `getPause()/getModelTime()` → `true/0`. Sim torn down with `DCS.exitProcess()`; deployment left as this tree's build.
+
+  **Gates re-run**: `cargo fmt --all --check` clean, `clippy --workspace --all-targets -D warnings` clean, `cargo test --workspace -- --include-ignored --skip lua_panic` with DCS's `lua.dll` on PATH — 128 lib + **jsonrpc_server 10/10** + 4 + 12 + 1 + 1 + 2 + 3 + 5, no failures. No sim needed: the regression is off-sim by design, and the shipped guard is unchanged in behaviour for every path already live-verified above.
 
   **Worth reporting upstream to ED** — this is an engine bug (any user with the Lua console of *any* tool can take their sim down with it), and our guard only protects users going through DCS Studio.

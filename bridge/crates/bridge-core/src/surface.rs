@@ -524,6 +524,24 @@ mod tests {
             assert(RT.export_json("DCS.getMissionLoaded()", nil):find("^ERR:"), "export guarded")
             assert(REACHED == false, "no entry point reached the real function")
 
+            -- A bare `DCS = x` inside a chunk is sandbox-local: that chunk reads
+            -- back its own value, the state's real DCS is untouched, and — the
+            -- regression this covers — the NEXT chunk gets the guard back. A
+            -- shared env table would have let this one line disable the guard
+            -- for every later eval in the state.
+            local own = RT.eval_json("DCS = nil return type(DCS)")
+            assert(own:find('"result":"nil"'), "the writing chunk sees its own value: " .. own)
+            assert(type(DCS) == "table" and DCS.getMissionName ~= nil, "the real DCS survived")
+            assert(RT.eval_json("return type(DCS)"):find('"result":"table"'), "next chunk sees DCS")
+            local after = RT.eval_json("DCS.getMissionLoaded()")
+            assert(after:find('"ok":false') and after:find("getMissionLoaded"), "still guarded: " .. after)
+            assert(REACHED == false, "and still never called")
+
+            -- Same for overwriting it with a table of the user's own: local to
+            -- that chunk only.
+            RT.eval_json("DCS = { getMissionLoaded = function() return 'mine' end }")
+            assert(RT.eval_json("DCS.getMissionLoaded()"):find('"ok":false'), "no carry-over")
+
             -- Swapping the DCS table re-guards against the new one.
             DCS = { getMissionLoaded = function() REACHED = true end, fresh = 1 }
             assert(RT.eval_json("return DCS.fresh"):find('"result":1'), "new table visible")
