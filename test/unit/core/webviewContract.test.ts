@@ -1275,12 +1275,12 @@ describe("newproject — host -> webview", () => {
     const posted: NewProjectHostMessage[] = [];
 
     // `init` — driven through the boot handshake rather than `pushInit()`, since
-    // card 24 made the reply the same push; `browsed` — the picker's answer;
-    // `created` — a scaffold that worked.
+    // card 24 made the reply the same push; `browsed` — the picker's answer.
+    // A `create` that SUCCEEDS posts nothing at all (card 25), so it is driven
+    // below only for its failure.
     const h = newProjectHarness();
     await h.presenter.handle({ type: "ready" });
     await h.presenter.handle({ type: "browse", location: "E:\\Projects" });
-    await h.presenter.handle({ type: "create", name: "my-mod", location: "E:\\Projects" });
     posted.push(...h.posted);
 
     // `error` — the one path the panel survives, so it needs a world where the

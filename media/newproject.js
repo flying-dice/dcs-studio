@@ -210,9 +210,12 @@
       state.creating = false;
       state.error = m.message || "Something went wrong.";
       render();
-    } else if (m.type === "created") {
-      state.creating = false;
     }
+    // There is deliberately no success message to handle. A scaffold that WORKS
+    // ends with the host closing the panel or reloading the window, so the last
+    // thing this form should do is unlatch Create: the `creating` flag set in
+    // create() stays set until the document goes away, and a second submit is
+    // impossible for the whole of the teardown (card 25).
   });
 
   // The boot handshake, posted last — after the listener above exists, so the

@@ -219,7 +219,10 @@ describe("creating into a new folder", () => {
       "effect openFolder",
     ]);
     expect(h.effects).toEqual([{ kind: "openFolder", root: NEW_ROOT }]);
-    expect(h.posted).toEqual([{ type: "created" }]);
+    // Nothing is posted to a form that is about to be reloaded away — card 25
+    // removed the `created` message this used to assert. A push here would be
+    // unobservable at best, and at worst would unlatch Create during teardown.
+    expect(h.posted).toEqual([]);
   });
 
   it("substitutes empty strings for missing fields rather than throwing", async () => {
@@ -270,7 +273,9 @@ describe("bootstrapping the open folder in place", () => {
       "effect close",
       "effect authorManifest",
     ]);
-    expect(h.posted).toEqual([{ type: "created" }]);
+    // Nothing is posted here either: the panel is disposed on the way out
+    // (card 25). `error` is the only reply a `create` has.
+    expect(h.posted).toEqual([]);
     // No reload on this branch, so no breadcrumb is needed — and writing one
     // would open the manifest a second time on the next activation.
     expect(h.stored.has("pending")).toBe(false);

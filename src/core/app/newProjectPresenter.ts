@@ -159,7 +159,8 @@ export class NewProjectPresenter {
       const folder = this.deps.folder();
       if (inPlace && folder) {
         const { skipped } = await this.deps.scaffoldInPlace(template, name, folder);
-        this.deps.post({ type: "created" });
+        // Nothing is posted on success: this branch's next act is disposing the
+        // panel, so the only honest report is the close itself (card 25).
         this.deps.effect({ kind: "close" });
         if (skipped.length) {
           this.deps.effect({
@@ -173,7 +174,6 @@ export class NewProjectPresenter {
 
       const { root } = await this.deps.scaffoldNewFolder(template, name, location);
       await this.deps.rememberLocation(location);
-      this.deps.post({ type: "created" });
       // Both persists happen BEFORE the folder is opened: opening it reloads the
       // extension host, and the pending-open breadcrumb is what makes the
       // manifest and form appear on the other side of that reload.

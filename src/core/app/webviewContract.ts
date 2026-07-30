@@ -475,12 +475,13 @@ export type NewProjectHostMessage =
     } & InitialForm)
   | { type: "browsed"; path: string }
   /**
-   * The scaffold finished. Declared because both halves implement it, and
-   * `silent` in `NEWPROJECT_PROTOCOL` because all it does is drop the webview's
-   * "Creating…" latch — a latch nothing can outlive, since the host closes the
-   * panel or reloads the window immediately after (card 24).
+   * The one path the panel SURVIVES a `create`, which is why it is the only
+   * reply a `create` has: success ends in the panel being closed or the window
+   * reloaded, so there is nothing left to tell. A `created` message used to be
+   * declared here and posted on both success branches; it could never be
+   * observed and its only effect was to unlatch a form about to disappear, so
+   * card 25 removed it from both halves rather than inventing a pane for it.
    */
-  | { type: "created" }
   | { type: "error"; message: string };
 
 const NEWPROJECT_TO_HOST_KEYS: { readonly [K in NewProjectWebviewMessage["type"]]: true } = {
@@ -492,7 +493,6 @@ const NEWPROJECT_TO_HOST_KEYS: { readonly [K in NewProjectWebviewMessage["type"]
 const NEWPROJECT_TO_WEBVIEW_KEYS: { readonly [K in NewProjectHostMessage["type"]]: true } = {
   init: true,
   browsed: true,
-  created: true,
   error: true,
 };
 
@@ -790,9 +790,10 @@ export const NEWPROJECT_PROTOCOL: WebviewProtocol = {
   scripts: ["newproject.js"],
   toHost: Object.keys(NEWPROJECT_TO_HOST_KEYS),
   toWebview: Object.keys(NEWPROJECT_TO_WEBVIEW_KEYS),
-  // `created` only clears the script-local `creating` flag; the form it would
-  // re-enable is about to be closed or reloaded away, so it renders nothing.
-  silent: ["created"],
+  // Empty since card 25: this panel's one silent message was `created`, and the
+  // decision there was that a push nothing can render and nobody can observe is
+  // not a message. All three that remain redraw the form.
+  silent: [],
 };
 
 export const MANIFEST_PROTOCOL: WebviewProtocol = {
