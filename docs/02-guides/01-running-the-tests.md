@@ -125,6 +125,56 @@ Two standing conventions:
   defensive lines with a justification comment. Prefer restructuring so the line
   is reachable.
 
+## Mutation testing: `npm run mutate`
+
+Coverage says a line RAN. It never says a test would notice if that line were
+wrong. This repo's board journals are full of the missing half — dozens of
+hand-run entries reading "breaking X failed exactly test Y" — each recorded once
+by whoever wrote the code and then unmaintained, so the next refactor could
+quietly hollow out a guard and leave every gate green.
+
+`scripts/mutate.mjs` is that practice made repeatable. It holds a table of
+deliberate breakages, each paired with the gate that must NOTICE it. For each
+one it copies the target file aside, applies an **exact** string replacement,
+runs that gate, demands a non-zero exit, and restores the file from the copy.
+
+```sh
+npm run mutate                      # every mutation
+npm run mutate -- --list            # the table, no runs
+npm run mutate -- --only nav-ready-case   # one (repeatable)
+```
+
+Four properties worth knowing before you trust or extend it:
+
+- **Every gate is checked GREEN first.** A gate that is already red cannot
+  testify that a mutation broke anything, so a red baseline is reported as an
+  `ERROR` rather than counted as a kill. This is also why the gates are scoped
+  to the files that witness each mutation and not to whole layers: an
+  unprivileged Windows box has pre-existing `test:integration` failures that
+  would mark every mutation KILLED without ever running the mutated code.
+- **A `find` that no longer matches is a loud `ROTTED`, never a silent pass.**
+  The same goes for one that matches twice. If you reflow a guarded line, the
+  script tells you the table needs updating instead of quietly measuring
+  nothing. Anchor new entries on a decision's own words, not on punctuation.
+- **The restore never touches git.** It restores from the copy aside, in a
+  `finally` and on every fatal signal, and the run refuses to start if a target
+  file is already dirty — so a crash mid-run can never be confused with, or
+  overwrite, an edit in progress. Do not "improve" this into a `git checkout`.
+- **Rust/Lua entries SKIP without DCS's `lua.dll` on PATH**, with the reason
+  printed. Put `<DCS>\bin` on PATH to run them; a box without DCS gets an honest
+  partial run rather than a fraudulent green one.
+
+**When to run it: on demand, and after any refactor of a gated area** — the
+webview contract tables, the panel lifecycle helpers, the presenters, the
+bridge's teardown path, the embedded Lua. That is the moment the recorded
+evidence stops being true and the moment this script is worth its runtime.
+
+**It is deliberately NOT in CI's per-push path.** It applies ten mutations and
+runs a gate for each, including e2e and cargo, and it edits tracked files while
+it works — neither is something to put in front of every push. The suite it
+checks is already gated per push; this checks the gate itself, which is a
+question worth asking on a cadence rather than continuously.
+
 ## What the gates cannot see
 
 A coverage gate is only ever as complete as the file list it was given. A script

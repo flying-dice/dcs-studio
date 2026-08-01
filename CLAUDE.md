@@ -25,6 +25,13 @@ so **run them one at a time**. Concurrent runs share `coverage/**/.tmp` and
 corrupt each other's shards, and a line covered by the wrong layer reports
 green. Full guide: [docs/02-guides/01-running-the-tests.md](docs/02-guides/01-running-the-tests.md).
 
+**Coverage says a line ran, not that a test would notice it being wrong.**
+`npm run mutate` answers the second question: a table of deliberate breakages,
+each with the gate that must go red. Run it on demand and **after refactoring a
+gated area** — contract tables, panel lifecycle, presenters, bridge teardown,
+embedded Lua. Not in CI's per-push path, by design. Details and the rules for
+extending the table: [docs/02-guides/01-running-the-tests.md](docs/02-guides/01-running-the-tests.md).
+
 Three things that will otherwise cost you an afternoon:
 
 - **Never `vitest run --coverage` at the repo root.** It silently discards every
