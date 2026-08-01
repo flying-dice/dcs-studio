@@ -222,20 +222,25 @@ Evidence trail: issue #69 and board cards 16–21 (16 log level, 17 pump stalene
 
 ## Testing & coverage
 
-Three layers, each runnable on its own command, each gating its own coverage at
-**100% per file** over an include set that does not overlap the others'. A gap in
-one layer can therefore never be masked by another layer happening to execute the
-same line.
+**Four** layers, each runnable on its own command, each gating its own coverage over
+an include set that does not overlap the others' ([decision 05](decisions/05-four-disjoint-test-layers-each-at-100.md)).
+A gap in one layer can therefore never be masked by another layer happening to
+execute the same line. The three JavaScript layers gate at **100% per file**; the
+Rust layer gates lines and functions at 100 and regions at 99.5 (the floor is
+explained in `.github/workflows/ci.yml`).
 
 | Layer | Command | Tests live in | Gates coverage of |
 |---|---|---|---|
 | Unit | `npm run test:unit` | `test/unit/**` | `src/core/**`, `media/*-core.js` |
 | Integration | `npm run test:integration` | `test/integration/**` | `src/**` minus the hexagon |
 | E2E | `npm run test:e2e` | `tests/**` | `media/*.js` in real Chromium |
+| Rust | `cargo test --workspace` | `bridge/crates/**` | the bridge workspace (`cargo llvm-cov`) |
 
-`npm test` runs all three in sequence; `npm run coverage` does the same with each
-gate enforced. CI runs one job per layer, plus `cargo llvm-cov` for the Rust bridge
-and a Windows job that re-runs the headless layers on the shipping OS.
+`npm test` runs the three JavaScript layers in sequence; `npm run coverage` does
+the same with each gate enforced. CI runs one job per layer, plus `cargo llvm-cov`
+for the Rust bridge and a Windows job that re-runs the headless layers on the
+shipping OS. Operational detail — prerequisites, and which layer a new test belongs
+in — is [docs/02-guides/01-running-the-tests.md](docs/02-guides/01-running-the-tests.md).
 
 **Run the gates serially, and never two `cargo llvm-cov` invocations at once.**
 Both matter for the same reason — a gate that reports the wrong answer is worse
