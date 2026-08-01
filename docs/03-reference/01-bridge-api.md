@@ -69,6 +69,13 @@ Endpoints on each port (both transports carry the same JSON-RPC protocol):
   `status`, `version`, `pump_idle_ms`, `pump_stalled`, `queue_depth`,
   `queue_capacity`)
 
+Both transports cap a body at **32 MB** — stated by the bridge rather than
+inherited from the web framework's defaults (which are 2 MB for HTTP and 64 KB
+for a WebSocket frame). Over that, `POST /rpc` answers `413` from the
+`Content-Length` alone and the WebSocket session is closed. Nothing the editor
+sends comes near it: anything that would genuinely be tens of megabytes
+(`db_export`, `repl_export`) writes a file and returns its path instead.
+
 Three rules that bite first-time callers:
 
 - The request `id` **must be a string** (or absent for a notification) — a

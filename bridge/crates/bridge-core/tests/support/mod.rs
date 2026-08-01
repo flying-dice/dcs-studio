@@ -94,6 +94,33 @@ impl Ws {
         self.stream.write_all(&frame)
     }
 
+    /// Send a text frame of exactly `len` bytes of filler — the lever for the
+    /// frame-size limit.
+    ///
+    /// It has to be a WHOLE frame: actix's WebSocket codec checks the length
+    /// against its maximum only once the frame has arrived, so a header that
+    /// merely *declares* an over-limit size is buffered rather than refused and
+    /// would prove nothing. The payload is `len` zero bytes, which after masking
+    /// is the mask key repeated — so this writes megabytes without building
+    /// them byte by byte.
+    pub fn send_filler_text(&mut self, len: usize) -> std::io::Result<()> {
+        const MASK: [u8; 4] = [0x12, 0x34, 0x56, 0x78];
+        let mut header = vec![0x81u8]; // FIN + text
+        header.push(0x80 | 0x7f); // 127: 64-bit extended payload length
+        header.extend_from_slice(&(len as u64).to_be_bytes());
+        header.extend_from_slice(&MASK);
+        self.stream.write_all(&header)?;
+
+        let block: Vec<u8> = MASK.iter().copied().cycle().take(64 * 1024).collect();
+        let mut written = 0;
+        while written < len {
+            let chunk = block.len().min(len - written);
+            self.stream.write_all(&block[..chunk])?;
+            written += chunk;
+        }
+        Ok(())
+    }
+
     /// Send one masked frame with an arbitrary opcode — the lever for the
     /// control and binary frames the read loop has to handle.
     pub fn send_frame(&mut self, opcode: u8, payload: &[u8]) -> std::io::Result<()> {

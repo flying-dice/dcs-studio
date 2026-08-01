@@ -507,6 +507,9 @@ fn serve_until_stopped(
                 .service(get_health)
                 .service(post_rpc)
                 .app_data(Data::clone(&app_data))
+                // The `Json` extractor's own limit, stated rather than
+                // inherited — actix's default is 2 MB. See `MAX_PAYLOAD_BYTES`.
+                .app_data(actix_web::web::JsonConfig::default().limit(MAX_PAYLOAD_BYTES))
         })
         .workers(1)
         .bind((host, port));
@@ -874,6 +877,38 @@ enum Queued {
 /// logs at `warn` rather than silently coping.
 const QUEUE_CAP: usize = 256;
 
+/// The largest body this bridge will accept on either transport.
+///
+/// Declared rather than inherited. Both frameworks pick a default and both
+/// defaults are wrong here in opposite directions: actix-web's `Json` extractor
+/// caps a payload at 2 MB and actix-ws caps a WebSocket frame at 64 KB, so the
+/// exposure — and the capability — moved silently with a dependency bump. A
+/// number written down here is one a review can argue with.
+///
+/// 32 MB is sized against the largest legitimate payload rather than against
+/// generosity: a mission `.miz`'s decoded mission table is the biggest thing
+/// that crosses this boundary, and `db_export`/`repl_export` deliberately do NOT
+/// — they write a file and return its path precisely so a tens-of-megabytes dump
+/// never rides the socket. So this is an order of magnitude above what any
+/// designed call sends, and still a bound: the request is buffered in the sim's
+/// own process, and "as much as the client feels like" is not a size.
+///
+/// Over-limit is a clean refusal on both transports: `413` on `POST /rpc`,
+/// decided from `Content-Length` before a byte of body is read, and a protocol
+/// close on the WebSocket.
+///
+/// The WebSocket half is a bound on buffering rather than a promise about it —
+/// actix's frame codec compares the length against the maximum only once the
+/// frame has arrived, and reserves up to the maximum while it waits. So a
+/// client that declares 32 MB makes this process reserve 32 MB before being
+/// told no. That is a deliberate trade rather than an oversight: both listeners
+/// are bound to loopback and the caller is the user's own editor, so the
+/// exposure is a buggy local client rather than an attacker, and the cost of
+/// the alternative is refusing the largest payload the editor legitimately has.
+/// Anything that would genuinely be tens of megabytes — `db_export`,
+/// `repl_export` — already writes a file and returns its path instead.
+const MAX_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
+
 /// Offer `request` to the queue, refusing it outright when the pump is stale or
 /// the queue is full.
 ///
@@ -1068,11 +1103,29 @@ async fn get_ws(
     data: Data<Mutex<AppData>>,
 ) -> actix_web::Result<HttpResponse> {
     let (response, mut session, mut msg_stream) = actix_ws::handle(&req, body)?;
+    // Stated rather than inherited, and a raise as well as a bound: actix-ws
+    // defaults to 64 KB, which no mission table fits in. See
+    // `MAX_PAYLOAD_BYTES`.
+    msg_stream = msg_stream.max_frame_size(MAX_PAYLOAD_BYTES);
 
     info!("WebSocket connection established");
 
     spawn_local(async move {
-        while let Some(Ok(msg)) = msg_stream.recv().await {
+        while let Some(frame) = msg_stream.recv().await {
+            let msg = match frame {
+                Ok(msg) => msg,
+                // A protocol error — an over-limit frame is the one this bridge
+                // declares — is the end of THIS session and nothing more. Say so
+                // to the peer rather than dropping the socket silently: a client
+                // that sent something too big needs to learn that, and the
+                // alternative is an editor waiting on a reply that will never
+                // come.
+                Err(cause) => {
+                    warn!("jsonrpc: ending the WebSocket session: {cause}");
+                    let _ = session.close(None).await;
+                    break;
+                }
+            };
             match msg {
                 Message::Text(text) => {
                     // Enqueue the request IN ORDER (synchronously) but await its

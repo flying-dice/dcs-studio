@@ -486,6 +486,92 @@ fn a_plain_get_on_the_websocket_route_is_refused_and_the_bridge_survives() {
     bridge.shutdown(true);
 }
 
+/// One byte past the limit both transports declare.
+const OVER_LIMIT: usize = 32 * 1024 * 1024 + 1;
+
+/// **Both transports declare their own size limit, and refuse over it cleanly.**
+///
+/// The limits used to be whatever the two frameworks happened to default to —
+/// 2 MB for actix-web's `Json` extractor, 64 KB for an actix-ws frame — which
+/// meant the bridge's exposure, and its capability, moved with a dependency
+/// bump nobody would connect to it. 32 MB is now stated in one place.
+///
+/// The refusal must come from the DECLARED length, before the body is read: a
+/// server that read first could be made to hold 32 MB by a client that sends a
+/// header and then nothing, which is a hang rather than a refusal. So both
+/// halves here declare a size and send no payload at all, and a bridge that
+/// waited for one would fail this test by timing out rather than by asserting.
+///
+/// That ordinary, in-limit bodies still work is asserted by every sibling test
+/// in this file, so it is not repeated here — and it could not be asserted the
+/// same way in any case, since a declared-but-unsent body inside the limit is a
+/// hang by construction.
+///
+/// And the bridge survives both: one refused request or one ended session must
+/// never cost the single actix worker, which is the whole bridge for the rest
+/// of the DCS session.
+#[test]
+#[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+fn an_over_limit_body_is_refused_on_both_transports_without_reading_it() {
+    let _serial = serially();
+    let bridge = Bridge::start(5);
+
+    // POST /rpc: a declared Content-Length past the limit, and no body. actix
+    // answers 413 from the header alone.
+    let (status, _body) = support::http(
+        bridge.port,
+        &format!(
+            "POST /rpc HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+             Content-Length: {OVER_LIMIT}\r\nConnection: close\r\n\r\n"
+        ),
+    );
+    assert!(
+        status.contains("413"),
+        "an over-limit body must be refused with a status, not read: {status}"
+    );
+
+    // The WebSocket: a whole text frame one byte past the limit. It has to be a
+    // whole one — actix's codec checks the size only once the frame has arrived,
+    // so a header that merely declares an over-limit length is buffered rather
+    // than refused, which is worth knowing and is why the limit is a bound on
+    // buffering rather than a promise about it.
+    let mut ws = connect_ws(bridge.port);
+    ws.send(&rpc("before", "echo", "{}")).expect("send");
+    assert!(
+        bridge
+            .pump_until(
+                || ws.await_id("before", Duration::from_millis(50)),
+                Duration::from_secs(10)
+            )
+            .is_some(),
+        "the session is healthy before the oversized frame"
+    );
+    ws.send_filler_text(OVER_LIMIT)
+        .expect("send an over-limit frame");
+    assert!(
+        ws.wait_until_closed(Duration::from_secs(10)),
+        "the session must be ENDED rather than left open having silently \n         discarded a frame the client believes it sent"
+    );
+
+    // And the bridge itself is untouched: a new session serves.
+    let (health, body) = get(bridge.port, "/health");
+    assert!(health.contains("200"), "{health}");
+    assert!(body.contains(r#""status":"OK""#), "{body}");
+    let mut next = connect_ws(bridge.port);
+    next.send(&rpc("after", "echo", "{}")).expect("send");
+    assert!(
+        bridge
+            .pump_until(
+                || next.await_id("after", Duration::from_millis(50)),
+                Duration::from_secs(10)
+            )
+            .is_some(),
+        "one client's oversized frame must not cost the bridge its worker"
+    );
+
+    bridge.shutdown(true);
+}
+
 /// The WebSocket read loop is the editor's long-lived connection. Requests,
 /// notifications, failing handlers, unserializable results, `rpc.discover`, and
 /// one malformed frame all have to be survivable — a dropped session mid-debug
