@@ -235,36 +235,36 @@ jobs:
       # CI and a developer's machine run the identical command, and so this job
       # keeps working if it is ever split or matrixed. The script cds into
       # bridge/ itself, hence no working-directory.
-      # Lines are gated by COUNT, not percent, and the count is 2. Not a
-      # softened floor — a tighter one: `--fail-under-lines 100` passes on a
-      # 5127-line workspace only at zero misses, and `--fail-uncovered-lines 2`
-      # fails on the third, so this cannot drift upward the way a percentage
-      # can as the file count grows.
+      # Lines are gated by COUNT at ZERO, not by percent. There is no allowance:
+      # one uncovered line fails the build.
       #
-      # Those 2 are a measured artefact of llvm-cov's views disagreeing with
-      # each other, not dead code, and the number is EXACTLY at the boundary:
-      # bisected on this profile, the gate fails at 1 and passes at 2.
+      # An earlier version of this comment allowed 2 and called them an
+      # unlocatable artefact of llvm-cov's views disagreeing. That was wrong,
+      # and the way it was wrong is worth keeping: the 2 were real, they were
+      # `let ... else { panic!(..) }` failure arms in TEST code, and
+      # `--show-missing-lines` does not print all of them — so "I cannot find
+      # it" got mistaken for "it is not there". They are gone, and with them the
+      # allowance.
       #
-      # The disagreement, for whoever hits it next. `llvm-cov report` computes a
-      # file's line summary over each function record's whole span — blank
-      # lines, comments and braces included — and prints 4 missed of 5380, all
-      # in crates/bridge-core/src/jsonrpc/server.rs. cargo-llvm-cov's own
-      # uncovered-lines count over the same profile is 2. And `llvm-cov show`
-      # says every mapped line in that file is covered: the text and HTML
-      # reports (with --show-instantiations) mark nothing red, and the JSON
-      # export holds no zero-count region in the file at all, in any
-      # instantiation. There is no line to point a test at, in any of the three.
+      # A let-else failure arm can never be covered by construction: it runs
+      # only when the test it guards is already broken. Destructure with a total
+      # helper returning `Option` plus `expect` instead — `refusal_of` /
+      # `waiting_on` in jsonrpc::server::tests are the pattern — so the
+      # assertion sits on a line that actually runs.
       #
-      # Two things pin this as an artefact rather than a hiding place. It
-      # predates the regression it was found during: the run that reported 26
-      # missed lines yielded only 24 locatable ones, the same 2 over. And every
-      # other file in the workspace reports zero missed lines while showing the
-      # same report-vs-show line-count gap. If a later change makes these
-      # locatable, delete the allowance rather than growing it.
+      # Count rather than percent because a percentage floor loosens as the
+      # workspace grows: 100% of 5449 lines and 100% of 20000 are the same
+      # gate, but 99.9% of the second forgives twenty lines. Note that
+      # `--fail-under-lines 100` CANNOT be used here — it reads the percentage
+      # off `llvm-cov report`'s own table, which counts a function record's
+      # whole span (blank lines, comments, braces) and still shows 2 missed of
+      # 5449 where every other view shows none. That table gap is the real
+      # artefact; cargo-llvm-cov's uncovered-lines count, which this flag uses,
+      # tracks actual uncovered lines and is at 0.
       - name: Rust tests + coverage gate
         run: >-
           node scripts/llvm-cov.mjs --workspace
-          --fail-uncovered-lines 2 --fail-under-functions 100 --fail-under-regions 99.5
+          --fail-uncovered-lines 0 --fail-under-functions 100 --fail-under-regions 99.5
 
   windows:
     name: Shipping target (Windows)

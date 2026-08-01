@@ -1773,9 +1773,34 @@ mod tests {
         )))
     }
 
-    /// Backdate the pump stamp by `idle`, i.e. "nothing has drained this queue for
-    /// `idle`" — the state a held breakpoint or a paused sim leaves the other
-    /// bridge in, without waiting for real time to pass.
+    /// The refusal envelope a [`Queued`] carries, or `None` if it was not a
+    /// refusal at all.
+    ///
+    /// Total on purpose, and the reason these exist rather than
+    /// `let Queued::PumpStalled(x) = q else { panic!(..) }`: a let-else failure
+    /// arm is a line that only ever runs when the test is ALREADY broken, so it
+    /// can never be covered, and an uncovered line in a suite gated at zero
+    /// reports as a coverage regression while saying nothing about the code.
+    /// `Option` + `expect` puts the same assertion on a line that does run.
+    fn refusal_of(queued: Queued) -> Option<Box<JsonRpcResponse>> {
+        match queued {
+            Queued::PumpStalled(response) => Some(response),
+            Queued::Waiting(_) | Queued::Accepted | Queued::Dropped => None,
+        }
+    }
+
+    /// The channel a [`Queued`] left for its caller to await, or `None` when
+    /// there is nobody waiting. Total for the same reason as [`refusal_of`].
+    fn waiting_on(queued: Queued) -> Option<tokio::sync::oneshot::Receiver<JsonRpcResponse>> {
+        match queued {
+            Queued::Waiting(receiver) => Some(receiver),
+            Queued::PumpStalled(_) | Queued::Accepted | Queued::Dropped => None,
+        }
+    }
+
+    /// Backdate the pump stamp by `idle`, i.e. "nothing has drained this queue
+    /// for `idle`" — the state a held breakpoint or a paused sim leaves the
+    /// other bridge in, without waiting for real time to pass.
     fn pretend_idle_for(data: &Data<Mutex<AppData>>, idle: Duration) {
         let mut guard = lock_app_data(data);
         guard.last_drained = std::time::Instant::now()
@@ -2318,9 +2343,8 @@ mod tests {
         let (queued, _) =
             enqueue_text_frame(r#"{"jsonrpc":"2.0","id":"w","method":"eval"}"#, &data)
                 .expect("a well-formed frame");
-        let Queued::PumpStalled(response) = queued else {
-            panic!("a stalled pump must refuse the frame, not queue it");
-        };
+        let response =
+            refusal_of(queued).expect("a stalled pump must refuse the frame, not queue it");
         assert_eq!(response.id, "w");
         assert_eq!(
             response.error.expect("error")["code"],
@@ -2482,22 +2506,26 @@ mod tests {
         let data = app_data(); // the staleness refusal is off here
 
         for n in 0..QUEUE_CAP {
-            assert!(matches!(
-                accept_request(
-                    &mut lock_app_data(&data),
-                    request(None, &format!("n{n}"), None)
-                ),
-                Queued::Accepted
-            ));
+            let queued = accept_request(
+                &mut lock_app_data(&data),
+                request(None, &format!("n{n}"), None),
+            );
+            assert!(
+                refusal_of(queued).is_none(),
+                "a queue with room left refuses nothing"
+            );
         }
+        // ... and every one of them was QUEUED rather than quietly discarded,
+        // which is what makes the count above an assertion and not a hope.
         assert_eq!(lock_app_data(&data).rpc_queue.len(), QUEUE_CAP);
 
         // One more notification: the queue does not grow, the OLDEST goes, and
         // the newest is what was kept — the recent state is the interesting one.
-        assert!(matches!(
-            accept_request(&mut lock_app_data(&data), request(None, "newest", None)),
-            Queued::Accepted
-        ));
+        let newest = accept_request(&mut lock_app_data(&data), request(None, "newest", None));
+        assert!(
+            waiting_on(newest).is_none(),
+            "a notification is queued with nobody waiting on it"
+        );
         let guard = lock_app_data(&data);
         assert_eq!(guard.rpc_queue.len(), QUEUE_CAP, "the cap holds");
         assert_eq!(
@@ -2514,11 +2542,9 @@ mod tests {
         // A request arriving at the full queue is ANSWERED, not queued and not
         // dropped: -32002 with the real reason, and nothing already queued is
         // displaced to make room for it.
-        let Queued::PumpStalled(refusal) =
-            accept_request(&mut lock_app_data(&data), request(Some("r"), "eval", None))
-        else {
-            panic!("a request at a full queue must be answered, not swallowed");
-        };
+        let refused = accept_request(&mut lock_app_data(&data), request(Some("r"), "eval", None));
+        let refusal =
+            refusal_of(refused).expect("a request at a full queue must be answered, not swallowed");
         assert_eq!(refusal.id, "r");
         let error = refusal.error.expect("an error envelope");
         assert_eq!(error["code"], JSON_RPC_PUMP_STALLED);
@@ -2548,13 +2574,11 @@ mod tests {
         let data = app_data();
         let mut waiting = Vec::new();
         for n in 0..QUEUE_CAP {
-            let Queued::Waiting(receiver) = accept_request(
+            let queued = accept_request(
                 &mut lock_app_data(&data),
                 request(Some(&n.to_string()), "eval", None),
-            ) else {
-                panic!("a fresh queue takes requests");
-            };
-            waiting.push(receiver);
+            );
+            waiting.push(waiting_on(queued).expect("a fresh queue takes requests"));
         }
 
         let app =
@@ -2805,8 +2829,15 @@ mod tests {
         let params =
             serde_json::json!({ "a": [1, 2, 3], "b": "some text long enough to allocate" });
 
-        let mut answered_with_the_failure = false;
-        for headroom in (0..64_000).step_by(8) {
+        // Where the allocator gives out depends on the state's settled heap, so
+        // the ceiling is swept until one bites rather than guessed. `find_map`
+        // rather than a loop with a `break`: a `break` leaves the block's own
+        // closing brace reachable only when the test is failing, which is an
+        // uncovered line that says nothing.
+        //
+        // Every pass asserts the caller was answered at all — an unanswered one
+        // is the exact bug — and yields the error envelope when the squeeze bit.
+        let squeezed = (0..64_000).step_by(8).find_map(|headroom| {
             lua.gc_collect().expect("collect");
             let ceiling = lua.used_memory() + headroom;
             lua.set_memory_limit(ceiling)
@@ -2826,25 +2857,20 @@ mod tests {
             let answer = receiver
                 .blocking_recv()
                 .expect("the caller must be answered either way, never left hanging");
-            if let Some(error) = answer.error {
-                assert_eq!(answer.id, "squeezed");
-                assert_eq!(error["code"], JSON_RPC_INTERNAL_ERROR);
-                assert_eq!(
-                    error["message"], "not dispatched",
-                    "distinct from a handler that raised — the editor needs to \
-                     tell 'it ran and failed' from 'it never ran': {error}"
-                );
-                let detail = error["data"].as_str().expect("a cause");
-                assert!(detail.contains("echo"), "names the call: {detail}");
-                assert!(detail.contains("memory"), "and the real cause: {detail}");
-                answered_with_the_failure = true;
-                break;
-            }
-        }
-        assert!(
-            answered_with_the_failure,
-            "the squeeze never bit, so this test proves nothing"
+            assert_eq!(answer.id, "squeezed");
+            answer.error
+        });
+
+        let error = squeezed.expect("the squeeze never bit, so this test proves nothing");
+        assert_eq!(error["code"], JSON_RPC_INTERNAL_ERROR);
+        assert_eq!(
+            error["message"], "not dispatched",
+            "distinct from a handler that raised — the editor needs to \
+             tell 'it ran and failed' from 'it never ran': {error}"
         );
+        let detail = error["data"].as_str().expect("a cause");
+        assert!(detail.contains("echo"), "names the call: {detail}");
+        assert!(detail.contains("memory"), "and the real cause: {detail}");
 
         // And a notification that cannot be dispatched has nobody to tell, which
         // must still not stop the drain.

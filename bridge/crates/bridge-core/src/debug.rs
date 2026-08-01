@@ -328,7 +328,13 @@ pub fn register(sub: &mut Sub) -> Result<()> {
         |lua: &Lua, ms: f64| {
             // Clamped rather than trusted: this parks the sim thread, so a
             // typo'd or computed argument must not be able to hold it for a
-            // minute. NaN falls through `clamp` to the low end.
+            // minute.
+            //
+            // NaN is taken BEFORE the clamp, not by it. `clamp` hands NaN
+            // straight back — every comparison against NaN is false — and
+            // `Duration::from_secs_f64` PANICS on NaN. That panic would be on
+            // the sim thread inside DCS, i.e. a crash rather than a bad sleep,
+            // and `0/0` is one arithmetic slip away in a Lua caller.
             let ms = if ms.is_nan() {
                 0.0
             } else {
@@ -759,6 +765,13 @@ mod tests {
             dbg.sleep_ms(-5)
             dbg.sleep_ms(0)
             dbg.sleep_ms(1e9)
+            -- NaN is the one a clamp does NOT catch: it compares false against
+            -- both bounds and comes back out unchanged, and the Duration it
+            -- would then build PANICS. On the sim thread, inside DCS. `0/0` is
+            -- one arithmetic slip away in a caller, so it is driven across the
+            -- boundary for real rather than reasoned about — reaching the next
+            -- line at all is the assertion.
+            dbg.sleep_ms(0/0)
             local capped = dbg.monotonic() - t0
             assert(capped < 3, "a huge sleep was capped, not honoured: " .. capped)
 
