@@ -19,10 +19,13 @@ import type { BridgeClient } from "./client";
 // menu" correctly. #32's premise was overtaken by events and the issue closed.
 //
 // Where connectedness still is not liveness is a paused sim or the briefing
-// screen — the state exists, the model-time pump does not run. The bridge now
-// reports that itself, in /health's `pump_idle_ms` and `pump_stalled`; a
-// caller wanting to know whether a call will be *served* rather than merely
-// accepted should read those rather than this socket's state.
+// screen — the state exists, the model-time pump does not run. That gap is now
+// carried in the status itself rather than left to callers to infer: each
+// client reads the bridge's own `-32002` refusals off the replies it already
+// receives and reports `stalled`, which `combinedState`/`statusBarView` render
+// as a state of their own. `/health`'s `pump_idle_ms`/`pump_stalled` say the
+// same thing over HTTP and are the right probe for a script or a live session;
+// the editor gets it from the WebSocket it is already holding.
 export class BridgeClients implements BridgeRouterPort {
   constructor(
     readonly gui: BridgeClient,

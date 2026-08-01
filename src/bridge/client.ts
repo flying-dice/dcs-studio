@@ -9,9 +9,10 @@ import {
   GUI_BRIDGE_PORT,
   INITIAL_BRIDGE_STATUS,
   nextBackoff,
-  PING_INTERVAL_MS,
   PING_TIMEOUT_MS,
   parseResponse,
+  pingIntervalFor,
+  pumpStateFromReply,
 } from "../core/domain/bridgeProtocol";
 import type {
   DebugEnv,
@@ -57,7 +58,9 @@ export class BridgeClient implements DebugBridgePort {
   private conn: BridgeConnection | undefined;
   private nextId = 1;
   private readonly pending = new Map<string, Pending>();
-  private pingTimer: ReturnType<typeof setInterval> | undefined;
+  // A rescheduled timeout rather than an interval: the cadence is a function of
+  // the pump's state (`pingIntervalFor`), so it has to be re-decided each tick.
+  private pingTimer: ReturnType<typeof setTimeout> | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private backoff = BRIDGE_INITIAL_BACKOFF_MS;
   private disposed = false;
@@ -315,7 +318,7 @@ export class BridgeClient implements DebugBridgePort {
       {
         onOpen: () => {
           this.backoff = BRIDGE_INITIAL_BACKOFF_MS;
-          this.emit({ connected: true });
+          this.emit({ connected: true, stalled: false });
           this.startPing();
         },
         onMessage: (data) => this.onMessage(data),
@@ -329,7 +332,9 @@ export class BridgeClient implements DebugBridgePort {
     this.stopPing();
     this.failAll(`${this.label} disconnected`);
     this.conn = undefined;
-    this.emit({ connected: false, dcsTime: null });
+    // A bridge that is gone has no pump to describe: the stall is cleared with
+    // the connection so a reconnect never inherits the last session's verdict.
+    this.emit({ connected: false, dcsTime: null, stalled: false });
     this.scheduleReconnect();
   }
 
@@ -345,25 +350,53 @@ export class BridgeClient implements DebugBridgePort {
 
   private startPing(): void {
     this.stopPing();
-    const tick = async () => {
-      try {
-        const r = (await this.call("ping", undefined, PING_TIMEOUT_MS)) as
-          | { dcs_time?: number }
-          | undefined;
-        this.emit({ dcsTime: dcsTimeFromPing(r) });
-      } catch {
-        /* a real drop is handled by onDisconnect; a lone timeout is ignored */
-      }
-    };
-    void tick();
-    this.pingTimer = setInterval(() => void tick(), PING_INTERVAL_MS);
+    void this.pingTick();
+  }
+
+  private async pingTick(): Promise<void> {
+    try {
+      const r = (await this.call("ping", undefined, PING_TIMEOUT_MS)) as
+        | { dcs_time?: number }
+        | undefined;
+      this.emit({ dcsTime: dcsTimeFromPing(r) });
+    } catch {
+      /* a real drop is handled by onDisconnect; a lone timeout is ignored, and
+         a -32002 refusal has already been read off the reply in onMessage */
+    }
+    this.schedulePing();
+  }
+
+  /** Arm the next ping at the cadence the pump's current state deserves. */
+  private schedulePing(): void {
+    this.stopPing();
+    // A tick can land after a close or a dispose (the awaited call rejects, then
+    // this runs) — re-arming there would ping a socket that is gone.
+    if (this.disposed || !this.conn) return;
+    this.pingTimer = setTimeout(() => void this.pingTick(), pingIntervalFor(this.status.stalled));
   }
 
   private stopPing(): void {
     if (this.pingTimer) {
-      clearInterval(this.pingTimer);
+      clearTimeout(this.pingTimer);
       this.pingTimer = undefined;
     }
+  }
+
+  /**
+   * Fold one reply's pump evidence into the status.
+   *
+   * Every reply is evidence, not just the ping's — which is what keeps the
+   * backoff from costing recovery latency. A user stepping in the debugger or
+   * running a console eval clears a stall the instant their call is served,
+   * rather than up to `PING_STALLED_INTERVAL_MS` later, and the change of state
+   * re-arms the ping at the new cadence immediately rather than at the end of
+   * whatever interval is currently running.
+   */
+  private observePump(code: number | undefined): void {
+    const stalled = pumpStateFromReply(code);
+    if (stalled === null || stalled === this.status.stalled) return;
+    this.emit({ stalled });
+    if (this.pingTimer) this.schedulePing();
   }
 
   private onMessage(data: string): void {
@@ -375,8 +408,14 @@ export class BridgeClient implements DebugBridgePort {
     clearTimeout(p.timer);
     // A server-assigned code travels with the rejection: callers need it to
     // tell "the mission ended" from "the bridge is broken".
-    if (parsed.kind === "error") p.reject(new BridgeRpcError(parsed.message, parsed.code));
-    else p.resolve(parsed.result);
+    if (parsed.kind === "error") {
+      this.observePump(parsed.code);
+      p.reject(new BridgeRpcError(parsed.message, parsed.code));
+    } else {
+      // A result could only have been produced by a drain that ran.
+      this.observePump(undefined);
+      p.resolve(parsed.result);
+    }
   }
 
   private failAll(reason: string): void {
