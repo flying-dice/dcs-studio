@@ -30,6 +30,15 @@ export default defineConfig({
         ...devices["Desktop Chrome"],
         // Images that ship their own Chromium (CI containers, nix, locked-down
         // corporate builds) can point at it instead of Playwright's download.
+        //
+        // The revision is pinned by the @playwright/test version, not by this
+        // file: 1.62.1 wants chromium-1234, where 1.61.1 wanted 1228. So a
+        // hardcoded PW_CHROMIUM_PATH goes stale on a Playwright bump and the
+        // whole suite fails to launch. Leave it unset and let Playwright
+        // resolve its own download (`npx playwright install chromium` after a
+        // bump); set it only when there is a browser Playwright cannot find.
+        // On Windows the cache is
+        // %LOCALAPPDATA%\ms-playwright\chromium-<rev>\chrome-win64\chrome.exe.
         ...(process.env.PW_CHROMIUM_PATH
           ? { launchOptions: { executablePath: process.env.PW_CHROMIUM_PATH } }
           : {}),

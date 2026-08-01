@@ -172,19 +172,17 @@ describe("parseToml — [project] scalars are normalised to text", () => {
   // consumer of the modeled [project] fields treats them as strings and calls
   // .trim() on them — the form's issues() and publish preflight both did, and
   // both threw. The parser is the one boundary that can make them all safe.
-  it.each([
-    "name",
-    "version",
-    "author",
-    "description",
-  ])("keeps a bare integer %s as its literal text", (key) => {
-    const model = parseToml(`[project]\n${key} = 2024\n`);
-    expect(model.project[key]).toBe("2024");
-    // The `as string` is the claim under test: a consumer that believes the
-    // modeled fields are text calls .trim() on them, and this is what would
-    // throw if the parser handed back the integer TOML says it is.
-    expect(() => (model.project[key] as string).trim()).not.toThrow();
-  });
+  it.each(["name", "version", "author", "description"])(
+    "keeps a bare integer %s as its literal text",
+    (key) => {
+      const model = parseToml(`[project]\n${key} = 2024\n`);
+      expect(model.project[key]).toBe("2024");
+      // The `as string` is the claim under test: a consumer that believes the
+      // modeled fields are text calls .trim() on them, and this is what would
+      // throw if the parser handed back the integer TOML says it is.
+      expect(() => (model.project[key] as string).trim()).not.toThrow();
+    },
+  );
 
   it.each([
     ["a negative integer", "-7", "-7"],
@@ -389,16 +387,16 @@ describe("staysUnder (webview copy)", () => {
     }
   });
 
-  it.each(CONTAINMENT_CASES.dest)("reduces $dest to $relative like the domain copy — $why", ({
-    dest,
-    relative,
-  }) => {
-    // splitDest is the webview's destRelative: same token rule, and the same
-    // separator strip. The form shows the author where a link will land, so a
-    // disagreement here is the form promising a path the installer refuses.
-    expect(splitDest(dest).rest).toBe(relative);
-    expect(destStaysUnder(dest)).toBe(domainDestStaysUnder(dest));
-  });
+  it.each(CONTAINMENT_CASES.dest)(
+    "reduces $dest to $relative like the domain copy — $why",
+    ({ dest, relative }) => {
+      // splitDest is the webview's destRelative: same token rule, and the same
+      // separator strip. The form shows the author where a link will land, so a
+      // disagreement here is the form promising a path the installer refuses.
+      expect(splitDest(dest).rest).toBe(relative);
+      expect(destStaysUnder(dest)).toBe(domainDestStaysUnder(dest));
+    },
+  );
 });
 
 describe("UMD wrapper", () => {
