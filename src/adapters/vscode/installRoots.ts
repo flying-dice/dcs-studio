@@ -21,8 +21,8 @@ export class VsCodeInstallRoots implements InstallRootsPort {
   savedGames(): string {
     const configured = this.setting("savedGamesPath");
     if (configured) return configured;
-    const candidates = savedGamesCandidates(this.home());
-    return candidates.find((c) => fs.existsSync(c)) ?? candidates[0];
+    const [plain, openBeta] = savedGamesCandidates(this.home());
+    return [plain, openBeta].find((c) => fs.existsSync(c)) ?? plain;
   }
 
   gameInstall(): string | undefined {

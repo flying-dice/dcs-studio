@@ -70,8 +70,8 @@ function isTriggerFor(line: string, file: string): boolean {
 function sanitizeBounds(lines: string[]): { first: number; last: number } | null {
   let first = -1;
   let last = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const isBlockLine = ITEMS.some((name) => lineState(lines[i], name) !== null);
+  for (const [i, line] of lines.entries()) {
+    const isBlockLine = ITEMS.some((name) => lineState(line, name) !== null);
     if (isBlockLine) {
       if (first === -1) first = i;
       last = i;
@@ -88,20 +88,21 @@ function isSkippable(line: string): boolean {
 
 /** Walk up from the first lockdown line to a `do` opener, past blank/comments. */
 function expandToOpener(lines: string[], first: number): number {
-  for (let i = first - 1; i >= 0; i--) {
-    const t = lines[i].trim();
-    if (t === "do") return i;
-    if (!isSkippable(lines[i])) break;
+  // Nearest-first over the preceding lines. `slice` already copies, so the
+  // in-place `reverse` is local, and iterating entries keeps each line typed as
+  // present — which an `lines[i]` read walking backwards cannot show.
+  for (const [back, line] of lines.slice(0, first).reverse().entries()) {
+    if (line.trim() === "do") return first - 1 - back;
+    if (!isSkippable(line)) break;
   }
   return first;
 }
 
 /** Walk down from the last lockdown line to an `end` closer, past blank/comments. */
 function expandToCloser(lines: string[], last: number): number {
-  for (let i = last + 1; i < lines.length; i++) {
-    const t = lines[i].trim();
-    if (t === "end") return i;
-    if (!isSkippable(lines[i])) break;
+  for (const [ahead, line] of lines.slice(last + 1).entries()) {
+    if (line.trim() === "end") return last + 1 + ahead;
+    if (!isSkippable(line)) break;
   }
   return last;
 }

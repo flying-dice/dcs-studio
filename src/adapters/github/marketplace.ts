@@ -91,7 +91,13 @@ export class GithubMarketplace implements MarketplacePort {
   }
 
   async loadProduct(repo: string): Promise<ProductDetail> {
+    // The only site in this pass where the index really could be absent: nothing
+    // proves the caller's `repo` carries a slash. Unslashed input used to reach
+    // GitHub as `/repos/<repo>/undefined` and come back as the 404 message
+    // "Repository <repo>/undefined was not found." — which blames GitHub for a
+    // malformed argument. Reject it here, where the shape is known.
     const [owner, name] = repo.split("/");
+    if (!owner || !name) throw new Error(`"${repo}" is not an owner/name repository reference.`);
     return loadProduct(owner, name, await this.auth.getToken(false));
   }
 }

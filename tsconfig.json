@@ -7,6 +7,13 @@
     "rootDir": "src",
     "sourceMap": true,
     "strict": true,
+    // `arr[i]` and `rec[k]` yield `T | undefined`. The point is the reads where
+    // nothing proves the element is there — see the owner/name split in
+    // adapters/github/marketplace.ts, which this flag caught building a GitHub
+    // URL out of `undefined`. Where an invariant does hold, the fix is to make
+    // the code carry it (a tuple return, `entries()` over a loop index, a guard
+    // that binds what it checks) rather than to assert past the flag.
+    "noUncheckedIndexedAccess": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true

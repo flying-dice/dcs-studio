@@ -14,6 +14,11 @@ export interface RepoRef {
  * not a recognisable GitHub remote.
  */
 export function parseRepoRemote(remoteUrl: string): RepoRef | null {
-  const m = remoteUrl.trim().match(/github\.com[/:]([^/]+)\/(.+?)(?:\.git)?$/i);
+  // Both groups are mandatory — the optional `.git` is a non-capturing suffix —
+  // so a match fills owner and name; the tuple states that rather than each read
+  // asserting it.
+  const m = remoteUrl.trim().match(/github\.com[/:]([^/]+)\/(.+?)(?:\.git)?$/i) as
+    | [full: string, owner: string, name: string]
+    | null;
   return m ? { owner: m[1], name: m[2] } : null;
 }

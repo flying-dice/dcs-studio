@@ -26,10 +26,14 @@ export function parseRegistryQuery(stdout: string, valueName: string): Array<[st
     if (/^HKEY_/i.test(raw.trim())) {
       currentKey = raw.trim();
     } else {
-      const m = raw.match(valueRe);
+      // The pattern's single group is mandatory, so a match fills it; saying so
+      // in the type beats re-asserting it at the read.
+      const m = raw.match(valueRe) as [full: string, value: string] | null;
       if (m && currentKey) {
-        const parts = currentKey.split("\\");
-        out.push([parts[parts.length - 1], m[1]]);
+        // The leaf of the key path — "everything after the last backslash",
+        // which is the same answer as the old last-element index without
+        // pretending a split can yield nothing.
+        out.push([currentKey.replace(/^.*\\/, ""), m[1]]);
       }
     }
   }
@@ -53,7 +57,10 @@ export const REGISTRY_INSTALL_KEYS: ReadonlyArray<readonly [string, string]> = [
  * `{SavedGames}` points on an OpenBeta-only machine, and they disagreed for as
  * long as each resolved it separately (issue #45).
  */
-export function savedGamesCandidates(home: string): string[] {
+// The tuple type is load-bearing, not decoration: callers fall back to the
+// first candidate when none exists on disk, and a plain `string[]` would make
+// that read look like it could come up empty when the list is a literal pair.
+export function savedGamesCandidates(home: string): [string, string] {
   return [path.join(home, "Saved Games", "DCS"), path.join(home, "Saved Games", "DCS.openbeta")];
 }
 

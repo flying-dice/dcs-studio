@@ -74,10 +74,12 @@ export function lineState(line: string, name: string): boolean | null {
  *  requested item matches or it's already in the desired state. */
 export function toggledLine(line: string, desired: Record<string, boolean>): string | null {
   let match: { want: boolean; active: boolean } | undefined;
-  for (const name of Object.keys(desired)) {
+  // `entries` rather than `keys` + lookup: the value comes back with the key, so
+  // `want` is a boolean by construction instead of a re-read of the record.
+  for (const [name, want] of Object.entries(desired)) {
     const st = lineState(line, name);
     if (st !== null) {
-      match = { want: desired[name], active: st };
+      match = { want, active: st };
       break;
     }
   }
@@ -179,8 +181,8 @@ export function applyDesired(content: string, desired: Record<string, boolean>):
   const eol = content.includes("\r\n") ? "\r\n" : "\n";
   const lines = content.split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
   let changed = false;
-  for (let i = 0; i < lines.length; i++) {
-    const nl = toggledLine(lines[i], desired);
+  for (const [i, line] of lines.entries()) {
+    const nl = toggledLine(line, desired);
     if (nl !== null) {
       lines[i] = nl;
       changed = true;
