@@ -32,9 +32,13 @@ Chromium, so it needs a browser binary present:
 npx playwright install chromium
 ```
 
-Without it the layer fails at launch rather than at an assertion, which reads as a
-broken test rather than a missing dependency — a preflight check is being added to
-the coverage script this sprint so the message says which one it is.
+`npm run coverage:e2e` runs that for you. `scripts/e2e-coverage.mjs` installs
+Chromium up front — a no-op costing under a second when the browser is already
+there — so the coverage command works on a fresh clone with nothing else done
+first, and a box that cannot download browsers gets a one-line message naming
+`PW_CHROMIUM_PATH` instead of Playwright's launch-time wall of text. Run the
+command above by hand only if you are driving `npm run test:e2e` directly, which
+does not preflight.
 
 If Chromium is already on the machine and you would rather not have Playwright
 download its own, point at the existing binary instead:

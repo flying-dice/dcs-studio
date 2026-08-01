@@ -10,9 +10,17 @@ the detail — follow the link before acting on a summary.
 | Unit | `npm run test:unit` | `npm run coverage:unit` |
 | Integration | `npm run test:integration` | `npm run coverage:integration` |
 | E2E | `npm run test:e2e` | `npm run coverage:e2e` |
-| Rust | `cd bridge && cargo test --workspace` | `node scripts/llvm-cov.mjs --workspace` |
+| Rust | `cd bridge && cargo test --workspace` | `node scripts/llvm-cov.mjs --workspace --fail-uncovered-lines 0 --fail-under-functions 100 --fail-under-regions 99.5` |
 
-Each layer gates 100% against its own include set, and the sets are disjoint —
+The three JavaScript layers gate 100% per file. **The Rust layer does not gate
+regions at 100** — it gates uncovered lines at a count of zero, functions at
+100%, and regions at 99.5%, and those flags are not defaults: the bare
+`node scripts/llvm-cov.mjs --workspace` in the cell above measures without
+gating anything. The 99.5 floor is deliberate and its reasoning lives in
+`.github/workflows/ci.yml` beside the CI step; raise it when the number rises,
+do not lower it.
+
+Each layer gates against its own include set, and the sets are disjoint —
 so **run them one at a time**. Concurrent runs share `coverage/**/.tmp` and
 corrupt each other's shards, and a line covered by the wrong layer reports
 green. Full guide: [docs/02-guides/01-running-the-tests.md](docs/02-guides/01-running-the-tests.md).
