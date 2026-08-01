@@ -718,7 +718,22 @@ export interface WebviewProtocol {
   readonly preview: string;
   /** The media script that implements the webview half. */
   readonly scripts: readonly string[];
-  /** Every message type the webview posts to the host. */
+  /**
+   * Every message type the webview posts to the host.
+   *
+   * Considered and rejected: a runtime `isInboundOf(protocol, m)` in the panel
+   * shells, checking an arriving `m.type` against this list. It looks free
+   * because the table is already here, and it is not. It cannot narrow
+   * honestly — a `type` in the list says nothing about the rest of the payload,
+   * so every shell would still cast afterwards. It would make each shell
+   * silently DROP an unrecognised message where the presenter's own dispatch
+   * handles that today. And it adds a rejection branch to eleven shells that
+   * the 100%-per-file gate then needs eleven tests to cover, for a check the
+   * contract suite already makes statically against both halves.
+   *
+   * The eleven annotated handlers are claims about the boundary, and this table
+   * plus that suite are what make the claims hold.
+   */
   readonly toHost: readonly string[];
   /** Every message type the host pushes to the webview. */
   readonly toWebview: readonly string[];
