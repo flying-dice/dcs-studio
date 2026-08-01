@@ -223,6 +223,15 @@ struct Health {
     /// request arriving now would be answered `-32002` rather than dispatched.
     /// Always `false` when the check is disabled.
     pump_stalled: bool,
+    /// How many requests are queued and waiting for the next drain, out of
+    /// [`QUEUE_CAP`]. The third independent signal, after the listener and the
+    /// pump: a bridge can be listening AND pumping and still be behind, and a
+    /// depth that climbs across successive probes is the only way to see that
+    /// from outside before the refusals start.
+    queue_depth: usize,
+    /// The cap `queue_depth` is measured against, reported rather than assumed
+    /// so a client can compute headroom without being recompiled when it moves.
+    queue_capacity: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -812,17 +821,55 @@ enum Queued {
     Waiting(Receiver<JsonRpcResponse>),
     /// Queued as a notification — no id, so there is nothing to await.
     Accepted,
-    /// NOT queued. The Lua-side pump has not drained for long enough that
-    /// nothing would have answered it, so here is that answer instead — now,
-    /// rather than after the request deadline (card 17).
+    /// NOT queued. Either the Lua-side pump has not drained for long enough that
+    /// nothing would have answered it (card 17), or the queue is at
+    /// [`QUEUE_CAP`] — so here is that answer now, rather than after the request
+    /// deadline.
     PumpStalled(Box<JsonRpcResponse>),
+    /// NOT queued, and nothing to answer to: a notification arriving at a queue
+    /// already full of *requests*, which may not be dropped to make room for it.
+    Dropped,
 }
 
-/// Offer `request` to the queue, refusing it outright when the pump is stale.
+/// How many entries this server's queue may hold before an arriving one has to
+/// give way.
 ///
-/// The refusal is deliberately limited to requests carrying an id. A
+/// The queue existed with no cap at all, which is only safe if something else
+/// bounds it — and nothing did. Everything that drains it runs on the sim
+/// thread, and everything that fills it runs on the actix worker, so a sim that
+/// stops pumping (a mission load, a held breakpoint, a paused menu) leaves a
+/// producer running against a consumer that is not, with the process's own
+/// address space as the only limit. Card 17's staleness refusal caps how long
+/// that can go on for requests; it deliberately exempts notifications, which is
+/// exactly the traffic with nobody waiting to notice.
+///
+/// 256 is chosen against what the producers can legitimately have in flight
+/// between two drains, not against a throughput target. The drain runs every
+/// simulation frame, the editor holds one WebSocket plus a 2 s status poll, and
+/// the largest legitimate burst is a debug session's step-and-inspect volley —
+/// tens, not hundreds. 256 is therefore an order of magnitude above anything
+/// healthy while still bounding what a looping or runaway client can make the
+/// sim hold: entries are a parsed request and a channel, so a full queue is
+/// megabytes at worst rather than "until DCS dies".
+///
+/// Reaching it at all means something is wrong, which is why every path here
+/// logs at `warn` rather than silently coping.
+const QUEUE_CAP: usize = 256;
+
+/// Offer `request` to the queue, refusing it outright when the pump is stale or
+/// the queue is full.
+///
+/// The staleness refusal is deliberately limited to requests carrying an id: a
 /// notification has no caller waiting and no deadline to burn, so queueing it is
 /// free and its side effect still runs on the frame the sim resumes.
+///
+/// The cap is where those two kinds of traffic meet, and the rule is that **a
+/// request carrying an id is never dropped silently**. It is either queued or
+/// answered — with the truth — because a caller is waiting on it and a drop it
+/// cannot see is indistinguishable from a hang. A notification has nobody to
+/// tell, so it is what gives: the oldest queued notification is dropped to make
+/// room for the newest, which keeps the most recent state the client sent (the
+/// interesting one) rather than the staleset.
 fn accept_request(data: &mut AppData, request: JsonRpcRequest) -> Queued {
     if let (Some(idle), Some(id)) = (data.pump_stall(), request.id.clone()) {
         warn!(
@@ -833,10 +880,59 @@ fn accept_request(data: &mut AppData, request: JsonRpcRequest) -> Queued {
         let response = pump_stalled_response(id, &data.service, idle);
         return Queued::PumpStalled(Box::new(response));
     }
+
+    if data.rpc_queue.len() >= QUEUE_CAP {
+        if let Some(id) = request.id.clone() {
+            warn!(
+                "jsonrpc: refusing '{}' [{id}] - the {} bridge's queue is full at \
+                 {QUEUE_CAP} undrained entries",
+                request.method, data.service.env
+            );
+            let response = queue_full_response(id, &data.service);
+            return Queued::PumpStalled(Box::new(response));
+        }
+        if !drop_oldest_notification(data) {
+            warn!(
+                "jsonrpc: dropping the notification '{}' - the {} bridge's queue is \
+                 full at {QUEUE_CAP} entries and every one of them is a request with a \
+                 caller waiting, which may not be dropped to make room",
+                request.method, data.service.env
+            );
+            return Queued::Dropped;
+        }
+    }
+
     match push_rpc_request(data, request) {
         Some(receiver) => Queued::Waiting(receiver),
         None => Queued::Accepted,
     }
+}
+
+/// Drop the oldest queued NOTIFICATION, reporting whether there was one.
+///
+/// Identified by the absent id rather than by the absent response channel: an
+/// entry can lose its channel to a caller that gave up while still being a
+/// request somebody once waited on, and those are not this function's to take.
+fn drop_oldest_notification(data: &mut AppData) -> bool {
+    let Some(index) = data
+        .rpc_queue
+        .iter()
+        .position(|queued| queued.request.id.is_none())
+    else {
+        return false;
+    };
+    // `remove` on an index just found by `position` cannot be `None`; the
+    // `map_or` is how that is said without an `unwrap` on the sim's path.
+    let method = data
+        .rpc_queue
+        .remove(index)
+        .map_or_else(String::new, |queued| queued.request.method);
+    warn!(
+        "jsonrpc: the {} bridge's queue is full at {QUEUE_CAP} - dropping the oldest \
+         queued notification ('{method}') to make room for the newest",
+        data.service.env
+    );
+    true
 }
 
 /// The envelope a caller gets when the transport is healthy but nothing is
@@ -871,6 +967,36 @@ fn pump_stalled_response(id: String, service: &ServiceInfo, idle: Duration) -> J
     }
 }
 
+/// The envelope a caller gets when the queue is full.
+///
+/// The same code as a stalled pump, because it is the same thing from the
+/// client's side and wants the same handling: the bridge is listening, this call
+/// was understood, and the Lua-side dispatch is not keeping up — try again, do
+/// not reconnect. The `data` string says which of the two it was, because the
+/// remedies differ for whoever reads the log: a stalled pump waits for the sim,
+/// a full queue means something is sending faster than a simulation frame can
+/// absorb.
+fn queue_full_response(id: String, service: &ServiceInfo) -> JsonRpcResponse {
+    let detail = format!(
+        "the {} bridge's queue is full at {QUEUE_CAP} undrained entries - requests are \
+         arriving faster than the simulation frame that dispatches them into Lua can \
+         absorb them. The bridge is listening and no request already queued has been \
+         discarded; this one was refused rather than displacing one of them.",
+        service.env
+    );
+    JsonRpcResponse {
+        jsonrpc: JSON_RPC_VERSION.to_string(),
+        id,
+        result: None,
+        error: serde_json::to_value(JsonRpcError {
+            code: JSON_RPC_PUMP_STALLED,
+            message: "queue full".to_string(),
+            data: serde_json::to_value(detail).ok(),
+        })
+        .ok(),
+    }
+}
+
 #[post("/rpc")]
 async fn post_rpc(
     _req: HttpRequest,
@@ -891,6 +1017,13 @@ async fn post_rpc(
     let receiver = match queued {
         Queued::Waiting(receiver) => receiver,
         Queued::Accepted => return Ok(HttpResponse::Accepted().body("OK")),
+        // 503, not 202: there is no id to put a JSON-RPC envelope on, and
+        // telling a caller its notification was accepted when it was discarded
+        // is the silent loss this whole path exists to avoid.
+        Queued::Dropped => {
+            return Ok(HttpResponse::ServiceUnavailable()
+                .body("the bridge's queue is full of requests that cannot be dropped"))
+        }
         // A JSON-RPC error is still a delivered answer, so 200 with the envelope
         // — exactly as an error from a handler is returned below.
         Queued::PumpStalled(response) => {
@@ -951,9 +1084,12 @@ async fn get_ws(
                         Some((Queued::PumpStalled(response), _)) => {
                             report_refusal(&mut session, &response).await;
                         }
-                        // A notification, or a frame that was not a request at
-                        // all: nothing to await and nothing to answer.
-                        Some((Queued::Accepted, _)) | None => {}
+                        // A notification (queued or, at a full queue, dropped),
+                        // or a frame that was not a request at all: nothing to
+                        // await and no id to answer to. The drop is already at
+                        // `warn` in the log, which is the only place it can be
+                        // reported.
+                        Some((Queued::Accepted | Queued::Dropped, _)) | None => {}
                     }
                 }
                 Message::Ping(bytes) => {
@@ -1018,12 +1154,13 @@ fn enqueue_text_frame(message: &str, data: &Data<Mutex<AppData>>) -> Option<(Que
 
 #[get("/health")]
 async fn get_health(data: Data<Mutex<AppData>>) -> Json<Health> {
-    let (service, pump_idle, pump_stalled) = {
+    let (service, pump_idle, pump_stalled, queue_depth) = {
         let guard = lock_app_data(&data);
         (
             Arc::clone(&guard.service),
             guard.pump_idle(),
             guard.pump_stall().is_some(),
+            guard.rpc_queue.len(),
         )
     };
     Json(Health {
@@ -1037,6 +1174,8 @@ async fn get_health(data: Data<Mutex<AppData>>) -> Json<Health> {
         // the sim is wedged.
         pump_idle_ms: u64::try_from(pump_idle.as_millis()).unwrap_or(u64::MAX),
         pump_stalled,
+        queue_depth,
+        queue_capacity: QUEUE_CAP,
     })
 }
 
@@ -1306,6 +1445,7 @@ mod tests {
         success_response, AppData, AppRequest, Health, JsonRpcServer, Queued, ServerConfig,
         ServiceInfo, StopBudget, DEFAULT_TIMEOUT, JSON_RPC_INTERNAL_ERROR,
         JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_PUMP_STALLED, JSON_RPC_VERSION, PUMP_STALE_AFTER,
+        QUEUE_CAP,
     };
     use crate::jsonrpc::router::{JsonRpcRouter, MethodMeta};
     use crate::jsonrpc::{JsonRpcRequest, JsonRpcResponse};
@@ -2193,6 +2333,151 @@ mod tests {
         drain_queue(&lua, &data, &router);
         assert_eq!(receiver.blocking_recv().expect("answered").id, "q");
         assert_eq!(Arc::as_ptr(&lock_app_data(&data).service), identity);
+    }
+
+    /// **The queue had no cap.** Everything that fills it runs on the actix
+    /// worker and everything that drains it runs on the sim thread, so a sim
+    /// that stops pumping — a mission load, a held breakpoint, a paused menu —
+    /// left a producer running against a consumer that was not, bounded by
+    /// nothing but the process's address space. Card 17's staleness refusal
+    /// bounds that for requests and deliberately exempts notifications, which is
+    /// precisely the traffic with nobody waiting to notice.
+    ///
+    /// The rule at the cap: a request carrying an id is NEVER dropped, because a
+    /// caller is waiting on it and a drop it cannot see is indistinguishable
+    /// from a hang. The notification is what gives, oldest first.
+    #[test]
+    fn a_full_queue_drops_the_oldest_notification_and_never_a_waiting_caller() {
+        let data = app_data(); // the staleness refusal is off here
+
+        for n in 0..QUEUE_CAP {
+            assert!(matches!(
+                accept_request(
+                    &mut lock_app_data(&data),
+                    request(None, &format!("n{n}"), None)
+                ),
+                Queued::Accepted
+            ));
+        }
+        assert_eq!(lock_app_data(&data).rpc_queue.len(), QUEUE_CAP);
+
+        // One more notification: the queue does not grow, the OLDEST goes, and
+        // the newest is what was kept — the recent state is the interesting one.
+        assert!(matches!(
+            accept_request(&mut lock_app_data(&data), request(None, "newest", None)),
+            Queued::Accepted
+        ));
+        let guard = lock_app_data(&data);
+        assert_eq!(guard.rpc_queue.len(), QUEUE_CAP, "the cap holds");
+        assert_eq!(
+            guard.rpc_queue[0].request.method, "n1",
+            "'n0' was the oldest, so 'n0' is what went"
+        );
+        assert_eq!(
+            guard.rpc_queue[QUEUE_CAP - 1].request.method,
+            "newest",
+            "and the arrival is at the back, in order"
+        );
+        drop(guard);
+
+        // A request arriving at the full queue is ANSWERED, not queued and not
+        // dropped: -32002 with the real reason, and nothing already queued is
+        // displaced to make room for it.
+        let Queued::PumpStalled(refusal) =
+            accept_request(&mut lock_app_data(&data), request(Some("r"), "eval", None))
+        else {
+            panic!("a request at a full queue must be answered, not swallowed");
+        };
+        assert_eq!(refusal.id, "r");
+        let error = refusal.error.expect("an error envelope");
+        assert_eq!(error["code"], JSON_RPC_PUMP_STALLED);
+        assert_eq!(error["message"], "queue full");
+        let detail = error["data"].as_str().expect("a cause");
+        assert!(detail.contains("queue is full"), "{detail}");
+        assert!(
+            detail.contains("no request already queued has been discarded"),
+            "the caller is told its peers survived, which is the promise: {detail}"
+        );
+        assert_eq!(
+            lock_app_data(&data).rpc_queue.len(),
+            QUEUE_CAP,
+            "the refusal displaced nothing"
+        );
+    }
+
+    /// The corner where the two rules meet: a queue full of REQUESTS, all of
+    /// them with a caller waiting, and a notification arrives. There is nothing
+    /// droppable and nothing may be displaced, so the notification is what goes —
+    /// and the caller is told, because a 202 for a discarded notification is the
+    /// silent loss this whole path exists to prevent.
+    #[actix_web::test]
+    async fn a_notification_gives_way_to_the_waiting_callers_it_cannot_displace() {
+        use actix_web::{test, App};
+
+        let data = app_data();
+        let mut waiting = Vec::new();
+        for n in 0..QUEUE_CAP {
+            let Queued::Waiting(receiver) = accept_request(
+                &mut lock_app_data(&data),
+                request(Some(&n.to_string()), "eval", None),
+            ) else {
+                panic!("a fresh queue takes requests");
+            };
+            waiting.push(receiver);
+        }
+
+        let app =
+            test::init_service(App::new().service(post_rpc).app_data(Data::clone(&data))).await;
+        let dropped = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/rpc")
+                .set_json(serde_json::json!({ "jsonrpc": "2.0", "method": "bump" }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(
+            dropped.status(),
+            503,
+            "not 202 — it was refused, and saying otherwise loses it silently"
+        );
+
+        let guard = lock_app_data(&data);
+        assert_eq!(guard.rpc_queue.len(), QUEUE_CAP, "the queue did not grow");
+        assert!(
+            guard.rpc_queue.iter().all(|q| q.request.id.is_some()),
+            "and not one waiting caller was dropped to make room"
+        );
+    }
+
+    /// `/health` is the only view a client has of a bridge that is listening,
+    /// pumping, and still falling behind — the state between "fine" and "already
+    /// refusing". So it carries the depth, and the cap it is measured against,
+    /// rather than leaving a client to discover the problem by being refused.
+    #[actix_web::test]
+    async fn health_reports_how_full_the_queue_is_and_what_full_means() {
+        use actix_web::{test, App};
+
+        let data = app_data();
+        let app =
+            test::init_service(App::new().service(get_health).app_data(Data::clone(&data))).await;
+        let probe = || test::TestRequest::get().uri("/health").to_request();
+
+        let body = test::read_body(test::call_service(&app, probe()).await).await;
+        let health: Health = serde_json::from_slice(&body).expect("the published shape");
+        assert_eq!(health.queue_depth, 0);
+        assert_eq!(health.queue_capacity, QUEUE_CAP);
+
+        for n in 0..3 {
+            let _ = accept_request(
+                &mut lock_app_data(&data),
+                request(Some(&n.to_string()), "eval", None),
+            );
+        }
+        let body = test::read_body(test::call_service(&app, probe()).await).await;
+        let health: Health = serde_json::from_slice(&body).expect("the published shape");
+        assert_eq!(health.queue_depth, 3, "what the sim has not drained yet");
+        assert!(!health.pump_stalled, "and the pump itself is fine");
     }
 
     /// The threshold, and its escape hatch. Configurable because the two pumps
