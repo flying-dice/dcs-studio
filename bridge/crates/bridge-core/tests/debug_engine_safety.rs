@@ -415,6 +415,153 @@ fn a_condition_over_an_upvalue_still_resolves_after_the_getinfo_split() {
     .expect("upvalue condition suite");
 }
 
+/// A bootstrapped state that has no `debug.getupvalue`/`setupvalue` — which is
+/// what BOTH of DCS's Lua states are (card 30 measured it live in the mission
+/// and GUI states alike). Removed BEFORE bootstrap for the same reason
+/// `engine_state(true)` drops `os` and `timer` there: the engine captures the
+/// debug library as private copies at install time, so taking the functions
+/// away afterwards would prove nothing about what the engine sees.
+fn engine_state_without_upvalues() -> CoveredLua {
+    // SAFETY: test harness, not the DLL — see engine_state.
+    let lua = unsafe { Lua::unsafe_new() };
+    let lua = CoveredLua::new(lua);
+    lua.load(
+        r#"
+        debug.getupvalue = nil
+        debug.setupvalue = nil
+
+        -- Also installed before bootstrap, and for the same reason: a counting
+        -- shim over debug.getinfo, so the test can prove the engine stopped
+        -- asking for the frame's function ("f") on a host where the answer
+        -- could never be used. It adds one Lua frame, so a numeric level is
+        -- shifted by one to keep every caller's frame of reference intact.
+        __getinfo_f = 0
+        local real_getinfo = debug.getinfo
+        debug.getinfo = function(level, what)
+          if what and string.find(what, "f", 1, true) then
+            __getinfo_f = __getinfo_f + 1
+          end
+          if type(level) == "number" then
+            level = level + 1
+          end
+          return real_getinfo(level, what)
+        end
+        "#,
+    )
+    .exec()
+    .expect("strip the upvalue API");
+    let exports = bootstrap(&lua, BridgeKind::Gui, "test").expect("bootstrap");
+    lua.globals().set("bridge", exports).expect("bind bridge");
+    lua
+}
+
+/// On a host without `debug.getupvalue`, a condition naming an upvalue can never
+/// be true — and it says so instead of pretending the code path was not hit.
+///
+/// This is the DCS case: `debug.getupvalue` is nil in both of its states, so the
+/// name resolves through `_G`, comes back nil, and the condition is false. The
+/// breakpoint then never fires and nothing explains why, which is the one shape
+/// of wrong answer this engine otherwise refuses to give.
+///
+/// The semantics stay FAIL-CLOSED — firing instead would stop on every iteration
+/// of the loop the condition was written to filter — so the fix is entirely in
+/// the reporting: once per breakpoint, through the logger, not once per hit.
+///
+/// It also pins the other half of the card: with the capability gone the branch
+/// no longer pays for `debug.getinfo(2, "f")`, whose only purpose is upvalues.
+#[test]
+#[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+fn an_unresolvable_condition_is_false_but_never_silent_without_getupvalue() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let lua = engine_state_without_upvalues();
+
+    lua.load(
+        r#"
+        local DBG = assert(__DCS_STUDIO_DBG, "the engine installed")
+        DBG.idle_seconds = 30
+        assert(debug.getupvalue == nil, "the state really has no upvalue API")
+
+        local stops = 0
+        DBG.pump = function()
+          if bridge.debug.paused() ~= nil then
+            stops = stops + 1
+            bridge.debug.request_resume("continue")
+          end
+        end
+
+        -- The logger is a DLL export reached live through the `bridge` table, so
+        -- the report can be spied the same way the sleep is elsewhere here.
+        local real_error, reports = bridge.logger.error, {}
+        bridge.logger.error = function(msg)
+          reports[#reports + 1] = msg
+          return real_error(msg)
+        end
+
+        bridge.debug.clear_breakpoints()
+        -- `threshold` is an upvalue of `tick` — exactly the fixture that works
+        -- on a full host (see the sibling test) and cannot work here.
+        DBG.set_breakpoints({
+          source = "=noupval.lua",
+          breakpoints = { { line = 3, condition = "i == threshold" } },
+        })
+
+        hits = 0
+        local chunk = "local threshold = 5\n"
+          .. "local function tick(i)\n"
+          .. "  local seen = i\n"
+          .. "  if seen >= threshold then hits = hits + 1 end\n"
+          .. "end\n"
+          .. "for i = 1, 10 do tick(i) end\n"
+        __getinfo_f = 0
+        local outcome = DBG.run(chunk, "=noupval.lua", false)
+
+        assert(outcome.ran == true, "the run finished cleanly: " .. tostring(outcome.error))
+        -- The other half of the card: the lazy `debug.getinfo(2, "f")` exists
+        -- solely to resolve upvalues, so on a host that has no getupvalue it is
+        -- a per-hit cost bought for nothing. The condition was evaluated on all
+        -- ten iterations and the fetch happened on none of them. (No stop below
+        -- means no snapshot either, which is the engine's other "f" caller.)
+        assert(__getinfo_f == 0, "the frame function was still fetched " .. __getinfo_f .. " times")
+        assert(hits == 6, "the whole loop ran untouched (i = 5..10): " .. tostring(hits))
+        -- Fail-CLOSED is preserved: the condition is false, so no stop. What
+        -- changes is that the reason is now on the record.
+        assert(stops == 0, "the condition stayed false, as it must: " .. stops)
+        assert(#reports == 1, "reported exactly once for the breakpoint, not once per hit: " .. #reports)
+        local msg = reports[1]
+        assert(string.find(msg, "=noupval.lua:3", 1, true), msg)
+        assert(string.find(msg, "'threshold'", 1, true), msg)
+        assert(string.find(msg, "debug.getupvalue", 1, true), msg)
+        assert(string.find(msg, "treated as false", 1, true), msg)
+
+        -- A SECOND session says it again — a new run is a new attempt, and that
+        -- reset is also what bounds the table across a multi-hour DCS process.
+        stops, hits, reports = 0, 0, {}
+        assert(DBG.run(chunk, "=noupval.lua", false).ran == true, "the second session ran")
+        assert(#reports == 1, "the new session reported again: " .. #reports)
+
+        -- And a condition over LOCALS is unaffected on this same host: the
+        -- branch still evaluates, it simply no longer asks for the frame's
+        -- function first.
+        stops, hits, reports = 0, 0, {}
+        bridge.debug.clear_breakpoints()
+        DBG.set_breakpoints({
+          source = "=noupval.lua",
+          breakpoints = { { line = 3, condition = "i == 5" } },
+        })
+        assert(DBG.run(chunk, "=noupval.lua", false).ran == true, "the locals session ran")
+        assert(stops == 1, "the local condition stopped exactly once: " .. stops)
+        assert(#reports == 0, "and nothing was reported about it: " .. #reports)
+
+        bridge.logger.error = real_error
+        bridge.debug.clear_breakpoints()
+        "#,
+    )
+    .exec()
+    .expect("unresolvable condition suite");
+}
+
 /// A pump that raises costs one drain, not the debugger.
 ///
 /// `D.pump` is the host-supplied RPC drain, and the engine calls it from INSIDE
