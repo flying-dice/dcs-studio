@@ -54,7 +54,21 @@ use tokio::sync::oneshot::Receiver;
 use tokio::task::spawn_local;
 use tokio::time::timeout;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_mins(5);
+/// How long a request may sit undispatched before the server releases its
+/// caller, when the config does not say.
+///
+/// 30 s, which is what every caller in this repository already sets by hand —
+/// the GUI hook, the mission init, and the WebSocket latency test all pass
+/// `timeout = 30` — and what every document describing the bridge says the
+/// deadline is. This constant said five minutes, and had said so unread: a
+/// config that omitted the field would have got a deadline ten times the
+/// documented one, on the one path nobody exercises.
+///
+/// Deliberately still a default rather than a required field. A hand-written
+/// config table that forgets `timeout` healing to the documented value is
+/// kinder than a bridge that refuses to start over it, and the value is not a
+/// secret the caller has to be told.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long [`JsonRpcServer::new`] waits for its server thread to report
 /// whether the port bound.
@@ -238,6 +252,10 @@ struct Health {
 pub(crate) struct ServerConfig {
     host: String,
     port: u16,
+    /// How long a request may sit undispatched before its caller is released.
+    /// Absent uses [`DEFAULT_TIMEOUT`] (30 s, the documented one); `0` means
+    /// effectively never, which is what an interactive debug session — where a
+    /// breakpoint legitimately holds a request for minutes — asks for.
     timeout: Option<u64>,
     /// The environment this bridge serves ("gui" / "mission") — names the
     /// service in `/health` and `rpc.discover`.
@@ -1755,7 +1773,13 @@ mod tests {
         );
         assert_eq!(
             get_timeout_duration_from_config(&config(&format!("{base}}}"))),
-            DEFAULT_TIMEOUT
+            DEFAULT_TIMEOUT,
+            "a config that forgets the field heals to the default rather than              failing to start"
+        );
+        assert_eq!(
+            DEFAULT_TIMEOUT,
+            Duration::from_secs(30),
+            "and that default is the 30 s every caller sets by hand and every              document states — it was five minutes, unread, for anyone who did              not set it"
         );
         assert_eq!(
             get_timeout_duration_from_config(&config(&format!("{base},\"timeout\":0}}"))),
