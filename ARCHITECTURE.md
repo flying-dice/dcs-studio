@@ -82,6 +82,8 @@ port files, when they carry behavior.
 | `git.ts` | `GitPort` | repo init/status/commit/remote ops used by publish (git CLI) |
 | `gh.ts` | `GhPort` | install/auth check + login, repo create + topic, release view/create/edit/delete, asset upload/list/delete (gh CLI) |
 | `bridgeTransport.ts` | `BridgeTransportPort` | connect/send/close + handler callbacks (raw-TCP WebSocket) |
+| `debugBridge.ts` | `DebugBridgePort`, `BridgeRouterPort` | what a debug session needs of one bridge (console read, REPL eval, run/state/continue/pause/stop, expand/eval, breakpoints) and of the pair (`forEnv`, status subscription) — `BridgeClient` implements it (#61) |
+| `skillsCatalog.ts` | `SkillsCatalogPort` | `onDidChange(listener)`, `updatesAvailable()` — the slice of the skills library the nav badge consumes, deliberately not the whole library (`skills/library.ts`) (#61) |
 | `registry.ts` | `RegistryPort` | Windows registry value queries (reg.exe) |
 | `env.ts` | `EnvPort` | homedir/userProfile (install roots are pure math in `core/domain/dcsDetect.ts`) |
 | `clock.ts` | `ClockPort` | `now()` (Date.now) — inject wherever time feeds logic |
@@ -89,6 +91,14 @@ port files, when they carry behavior.
 
 Slice work MAY add new port files here when a genuine boundary is missing; never widen
 an existing port with adapter-specific details.
+
+Not every adapter has a port. `src/adapters/node/processLauncher.ts` (`ProcessLauncher`
+— detached spawn + tracked handles for mod executable entrypoints, `taskkill /T /F` on
+stop) is named concretely by `extension.ts` and by the panel it serves, and appears in no
+port file. That is deliberate under the BOUNDARY rule below: the decision it embodies is
+already pure (`core/domain/entrypointLaunch.ts` builds the `EntrypointLaunchPlan`; the
+adapter only spawns it), so a port would abstract a seam nothing needs to swap. It joins
+the catalog the day a second launcher exists.
 
 ## Core services (`src/core/app/`)
 
@@ -106,19 +116,34 @@ an existing port with adapter-specific details.
 - `detectService.ts` — DCS Saved Games + game-install detection (ordering, dedup,
   validity). Injected: registry, filesystem, env. Rules are pure in
   `core/domain/dcsDetect.ts`.
-- Presenters — `marketplacePresenter.ts` (the pilot), `myModsPresenter.ts` (#40),
-  `consolePresenter.ts` (board card 08). Each holds a panel's decision logic as a
-  `vscode`-free object that returns state, outgoing messages and described effects;
-  the panel shell owns the `WebviewPanel` and performs the effects. Presenters are
-  covered by the unit layer; the shells they leave behind stay under integration.
+- Presenters — **eleven**, one per webview: `consolePresenter.ts`, `docsPresenter.ts`,
+  `logPresenter.ts`, `manifestPresenter.ts`, `marketplacePresenter.ts` (the pilot),
+  `myModsPresenter.ts` (#40), `navPresenter.ts`, `newProjectPresenter.ts`,
+  `publishPresenter.ts`, `setupPresenter.ts`, `skillsPresenter.ts`. Each holds a
+  panel's decision logic as a `vscode`-free object that returns state, outgoing
+  messages and described effects; the panel shell owns the `WebviewPanel` and
+  performs the effects. Presenters are covered by the unit layer; the shells they
+  leave behind stay under integration. The rollout ran card 08 → card 09 → card 14,
+  and `navPresenter.ts` came last on purpose — the sidebar is a `WebviewView`, not a
+  panel, so it was taken as a decision rather than a repetition.
 - `webviewContract.ts` — the declared webview ↔ host message contract (board
-  card 09): typed unions per covered panel plus a runtime table whose
-  `toHost`/`toWebview` arrays are derived from the unions by mapped types, so
-  table and union cannot drift without a compile error. Covered panels are those
-  with presenters (console, marketplace today); the rest are named in
-  `UNCOVERED_WEBVIEWS` and a census test holds that list to exactly the
-  `previews/` directory. Extending coverage to a panel means extracting its
-  presenter first — an inferred contract is worse than none.
+  card 09): typed unions per covered webview plus the `WEBVIEW_PROTOCOLS` table,
+  whose `toHost`/`toWebview` arrays are derived from the unions by mapped types, so
+  table and union cannot drift without a compile error.
+
+  Coverage is now **total**, and that is the invariant card 14 left behind:
+  `WEBVIEW_PROTOCOLS` has an entry for all eleven webviews and
+  **`UNCOVERED_WEBVIEWS = []`**. The empty array is kept rather than deleted,
+  because the census in `test/integration/webview/webviewContract.test.ts` asserts
+  that the covered names *plus* that list equal the `previews/` directory exactly.
+  Empty makes the assertion a TOTAL partition of `previews/`: a **twelfth** webview
+  arriving fails the census until someone puts it on one side of the line or the
+  other — declares its protocol, or says out loud in `UNCOVERED_WEBVIEWS` that it is
+  not declared. The list is the place that second answer goes.
+
+  A webview joins `WEBVIEW_PROTOCOLS` by growing a presenter first. That ordering is
+  not style: a union declared for a panel whose host half is welded to `vscode`
+  leaves that half unexecutable, and an inferred contract is worse than none.
 - Skills bundled-vs-installed status (frontmatter parse, version compare, modified
   detection) is a pure domain module `core/domain/skillsStatus.ts`, driven by the
   `skills/library.ts` adapter (`SkillsLibrary`) — no dedicated app service.
