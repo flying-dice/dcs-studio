@@ -112,6 +112,16 @@ local started, err = pcall(function()
   local report_frame_error = reporter("simulation frame error")
   local report_start_error = reporter("simulation start error")
 
+  -- The frame body, hoisted out of the callback rather than built inside it.
+  -- pcall needs a function value, and written inline that is a fresh closure
+  -- constructed 60 times a second for the entire life of the process — a
+  -- garbage allocation per frame, forever, for a function that closes over
+  -- nothing that changes. One named upvalue costs one allocation, once.
+  local function drain_frame()
+    server:process_rpc(router) -- drains queued WS/HTTP requests (fires at the menu too)
+    reg.mission_boot_tick() -- self-heals the mission bridge boot while a mission runs
+  end
+
   -- BOTH callbacks are protected, and for the same reason mission_init.lua's
   -- pump is: these are C++ entry points. DCS calls them from its own dispatcher,
   -- which has nothing to catch a raise, so a fault in the live globals they
@@ -120,10 +130,7 @@ local started, err = pcall(function()
   function cb.onSimulationFrame()
     -- A raise here also SKIPS the RPC drain, so the bridge is up and answering
     -- nothing until it is fixed.
-    local drained, frame_err = pcall(function()
-      server:process_rpc(router) -- drains queued WS/HTTP requests (fires at the menu too)
-      reg.mission_boot_tick() -- self-heals the mission bridge boot while a mission runs
-    end)
+    local drained, frame_err = pcall(drain_frame)
     if not drained then
       report_frame_error(frame_err)
     end
