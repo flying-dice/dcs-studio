@@ -10,8 +10,15 @@ on:
   # Windows runner and two Rust builds on every commit.
   push:
     branches: ["**"]
+  # Also every branch, for the same reason the push trigger is. Filtered to
+  # [main, develop] this matched on the PR's *base*, so a PR targeting a
+  # feature branch — stacked work, a shared spike branch — ran nothing at all,
+  # and got strictly less scrutiny than the bare push that preceded it. The
+  # `if:` conditions below already let every non-push event through to the full
+  # matrix, which is the right answer for any PR: a PR is a request to be
+  # reviewed, and the base branch does not change what needs checking.
   pull_request:
-    branches: [main, develop]
+    branches: ["**"]
   workflow_dispatch:
   # release.yml calls this workflow and will not publish unless it passes. A
   # tag push matches no branch filter, so a release used to run neither lint,
@@ -26,6 +33,12 @@ on:
 # one of those pushes runs the full six-job matrix — a Windows runner and two
 # Rust builds included — against a commit nobody will merge. Tag and branch
 # pushes are never cancelled: those are the ones that gate a release.
+#
+# The group keys on github.ref, which is `refs/pull/N/merge` for a PR and
+# `refs/heads/…` for a push, so the two never share a group — a branch push and
+# a PR from that branch run side by side, duplicating work. That is the
+# accepted cost of the widened triggers: the alternative keys are the head ref,
+# which would let a PR run cancel a push run that gates a release.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -130,6 +143,20 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # Chromium is ~150MB downloaded on every run otherwise. Keyed on the
+      # resolved @playwright/test version rather than the lockfile hash,
+      # because that is what actually decides which browser build is wanted —
+      # an unrelated dependency bump should not throw the browser away, and a
+      # playwright bump must. Read after npm ci, since that is when the package
+      # exists to be asked. --with-deps stays either way: the system libraries
+      # it installs live outside this cache path.
+      - name: Resolve Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
       - name: Webview e2e + coverage gate
@@ -194,11 +221,19 @@ jobs:
       # with no headroom turns an infrastructure difference into a red build
       # that says "coverage regression". 99.5 still catches a ~15-region
       # regression. Raise it when the number rises; do not lower it.
+      #
+      # Invoked through scripts/llvm-cov.mjs, which takes an exclusive lock on
+      # the llvm-cov target directory. Two concurrent runs delete each other's
+      # test binaries and the survivor reports `could not execute process …
+      # (never executed)` on an unrelated test — flakiness that is not. One job
+      # per workflow run means CI does not contend today; the wrapper is here so
+      # CI and a developer's machine run the identical command, and so this job
+      # keeps working if it is ever split or matrixed. The script cds into
+      # bridge/ itself, hence no working-directory.
       - name: Rust tests + coverage gate
         run: >-
-          cargo llvm-cov --workspace
+          node scripts/llvm-cov.mjs --workspace
           --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 99.5
-        working-directory: bridge
 
   windows:
     name: Shipping target (Windows)
