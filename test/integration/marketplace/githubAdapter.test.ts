@@ -182,20 +182,22 @@ describe("loadProduct", () => {
     expect(product).toMatchObject({ repo: "Owner/Repo", release_tag: "v1.0.0" });
   });
 
-  it.each(["Repo", "", "Owner/", "/Repo"])(
-    "rejects %o as a repo reference instead of asking GitHub about it",
-    async (bad) => {
-      // Without the owner/name split holding, the name half is undefined and the
-      // request went out as `/repos/<bad>/undefined`, returning GitHub's 404 as
-      // "Repository <bad>/undefined was not found." — a message that reads like
-      // the repo is missing rather than like the argument is malformed. The
-      // shape is checkable here, so it is checked here, and no request is made.
-      await expect(new GithubMarketplace(auth("tok")).loadProduct(bad)).rejects.toThrow(
-        /is not an owner\/name repository reference/,
-      );
-      expect(requests).toEqual([]);
-    },
-  );
+  it.each([
+    "Repo",
+    "",
+    "Owner/",
+    "/Repo",
+  ])("rejects %o as a repo reference instead of asking GitHub about it", async (bad) => {
+    // Without the owner/name split holding, the name half is undefined and the
+    // request went out as `/repos/<bad>/undefined`, returning GitHub's 404 as
+    // "Repository <bad>/undefined was not found." — a message that reads like
+    // the repo is missing rather than like the argument is malformed. The
+    // shape is checkable here, so it is checked here, and no request is made.
+    await expect(new GithubMarketplace(auth("tok")).loadProduct(bad)).rejects.toThrow(
+      /is not an owner\/name repository reference/,
+    );
+    expect(requests).toEqual([]);
+  });
 
   it("requests the README as raw markdown, not as JSON metadata", async () => {
     seed();
