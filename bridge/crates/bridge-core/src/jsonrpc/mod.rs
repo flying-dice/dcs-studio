@@ -35,6 +35,19 @@ pub const JSON_RPC_BRIDGE_TORN_DOWN: i32 = -32001;
 /// report — so the request is refused immediately with the reason instead.
 /// Distinguishable from [`JSON_RPC_BRIDGE_TORN_DOWN`] on purpose: nothing has
 /// gone away, and the very next frame will serve again.
+///
+/// The name records the first cause, not the only one. This code now carries
+/// TWO refusals, told apart by the message rather than by the code:
+///
+/// - `"sim not pumping"` — the staleness refusal described above.
+/// - `"queue full"` — the queue is at its cap and a request arriving at a full
+///   one is answered rather than queued.
+///
+/// One code for both is deliberate. They are the same thing to a caller: a
+/// transient, bridge-side back-pressure refusal of a request that was perfectly
+/// well formed, where the remedy is to retry rather than to change anything. A
+/// client that wants to tell them apart reads the message; a client that only
+/// wants to know whether to retry does not have to.
 pub const JSON_RPC_PUMP_STALLED: i32 = -32002;
 
 /// One turnstile for every test in this crate that binds a server. Since card
@@ -69,8 +82,16 @@ pub fn register(sub: &mut Sub) -> LuaResult<()> {
                  env? = string, pump_stale_ms? = number }`. \
                  timeout is the request deadline in seconds (default 30; 0 means effectively \
                  never, for interactive debugging). \
-                 pump_stale_ms is how long this server's queue may go undrained before arriving requests are refused with \
-                 -32002 'sim not pumping' instead of queueing into the request timeout (default 2000; 0 disables). \
+                 pump_stale_ms is how long this server's queue may go undrained before arriving \
+                 requests are refused with -32002 'sim not pumping' instead of queueing into the \
+                 request timeout (default 2000; 0 disables). \
+                 -32002 also carries 'queue full', the bridge's other refusal: the queue holds 256 \
+                 entries, and a request arriving at a full one is answered rather than queued. \
+                 A NOTIFICATION is never refused this way, because it has no id to answer to — at \
+                 a full queue the oldest queued notification is dropped to make room for it, and \
+                 if every entry is a request with a caller waiting then the arriving notification \
+                 is the one dropped. Either way the drop is logged at warn and reported nowhere \
+                 else. \
                  The same thing `serve` does — prefer `serve`, which is what both bridges' boot code calls.",
             )
             .method(
