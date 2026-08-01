@@ -266,6 +266,16 @@ jobs:
           node scripts/llvm-cov.mjs --workspace
           --fail-uncovered-lines 0 --fail-under-functions 100 --fail-under-regions 99.5
 
+      # The npm side has `npm audit` for free; the cargo side had no advisory
+      # check at all until the 2026-08-01 sprint survey noticed. Advisories
+      # only — this must not fail on unmaintained/yanked informational notices,
+      # so warnings are not denied.
+      - name: Rust dependency advisories
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+        working-directory: bridge
+
   windows:
     name: Shipping target (Windows)
     if: github.event_name != 'push' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/')
