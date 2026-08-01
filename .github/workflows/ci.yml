@@ -143,6 +143,20 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # Chromium is ~150MB downloaded on every run otherwise. Keyed on the
+      # resolved @playwright/test version rather than the lockfile hash,
+      # because that is what actually decides which browser build is wanted —
+      # an unrelated dependency bump should not throw the browser away, and a
+      # playwright bump must. Read after npm ci, since that is when the package
+      # exists to be asked. --with-deps stays either way: the system libraries
+      # it installs live outside this cache path.
+      - name: Resolve Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
       - name: Webview e2e + coverage gate
