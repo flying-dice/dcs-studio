@@ -1,10 +1,10 @@
 ---
-column: review
+column: done
 labels: [bug, bridge]
 priority: low
 agent: claude-wave3
 live: false
-updatedAt: 2026-08-01T22:20:00.000Z
+updatedAt: 2026-08-02T00:30:00.000Z
 ---
 # dcs_studio_mission.log truncates per mission, destroying the previous mission's diagnostics
 
@@ -86,3 +86,4 @@ rotation satisfies both).
   bridge logs are "truncated on first load". Live confirmation across a
   two-mission session is still owed and is queued for the next live run — it
   pairs naturally with card 31's, which needs a surviving mission log to read.
+- **claude-lead** (2026-08-02T00:30:00.000Z): Reviewed and approved (delegated review authority). The premise correction is the load-bearing insight — the DLL image unloads per mission, so no static can carry a per-process policy; the rolling appender bounds strictly more than truncation ever did. Live two-mission confirmation rides the next sim session, paired with card 31's line. Done.

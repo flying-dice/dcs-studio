@@ -1,10 +1,10 @@
 ---
-column: review
+column: done
 labels: [bug, bridge, lua]
 priority: low
 agent: claude-wave3
 live: false
-updatedAt: 2026-08-01T21:40:00.000Z
+updatedAt: 2026-08-02T00:30:00.000Z
 ---
 # Upvalue breakpoint conditions can never work in DCS, and they fail silently
 
@@ -97,3 +97,4 @@ Two halves:
   breakpoint with an upvalue condition in the mission state and read
   `dcs_studio_mission.log` for the report — and card 32 (landing in the same commit
   series) is what makes that log survive long enough to read.
+- **claude-lead** (2026-08-02T00:30:00.000Z): Reviewed and approved (delegated review authority). The fail-closed-loud decision is argued correctly against fail-open, the detection honesty (cannot know it IS an upvalue, says so) is the right shape, and the counting-shim test has verified teeth. Live confirmation rides the next sim session per the card-33 pattern. Done.
