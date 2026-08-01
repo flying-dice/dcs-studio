@@ -378,6 +378,10 @@ mod bootstrap_tests {
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn both_bridges_bootstrap_a_complete_module_table() {
+        // `bootstrap` walks the process-wide PHASE static Load..Ready and
+        // stores KIND. Serialized so it cannot land inside a sibling's
+        // assertion on either — see `jsonrpc::serially`.
+        let _serial = crate::jsonrpc::serially();
         for (kind, name) in [
             (BridgeKind::Gui, "dcs-studio-gui"),
             (BridgeKind::Mission, "dcs-studio-mission"),
@@ -440,6 +444,10 @@ mod bootstrap_tests {
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn a_state_without_the_debug_library_still_gets_the_rest_of_the_bridge() {
+        // `bootstrap` walks the process-wide PHASE static Load..Ready and
+        // stores KIND. Serialized so it cannot land inside a sibling's
+        // assertion on either — see `jsonrpc::serially`.
+        let _serial = crate::jsonrpc::serially();
         let lua = Lua::new();
         assert!(
             lua.globals()
@@ -476,6 +484,10 @@ mod bootstrap_tests {
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn a_state_without_coroutines_gets_no_debug_engine_either() {
+        // `bootstrap` walks the process-wide PHASE static Load..Ready and
+        // stores KIND. Serialized so it cannot land inside a sibling's
+        // assertion on either — see `jsonrpc::serially`.
+        let _serial = crate::jsonrpc::serially();
         // SAFETY: test-only state; `unsafe_new` loads the debug stdlib, so the
         // engine gets past its debug-library guard and reaches this one.
         let lua = unsafe { Lua::unsafe_new() };
@@ -503,6 +515,10 @@ mod bootstrap_tests {
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn another_mod_owning_the_engine_global_does_not_fail_the_module_load() {
+        // `bootstrap` walks the process-wide PHASE static Load..Ready and
+        // stores KIND. Serialized so it cannot land inside a sibling's
+        // assertion on either — see `jsonrpc::serially`.
+        let _serial = crate::jsonrpc::serially();
         // SAFETY: test-only state; `unsafe_new` loads the debug stdlib so the
         // engine gets past its library guards and reaches the version check.
         let lua = unsafe { Lua::unsafe_new() };
@@ -531,6 +547,10 @@ mod bootstrap_tests {
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn another_mod_owning_the_runtime_global_does_not_fail_the_module_load() {
+        // `bootstrap` walks the process-wide PHASE static Load..Ready and
+        // stores KIND. Serialized so it cannot land inside a sibling's
+        // assertion on either — see `jsonrpc::serially`.
+        let _serial = crate::jsonrpc::serially();
         // SAFETY: test-only state; matches the state the DLL bootstraps into.
         let lua = unsafe { Lua::unsafe_new() };
         lua.globals()
@@ -564,6 +584,10 @@ mod bootstrap_tests {
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn a_global_that_raises_when_read_fails_the_load_rather_than_the_process() {
+        // `bootstrap` walks the process-wide PHASE static Load..Ready and
+        // stores KIND. Serialized so it cannot land inside a sibling's
+        // assertion on either — see `jsonrpc::serially`.
+        let _serial = crate::jsonrpc::serially();
         let lua = Lua::new();
         lua.load(
             r#"
@@ -599,6 +623,10 @@ mod bootstrap_tests {
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn a_state_out_of_memory_fails_the_load_instead_of_panicking() {
+        // `bootstrap` walks the process-wide PHASE static Load..Ready and
+        // stores KIND. Serialized so it cannot land inside a sibling's
+        // assertion on either — see `jsonrpc::serially`.
+        let _serial = crate::jsonrpc::serially();
         let mut relaxed_enough_to_load = false;
         for headroom in (0..2_000_000).step_by(256) {
             let lua = Lua::new();

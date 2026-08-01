@@ -50,11 +50,26 @@ pub const JSON_RPC_BRIDGE_TORN_DOWN: i32 = -32001;
 /// wants to know whether to retry does not have to.
 pub const JSON_RPC_PUMP_STALLED: i32 = -32002;
 
-/// One turnstile for every test in this crate that binds a server. Since card
-/// 18's third iteration there are no server statics to collide over, but the
-/// *ports* still are shared: libtest runs a binary's tests in parallel, several
-/// of these tests assert that a particular port is refused after a stop, and a
-/// sibling rebinding meanwhile would answer about someone else's listener.
+/// One turnstile for every test in this crate that binds a server **or touches
+/// a process-wide static**. Since card 18's third iteration there are no server
+/// statics to collide over, but the *ports* still are shared: libtest runs a
+/// binary's tests in parallel, several of these tests assert that a particular
+/// port is refused after a stop, and a sibling rebinding meanwhile would answer
+/// about someone else's listener.
+///
+/// It guards `lua_panic`'s `PHASE` and `KIND` atomics too, and it must be THIS
+/// mutex rather than one of that module's own. The two sets of tests are not
+/// independent: `crate::bootstrap` walks the phase from `Load` to `Ready` and
+/// `jsonrpc::teardown::release` stamps `Teardown`, so a jsonrpc test holding a
+/// *separate* lock would still be free to rewrite the phase underneath a
+/// `lua_panic` assertion, and did — a Linux CI run caught
+/// `a_release_and_the_next_mission_are_named_rather_than_reported_as_serving`
+/// reading `Surface` where it had just written `Teardown`. One process-wide
+/// static needs one process-wide turnstile; two locks are the same bug with
+/// more ceremony.
+///
+/// So: **anything asserting on a shared static must hold this**, not merely
+/// anything that binds a port.
 #[cfg(test)]
 pub(crate) fn serially() -> std::sync::MutexGuard<'static, ()> {
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());

@@ -202,8 +202,15 @@ mod tests {
     /// separate matches. Every phase must survive the round trip: a mismatch
     /// would put the wrong phase in the one log line anybody ever sees, and
     /// send whoever is diagnosing a closed sim at the wrong code.
+    ///
+    /// Serialized because `PHASE` is process-wide and this test writes all six
+    /// values into it. It was only ever accidentally safe: nothing stopped a
+    /// sibling reading the static between this `enter` and this assert, or this
+    /// `enter` landing between a sibling's write and its own assert. The second
+    /// is what broke CI.
     #[test]
     fn phase_round_trips_through_the_atomic() {
+        let _serial = crate::jsonrpc::serially();
         for phase in [
             Phase::Load,
             Phase::Surface,
@@ -303,8 +310,14 @@ mod tests {
     /// closed itself: which bridge, what it was doing, why nothing else was
     /// logged. Both bridges must name themselves — the two DLLs write to
     /// different files, but the line gets pasted into issues on its own.
+    ///
+    /// Serialized for both statics it touches: it stores `KIND` and stamps
+    /// `PHASE::Surface`, then asserts on a line rendered from the pair. This is
+    /// the write that surfaced the race — a sibling asserting on the phase saw
+    /// "registering the binding surface" arrive from here.
     #[test]
     fn the_line_names_the_bridge_the_phase_and_the_ending() {
+        let _serial = crate::jsonrpc::serially();
         for (bridge, service) in [
             (BridgeKind::Gui, "dcs-studio-gui"),
             (BridgeKind::Mission, "dcs-studio-mission"),
