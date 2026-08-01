@@ -23,6 +23,30 @@ functions at 100 and regions at 99.5 — see the comment in
 `.github/workflows/ci.yml` for why that floor is 99.5 and why it should not be
 lowered.
 
+## Environment prerequisites
+
+Three of the four layers need nothing but `npm ci`. The **e2e** layer drives real
+Chromium, so it needs a browser binary present:
+
+```bash
+npx playwright install chromium
+```
+
+Without it the layer fails at launch rather than at an assertion, which reads as a
+broken test rather than a missing dependency — a preflight check is being added to
+the coverage script this sprint so the message says which one it is.
+
+If Chromium is already on the machine and you would rather not have Playwright
+download its own, point at the existing binary instead:
+
+```bash
+PW_CHROMIUM_PATH=/path/to/chromium npm run test:e2e
+```
+
+`playwright.config.ts` reads `PW_CHROMIUM_PATH` and, when set, passes it through as
+the launch `executablePath`. It is an escape hatch, not the supported path: the
+managed download is the version the suite is verified against.
+
 ## Two rules that are not optional
 
 **Run the gates serially.** The include sets are disjoint by design, so running

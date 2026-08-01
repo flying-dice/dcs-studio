@@ -82,6 +82,8 @@ port files, when they carry behavior.
 | `git.ts` | `GitPort` | repo init/status/commit/remote ops used by publish (git CLI) |
 | `gh.ts` | `GhPort` | install/auth check + login, repo create + topic, release view/create/edit/delete, asset upload/list/delete (gh CLI) |
 | `bridgeTransport.ts` | `BridgeTransportPort` | connect/send/close + handler callbacks (raw-TCP WebSocket) |
+| `debugBridge.ts` | `DebugBridgePort`, `BridgeRouterPort` | what a debug session needs of one bridge (console read, REPL eval, run/state/continue/pause/stop, expand/eval, breakpoints) and of the pair (`forEnv`, status subscription) — `BridgeClient` implements it (#61) |
+| `skillsCatalog.ts` | `SkillsCatalogPort` | `onDidChange(listener)`, `updatesAvailable()` — the slice of the skills library the nav badge consumes, deliberately not the whole library (`skills/library.ts`) (#61) |
 | `registry.ts` | `RegistryPort` | Windows registry value queries (reg.exe) |
 | `env.ts` | `EnvPort` | homedir/userProfile (install roots are pure math in `core/domain/dcsDetect.ts`) |
 | `clock.ts` | `ClockPort` | `now()` (Date.now) — inject wherever time feeds logic |
@@ -89,6 +91,14 @@ port files, when they carry behavior.
 
 Slice work MAY add new port files here when a genuine boundary is missing; never widen
 an existing port with adapter-specific details.
+
+Not every adapter has a port. `src/adapters/node/processLauncher.ts` (`ProcessLauncher`
+— detached spawn + tracked handles for mod executable entrypoints, `taskkill /T /F` on
+stop) is named concretely by `extension.ts` and by the panel it serves, and appears in no
+port file. That is deliberate under the BOUNDARY rule below: the decision it embodies is
+already pure (`core/domain/entrypointLaunch.ts` builds the `EntrypointLaunchPlan`; the
+adapter only spawns it), so a port would abstract a seam nothing needs to swap. It joins
+the catalog the day a second launcher exists.
 
 ## Core services (`src/core/app/`)
 
@@ -106,19 +116,34 @@ an existing port with adapter-specific details.
 - `detectService.ts` — DCS Saved Games + game-install detection (ordering, dedup,
   validity). Injected: registry, filesystem, env. Rules are pure in
   `core/domain/dcsDetect.ts`.
-- Presenters — `marketplacePresenter.ts` (the pilot), `myModsPresenter.ts` (#40),
-  `consolePresenter.ts` (board card 08). Each holds a panel's decision logic as a
-  `vscode`-free object that returns state, outgoing messages and described effects;
-  the panel shell owns the `WebviewPanel` and performs the effects. Presenters are
-  covered by the unit layer; the shells they leave behind stay under integration.
+- Presenters — **eleven**, one per webview: `consolePresenter.ts`, `docsPresenter.ts`,
+  `logPresenter.ts`, `manifestPresenter.ts`, `marketplacePresenter.ts` (the pilot),
+  `myModsPresenter.ts` (#40), `navPresenter.ts`, `newProjectPresenter.ts`,
+  `publishPresenter.ts`, `setupPresenter.ts`, `skillsPresenter.ts`. Each holds a
+  panel's decision logic as a `vscode`-free object that returns state, outgoing
+  messages and described effects; the panel shell owns the `WebviewPanel` and
+  performs the effects. Presenters are covered by the unit layer; the shells they
+  leave behind stay under integration. The rollout ran card 08 → card 09 → card 14,
+  and `navPresenter.ts` came last on purpose — the sidebar is a `WebviewView`, not a
+  panel, so it was taken as a decision rather than a repetition.
 - `webviewContract.ts` — the declared webview ↔ host message contract (board
-  card 09): typed unions per covered panel plus a runtime table whose
-  `toHost`/`toWebview` arrays are derived from the unions by mapped types, so
-  table and union cannot drift without a compile error. Covered panels are those
-  with presenters (console, marketplace today); the rest are named in
-  `UNCOVERED_WEBVIEWS` and a census test holds that list to exactly the
-  `previews/` directory. Extending coverage to a panel means extracting its
-  presenter first — an inferred contract is worse than none.
+  card 09): typed unions per covered webview plus the `WEBVIEW_PROTOCOLS` table,
+  whose `toHost`/`toWebview` arrays are derived from the unions by mapped types, so
+  table and union cannot drift without a compile error.
+
+  Coverage is now **total**, and that is the invariant card 14 left behind:
+  `WEBVIEW_PROTOCOLS` has an entry for all eleven webviews and
+  **`UNCOVERED_WEBVIEWS = []`**. The empty array is kept rather than deleted,
+  because the census in `test/integration/webview/webviewContract.test.ts` asserts
+  that the covered names *plus* that list equal the `previews/` directory exactly.
+  Empty makes the assertion a TOTAL partition of `previews/`: a **twelfth** webview
+  arriving fails the census until someone puts it on one side of the line or the
+  other — declares its protocol, or says out loud in `UNCOVERED_WEBVIEWS` that it is
+  not declared. The list is the place that second answer goes.
+
+  A webview joins `WEBVIEW_PROTOCOLS` by growing a presenter first. That ordering is
+  not style: a union declared for a panel whose host half is welded to `vscode`
+  leaves that half unexecutable, and an inferred contract is worse than none.
 - Skills bundled-vs-installed status (frontmatter parse, version compare, modified
   detection) is a pure domain module `core/domain/skillsStatus.ts`, driven by the
   `skills/library.ts` adapter (`SkillsLibrary`) — no dedicated app service.
@@ -126,22 +151,96 @@ an existing port with adapter-specific details.
 - Bridge protocol + DAP session translation logic extracted into `core/domain/` pure
   functions where feasible; live transports stay adapters.
 
+## The bridge (Rust)
+
+The `bridge/` cargo workspace builds **two** DLLs from a shared `bridge-core`, one
+per Lua state DCS gives us. They are separate DLLs because the states have
+different lifetimes, and that difference is the whole design.
+
+| DLL | Port | Loaded by | Lives for |
+|---|---|---|---|
+| `dcs_studio_gui.dll` | `127.0.0.1:25569` | the GameGUI hook (`bridge/hook/DcsStudio.lua`), `require`d once at startup | the process |
+| `dcs_studio_mission.dll` | `127.0.0.1:25570` | `require`d into **each** mission scripting state by `mission_init.lua` | one mission, torn down at its end |
+
+Both serve JSON-RPC over WebSocket (`/ws`) plus `POST /rpc` and `GET /health`. The
+hook dispatches the mission bridge's boot at mission start; that path needs a
+desanitized `MissionScripting.lua` (`require`/`package` restored), which is what
+`missionSanitizeService` exists to arrange.
+
+### Resources belong to the Lua state that asked for them
+
+Statics are per-DLL and deliberately minimal, and **the JSON-RPC server is not one
+of them**. `jsonrpc.serve` constructs the server inside the Lua call and returns it
+as an mlua **userdata that owns it** — listener, actix `System` thread and request
+queue together. Each bridge's boot code parks that userdata in its own state (the
+hook in its frame callbacks, `mission_init.lua` in its pump closures), so the server
+lives exactly as long as the state that asked for it, and `Drop` stops it. There is
+no server static and no queue static, so a dead state cannot be reached through one.
+
+This is the repository owner's Lua-lifecycle directive — see
+[decision 08](decisions/08-lua-state-owns-its-resources.md). It was born from the
+card-18 crash: a server that spanned mission unloads killed DCS roughly ten seconds
+after quitting, 6 reproductions out of 6.
+
+Every wait on the shutdown path is bounded, because the caller is the sim thread:
+2s + 2s (acknowledge + `System` exit) on the explicit path, 250ms + 250ms when
+`Drop` is reached from `__gc` inside DCS's own `lua_close`.
+
+**Teardown ordering is load-bearing** and was verified live. On `S_EVENT_MISSION_END`:
+
+1. release the registered handlers first — each is a live mlua reference into the
+   state DCS is about to close;
+2. *then* answer the requests stranded in the queue with `-32001`, which reads the
+   still-running server's queue and so must precede the stop (40-odd real callers
+   per unload in the live runs);
+3. *then* stop the listener and wait, bounded, for the actix `System` thread.
+
+### The pump clock, and what "OK" means
+
+The queue is drained once per simulation frame. The pump stamps a liveness clock,
+and a request arriving while that clock is stale fast-fails `-32002` "sim not
+pumping" rather than burning the 30s request deadline (card 17). Default 2000ms,
+overridable per server with `pump_stale_ms`, `0` disables. `GET /health` exposes
+`pump_idle_ms` and `pump_stalled` for exactly this reason: **status OK is about the
+listener, not the sim** — a client deciding whether the sim will answer reads
+`pump_stalled`, not `status`.
+
+### Two guards worth knowing
+
+- **The RT guard** (`lua/rt.lua`) serves user chunks a *guarded* view of `DCS`:
+  `DCS.getMissionLoaded()` with a mission loaded takes the process down on the spot
+  inside ED's own `copyindex` recursion, and no `pcall` can contain it — measured
+  live, `pcall(DCS.getMissionLoaded)` dies exactly like the bare call (card 19). The
+  guarded view is rebuilt fresh per chunk.
+- **Config arrives via `_G.DCS_STUDIO`** (`logger_level`), and the `_G` is explicit
+  because DCS sandboxes hook chunk environments — a bare `DCS_STUDIO = ...` lands in
+  the chunk's own table and never reaches the globals the DLL reads on `require`
+  (card 16).
+
+Evidence trail: issue #69 and board cards 16–21 (16 log level, 17 pump staleness,
+18 the crash and the ownership rework, 19 the RT guard).
+
 ## Testing & coverage
 
-Three layers, each runnable on its own command, each gating its own coverage at
-**100% per file** over an include set that does not overlap the others'. A gap in
-one layer can therefore never be masked by another layer happening to execute the
-same line.
+**Four** layers, each runnable on its own command, each gating its own coverage over
+an include set that does not overlap the others' ([decision 05](decisions/05-four-disjoint-test-layers-each-at-100.md)).
+A gap in one layer can therefore never be masked by another layer happening to
+execute the same line. The three JavaScript layers gate at **100% per file**; the
+Rust layer gates lines and functions at 100 and regions at 99.5 (the floor is
+explained in `.github/workflows/ci.yml`).
 
 | Layer | Command | Tests live in | Gates coverage of |
 |---|---|---|---|
 | Unit | `npm run test:unit` | `test/unit/**` | `src/core/**`, `media/*-core.js` |
 | Integration | `npm run test:integration` | `test/integration/**` | `src/**` minus the hexagon |
 | E2E | `npm run test:e2e` | `tests/**` | `media/*.js` in real Chromium |
+| Rust | `cargo test --workspace` | `bridge/crates/**` | the bridge workspace (`cargo llvm-cov`) |
 
-`npm test` runs all three in sequence; `npm run coverage` does the same with each
-gate enforced. CI runs one job per layer, plus `cargo llvm-cov` for the Rust bridge
-and a Windows job that re-runs the headless layers on the shipping OS.
+`npm test` runs the three JavaScript layers in sequence; `npm run coverage` does
+the same with each gate enforced. CI runs one job per layer, plus `cargo llvm-cov`
+for the Rust bridge and a Windows job that re-runs the headless layers on the
+shipping OS. Operational detail — prerequisites, and which layer a new test belongs
+in — is [docs/02-guides/01-running-the-tests.md](docs/02-guides/01-running-the-tests.md).
 
 **Run the gates serially, and never two `cargo llvm-cov` invocations at once.**
 Both matter for the same reason — a gate that reports the wrong answer is worse

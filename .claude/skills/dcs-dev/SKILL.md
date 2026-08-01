@@ -55,6 +55,35 @@ Invoke-RestMethod "http://127.0.0.1:25570/health"   # {"name":"dcs-studio-missio
 
 If health never comes up: check `dcs.log` for `DCS-STUDIO` lines (hook load / mission boot failure), then the per-DLL bridge log (server/port failure). Port 12080 belongs to the user's dcs-fiddle hook — unrelated.
 
+## Driving the DCS UI
+
+RPC alone gets stuck: DCS boots into modals that no amount of JSON-RPC clears. Expect to drive the actual window, and expect the obvious approaches not to work.
+
+**Keyboard: DirectInput only.** DCS reads the keyboard through DirectInput, so `SendKeys`, `WM_KEYDOWN` and every other message-posting trick are **silently ignored** — the call succeeds and nothing happens. Use `SendInput` with `KEYEVENTF_SCANCODE` and send scan codes, not virtual key codes (ESC = `0x01`).
+
+**Mouse: make the process DPI-aware first.** The display here is 3840x2160 at 150% scaling. Without `SetProcessDPIAware()` the coordinates you pass `SetCursorPos` are interpreted in the virtualized 2560x1440 space, so every click lands 1.5x off — usually on nothing, occasionally on the wrong button. Call `SetProcessDPIAware()` **before** the first `SetCursorPos`.
+
+**Modals that block boot**, in the order they tend to appear:
+
+- ED's **"Authorization failed (error code 504)"** — appears at startup and blocks everything behind it. Must be dismissed or the sim never reaches the main menu.
+- **Unit-type warnings** when a mission loads.
+- The **briefing screen**: BRIEFING → FLY.
+
+**Wait on the log, not on a stopwatch.** Fixed sleeps are either too short on a cold start or wasted on a warm one. Poll `dcs.log` for:
+
+```
+loadMission Done: Control passed to the player
+```
+
+That line is the mission actually being playable, which is what the mission bridge's readiness depends on.
+
+**Mission control from the GUI eval** (port 25569 — remember `id` must be a string):
+
+- `DCS.startMission(path)` works headless; no UI interaction needed to start one.
+- `DCS.stopMission()` is safe as of card 18's fix — the crash it used to cause was the bridge's lifetime bug, not the call.
+- `DCS.startMission` **while a mission is already running is a silent no-op** — no error, no result telling you so. Stop first, or you will be debugging a "mission that did not change" for a while.
+- `DCS.getMissionLoaded()` is blocked by the RT guard and crashes DCS if you route around it (card 19). Use `DCS.getMissionName()` — empty string at the main menu.
+
 ## Drive it
 
 Each bridge serves JSON-RPC on its port: `POST /rpc`, WebSocket `/ws` (what the extension uses), `GET /health`. Request `id` must be a **string or absent** (numeric ids are rejected; absent id = notification, no reply). Requests queue in the DLL and drain on the sim thread — the GUI bridge per `onSimulationFrame` (fires even at the main menu, so RPC works from boot; `DCS.getModelTime()` stays 0 until a mission runs), the mission bridge per 0.1 s of **model time** (stalls while the sim is paused). Server-side timeout is 30 s.

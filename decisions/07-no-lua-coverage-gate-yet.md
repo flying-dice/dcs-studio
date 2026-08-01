@@ -1,7 +1,6 @@
 ---
 status: Accepted
 date: 2026-07-29
-accepted: 2026-08-01
 ---
 # Decision 07 — No Lua coverage gate on the number we can currently measure
 
