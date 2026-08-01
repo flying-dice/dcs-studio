@@ -1097,6 +1097,9 @@ async fn post_rpc(
 }
 
 #[get("/ws")]
+// This future is deliberately !Send: the server runs `.workers(1)` and every
+// task here is `spawn_local` onto that one worker's LocalSet, by design.
+#[allow(clippy::future_not_send)]
 async fn get_ws(
     req: HttpRequest,
     body: Payload,
