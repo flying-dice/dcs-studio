@@ -89,13 +89,29 @@ return function(router, deps)
   local MISSION_MOVED = "the 'mission' environment is served by the mission bridge on 127.0.0.1:25570 "
     .. "(it runs while a mission is up and needs a desanitized MissionScripting.lua)"
 
+  -- The valid names, listed once for the error below. Sorted so the message is
+  -- stable rather than following the hash order `pairs` happens to give — an
+  -- error that reshuffles itself between runs reads like two different errors.
+  local REPL_ENV_NAMES
+  do
+    local names = {}
+    for name in pairs(REPL_ENVS) do
+      names[#names + 1] = name
+    end
+    table.sort(names)
+    REPL_ENV_NAMES = table.concat(names, ", ")
+  end
+
   local function repl_env(params)
     local envname = (params and params.env) or "gui"
     if envname == "mission" then
       error(MISSION_MOVED, 0)
     end
     if not REPL_ENVS[envname] then
-      error("unknown environment '" .. tostring(envname) .. "'", 0)
+      error("unknown environment '" .. tostring(envname) .. "', so there is nowhere to run this. "
+        .. "This bridge reaches the GUI/hooks state and the DCS Lua states it can call into with "
+        .. "net.dostring_in, and those are the only names it knows. Use one of: " .. REPL_ENV_NAMES
+        .. " (or omit `env` for gui). For the mission state, " .. MISSION_MOVED .. ".", 0)
     end
     return envname
   end

@@ -806,6 +806,17 @@ mod gui_method_tests {
       assert(not ok, "a failed write must not report success")
       assert(string.find(tostring(err), "The disc is full", 1, true), tostring(err))
 
+      -- An unknown environment says what the known ones ARE. "unknown
+      -- environment 'sever'" alone told a user nothing they could act on: the
+      -- valid set is not discoverable from anywhere else they were looking.
+      local ok2, err2 = pcall(H.repl_eval, { code = "1", env = "sever" })
+      assert(not ok2, "an unknown environment is refused")
+      err2 = tostring(err2)
+      for _, name in ipairs({ "gui", "server", "config", "export" }) do
+        assert(string.find(err2, name, 1, true), name .. " is missing from: " .. err2)
+      end
+      assert(string.find(err2, "25570", 1, true), "and mission is pointed at its own bridge: " .. err2)
+
       -- ── The mission-boot dispatch contains everything it touches ──
       -- Its callers are DCS C++ entry points (onSimulationStart, and
       -- onSimulationFrame via mission_boot_tick), so a raise escaping it has

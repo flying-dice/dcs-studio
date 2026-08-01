@@ -262,7 +262,11 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
     if suspended then
       -- It yielded, so it never produced a value; resuming again could block
       -- for another full budget. Report it rather than pretend it returned nil.
-      return false, "evaluation yielded instead of returning a value"
+      return false, "evaluation yielded instead of returning a value, so there is nothing to show. "
+        .. "Every watch, hover, console line and breakpoint condition runs on its own coroutine — "
+        .. "that is what lets a runaway one be cut off — and a yield suspends it mid-way rather "
+        .. "than producing a result. Rewrite the expression so it returns without yielding; if you "
+        .. "need to drive a coroutine, resume one you create inside the expression itself."
     end
     return ok, res
   end

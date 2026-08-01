@@ -489,12 +489,24 @@ if type(__DCS_STUDIO_RT) ~= "table" or __DCS_STUDIO_RT.version ~= 3 then
   -- Full JSON of a value — by live ref (a drilled-into node) or by evaluating
   -- `expr` fresh. Prefix protocol instead of a JSON envelope so the
   -- (potentially huge) payload is never escaped a second time.
+  -- Why a ref the client still holds is not in this state's registry, and what
+  -- to do about it. Shared by export_json and signature_json so the two tell the
+  -- same story; `what` names the operation that was refused. The leading "stale
+  -- ref" is depended on by the surface tests.
+  local function stale_ref_error(ref, what)
+    return "stale ref " .. tostring(ref) .. ": this state's console runtime has no value under it, so "
+      .. what .. ". Explorer refs live inside the Lua state that minted them and are dropped by "
+      .. "repl_clear, and with the state itself when a mission unloads or DCS restarts — a ref from "
+      .. "before then cannot be resolved here. Re-run repl_inspect on the expression to mint a fresh "
+      .. "ref, then drill into that one."
+  end
+
   function RT.export_json(expr, ref)
     local v
     if ref and ref > 0 then
       v = RT.refs[ref]
       if v == nil then
-        return "ERR:stale ref (state was reset?) - inspect again and retry"
+        return "ERR:" .. stale_ref_error(ref, "there is nothing to export")
       end
     else
       local f, err = compile(expr or "")
@@ -519,7 +531,11 @@ if type(__DCS_STUDIO_RT) ~= "table" or __DCS_STUDIO_RT.version ~= 3 then
       error(string.sub(res, 5), 0)
     end
     if string.sub(res, 1, 3) ~= "OK:" then
-      error("export failed: " .. string.sub(res, 1, 400), 0)
+      error("export failed: the state answered without the 'OK:' or 'ERR:' prefix export_json always "
+        .. "writes, so this reply did not come from the console runtime — most often the runtime never "
+        .. "installed in that environment, or something else answered the dostring_in. Run repl_eval "
+        .. "with `return 1 + 1` against the same environment to see whether the runtime is there. The "
+        .. "reply began: " .. string.sub(res, 1, 400), 0)
     end
     return string.sub(res, 4)
   end
@@ -540,9 +556,20 @@ if type(__DCS_STUDIO_RT) ~= "table" or __DCS_STUDIO_RT.version ~= 3 then
   -- "takes no parameters". A fresh coroutine has its own hook slot and starts
   -- with hooks enabled, so the probe is safe whoever is asking.
   function RT.signature_json(ref)
-    local fn = RT.refs[ref or 0]
+    ref = ref or 0
+    local fn = RT.refs[ref]
+    -- Two different failures, told apart rather than merged: a ref this state
+    -- has never heard of (stale), and a ref that is perfectly live but holds
+    -- something with no signature to resolve. Merging them sent the client
+    -- chasing a state reset that never happened.
+    if fn == nil then
+      return RT.encode({ ok = false, err = stale_ref_error(ref, "its signature cannot be resolved") })
+    end
     if type(fn) ~= "function" then
-      return RT.encode({ ok = false, err = "stale ref (state was reset?) - inspect again and retry" })
+      return RT.encode({ ok = false, err = "ref " .. tostring(ref) .. " holds a " .. type(fn)
+        .. ", and only functions have a signature. Signatures are resolved by probing the function "
+        .. "itself, so there is nothing to read here. Use repl_expand on this ref to see its contents "
+        .. "instead." })
     end
     if not dbg or type(dbg.getinfo) ~= "function" or type(dbg.sethook) ~= "function"
       or type(dbg.gethook) ~= "function" or type(dbg.getlocal) ~= "function" then
