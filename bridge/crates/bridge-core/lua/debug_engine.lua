@@ -41,6 +41,54 @@ if type(coroutine) ~= "table" or type(coroutine.create) ~= "function" then
     .. "so the debugger would risk freezing the sim"
 end
 
+-- ── The stdlib is captured, not looked up ──
+-- Below this line every stdlib name is the local captured here, resolved once,
+-- after the guards above have established that `debug` and `coroutine` are
+-- really present. The engine runs in a state shared with DCS, every mission
+-- script and every other mod, and a global any of them assigns over would
+-- otherwise be consulted mid-session — while the sim thread is held inside the
+-- line hook, which is the worst possible moment to discover `table.insert` is
+-- nil.
+--
+-- The library tables are captured as private COPIES rather than by reference,
+-- and that is the whole protection: `local debug = debug` still points at the
+-- shared table, so a later `debug.sethook = nil` would reach through it. Copying
+-- into same-named locals keeps every call site reading as ordinary
+-- `debug.getinfo(...)`, so this is one block rather than hundreds of renames.
+-- Nothing here uses method syntax (`s:sub()`), which would bypass the copy.
+--
+-- `print` is deliberately absent: swapping `_G.print` is how a debugged run's
+-- output is captured (see D.run), and every access here already goes through
+-- `_G.print` so it stays live by construction. `_G` itself, `__DCS_STUDIO_RT`
+-- and `bridge` are likewise read live — the first two on purpose, and `bridge`
+-- is the DLL's own table, which nothing else can reach.
+local type, tostring, pairs, ipairs = type, tostring, pairs, ipairs
+local pcall, xpcall, error, setmetatable = pcall, xpcall, error, setmetatable
+local loadstring, setfenv = loadstring, setfenv
+local _G = _G
+local debug = {
+  getinfo = debug.getinfo,
+  getlocal = debug.getlocal,
+  getupvalue = debug.getupvalue, -- absent in DCS's hooks env; the nil is meaningful
+  sethook = debug.sethook,
+  setlocal = debug.setlocal,
+  setupvalue = debug.setupvalue, -- absent in DCS's hooks env; the nil is meaningful
+  traceback = debug.traceback,
+}
+local coroutine = {
+  create = coroutine.create,
+  resume = coroutine.resume,
+  status = coroutine.status,
+}
+local string = {
+  find = string.find,
+  gsub = string.gsub,
+  lower = string.lower,
+  match = string.match,
+  sub = string.sub,
+}
+local table = { insert = table.insert, sort = table.sort }
+
 -- `type(...) == "table"` rather than a plain truth test: the global belongs to a
 -- state shared with every other mod, and indexing a non-table one raises at
 -- CHUNK LOAD — which the DLL propagates with `?`, so the whole module fails to

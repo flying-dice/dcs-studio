@@ -391,14 +391,9 @@ mod tests {
             assert(from_hook:find('"params":"alpha, beta"'), "probed from inside a hook: " .. from_hook)
             assert(side_effects == 0, "the probe ran the function body")
 
-            -- Without coroutines there is no thread with its own hook slot, so
-            -- the probe refuses rather than falling back to running the body.
-            local saved_coroutine = coroutine
-            coroutine = nil
-            local nocoro = RT.signature_json(eref)
-            coroutine = saved_coroutine
-            assert(nocoro:find('"ok":false') and nocoro:find("coroutine library not present"), nocoro)
-            assert(side_effects == 0, "a refusal must not run the body either")
+            -- (The no-coroutine refusal is its own test below: the runtime
+            -- captures the stdlib at install time, so the state has to lack
+            -- `coroutine` BEFORE rt.lua runs, not after.)
 
             -- Same again when the host's debug library will not carry the hook
             -- onto the probe thread: resuming an unhooked coroutine would run
@@ -422,6 +417,133 @@ mod tests {
         )
         .exec()
         .expect("rt explorer/signature suite");
+    }
+
+    /// A mission script clobbering the stdlib cannot take the console runtime
+    /// down with it — and the one global it still reads live keeps working.
+    ///
+    /// The runtime shares `_G` with DCS, every mission script and every other
+    /// mod. `table.insert = nil` in someone's script is one typo, and looked up
+    /// per call it would break the console, the explorer and the debugger's
+    /// globals view mid-session, reading as "the bridge is broken". So the
+    /// stdlib is captured at install time.
+    ///
+    /// `print` is the deliberate exception, and the second half is what stops
+    /// the capture being applied to it by a later well-meaning edit: swapping
+    /// `_G.print` IS the print-capture mechanism, so a captured `print` would
+    /// make `eval_json` stream nothing.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_clobbered_stdlib_does_not_break_the_runtime_but_print_is_still_live() {
+        // SAFETY: test-only state, matching what the DLL bootstraps into.
+        let lua = unsafe { Lua::unsafe_new() };
+        lua.load(crate::RT_SOURCE).exec().expect("install RT");
+        lua.load(
+            r#"
+            local RT = assert(__DCS_STUDIO_RT, "RT installed")
+            -- This suite has to survive its own sabotage, so it captures what it
+            -- needs the same way the runtime does. (`assert` and the string
+            -- metatable's `:find` are left intact and are all it relies on.)
+            local assert, tostring, tonumber = assert, tostring, tonumber
+
+            -- Someone else's script, running after the bridge loaded. Written
+            -- through _G explicitly so it is unambiguously the GLOBALS being
+            -- clobbered — the locals captured above are this suite's own.
+            table.insert = nil
+            table.concat = function() error("table.concat is mine now", 0) end
+            table.sort = nil
+            string.format = nil
+            string.gsub = nil
+            math.floor = nil
+            _G.tostring = function() error("tostring is mine now", 0) end
+            _G.type = nil
+            _G.pairs = nil
+            _G.ipairs = nil
+            _G.pcall = nil
+            _G.select = nil
+            _G.setmetatable = nil
+            _G.loadstring = nil
+            _G.unpack = nil
+
+            -- Every entry point the console and explorer drive still answers.
+            local ev = RT.eval_json("return { alpha = 1, beta = { 'two' } }")
+            assert(ev:find('"ok":true'), "eval survived the clobber: " .. tostring(ev))
+            assert(ev:find('"alpha":1'), "and encoded correctly: " .. ev)
+
+            local ins = RT.inspect_json("({ 1, 2, 3 })")
+            assert(ins:find('"ok":true') and ins:find('"type":"table"'), ins)
+            local ref = tonumber(ins:match('"ref"%s*:%s*(%d+)'))
+            local ex = RT.expand_json(ref)
+            assert(ex:find('"ok":true') and ex:find('"name":"1"'), ex)
+            assert(RT.export_json("({ x = 1 })", nil):find("^OK:"), "export survived")
+            assert(RT.clear_json():find('"ok":true'), "clear survived")
+            "#,
+        )
+        .exec()
+        .expect("clobbered-stdlib suite");
+
+        // print stays live, in a state whose stdlib is intact — the capture
+        // mechanism is a global swap and must keep observing one.
+        let lua2 = unsafe { Lua::unsafe_new() };
+        lua2.load(crate::RT_SOURCE).exec().expect("install RT");
+        lua2.load(
+            r#"
+            local RT = __DCS_STUDIO_RT
+            -- eval_json swaps _G.print around the chunk to collect its output.
+            local out = RT.eval_json("print('hello from the chunk') return 1")
+            assert(out:find("hello from the chunk", 1, true),
+              "print output was not captured — is `print` being localised? " .. out)
+
+            -- And the swap is restored on the way out.
+            local restored = print
+            RT.eval_json("print('again')")
+            assert(print == restored, "print was not restored")
+
+            -- with_print_capture, the other half, reads _G.print the same way.
+            local seen = {}
+            RT.with_print_capture(function(line) seen[#seen + 1] = line end, function()
+              print("streamed")
+            end)
+            assert(seen[1] == "streamed", "with_print_capture missed the line")
+            "#,
+        )
+        .exec()
+        .expect("print liveness suite");
+    }
+
+    /// Without coroutines there is no thread carrying its own hook slot, so the
+    /// signature probe REFUSES rather than falling back to running the body —
+    /// which would be arbitrary DCS side effects reported as "takes no
+    /// parameters".
+    ///
+    /// The library is removed BEFORE `rt.lua` runs, and that is the point of the
+    /// separate state: the runtime captures the stdlib at install time (so a
+    /// mission script cannot disable it mid-session by clobbering a global), and
+    /// a sanitized state is sanitized before the bridge loads into it, which is
+    /// the real shape of this scenario.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_state_without_coroutines_refuses_the_signature_probe() {
+        // SAFETY: test-only state; `unsafe_new` loads `debug`, so the probe gets
+        // past the debug-library guard and reaches the coroutine one.
+        let lua = unsafe { Lua::unsafe_new() };
+        lua.globals()
+            .set("coroutine", LuaValue::Nil)
+            .expect("drop coroutine before the runtime installs");
+        lua.load(crate::RT_SOURCE).exec().expect("install RT");
+        lua.load(
+            r#"
+            local RT = assert(__DCS_STUDIO_RT, "the runtime installs without coroutines")
+            side_effects = 0
+            G = { effectful = function(alpha, beta) side_effects = side_effects + 1 end }
+            local eref = tonumber(RT.inspect_json("G.effectful"):match('"ref"%s*:%s*(%d+)'))
+            local nocoro = RT.signature_json(eref)
+            assert(nocoro:find('"ok":false') and nocoro:find("coroutine library not present"), nocoro)
+            assert(side_effects == 0, "a refusal must not run the body either")
+            "#,
+        )
+        .exec()
+        .expect("no-coroutine refusal");
     }
 
     /// Without the debug library (`Lua::new()` omits it, as do sanitized DCS

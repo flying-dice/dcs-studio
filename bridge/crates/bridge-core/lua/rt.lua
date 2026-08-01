@@ -6,6 +6,59 @@
 -- Lua 5.1 with no require. Entry points return JSON strings because
 -- dostring_in can only pass strings between states.
 --
+-- ── The stdlib is captured, not looked up ──
+-- Every name below is resolved ONCE, here, and used through the local from then
+-- on. This runtime lives in a Lua state it shares with DCS, every mission
+-- script, and every other mod, and any of them can assign over a global at any
+-- moment — `table.insert = nil` in a mission script is not hypothetical, it is
+-- one typo. Looked up per call, that takes the console, the explorer and the
+-- debugger's globals view down mid-session, in a way that reads as the bridge
+-- being broken. Captured at install time, a later clobber is the clobberer's
+-- problem alone.
+--
+-- Three names are deliberately NOT captured, and each exclusion is load-bearing:
+--
+--   * `print` — swapping `_G.print` IS the print-capture mechanism (see
+--     print_shim, with_print_capture and capture_prints, which read AND assign
+--     the global). A local would make the capture write to itself and stream
+--     nothing.
+--   * `DCS` — the guard reads the live table so it re-snapshots when a state
+--     swaps it (see guarded_dcs_for), and it must be absent in mission states.
+--   * `debug` — it may not exist at all in a sanitized state. It is read once
+--     into `dbg` below, under a type check, which is this same capture with the
+--     absence handled.
+-- The library tables are captured as private COPIES rather than by reference,
+-- and that distinction is the whole protection: `local table = table` still
+-- points at the shared table, so `table.insert = nil` elsewhere would reach
+-- straight through it. Copying the individual functions is what puts them out
+-- of reach — and copying into same-named locals keeps every call site below
+-- reading as ordinary `string.gsub(...)`, so the diff is one block, not five
+-- hundred renames. (Nothing here uses method syntax like `s:gsub()`, which
+-- would go through the real string metatable and bypass the copy.)
+local type, tostring, pairs, ipairs, select = type, tostring, pairs, ipairs, select
+local pcall, error, setmetatable, setfenv, unpack = pcall, error, setmetatable, setfenv, unpack
+local loadstring = loadstring
+local _G = _G
+local string = {
+  byte = string.byte,
+  format = string.format,
+  gsub = string.gsub,
+  lower = string.lower,
+  rep = string.rep,
+  sub = string.sub,
+}
+local table = {
+  concat = table.concat,
+  insert = table.insert,
+  sort = table.sort,
+}
+local math = { abs = math.abs, floor = math.floor, huge = math.huge }
+-- `coroutine` may be absent (a sanitized state), so it is copied defensively
+-- and the presence checks in signature_json still do their job against the copy.
+local coroutine = type(coroutine) == "table"
+  and { create = coroutine.create, resume = coroutine.resume }
+  or nil
+--
 -- `type(...) ~= "table"` rather than a plain truth test, for the same reason
 -- debug_engine.lua's version check is written that way: this global lives in a
 -- state shared with every other mod, and indexing a non-table one (a co-installed

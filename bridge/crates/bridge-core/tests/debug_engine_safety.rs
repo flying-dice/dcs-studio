@@ -250,6 +250,106 @@ fn a_session_that_cannot_start_leaves_the_engine_ready_for_the_next_one() {
     .expect("session-claim suite");
 }
 
+/// A mission script clobbering the stdlib cannot break a debug session.
+///
+/// The engine runs in a state it shares with DCS, every mission script and every
+/// other mod. Looked up per use, a global any of them assigned over would be
+/// consulted from inside the line hook — while the sim thread is held, which is
+/// the worst possible moment to discover `table.insert` is nil, and a failure
+/// there is the wedge the pump test above describes. So the engine captures the
+/// stdlib at install time, as private copies (a captured `debug` TABLE would
+/// still have `debug.sethook = nil` reach through it).
+///
+/// This drives a whole session — breakpoint, condition, snapshot, eval, assign,
+/// resume — through a state whose globals have been gutted afterwards.
+#[test]
+#[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+fn a_clobbered_stdlib_does_not_break_a_debug_session() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let lua = engine_state(false);
+
+    lua.load(
+        r#"
+        local DBG = assert(__DCS_STUDIO_DBG, "the engine installed")
+        -- This suite must survive its own sabotage, so it captures what it needs
+        -- the same way the engine does.
+        local assert, tostring, type = assert, tostring, type
+        DBG.idle_seconds = 30
+
+        local stops, watched, assigned = 0, nil, nil
+        DBG.pump = function()
+          if bridge.debug.paused() == nil or stops > 0 then return end
+          stops = stops + 1
+          watched = DBG.eval(0, "seen * 2")          -- eval + preview + refs
+          DBG.expand(0)                               -- the variables tree
+          assigned = DBG.eval(0, "seen = 99")         -- setlocal on the live stack
+          bridge.debug.request_resume("continue")
+        end
+
+        bridge.debug.clear_breakpoints()
+        -- Line 4, not 3: `local seen = i` does not bring `seen` into scope until
+        -- after it executes, and the watch below reads it.
+        DBG.set_breakpoints({
+          source = "=clobber.lua",
+          breakpoints = { { line = 4, condition = "i == threshold" } },
+        })
+
+        -- Someone else's script, running after the bridge loaded. Written
+        -- through _G explicitly so it is unambiguously the GLOBALS being
+        -- clobbered, not this chunk's own locals.
+        table.insert = nil
+        table.sort = nil
+        string.sub = nil
+        string.gsub = nil
+        string.find = nil
+        string.match = nil
+        string.lower = nil
+        debug.getinfo = nil
+        debug.getlocal = nil
+        debug.sethook = nil
+        debug.traceback = nil
+        coroutine.create = nil
+        coroutine.resume = nil
+        _G.type = nil
+        _G.pairs = nil
+        _G.ipairs = nil
+        _G.pcall = nil
+        _G.xpcall = nil
+        _G.loadstring = nil
+        _G.setfenv = nil
+        _G.setmetatable = nil
+        _G.tostring = nil
+
+        hits = 0
+        local outcome = DBG.run(
+          "local threshold = 5\n"
+            .. "local function tick(i)\n"
+            .. "  local seen = i\n"
+            .. "  if seen >= threshold then hits = hits + 1 end\n"
+            .. "end\n"
+            .. "for i = 1, 10 do tick(i) end\n",
+          "=clobber.lua",
+          false
+        )
+
+        assert(outcome.ran == true, "the session ran: " .. tostring(outcome.error))
+        assert(stops == 1, "the conditional breakpoint stopped once: " .. tostring(stops))
+        assert(watched and watched.ok == true and watched.value == "10",
+          "the watch evaluated: " .. tostring(watched and watched.err))
+        assert(assigned and assigned.ok == true and assigned.assigned == true,
+          "the assignment landed: " .. tostring(assigned and assigned.err))
+        -- seen := 99 on the live stack, so 99 >= 5 and that iteration counted.
+        assert(hits == 6, "the chunk ran to completion: " .. tostring(hits))
+        assert(bridge.debug.paused() == nil, "the pause was cleared")
+        assert(DBG.running == false, "the session flag was released")
+        "#,
+    )
+    .exec()
+    .expect("clobbered-stdlib session suite");
+}
+
 /// A breakpoint condition can still see the frame's UPVALUES.
 ///
 /// The line hook used to fetch `debug.getinfo(2, "nSlf")` on every line of every
