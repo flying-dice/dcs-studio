@@ -1,5 +1,6 @@
 import { win32 as path } from "node:path";
 import * as vscode from "vscode";
+import type { ManifestInbound } from "../core/app/manifestPresenter";
 import { ManifestPresenter } from "../core/app/manifestPresenter";
 import type { InstallRootsPort } from "../core/ports/installRoots";
 import { renderWebviewHtml } from "../webview/html";
@@ -81,8 +82,20 @@ export class ManifestFormPanel {
       }),
     );
 
+    // `onDidReceiveMessage` hands over `any`, so the annotation is the only
+    // thing naming what this panel expects. Without it `m` was an implicit
+    // any: a message shape that stopped matching `ManifestInbound` would have
+    // compiled here and failed inside the presenter at runtime. Every other
+    // panel shell annotates its own inbound union the same way — this one was
+    // the odd one out.
+    //
+    // It remains a claim about the boundary rather than a check of it: nothing
+    // verifies at runtime that what arrived really is a ManifestInbound. What
+    // makes the claim hold is the contract suite — MANIFEST_PROTOCOL's toHost
+    // list in core/app/webviewContract.ts is asserted against both this union
+    // and what media/manifest.js actually posts.
     this.panel.webview.onDidReceiveMessage(
-      (m) => void this.presenter.handle(m),
+      (m: ManifestInbound) => void this.presenter.handle(m),
       null,
       this.disposables,
     );

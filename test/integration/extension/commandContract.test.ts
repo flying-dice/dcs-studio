@@ -16,19 +16,31 @@ import { describe, expect, it } from "vitest";
 const root = resolve(__dirname, "../../..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
-/** Every `registerCommand` id across the composition root and its helpers. */
+/** Every `.ts` file under `src/`. */
+function sourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...sourceFiles(full));
+    else if (entry.name.endsWith(".ts")) out.push(full);
+  }
+  return out;
+}
+
+/**
+ * Every `registerCommand` id in `src/`.
+ *
+ * This used to be a hardcoded list of six files, which quietly stopped being
+ * true the moment the registrations moved out of `activate()` into
+ * `src/bridge/commands.ts` — the scan found no `dcs.bridge.statusBarClick` and
+ * concluded the command had been deleted. A list of files that has to be
+ * updated by hand whenever code moves is a check that decays into a
+ * false alarm at best and a blind spot at worst, so it walks the tree instead.
+ */
 function registeredCommandIds(): string[] {
-  const sources = [
-    "src/extension.ts",
-    "src/debug/factory.ts",
-    "src/bridge/deploy.ts",
-    "src/bridge/launch.ts",
-    "src/bridge/dbExport.ts",
-    "src/mission/missionPanel.ts",
-  ];
   const ids: string[] = [];
-  for (const rel of sources) {
-    const text = readFileSync(join(root, rel), "utf8");
+  for (const file of sourceFiles(join(root, "src"))) {
+    const text = readFileSync(file, "utf8");
     for (const m of text.matchAll(/registerCommand\(\s*["'`]([^"'`]+)["'`]/g)) ids.push(m[1]);
   }
   return ids;

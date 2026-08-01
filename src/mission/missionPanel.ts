@@ -228,3 +228,39 @@ export function removeMissionHooks(
     return "Mission-script hooks removed from MissionScripting.lua.";
   });
 }
+
+/**
+ * Register the six MissionScripting.lua commands.
+ *
+ * Beside `registerDebugCommands`: the composition root still chooses the
+ * service and the roots resolver, and the feature that owns the handlers owns
+ * the mapping from command id to handler. Adding a mission command is then one
+ * edit in this file rather than a handler here and a registration buried in a
+ * forty-line list in `activate()`.
+ */
+export function registerMissionCommands(
+  context: vscode.ExtensionContext,
+  svc: MissionSanitizeService,
+  roots: InstallRootsPort,
+): void {
+  context.subscriptions.push(
+    vscode.commands.registerCommand("dcs.mission.open", () => {
+      void openMissionScripting(svc, roots);
+    }),
+    vscode.commands.registerCommand("dcs.mission.desanitize", () => {
+      void desanitizeMission(svc, roots);
+    }),
+    vscode.commands.registerCommand("dcs.mission.sanitize", () => {
+      void sanitizeMission(svc, roots);
+    }),
+    vscode.commands.registerCommand("dcs.mission.restore", () => {
+      void restoreMission(svc, roots);
+    }),
+    vscode.commands.registerCommand("dcs.mission.hooks.install", () => {
+      void installMissionHooks(svc, roots);
+    }),
+    vscode.commands.registerCommand("dcs.mission.hooks.remove", () => {
+      void removeMissionHooks(svc, roots);
+    }),
+  );
+}

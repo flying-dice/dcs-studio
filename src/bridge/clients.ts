@@ -12,13 +12,17 @@ import type { BridgeClient } from "./client";
 // mission). Thin shell — env routing is the pure `bridgeForEnv` rule, and the
 // merged status stream just re-emits whenever either client's status changes.
 //
-// TODO: clean-code - 0.7 - COUPLING (#32): "a mission is running" is inferred from
-// `mission.connected` — a TCP socket's state — everywhere downstream (the debug
-// adapter's sanitize prompt, the nav status). Transport liveness and mission
-// liveness are different facts, and a socket can outlive the mission that
-// justified it, so the editor can offer mission actions against a bridge whose
-// mission has ended. Tracked as issue #32; it needs confirming against a live
-// DCS before anyone changes the inference.
+// "A mission is running" is still inferred from `mission.connected`, and that
+// is now sound for the mission-ended case: card 04 confirmed live that card
+// 18's per-mission server stop closes :25570 at S_EVENT_MISSION_END, so the
+// socket no longer outlives the mission and the status bar reads "DCS: at
+// menu" correctly. #32's premise was overtaken by events and the issue closed.
+//
+// Where connectedness still is not liveness is a paused sim or the briefing
+// screen — the state exists, the model-time pump does not run. The bridge now
+// reports that itself, in /health's `pump_idle_ms` and `pump_stalled`; a
+// caller wanting to know whether a call will be *served* rather than merely
+// accepted should read those rather than this socket's state.
 export class BridgeClients implements BridgeRouterPort {
   constructor(
     readonly gui: BridgeClient,
