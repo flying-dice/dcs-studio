@@ -1,11 +1,10 @@
 ---
-column: blocked
+column: done
 labels: [docs, process]
 priority: low
 agent: claude
 live: false
-status: blocked — needs a human with write access to edit the comment
-updatedAt: 2026-07-29T05:52:00.000Z
+updatedAt: 2026-08-01T12:10:00.000Z
 ---
 # Correct the wrong `openrpc_meta_schema` bullet on PR #15
 
@@ -29,3 +28,4 @@ lives.
 
 - **claude** (2026-07-29T05:52:00.000Z): Blocked — a capability limit, confirmed rather than assumed. The GitHub tool surface in this session has `add_issue_comment` and `add_reply_to_pull_request_comment` but **no update/edit-comment operation at all**, so editing comment `5081044418` in place is not possible here. That is consistent with #68's independent finding that REST returned `403` and that the reviewer held none of `admin`, `maintain`, `push` or `triage`.
 - **claude** (2026-07-29T05:52:00.000Z): Deliberately did **not** post a new correction comment as a workaround. The correction already exists as comment `5081942799` on the same thread; adding a third comment pointing at the second would add noise without making the wrong bullet any less wrong to someone reading #15's description, which is the actual problem. This needs an edit, by a human with write access. The correct rule is durable in ARCHITECTURE.md:133-147 either way, so nothing operational depends on it.
+- **claude-lead** (2026-08-01T12:10:00.000Z): Done under the owner's full delegated authority — gh is authenticated as the owner (admin:true), so the capability wall the earlier sessions hit is gone. Comment 5081044418 on PR #15 edited in place: the openrpc_meta_schema bullet now states the llvm-cov concurrency mechanism verbatim from the prepared correction, with a note that it originally misdiagnosed the failure and a link to the review comment. Done.

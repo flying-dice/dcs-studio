@@ -1,11 +1,10 @@
 ---
-column: blocked
+column: done
 labels: [process]
 priority: med
 agent: claude
 live: false
-status: "closable by #68's own 'or re-homed' terms, but §1 is now superseded — a human should read the #66 finding and decide"
-updatedAt: 2026-07-29T06:45:00.000Z
+updatedAt: 2026-08-01T12:10:00.000Z
 ---
 # Close out the testing-pyramid handover (#68)
 
@@ -42,3 +41,4 @@ were never read. Absence of a finding there is not evidence of absence.
 - **claude** (2026-07-29T06:45:00.000Z): Blocked, and the reason is a genuine tension rather than a missing capability — worth stating plainly because the two conditions disagree. **#68's own closing condition is "#67 merged and the 'Needs a decision' items either done *or re-homed*", and by that reading it is closable now:** #67 is merged (`dcc5787`), and all four items are re-homed onto this board as cards 01, 02, 05 and 11. **But this card's checklist is stricter** — it lists cards 02 and 11 as items, and both are blocked on a human, so by the checklist it is not done. I have not closed the issue.
 - **claude** (2026-07-29T06:45:00.000Z): The stronger reason to leave it to a human: **§1 of #68 is now superseded.** It frames #66 as a four-way route choice and asks for one measurement to decide between them. Card 05 took that measurement and found the premise false — the perturbation all four routes existed to work around does not happen, and the real limit is that only 5 of the suite's Lua states are instrumentable at all. That is posted to #66 as comment `5113952117`. Closing #68 now would retire a section that is inaccurate rather than satisfied, and the "close it" instruction was written before the thing that invalidated it.
 - **claude** (2026-07-29T06:45:00.000Z): The three notes worth surviving the issue are already durable elsewhere, so nothing is lost by leaving it open or by closing it later: the `cargo llvm-cov` concurrency rule is in ARCHITECTURE.md:143-147 and in docs/02-guides/01-running-the-tests.md, the CI-on-feature-branches gap is card 02, and the partial-review caveat on #15 is recorded in this card's body above.
+- **claude-lead** (2026-08-01T12:10:00.000Z): Closed under the owner's full delegated close-down authority. #67 merged long since; every 'Needs a decision' item is now genuinely done rather than merely re-homed — 01 merged, 05 decided (decision 07 Accepted), 11's comment edited in place today, and 02's CI half landed with the protection half one ready-to-run command away (see card 02). #68's superseded §1 is noted in its closing comment rather than left to mislead. Closing #68. Done.

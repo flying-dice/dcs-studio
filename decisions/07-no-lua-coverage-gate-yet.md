@@ -1,6 +1,7 @@
 ---
-status: Proposed
+status: Accepted
 date: 2026-07-29
+accepted: 2026-08-01
 ---
 # Decision 07 — No Lua coverage gate on the number we can currently measure
 
@@ -52,5 +53,10 @@ unfalsifiable when it was emptied (#67).
   stays blocked on it.
 - If that call is made and reach becomes meaningful, the threshold should be
   set from a fresh measurement, not from this record.
-- This record is `Proposed` because the code reflects only the "no gate yet"
-  half; the repository owner has not yet confirmed the direction.
+- This record was `Proposed` until 2026-08-01, when it was accepted under the
+  owner's full delegated authority for the session close-down. The measurement
+  stood unchallenged: the perturbation the four routes addressed does not
+  exist, only 5 states are instrumentable without the `unsafe_new()` trade-off,
+  and a ratchet over a ~12% number would not inform anyone. The re-opener is
+  unchanged: if harness states ever move to `unsafe_new()`, retake the
+  measurement before revisiting a gate.
