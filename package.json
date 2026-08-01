@@ -514,7 +514,8 @@
     "coverage": "npm run coverage:unit && npm run coverage:integration && npm run coverage:e2e",
     "coverage:unit": "vitest run -c vitest.unit.config.ts --coverage",
     "coverage:integration": "vitest run -c vitest.integration.config.ts --coverage",
-    "coverage:e2e": "node scripts/e2e-coverage.mjs"
+    "coverage:e2e": "node scripts/e2e-coverage.mjs",
+    "mutate": "node scripts/mutate.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.6",
