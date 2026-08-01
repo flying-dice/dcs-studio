@@ -122,18 +122,11 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
     return dbg.n
   end
 
-  -- A short, single-line preview of a value for the variables tree. Deliberately
-  -- MIRRORS (does not share) rt.lua's `preview`: the two diverge on functions —
-  -- the debugger renders a bare "function" here, the REPL explorer shows arity —
-  -- and the engine stays self-contained: it must not depend on __DCS_STUDIO_RT
-  -- being the matching build inside a paused, possibly sanitized state. The
-  -- key-order comparator in D.expand mirrors rt.lua's key_order the same way.
-  -- Kept in sync by hand.
   -- Globals as a user-facing evaluation should see them: through the console
   -- runtime's guarded environment when that runtime is installed in this state
   -- (card 19 — its `DCS` refuses the calls that kill the process outright),
   -- else plain `_G`. A SOFT dependency by design, like dbg_preview's deliberate
-  -- duplication above: the engine must keep working in a state without the RT.
+  -- duplication below: the engine must keep working in a state without the RT.
   local function RT_GLOBALS()
     local rt = __DCS_STUDIO_RT
     if rt and rt.global_env then
@@ -142,6 +135,13 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
     return _G
   end
 
+  -- A short, single-line preview of a value for the variables tree. Deliberately
+  -- MIRRORS (does not share) rt.lua's `preview`: the two diverge on functions —
+  -- the debugger renders a bare "function" here, the REPL explorer shows arity —
+  -- and the engine stays self-contained: it must not depend on __DCS_STUDIO_RT
+  -- being the matching build inside a paused, possibly sanitized state. The
+  -- key-order comparator in D.expand mirrors rt.lua's key_order the same way.
+  -- Kept in sync by hand.
   local function dbg_preview(v)
     local t = type(v)
     if t == "string" then
