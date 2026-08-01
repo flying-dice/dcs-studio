@@ -29,6 +29,11 @@ import type * as vscode from "vscode";
 import { installRoots } from "../../../src/adapters/vscode/installRoots";
 import type { BridgeClient } from "../../../src/bridge/client";
 import { BridgeClients } from "../../../src/bridge/clients";
+import {
+  BRIDGE_TORN_DOWN,
+  BridgeRpcError,
+  PUMP_STALLED,
+} from "../../../src/core/domain/bridgeProtocol";
 import type { DebugSnapshot, DebugState } from "../../../src/core/domain/debugProtocol";
 import { DcsDebugAdapter } from "../../../src/debug/adapter";
 import { FakeBridge, FakeScheduler, flush, settle } from "./fakes";
@@ -351,8 +356,42 @@ describe("DcsDebugAdapter", () => {
     expect(dap.output("stderr")[0]).toBe(
       "Cannot start the debug session: Mission bridge call 'debug_state' timed out\n",
     );
+    // No code came back — nothing answered at all — so this stays reportable.
+    expect(state.errors).toHaveLength(1);
     expect(mission.debugClearBreakpoints).not.toHaveBeenCalled();
     expect(mission.debugRun).not.toHaveBeenCalled();
+  });
+
+  // Pressing Debug while a mission is unloading is a mistiming, not a defect.
+  // The refusal is still correct and the user still has to be told — but the
+  // bridge told us plainly which case this was, so offering to file it as a
+  // bug would be asking the user to report the sim for ending.
+  it("refuses without offering a bug report when the mission ended under the probe", async () => {
+    mission.debugState.mockRejectedValueOnce(
+      new BridgeRpcError("bridge torn down", BRIDGE_TORN_DOWN),
+    );
+    const dap = await started();
+
+    expect(dap.output("stderr")[0]).toBe("Cannot start the debug session: bridge torn down\n");
+    expect(state.errors).toEqual([]);
+    expect(mission.debugRun).not.toHaveBeenCalled();
+  });
+
+  it("refuses without offering a bug report when the sim was not pumping", async () => {
+    mission.debugState.mockRejectedValueOnce(new BridgeRpcError("pump stalled", PUMP_STALLED));
+    const dap = await started();
+
+    expect(dap.output("stderr")[0]).toBe("Cannot start the debug session: pump stalled\n");
+    expect(state.errors).toEqual([]);
+    expect(mission.debugRun).not.toHaveBeenCalled();
+  });
+
+  it("still offers a bug report when the bridge failed for a reason that is one", async () => {
+    mission.debugState.mockRejectedValueOnce(new BridgeRpcError("internal error", -32603));
+    const dap = await started();
+
+    expect(dap.output("stderr")[0]).toBe("Cannot start the debug session: internal error\n");
+    expect(state.errors).toHaveLength(1);
   });
 
   it("does not clear the registry when a run-without-debugging session ends", async () => {
@@ -544,6 +583,19 @@ describe("DcsDebugAdapter", () => {
     mission.debugClearBreakpoints.mockRejectedValueOnce(new Error("registry locked"));
     const dap = await started();
     expect(dap.output("stderr")[0]).toContain("Failed to set breakpoints: registry locked");
+    expect(state.errors).toHaveLength(1);
+    expect(mission.debugRun).not.toHaveBeenCalled();
+  });
+
+  it("aborts quietly when the mission ended while breakpoints were going in", async () => {
+    // Same suppression as the pre-flight probe: the session is still refused
+    // and still explained, without the Report Issue button.
+    mission.debugClearBreakpoints.mockRejectedValueOnce(
+      new BridgeRpcError("bridge torn down", BRIDGE_TORN_DOWN),
+    );
+    const dap = await started();
+    expect(dap.output("stderr")[0]).toContain("Failed to set breakpoints: bridge torn down");
+    expect(state.errors).toEqual([]);
     expect(mission.debugRun).not.toHaveBeenCalled();
   });
 

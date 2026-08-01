@@ -161,6 +161,33 @@ describe("BridgeClient over a scripted transport", () => {
     await expect(p).rejects.toThrow("boom at line 3");
   });
 
+  // The end of the taxonomy's wire: the code the server chose has to survive
+  // all the way into what the caller catches, or the callers deciding whether
+  // to offer a bug report have nothing to decide on.
+  it("rejects with the server's error code attached, not a bare Error", async () => {
+    open();
+    const p = client.call("debug_state", {});
+    const req = lastSent(transport);
+    transport.last.handlers.onMessage?.(
+      JSON.stringify({ id: req.id, error: { code: -32001, message: "bridge torn down" } }),
+    );
+    await expect(p).rejects.toMatchObject({
+      name: "BridgeRpcError",
+      message: "bridge torn down",
+      code: -32001,
+    });
+  });
+
+  it("rejects with no code when the server sent none", async () => {
+    open();
+    const p = client.call("eval", {});
+    const req = lastSent(transport);
+    transport.last.handlers.onMessage?.(
+      JSON.stringify({ id: req.id, error: { message: "LuaError", data: "boom" } }),
+    );
+    await expect(p).rejects.toMatchObject({ message: "boom", code: undefined });
+  });
+
   it("times out calls with the method name", async () => {
     open();
     const p = client.call("slow_thing", {}, 5000);

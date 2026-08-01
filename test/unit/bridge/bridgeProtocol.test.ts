@@ -3,13 +3,17 @@ import {
   BRIDGE_BACKOFF_FACTOR,
   BRIDGE_INITIAL_BACKOFF_MS,
   BRIDGE_MAX_BACKOFF_MS,
+  BRIDGE_TORN_DOWN,
+  BridgeRpcError,
   buildRequest,
   dcsTimeFromPing,
   formatRequestId,
   INITIAL_BRIDGE_STATUS,
+  isExpectedBridgeFailure,
   nextBackoff,
   PING_INTERVAL_MS,
   PING_TIMEOUT_MS,
+  PUMP_STALLED,
   parseResponse,
 } from "../../../src/core/domain/bridgeProtocol";
 
@@ -128,12 +132,118 @@ describe("parseResponse", () => {
 
   it("falls back to the JSON of the error object when message and data are missing", () => {
     const text = JSON.stringify({ id: "2", error: { code: -32000 } });
-    expect(parseResponse(text)).toEqual({ kind: "error", id: "2", message: '{"code":-32000}' });
+    expect(parseResponse(text)).toEqual({
+      kind: "error",
+      id: "2",
+      message: '{"code":-32000}',
+      code: -32000,
+    });
   });
 
   it("treats an empty-string data as absent (falsy fallback)", () => {
     const text = JSON.stringify({ id: "2", error: { message: "M", data: "" } });
     expect(parseResponse(text)).toEqual({ kind: "error", id: "2", message: "M" });
+  });
+
+  // The code is the ONLY thing separating "the mission ended" from "the bridge
+  // is broken" — the messages read the same to a caller. It used to be parsed
+  // away here, which is why every bridge failure looked equally alarming.
+  it("carries the server's error code through, not just the text", () => {
+    const text = JSON.stringify({
+      id: "7",
+      error: { code: BRIDGE_TORN_DOWN, message: "bridge torn down" },
+    });
+    expect(parseResponse(text)).toEqual({
+      kind: "error",
+      id: "7",
+      message: "bridge torn down",
+      code: BRIDGE_TORN_DOWN,
+    });
+  });
+
+  it("keeps the code alongside a data-supplied message", () => {
+    const text = JSON.stringify({
+      id: "8",
+      error: { code: PUMP_STALLED, message: "LuaError", data: "pump stalled" },
+    });
+    expect(parseResponse(text)).toEqual({
+      kind: "error",
+      id: "8",
+      message: "pump stalled",
+      code: PUMP_STALLED,
+    });
+  });
+
+  it("leaves the code undefined when the server sent a non-numeric one", () => {
+    const text = JSON.stringify({ id: "9", error: { code: "-32001", message: "odd" } });
+    expect(parseResponse(text)).toEqual({
+      kind: "error",
+      id: "9",
+      message: "odd",
+      code: undefined,
+    });
+  });
+
+  it("leaves the code undefined when the server sent none", () => {
+    const text = JSON.stringify({ id: "10", error: { message: "no code here" } });
+    expect(parseResponse(text)).toEqual({
+      kind: "error",
+      id: "10",
+      message: "no code here",
+      code: undefined,
+    });
+  });
+});
+
+describe("BridgeRpcError", () => {
+  it("is an Error that remembers the code", () => {
+    const e = new BridgeRpcError("bridge torn down", BRIDGE_TORN_DOWN);
+    expect(e).toBeInstanceOf(Error);
+    expect(e.name).toBe("BridgeRpcError");
+    expect(e.message).toBe("bridge torn down");
+    expect(e.code).toBe(BRIDGE_TORN_DOWN);
+  });
+
+  it("can carry no code, for a failure no server answered", () => {
+    // Not-connected, client-side timeout, socket dropped: real failures, but
+    // nothing assigned them a code, and they must not be mistaken for the
+    // expected lifecycle answers below.
+    expect(new BridgeRpcError("timed out").code).toBeUndefined();
+  });
+});
+
+describe("isExpectedBridgeFailure", () => {
+  // The decision this guards: whether the user is shown a "Report Issue"
+  // button. That button asserts the extension misbehaved. A mission ending and
+  // a sim not pumping are the bridge behaving correctly and saying so, and
+  // inviting bug reports for them buries the reports that matter.
+
+  it("says yes to a mission that ended under a call", () => {
+    expect(isExpectedBridgeFailure(new BridgeRpcError("bridge torn down", BRIDGE_TORN_DOWN))).toBe(
+      true,
+    );
+  });
+
+  it("says yes to a sim that is not pumping this instant", () => {
+    expect(isExpectedBridgeFailure(new BridgeRpcError("pump stalled", PUMP_STALLED))).toBe(true);
+  });
+
+  it("says no to any other server error code", () => {
+    // -32603 internal error is a genuine bridge fault and must stay reportable.
+    expect(isExpectedBridgeFailure(new BridgeRpcError("internal error", -32603))).toBe(false);
+    expect(isExpectedBridgeFailure(new BridgeRpcError("method not found", -32601))).toBe(false);
+  });
+
+  it("says no to a bridge rejection that carries no code", () => {
+    expect(isExpectedBridgeFailure(new BridgeRpcError("timed out"))).toBe(false);
+  });
+
+  it("says no to anything that is not a bridge rejection at all", () => {
+    // A plain Error whose text happens to mention the code must not sneak
+    // through: the classification is by code, never by message matching.
+    expect(isExpectedBridgeFailure(new Error("-32001 bridge torn down"))).toBe(false);
+    expect(isExpectedBridgeFailure("bridge torn down")).toBe(false);
+    expect(isExpectedBridgeFailure(undefined)).toBe(false);
   });
 });
 

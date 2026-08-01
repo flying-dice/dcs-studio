@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { dbExportFileBase } from "../core/domain/bridgeConsole";
+import { isExpectedBridgeFailure } from "../core/domain/bridgeProtocol";
 import { showError } from "../errors";
 import type { BridgeClients } from "./clients";
 import type { DbExportWhat } from "./dbTypes";
@@ -88,7 +89,16 @@ export async function dbExportCommand(clients: BridgeClients): Promise<void> {
     temp = vscode.Uri.file(path);
     await saveExport(temp, dbExportFileBase(what), bytes);
   } catch (e) {
-    void showError(`DCS database export failed: ${e instanceof Error ? e.message : String(e)}`, e);
+    const detail = e instanceof Error ? e.message : String(e);
+    if (isExpectedBridgeFailure(e)) {
+      // The mission ended mid-export, or the sim was not pumping. Neither is a
+      // bug in the extension, so this says what happened without the Report
+      // Issue button inviting the user to file it as one. Retrying once the
+      // sim is back is the whole remedy.
+      void vscode.window.showWarningMessage(`DCS database export did not finish: ${detail}`);
+    } else {
+      void showError(`DCS database export failed: ${detail}`, e);
+    }
   } finally {
     if (temp) {
       try {

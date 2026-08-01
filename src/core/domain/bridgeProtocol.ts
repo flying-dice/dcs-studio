@@ -98,20 +98,50 @@ export function buildRequest(method: string, id: string, params?: unknown): Json
   return msg;
 }
 
+/**
+ * The Lua state that would have answered is being destroyed, so nothing ever
+ * will. Defined bridge-side as `JSON_RPC_BRIDGE_TORN_DOWN`
+ * (bridge/crates/bridge-core/src/jsonrpc/mod.rs). Every request still queued at
+ * `S_EVENT_MISSION_END` is answered with this — 45 and 23 of them in two live
+ * runs — so it is the *expected* answer while a mission unloads, not a fault.
+ */
+export const BRIDGE_TORN_DOWN = -32001;
+
+/**
+ * The transport is healthy and the request was understood, but the Lua-side
+ * pump has not drained this server's queue for long enough that queueing would
+ * only end in the server's own 30 s timeout. Defined bridge-side as
+ * `JSON_RPC_PUMP_STALLED`.
+ *
+ * Card 17's finding: a held mission breakpoint stops the GUI bridge's
+ * `onSimulationFrame` drain while its socket still answers `/health` in 1–2 ms.
+ * Nothing has gone away and the very next frame serves again — so this is a
+ * condition to report, never a defect to file.
+ */
+export const PUMP_STALLED = -32002;
+
 /** The outcome of correlating an inbound frame against the pending map. */
 export type ParsedResponse =
   | { kind: "ignore" }
   | { kind: "result"; id: string; result: unknown }
-  | { kind: "error"; id: string; message: string };
+  | { kind: "error"; id: string; message: string; code?: number };
 
 /**
  * Parse an inbound JSON-RPC message. Non-JSON and id-less messages are ignored.
  * The id is coerced to a string so a numeric id (should the server ever send one)
  * still correlates. The bridge carries the human-readable Lua error in `data`;
  * `message` is a generic "LuaError", so `data` (when a string) wins.
+ *
+ * `code` is carried through rather than parsed away. It is the only thing that
+ * distinguishes "the mission ended" and "the sim is not pumping this instant"
+ * from "the bridge is broken", and the editor treats those very differently.
  */
 export function parseResponse(text: string): ParsedResponse {
-  let msg: { id?: string | number; result?: unknown; error?: { message?: string; data?: unknown } };
+  let msg: {
+    id?: string | number;
+    result?: unknown;
+    error?: { message?: string; data?: unknown; code?: unknown };
+  };
   try {
     msg = JSON.parse(text);
   } catch {
@@ -121,9 +151,49 @@ export function parseResponse(text: string): ParsedResponse {
   const id = String(msg.id);
   if (msg.error) {
     const detail = typeof msg.error.data === "string" ? msg.error.data : undefined;
-    return { kind: "error", id, message: detail || msg.error.message || JSON.stringify(msg.error) };
+    const code = typeof msg.error.code === "number" ? msg.error.code : undefined;
+    return {
+      kind: "error",
+      id,
+      message: detail || msg.error.message || JSON.stringify(msg.error),
+      code,
+    };
   }
   return { kind: "result", id, result: msg.result };
+}
+
+/**
+ * A rejection that came back from the bridge as a JSON-RPC error, carrying the
+ * `code` that says which kind it was. A plain `Error` is still used for
+ * failures that never reached the server (not connected, client-side timeout,
+ * socket dropped): those have no code because no server assigned one.
+ */
+export class BridgeRpcError extends Error {
+  constructor(
+    message: string,
+    readonly code?: number,
+  ) {
+    super(message);
+    this.name = "BridgeRpcError";
+  }
+}
+
+/**
+ * Whether a failed bridge call is an ordinary, expected answer rather than a
+ * defect — and so must NOT be offered to the user as something to file a
+ * GitHub issue about.
+ *
+ * The "Report Issue" toast is a claim that the extension did something wrong.
+ * A mission that ended (`-32001`) and a sim that is not pumping this instant
+ * (`-32002`) are both the bridge working correctly and saying so. Putting them
+ * behind a report button trains users to file noise and buries the reports
+ * that mean something.
+ *
+ * Note this is about the *report affordance*, not about silence: callers still
+ * tell the user what happened, just as transient status rather than a fault.
+ */
+export function isExpectedBridgeFailure(e: unknown): boolean {
+  return e instanceof BridgeRpcError && (e.code === BRIDGE_TORN_DOWN || e.code === PUMP_STALLED);
 }
 
 /** Derive `dcsTime` from a ping result: the numeric sim time, else null. */

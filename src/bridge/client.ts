@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import {
   BRIDGE_INITIAL_BACKOFF_MS,
+  BridgeRpcError,
   type BridgeStatus,
   buildRequest,
   dcsTimeFromPing,
@@ -372,7 +373,9 @@ export class BridgeClient implements DebugBridgePort {
     if (!p) return;
     this.pending.delete(parsed.id);
     clearTimeout(p.timer);
-    if (parsed.kind === "error") p.reject(new Error(parsed.message));
+    // A server-assigned code travels with the rejection: callers need it to
+    // tell "the mission ended" from "the bridge is broken".
+    if (parsed.kind === "error") p.reject(new BridgeRpcError(parsed.message, parsed.code));
     else p.resolve(parsed.result);
   }
 
