@@ -5,7 +5,15 @@
 -- via the version guard, so a fresh state heals itself on the next call. Pure
 -- Lua 5.1 with no require. Entry points return JSON strings because
 -- dostring_in can only pass strings between states.
-if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 3) then
+--
+-- `type(...) ~= "table"` rather than a plain truth test, for the same reason
+-- debug_engine.lua's version check is written that way: this global lives in a
+-- state shared with every other mod, and indexing a non-table one (a co-installed
+-- mod setting `__DCS_STUDIO_RT = 1`) raises HERE, at chunk load — which fails the
+-- whole require through bootstrap's `?`, costing the user the entire bridge over a
+-- name collision. A non-table means no runtime of ours is installed, so ours
+-- installs over it.
+if type(__DCS_STUDIO_RT) ~= "table" or __DCS_STUDIO_RT.version ~= 3 then
   local RT = { version = 3, refs = {}, nrefs = 0 }
   local MAX_TABLE_CHILDREN = 1000 -- cap children returned for one expand
   -- Ref ceiling so a huge drill-down can't pin unbounded memory. Raised for v2:

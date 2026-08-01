@@ -512,6 +512,41 @@ mod bootstrap_tests {
         assert_eq!(engine.get::<i64>("version").expect("version"), 1);
     }
 
+    /// The same collision, one global over: `__DCS_STUDIO_RT`. rt.lua's install
+    /// guard used to read `__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 3`,
+    /// which indexes whatever is there — and a NUMBER has no metatable in Lua
+    /// 5.1, so a co-installed mod owning the name raised "attempt to index a
+    /// number value" at chunk load. That raise comes back through `bootstrap`'s
+    /// `?` and fails the whole `require`, so the user loses the bridge —
+    /// server, methods, debugger and all — over a name another mod happened to
+    /// pick. A number is the case that matters (a string would have indexed
+    /// harmlessly through the string metatable), so it is the one planted here.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn another_mod_owning_the_runtime_global_does_not_fail_the_module_load() {
+        // SAFETY: test-only state; matches the state the DLL bootstraps into.
+        let lua = unsafe { Lua::unsafe_new() };
+        lua.globals()
+            .set("__DCS_STUDIO_RT", 42)
+            .expect("plant a non-table");
+
+        let exports = bootstrap(&lua, BridgeKind::Gui, "test").expect("bootstrap");
+        exports.get::<LuaTable>("json").expect("json survived");
+        let rt: LuaTable = lua
+            .globals()
+            .get("__DCS_STUDIO_RT")
+            .expect("the runtime installed over the collision");
+        assert_eq!(rt.get::<i64>("version").expect("version"), 3);
+        // And it is the working runtime, not a husk: the console path the REPL
+        // drives answers through it.
+        lua.globals().set("rt", rt).expect("bind rt");
+        let json: String = lua
+            .load(r#"return rt.eval_json("return 1 + 1")"#)
+            .eval()
+            .expect("the installed runtime evaluates");
+        assert!(json.contains(r#""result":2"#), "{json}");
+    }
+
     /// The engine chunk is loaded with `?`, so whatever it raises fails the
     /// module load. It is written never to raise — it RETURNS a reason string
     /// when the state cannot host it — but it reads `debug` and `coroutine` out
