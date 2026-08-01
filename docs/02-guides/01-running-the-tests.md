@@ -13,7 +13,7 @@ full spec is the "Testing & coverage" section of
 | Unit | `npm run test:unit` | `npm run coverage:unit` | `test/unit/**` | `src/core/**`, `media/*-core.js` |
 | Integration | `npm run test:integration` | `npm run coverage:integration` | `test/integration/**` | `src/**` minus the hexagon |
 | E2E | `npm run test:e2e` | `npm run coverage:e2e` | `tests/**` | `media/*.js` in real Chromium |
-| Rust | `cargo test --workspace` | `cargo llvm-cov --workspace` | `bridge/crates/**` | the bridge workspace |
+| Rust | `cargo test --workspace` | `node scripts/llvm-cov.mjs --workspace` | `bridge/crates/**` | the bridge workspace |
 
 `npm test` runs the three JavaScript layers in sequence. `npm run coverage` does
 the same with each gate enforced.
@@ -34,15 +34,34 @@ other's shards.
 `projects` config, and vitest treats `coverage` as a root-only option, so every
 per-layer threshold is silently ignored. Coverage gets computed and discarded.
 This is not hypothetical: it is how the release workflow gated nothing for a
-while. Use the per-layer commands.
+while. Use the per-layer commands. `vitest.config.ts` now refuses to load when
+coverage is requested, so this one is enforced rather than remembered.
 
 **Never run two `cargo llvm-cov` invocations at once.** They share
 `bridge/target/llvm-cov-target`, and the second's rebuild deletes the first's
 test binaries. The first then dies with
 `could not execute process … (never executed)` on whichever test is late in the
 run order — which looks exactly like a flaky test and is not one. Cargo's file
-lock does not cover it. If you genuinely need a second measurement, give it its
-own `--target-dir`.
+lock does not cover it.
+
+`scripts/llvm-cov.mjs` enforces this. Run llvm-cov through it — CI does too —
+and a second run fails immediately with an explanation instead of corrupting
+the first:
+
+```bash
+node scripts/llvm-cov.mjs --workspace   # everything after the script goes to cargo llvm-cov
+```
+
+It holds `.llvm-cov.lock` inside the target directory for the duration. If you
+genuinely need a second measurement, give it its own `--target-dir`: the lock
+follows the target directory, so runs that do not share artefacts do not
+contend.
+
+If a run is killed in a way that skips its cleanup, the lock can outlive it.
+The refusal message says so — it reports the holding pid and whether that
+process still exists — and prints the `rm` for the stale file. Nothing removes
+it automatically, because "the pid is gone" and "the pid was reused" look the
+same from here.
 
 ## Running the Rust tests off-Windows
 

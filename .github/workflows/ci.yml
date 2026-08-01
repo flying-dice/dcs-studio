@@ -194,11 +194,19 @@ jobs:
       # with no headroom turns an infrastructure difference into a red build
       # that says "coverage regression". 99.5 still catches a ~15-region
       # regression. Raise it when the number rises; do not lower it.
+      #
+      # Invoked through scripts/llvm-cov.mjs, which takes an exclusive lock on
+      # the llvm-cov target directory. Two concurrent runs delete each other's
+      # test binaries and the survivor reports `could not execute process …
+      # (never executed)` on an unrelated test — flakiness that is not. One job
+      # per workflow run means CI does not contend today; the wrapper is here so
+      # CI and a developer's machine run the identical command, and so this job
+      # keeps working if it is ever split or matrixed. The script cds into
+      # bridge/ itself, hence no working-directory.
       - name: Rust tests + coverage gate
         run: >-
-          cargo llvm-cov --workspace
+          node scripts/llvm-cov.mjs --workspace
           --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 99.5
-        working-directory: bridge
 
   windows:
     name: Shipping target (Windows)
