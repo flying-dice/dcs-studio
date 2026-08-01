@@ -118,8 +118,8 @@ import type { ManifestModel, ProductDetail, Subscription } from "../../../src/co
 
 // ── Console harness ──────────────────────────────────────────────────────────
 
-const CONNECTED = { connected: true, dcsTime: 0 };
-const OFFLINE = { connected: false, dcsTime: null };
+const CONNECTED = { connected: true, dcsTime: 0, stalled: false };
+const OFFLINE = { connected: false, dcsTime: null, stalled: false };
 const STATUS: DualBridgeStatus = { gui: CONNECTED, mission: OFFLINE };
 
 /** A bridge that answers everything successfully unless told to fail. */

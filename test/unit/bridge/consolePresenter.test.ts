@@ -56,8 +56,8 @@ class FakeBridge implements ConsoleBridge {
   }
 }
 
-const CONNECTED = { connected: true, dcsTime: 0 };
-const OFFLINE = { connected: false, dcsTime: null };
+const CONNECTED = { connected: true, dcsTime: 0, stalled: false };
+const OFFLINE = { connected: false, dcsTime: null, stalled: false };
 const STATUS: DualBridgeStatus = { gui: CONNECTED, mission: OFFLINE };
 
 interface Harness {

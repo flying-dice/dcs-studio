@@ -16,7 +16,7 @@ export interface RecordedCall {
 }
 
 export class FakeBridgeClient {
-  status: BridgeStatus = { connected: false, dcsTime: null };
+  status: BridgeStatus = { connected: false, dcsTime: null, stalled: false };
   readonly calls: RecordedCall[] = [];
   started = 0;
   reconnected = 0;
@@ -96,5 +96,5 @@ export class FakeBridgeClient {
   }
 }
 
-export const CONNECTED: BridgeStatus = { connected: true, dcsTime: 0 };
-export const OFFLINE: BridgeStatus = { connected: false, dcsTime: null };
+export const CONNECTED: BridgeStatus = { connected: true, dcsTime: 0, stalled: false };
+export const OFFLINE: BridgeStatus = { connected: false, dcsTime: null, stalled: false };

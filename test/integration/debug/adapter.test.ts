@@ -262,7 +262,7 @@ describe("DcsDebugAdapter", () => {
   });
 
   it("explains a missing mission with the reason, not a generic failure", async () => {
-    mission.status = { connected: false, dcsTime: null };
+    mission.status = { connected: false, dcsTime: null, stalled: false };
     const dap = await started();
     expect(dap.output("stderr")[0]).toContain("start a mission in DCS");
     expect(mission.debugRun).not.toHaveBeenCalled();
@@ -274,7 +274,7 @@ describe("DcsDebugAdapter", () => {
     // useless advice.
     resetVscode({ config: { "dcsStudio.gameInstallPath": "C:\\DCS" } });
     disk.missionScript = "do\n  sanitizeModule('os')\nend\n";
-    mission.status = { connected: false, dcsTime: null };
+    mission.status = { connected: false, dcsTime: null, stalled: false };
 
     const dap = await started();
     expect(dap.output("stderr")[0]).toContain("MissionScripting.lua is sanitized");
@@ -283,7 +283,7 @@ describe("DcsDebugAdapter", () => {
   it("does not blame sanitization when the file is already desanitized", async () => {
     resetVscode({ config: { "dcsStudio.gameInstallPath": "C:\\DCS" } });
     disk.missionScript = "do\n  -- sanitizeModule('os')\nend\n";
-    mission.status = { connected: false, dcsTime: null };
+    mission.status = { connected: false, dcsTime: null, stalled: false };
 
     const dap = await started();
     expect(dap.output("stderr")[0]).toContain("start a mission in DCS");
@@ -293,13 +293,13 @@ describe("DcsDebugAdapter", () => {
     // No install path configured at all is the other half: both leave the
     // sanitize question unanswered rather than guessing.
     resetVscode({ config: { "dcsStudio.gameInstallPath": "C:\\DCS" } });
-    mission.status = { connected: false, dcsTime: null };
+    mission.status = { connected: false, dcsTime: null, stalled: false };
     const dap = await started();
     expect(dap.output("stderr")[0]).toContain("start a mission in DCS");
   });
 
   it("aborts a GUI session with the launch nudge when DCS is down", async () => {
-    gui.status = { connected: false, dcsTime: null };
+    gui.status = { connected: false, dcsTime: null, stalled: false };
     const dap = await started({ env: "gui" });
     expect(dap.output("stderr")[0]).toContain("Launch DCS with the bridge");
     expect(gui.debugRun).not.toHaveBeenCalled();
@@ -802,7 +802,7 @@ describe("DcsDebugAdapter", () => {
     expect(dap.events("terminated")).toHaveLength(0);
 
     mission.debugState.mockRejectedValue(new Error("disconnected"));
-    mission.status = { connected: false, dcsTime: null };
+    mission.status = { connected: false, dcsTime: null, stalled: false };
     await scheduler.advance(250);
     expect(dap.output("stderr")).toEqual([
       "The DCS bridge disconnected — the debug session was abandoned.\n",

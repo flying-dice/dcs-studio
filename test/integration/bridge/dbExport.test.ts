@@ -53,7 +53,7 @@ beforeEach(() => {
 
 describe("when the sim is not reachable", () => {
   it("explains how to get connected instead of opening a picker", async () => {
-    gui.status = { connected: false, dcsTime: null };
+    gui.status = { connected: false, dcsTime: null, stalled: false };
     await dbExportCommand(clients);
     // db_export runs inside DCS; without the bridge there is nothing to ask.
     expect(state.errors).toEqual([expect.stringContaining("Launch DCS with the bridge")]);

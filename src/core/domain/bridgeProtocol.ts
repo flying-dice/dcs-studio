@@ -5,14 +5,28 @@
 // map; everything here is deterministic and exhaustively testable.
 
 /** Live bridge status surfaced to the UI. `dcsTime` is the last ping's sim model
- *  time (> 0 ⇒ a mission is running); null when offline or between pings. */
+ *  time (> 0 ⇒ a mission is running); null when offline or between pings.
+ *
+ *  `stalled` is the other half of "alive", and the reason this interface is not
+ *  just `connected`: cards 04 and 17 both landed on the same lesson — a healthy
+ *  socket (and a healthy `/health`) is not evidence that anything can be
+ *  dispatched. It is true while the bridge is answering but its Lua-side pump is
+ *  not draining, and it is *observed* rather than inferred: the bridge itself
+ *  refuses a request with `-32002` in that state, so every reply the client
+ *  already makes tells it which side of the line it is on. Meaningless while
+ *  `connected` is false, and always false there. */
 export interface BridgeStatus {
   connected: boolean;
   dcsTime: number | null;
+  stalled: boolean;
 }
 
 /** The status before the first successful connect. */
-export const INITIAL_BRIDGE_STATUS: BridgeStatus = { connected: false, dcsTime: null };
+export const INITIAL_BRIDGE_STATUS: BridgeStatus = {
+  connected: false,
+  dcsTime: null,
+  stalled: false,
+};
 
 // ── Two bridges: GUI (GameGUI hook state) and mission (mission scripting state) ──
 // Each is its own DLL with its own JSON-RPC server; the mission bridge is only
@@ -45,13 +59,31 @@ export const INITIAL_DUAL_STATUS: DualBridgeStatus = {
 };
 
 /** Coarse combined state for footers/badges: mission-bridge connectivity (or a
- * gui-reported mission time) means a mission is running. */
-export type CombinedState = "offline" | "menu" | "mission";
+ * gui-reported mission time) means a mission is running; a connected bridge that
+ * cannot be served is `stalled`. */
+export type CombinedState = "offline" | "stalled" | "menu" | "mission";
 
+/**
+ * `stalled` outranks `menu`/`mission` because it is the finer fact: those two
+ * say which Lua states exist, and this says whether either can be reached right
+ * now. Reporting "mission" for a sim that is sitting on a briefing screen is the
+ * exact over-claim cards 04 and 17 recorded.
+ *
+ * It is EITHER bridge, deliberately, not both. The two pumps stall
+ * independently and for opposite reasons — a held mission breakpoint stops the
+ * GUI bridge's frame drain while the mission bridge keeps serving, and an
+ * ESC pause or a briefing screen freezes model time and stalls the mission
+ * bridge while the GUI keeps drawing frames — so requiring both would report
+ * the truth in neither of the two situations that actually occur.
+ *
+ * `offline` still wins: a bridge that is not connected has no pump to describe.
+ */
 export function combinedState(s: DualBridgeStatus): CombinedState {
+  if (!s.gui.connected && !s.mission.connected) return "offline";
+  if ((s.gui.connected && s.gui.stalled) || (s.mission.connected && s.mission.stalled))
+    return "stalled";
   if (s.mission.connected || (s.gui.connected && (s.gui.dcsTime ?? 0) > 0)) return "mission";
-  if (s.gui.connected) return "menu";
-  return "offline";
+  return "menu";
 }
 
 /** The sim time to display: the mission bridge's own clock when connected,
@@ -73,6 +105,31 @@ export const BRIDGE_BACKOFF_FACTOR = 1.6;
 // a real drop is caught by the socket close.
 export const PING_INTERVAL_MS = 2000;
 export const PING_TIMEOUT_MS = 4000;
+
+/**
+ * The ping cadence while the pump is stalled.
+ *
+ * 2 s pings exist to keep the clock in the status bar fresh, and a stalled pump
+ * has no clock to freshen — model time is frozen and every ping is refused
+ * before it is even queued. Card 17's live session watched the extension's own
+ * 2 s poll write `deadline has elapsed` into `dcs_studio_gui.log` every two
+ * seconds for the whole of a held breakpoint; that is the noise this removes.
+ *
+ * The cost is bounded and worth stating plainly: a stalled → serving transition
+ * noticed by the ping alone can take up to 10 s to reach the status bar. It is
+ * bounded that way only when NOTHING else is talking to the bridge, because the
+ * client treats every reply as evidence (see `pumpStateFromReply`) — a debugger
+ * step, a console eval, the output tail, any of them clears the stall on the
+ * spot and restores the fast cadence. The slow case is therefore an idle editor
+ * whose user is watching only the status bar, and 10 s of a truthful "sim idle"
+ * is a far smaller lie than 2 s pings into a queue that cannot drain.
+ */
+export const PING_STALLED_INTERVAL_MS = 10000;
+
+/** How long to wait before the next ping, given the pump's last known state. */
+export function pingIntervalFor(stalled: boolean): number {
+  return stalled ? PING_STALLED_INTERVAL_MS : PING_INTERVAL_MS;
+}
 
 /** The next backoff delay after `current` (rounded, capped at the max). */
 export function nextBackoff(current: number): number {
@@ -213,6 +270,37 @@ export class BridgeRpcError extends Error {
  */
 export function isExpectedBridgeFailure(e: unknown): boolean {
   return e instanceof BridgeRpcError && (e.code === BRIDGE_TORN_DOWN || e.code === PUMP_STALLED);
+}
+
+/**
+ * What one correlated reply says about the pump behind it, or null when it says
+ * nothing.
+ *
+ * This is the whole liveness signal, and it needs no transport of its own: the
+ * bridge already refuses a request it cannot drain with `-32002` instead of
+ * queueing it, so a reply carrying that code is a first-hand report that the
+ * pump is stale, and ANY other reply — a result, or an error the sim had to be
+ * running to produce — is first-hand proof that it drained. Polling `/health`
+ * for `pump_stalled` was the alternative and was rejected: it would add an HTTP
+ * client beside the WebSocket, a second cadence to reason about, and a second
+ * source of truth that can disagree with the one the calls themselves see.
+ *
+ * `-32001` is the one reply that claims NOTHING, hence the `null`: the mission's
+ * queue is failed wholesale by the teardown path, not by a drain, so it is
+ * neither evidence the pump ran nor evidence it is stale. Reading it as "the
+ * pump drained" would briefly paint a bridge as healthy on its way out of
+ * existence.
+ *
+ * Note what is NOT here: a client-side timeout and a socket drop never reach
+ * this function, because no server assigned them a code. That is deliberate.
+ * "The bridge said it cannot drain" and "we heard nothing back" are different
+ * claims, and only the first one may light up a status that tells the user
+ * their sim is idle rather than gone.
+ */
+export function pumpStateFromReply(code: number | undefined): boolean | null {
+  if (code === PUMP_STALLED) return true;
+  if (code === BRIDGE_TORN_DOWN) return null;
+  return false;
 }
 
 /** Derive `dcsTime` from a ping result: the numeric sim time, else null. */

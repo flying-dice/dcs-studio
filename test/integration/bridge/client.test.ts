@@ -92,7 +92,7 @@ describe("BridgeClient over a scripted transport", () => {
   it("emits connected on open and pings immediately", () => {
     const seen: BridgeStatus[] = [];
     client.onStatus((s) => seen.push(s));
-    expect(seen[0]).toEqual({ connected: false, dcsTime: null }); // immediate replay
+    expect(seen[0]).toEqual({ connected: false, dcsTime: null, stalled: false }); // immediate replay
     open();
     expect(seen.some((s) => s.connected)).toBe(true);
     const ping = lastSent(transport);
@@ -108,15 +108,142 @@ describe("BridgeClient over a scripted transport", () => {
       JSON.stringify({ id: ping.id, result: { dcs_time: 42.5 } }),
     );
     await vi.advanceTimersByTimeAsync(0);
-    expect(client.current).toEqual({ connected: true, dcsTime: 42.5 });
+    expect(client.current).toEqual({ connected: true, dcsTime: 42.5, stalled: false });
   });
 
-  it("keeps pinging on the 2s cadence", async () => {
+  it("keeps pinging on the 2s cadence, measured from the answer", async () => {
+    // The cadence is a rescheduled timeout rather than an interval now, because
+    // its length depends on what the last answer said about the pump. The
+    // side effect is deliberate and better: pings no longer overlap — a slow one
+    // delays the next rather than stacking a second on top of it.
     open();
+    const ping = lastSent(transport);
+    transport.last.handlers.onMessage?.(JSON.stringify({ id: ping.id, result: { dcs_time: 1 } }));
+    await vi.advanceTimersByTimeAsync(0);
     const before = transport.last.sent.length;
-    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(transport.last.sent.length).toBe(before);
+    await vi.advanceTimersByTimeAsync(1);
     expect(transport.last.sent.length).toBe(before + 1);
     expect(lastSent(transport).method).toBe("ping");
+  });
+
+  // ── pump liveness: the bridge's own -32002 read off the replies we already get ──
+  //
+  // No new transport, no /health poll: the refusal the bridge sends instead of
+  // queueing is the signal, and every other reply is the counter-evidence.
+  describe("stalled pump", () => {
+    /** Answer the outstanding ping with `error`, or a result if none given. */
+    async function answerPing(error?: { code?: number; message: string }): Promise<void> {
+      const ping = lastSent(transport);
+      expect(ping.method).toBe("ping");
+      transport.last.handlers.onMessage?.(
+        JSON.stringify(error ? { id: ping.id, error } : { id: ping.id, result: { dcs_time: 5 } }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    it("reports stalled when the ping is refused with -32002, without going disconnected", async () => {
+      open();
+      await answerPing({ code: -32002, message: "sim not pumping" });
+      // The distinction the whole feature rests on: the bridge is right there.
+      expect(client.current).toMatchObject({ connected: true, stalled: true });
+    });
+
+    it("backs the ping off to 10s while stalled and restores 2s on recovery", async () => {
+      open();
+      await answerPing({ code: -32002, message: "sim not pumping" });
+      const afterStall = transport.last.sent.length;
+
+      // The 2s tick must NOT fire — that cadence exists to keep a clock fresh
+      // that is frozen, and card 17 watched it fill the bridge log.
+      await vi.advanceTimersByTimeAsync(9999);
+      expect(transport.last.sent.length).toBe(afterStall);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(transport.last.sent.length).toBe(afterStall + 1);
+
+      // Recovery: the next ping is served, and the fast cadence comes straight
+      // back rather than after another slow interval.
+      await answerPing();
+      expect(client.current).toMatchObject({ stalled: false });
+      const afterRecovery = transport.last.sent.length;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(transport.last.sent.length).toBe(afterRecovery + 1);
+    });
+
+    it("clears a stall on any served call, not just the ping — that is what bounds recovery", async () => {
+      // The 10s backoff would otherwise be the worst-case time to notice a
+      // resume. A debugger step or a console eval getting served is proof the
+      // pump drained, and it re-arms the fast ping immediately.
+      open();
+      await answerPing({ code: -32002, message: "sim not pumping" });
+      expect(client.current.stalled).toBe(true);
+
+      const p = client.call("eval", { code: "return 1" });
+      const req = lastSent(transport);
+      transport.last.handlers.onMessage?.(JSON.stringify({ id: req.id, result: 1 }));
+      await expect(p).resolves.toBe(1);
+      expect(client.current.stalled).toBe(false);
+
+      // …and the ping is back on the 2s cadence from that moment.
+      const before = transport.last.sent.length;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(transport.last.sent.length).toBe(before + 1);
+    });
+
+    it("a -32002 on an ordinary call reports the stall too", async () => {
+      open();
+      await answerPing();
+      const p = client.call("eval", { code: "return 1" });
+      p.catch(() => undefined);
+      const req = lastSent(transport);
+      transport.last.handlers.onMessage?.(
+        JSON.stringify({ id: req.id, error: { code: -32002, message: "queue full" } }),
+      );
+      await expect(p).rejects.toMatchObject({ code: -32002 });
+      expect(client.current.stalled).toBe(true);
+    });
+
+    it("a torn-down bridge is not read as a healthy pump", async () => {
+      open();
+      await answerPing({ code: -32002, message: "sim not pumping" });
+      const p = client.call("debug_state", {});
+      p.catch(() => undefined);
+      const req = lastSent(transport);
+      transport.last.handlers.onMessage?.(
+        JSON.stringify({ id: req.id, error: { code: -32001, message: "bridge torn down" } }),
+      );
+      await expect(p).rejects.toMatchObject({ code: -32001 });
+      // -32001 comes from the teardown failing the queue, not from a drain: it
+      // must not repaint a dying bridge as serving.
+      expect(client.current.stalled).toBe(true);
+    });
+
+    it("a lone ping timeout is not a stall — silence is not the bridge saying anything", async () => {
+      open();
+      await vi.advanceTimersByTimeAsync(4000); // ping timeout, no reply at all
+      expect(client.current).toMatchObject({ connected: true, stalled: false });
+    });
+
+    it("drops the stall with the connection, so a reconnect starts clean", async () => {
+      open();
+      await answerPing({ code: -32002, message: "sim not pumping" });
+      expect(client.current.stalled).toBe(true);
+      transport.last.handlers.onClose?.(1006, "");
+      expect(client.current).toEqual({ connected: false, dcsTime: null, stalled: false });
+      await vi.advanceTimersByTimeAsync(1000);
+      transport.last.handlers.onOpen?.();
+      expect(client.current.stalled).toBe(false);
+    });
+
+    it("stops pinging once disposed mid-stall", async () => {
+      open();
+      await answerPing({ code: -32002, message: "sim not pumping" });
+      const before = transport.last.sent.length;
+      client.dispose();
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(transport.last.sent.length).toBe(before);
+    });
   });
 
   it("rejects calls while not connected", async () => {
@@ -201,7 +328,7 @@ describe("BridgeClient over a scripted transport", () => {
     const p = client.call("eval", {});
     transport.last.handlers.onClose?.(1006, "socket closed");
     await expect(p).rejects.toThrow("bridge disconnected");
-    expect(client.current).toEqual({ connected: false, dcsTime: null });
+    expect(client.current).toEqual({ connected: false, dcsTime: null, stalled: false });
 
     expect(transport.connections.length).toBe(1);
     await vi.advanceTimersByTimeAsync(999);
@@ -365,7 +492,7 @@ describe("BridgeClient over a scripted transport", () => {
     // from a feature (#61). The transport is required now; what is left worth
     // asserting is the pre-connection state itself.
     const fresh = new BridgeClient("127.0.0.1", 25569, new FakeTransport());
-    expect(fresh.current).toEqual({ connected: false, dcsTime: null });
+    expect(fresh.current).toEqual({ connected: false, dcsTime: null, stalled: false });
     await expect(fresh.call("ping")).rejects.toThrow("bridge not connected");
     expect(() => fresh.dispose()).not.toThrow();
   });
