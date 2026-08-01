@@ -21,3 +21,6 @@ playwright-report/
 # whose NAMES contain literal backslashes when it runs on a POSIX host. Real
 # runs are on Windows, where these are ordinary directories under the temp dir.
 \\tmp*
+
+# Agent worktrees (session-local build trees; also in .git/info/exclude)
+**/.claude/worktrees/
