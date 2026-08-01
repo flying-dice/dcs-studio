@@ -44,6 +44,10 @@ ARCHITECTURE.md
 # extension's; shipping it puts a stray one inside the installed extension.
 dcs-studio.toml
 docs/04-quality/**
+# Bug reports and RFCs aimed at OUR upstreams (mlua, Eagle Dynamics), not at
+# users of this extension. Contributor-facing like 04-quality above: docs/01-03
+# are the shipped set, and this file is the only thing that decides that.
+docs/05-upstream/**
 # RepoDoc's planning surface — this repo's own kanban board and decision
 # records. Contributor-facing, like ARCHITECTURE.md above; nothing in the
 # extension reads them, so they have no business inside the .vsix.
