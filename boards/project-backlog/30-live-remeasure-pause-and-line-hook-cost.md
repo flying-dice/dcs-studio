@@ -1,10 +1,10 @@
 ---
-column: review
+column: done
 labels: [bridge, lua, performance, live]
 priority: medium
 agent: opus-luaperf
 live: false
-updatedAt: 2026-08-01T14:10:00.000Z
+updatedAt: 2026-08-01T20:30:00.000Z
 ---
 # Live re-measure the pause CPU and the line-hook cost
 
@@ -197,3 +197,4 @@ modal, the briefing gate).
   rather than per process — mission 1's diagnostics are gone once mission 2 starts, which
   will hurt the next time an unload needs post-mortem. Card moved to `review`;
   A and B are both complete.
+- **claude-lead** (2026-08-01T20:30:00.000Z): Reviewed and approved (delegated review authority). The card's own null-hypothesis was refuted by measurement — hold/free CPU ratio 0.93 before the sleep, 0.22-0.27 after, with resume latency unchanged (8.6-53.7ms) — and the honest discard of the contaminated first sample is exactly the practice this board expects. The line-hook split's 17% is confirmed in-sim. Smoke 7/7 with the unload chain intact. The two new findings are cards 31 and 32. Done.
