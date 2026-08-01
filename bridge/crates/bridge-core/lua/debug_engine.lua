@@ -65,6 +65,43 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
   local D = { version = 1, running = false, error = nil }
   D.pump = function() end -- the installer wires the env-specific RPC drain
 
+  -- Seconds between repeats of a pump fault. The drain runs on every qualifying
+  -- line of the debuggee and on the pause's own 0.05s cadence, so an unthrottled
+  -- report of a persistent fault would be a second fault of its own.
+  local PUMP_ERROR_INTERVAL = 10
+  local pump_reported_at = nil
+
+  -- Drive the RPC drain, ABSORBING anything it raises.
+  --
+  -- This is called from inside the line hook — from the run-loop drain and from
+  -- hold_pause — and a raise out of it there is not a lost drain but a lost
+  -- SESSION: it unwinds past hold_pause's `bridge.debug.clear_paused()` and the
+  -- per-pause vars release, so the DLL is left believing the sim is still
+  -- stopped. D.run's own guard then refuses every later debug_run with "a debug
+  -- session is already running" for the rest of the DCS process.
+  --
+  -- Swallowing is right rather than merely convenient: the drain is best-effort
+  -- by construction. It exists so a Pause/Stop can arrive while the chunk holds
+  -- the sim thread, and one that fails is one missed opportunity to deliver
+  -- them — the next line, or the next 0.05s tick, tries again. The pump reaches
+  -- a server userdata and a router owned by the host state, which a mission
+  -- unload or another mod can take out from under it at any moment; none of
+  -- that is a reason to strand the debugger.
+  local function pump_safely()
+    local ok, err = pcall(D.pump)
+    if ok then
+      return
+    end
+    local now = clock()
+    if not pump_reported_at or (now - pump_reported_at) > PUMP_ERROR_INTERVAL then
+      pump_reported_at = now
+      -- pcall'd in turn: the logger is a DLL export reached through the same
+      -- `bridge` table, and reporting a fault must not become one.
+      pcall(bridge.logger.error, "debug pump error (the RPC drain is best-effort; "
+        .. "the pause is unaffected): " .. tostring(err))
+    end
+  end
+
   -- The pause-safety budgets. Fields rather than locals so they can be retuned
   -- on a live state — which is also how the tests drive these paths without
   -- sitting out the real 30 seconds.
@@ -603,7 +640,7 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
         local now = clock()
         if last_pump == nil or (now - last_pump) > DRAIN_INTERVAL_SECONDS then
           last_pump = now
-          D.pump() -- a debug_state during this drain refreshes last_ping
+          pump_safely() -- a debug_state during this drain refreshes last_ping
           mode = bridge.debug.take_resume()
           if not mode and (clock() - dbg.last_ping) > D.idle_seconds then
             mode = "continue" -- the editor stopped polling (gone): don't freeze forever
@@ -627,7 +664,7 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
       local now = clock()
       if (now - last_drain) > DRAIN_INTERVAL_SECONDS then
         last_drain = now
-        D.pump()
+        pump_safely()
       end
       -- Cooperative Stop: unwind the chunk so a runaway/looping run can be
       -- killed (there is no terminate primitive over the bridge otherwise).

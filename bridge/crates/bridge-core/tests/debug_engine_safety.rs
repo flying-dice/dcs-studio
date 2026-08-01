@@ -226,6 +226,77 @@ fn a_session_that_cannot_start_leaves_the_engine_ready_for_the_next_one() {
     .expect("session-claim suite");
 }
 
+/// A pump that raises costs one drain, not the debugger.
+///
+/// `D.pump` is the host-supplied RPC drain, and the engine calls it from INSIDE
+/// the line hook — on the run loop's throttled drain and on the pause's own
+/// 0.05s cadence. It reaches a server userdata and a router owned by the host
+/// state, which a mission unload or another mod can take out from under it.
+///
+/// Unprotected, a raise there did not lose a drain, it lost the SESSION: it
+/// unwound past `hold_pause`'s `clear_paused()` and the per-pause vars release,
+/// so the DLL was left believing the sim was still stopped — and `D.run`'s own
+/// guard then answered "a debug session is already running" for every later
+/// `debug_run` until DCS was restarted. The debugger was gone for the rest of
+/// the flight, from one bad drain.
+#[test]
+#[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+fn a_pump_that_raises_costs_one_drain_and_not_the_session() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let lua = engine_state(false);
+
+    lua.load(
+        r#"
+        local DBG = assert(__DCS_STUDIO_DBG, "the engine installed")
+        -- The pump never succeeds, so no resume can ever be delivered: the idle
+        -- release is the only thing that can end this pause, which is exactly
+        -- the backstop that has to still work.
+        DBG.idle_seconds = 0.1
+
+        local pumps = 0
+        DBG.pump = function()
+          pumps = pumps + 1
+          error("the router was released under us", 0)
+        end
+
+        bridge.debug.clear_breakpoints()
+        DBG.set_breakpoints({ source = "=pump.lua", breakpoints = { { line = 1 } } })
+
+        -- The chunk runs long enough to cross the run loop's 0.05s drain
+        -- interval too, so the OTHER pump call site is exercised in the same run.
+        local outcome = DBG.run(
+          "local t0 = bridge.debug.monotonic()\n"
+            .. "while bridge.debug.monotonic() - t0 < 0.2 do end\n"
+            .. "reached_the_end = true\n",
+          "=pump.lua",
+          false
+        )
+
+        assert(outcome.ran == true, "the run finished cleanly: " .. tostring(outcome.error))
+        assert(pumps > 1, "both pump call sites were reached: " .. pumps)
+        assert(reached_the_end == true, "the chunk ran on past the released pause")
+
+        -- The wedge, precisely: the DLL must not be left believing the sim is
+        -- stopped, and the session flag must be down.
+        assert(bridge.debug.paused() == nil, "the pause was cleared despite the raising pump")
+        assert(DBG.running == false, "the session flag was released")
+        assert(debug.gethook() == nil, "the scoped hook came off")
+
+        -- Which is the whole point: the next debug_run still works. Before the
+        -- fix this answered "a debug session is already running", forever.
+        bridge.debug.clear_breakpoints()
+        DBG.pump = function() end
+        local again = DBG.run("recovered = true\n", "=after-pump.lua", false)
+        assert(again.ran == true, "the engine still runs a session: " .. tostring(again.error))
+        assert(recovered == true, "the chunk ran")
+        "#,
+    )
+    .exec()
+    .expect("pump fault suite");
+}
+
 /// A breakpoint condition is evaluated in the line hook itself, before any
 /// pause exists — the worst place for an unbounded loop, because there is not
 /// even a held pause to time out. It is bounded by the same ceiling, and its
