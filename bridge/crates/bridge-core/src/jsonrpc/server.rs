@@ -45,7 +45,7 @@ use std::error::Error;
 use std::io;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::mpsc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
@@ -148,7 +148,12 @@ pub(crate) struct AppRequest {
 pub(crate) struct AppData {
     pub(crate) rpc_queue: VecDeque<AppRequest>,
     pub(crate) timeout: Duration,
-    pub(crate) service: ServiceInfo,
+    /// This server's identity, behind an `Arc` because [`drain_queue`] needs a
+    /// copy of it on EVERY pump — 60 times a second on the sim thread, whether
+    /// or not there was anything in the queue. Cloning the struct there meant
+    /// four `String` allocations per frame for a value that never changes after
+    /// the bind; cloning the `Arc` is a refcount bump.
+    pub(crate) service: Arc<ServiceInfo>,
     /// When the Lua-side pump last drained this queue — stamped by
     /// [`drain_queue`], the one funnel every pump goes through: the hook's frame
     /// callback, the mission state's model-time timer, and the debug engine's
@@ -286,13 +291,13 @@ impl AppData {
     /// Test-only: the production path is [`AppData::with_stale_after`], which
     /// takes the threshold from the server's config.
     #[cfg(test)]
-    fn new(timeout: Duration, service: ServiceInfo) -> Self {
+    fn new(timeout: Duration, service: Arc<ServiceInfo>) -> Self {
         AppData::with_stale_after(timeout, service, Some(PUMP_STALE_AFTER))
     }
 
     fn with_stale_after(
         timeout: Duration,
-        service: ServiceInfo,
+        service: Arc<ServiceInfo>,
         pump_stale_after: Option<Duration>,
     ) -> Self {
         AppData {
@@ -345,7 +350,11 @@ impl JsonRpcServer {
     ///    silent success, which is the same failure mode wearing a different
     ///    hat.
     pub(crate) fn new(config: ServerConfig) -> Result<Self, actix_web::Error> {
-        let service = ServiceInfo::new(config.env.as_deref(), &config.host, config.port);
+        let service = Arc::new(ServiceInfo::new(
+            config.env.as_deref(),
+            &config.host,
+            config.port,
+        ));
         let app_data = Data::new(Mutex::new(AppData::with_stale_after(
             get_timeout_duration_from_config(&config),
             service,
@@ -733,7 +742,7 @@ fn drain_queue(lua: &Lua, app_data: &Data<Mutex<AppData>>, router: &JsonRpcRoute
         data_guard.mark_drained();
         (
             std::mem::take(&mut data_guard.rpc_queue),
-            data_guard.service.clone(),
+            Arc::clone(&data_guard.service),
         )
     };
 
@@ -1012,16 +1021,16 @@ async fn get_health(data: Data<Mutex<AppData>>) -> Json<Health> {
     let (service, pump_idle, pump_stalled) = {
         let guard = lock_app_data(&data);
         (
-            guard.service.clone(),
+            Arc::clone(&guard.service),
             guard.pump_idle(),
             guard.pump_stall().is_some(),
         )
     };
     Json(Health {
-        name: service.name,
-        env: service.env,
+        name: service.name.clone(),
+        env: service.env.clone(),
         status: "OK".to_string(),
-        version: service.version,
+        version: service.version.clone(),
         // Saturating because this is a report, not a computation: a `u64` of
         // milliseconds is ~584 million years, but a clock that ever hands back
         // something absurd must not cost the only endpoint that still works when
@@ -1305,7 +1314,7 @@ mod tests {
     use actix_web::web::Payload;
     use mlua::Lua;
     use std::io;
-    use std::sync::{mpsc, Mutex};
+    use std::sync::{mpsc, Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
@@ -1494,7 +1503,7 @@ mod tests {
     fn app_data() -> Data<Mutex<AppData>> {
         Data::new(Mutex::new(AppData::with_stale_after(
             Duration::from_secs(1),
-            ServiceInfo::new(Some("mission"), "127.0.0.1", 25570),
+            Arc::new(ServiceInfo::new(Some("mission"), "127.0.0.1", 25570)),
             None,
         )))
     }
@@ -1641,7 +1650,7 @@ mod tests {
         let restore_level = log::max_level();
         log::set_max_level(log::LevelFilter::Info);
 
-        let mut data = AppData::new(Duration::from_secs(1), ServiceInfo::default());
+        let mut data = AppData::new(Duration::from_secs(1), Arc::new(ServiceInfo::default()));
 
         assert!(push_rpc_request(&mut data, request(Some("1"), "echo", None)).is_some());
         assert!(push_rpc_request(&mut data, request(None, "echo", None)).is_none());
@@ -1980,7 +1989,7 @@ mod tests {
             // A 30 s deadline exactly as the hook configures, so the assertion
             // "this answered at all" is itself the proof it did not wait.
             Duration::from_secs(30),
-            ServiceInfo::new(Some("gui"), "127.0.0.1", 25569),
+            Arc::new(ServiceInfo::new(Some("gui"), "127.0.0.1", 25569)),
             Some(Duration::from_secs(2)),
         )));
         let app =
@@ -2119,6 +2128,73 @@ mod tests {
         drop(server);
     }
 
+    /// **The drain runs 60 times a second on the sim thread, and almost always
+    /// over an empty queue.** Every pump — the hook's `onSimulationFrame`, the
+    /// mission state's model-time timer, the debug engine's pause loop — reaches
+    /// `drain_queue`, which needs this server's identity to hand to `respond`.
+    /// Taking a copy of it there cost four `String` allocations per frame, into
+    /// the allocator DCS's own state shares, for a value fixed at bind time.
+    ///
+    /// So the identity is shared, not copied, and this pins both halves: the
+    /// drain still does exactly what it did (stamps the clock, leaves an empty
+    /// queue empty, answers what is queued), and it hands out the SAME
+    /// `ServiceInfo` rather than a fresh one.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn draining_an_empty_queue_shares_the_service_identity_instead_of_copying_it() {
+        let lua = Lua::new();
+        let router = router(&lua);
+        let data = app_data();
+
+        let identity = Arc::as_ptr(&lock_app_data(&data).service);
+        assert_eq!(
+            Arc::strong_count(&lock_app_data(&data).service),
+            1,
+            "the queue holds the only reference before any pump"
+        );
+
+        // The frame-by-frame case: nothing queued, and the drain is still a pump
+        // that ran.
+        pretend_idle_for(&data, Duration::from_secs(5));
+        for _ in 0..3 {
+            drain_queue(&lua, &data, &router);
+        }
+
+        let guard = lock_app_data(&data);
+        assert!(
+            guard.rpc_queue.is_empty(),
+            "nothing was queued, nothing ran"
+        );
+        assert!(
+            guard.last_drained.elapsed() < Duration::from_secs(1),
+            "the empty drain still stamps the liveness clock"
+        );
+        assert_eq!(
+            Arc::as_ptr(&guard.service),
+            identity,
+            "the drain must not replace the identity"
+        );
+        assert_eq!(
+            Arc::strong_count(&guard.service),
+            1,
+            "and must not leave a copy of it behind — three frames, three \
+             refcount bumps, all returned"
+        );
+        assert_eq!(guard.service.env, "mission", "and it is still the real one");
+        drop(guard);
+
+        // And a drain with something in it still answers, through the shared
+        // identity rather than a copy of it.
+        let (sender, receiver) = tokio::sync::oneshot::channel::<JsonRpcResponse>();
+        lock_app_data(&data).rpc_queue.push_back(AppRequest {
+            request: request(Some("q"), "echo", None),
+            response_sender: Some(sender),
+        });
+        drain_queue(&lua, &data, &router);
+        assert_eq!(receiver.blocking_recv().expect("answered").id, "q");
+        assert_eq!(Arc::as_ptr(&lock_app_data(&data).service), identity);
+    }
+
     /// The threshold, and its escape hatch. Configurable because the two pumps
     /// have different natural cadences and a user with a pathological setup must
     /// be able to opt out; `0` means "never refuse", i.e. the pre-card-17
@@ -2164,7 +2240,7 @@ mod tests {
 
         let data = Data::new(Mutex::new(AppData::with_stale_after(
             Duration::from_secs(30),
-            ServiceInfo::new(Some("gui"), "127.0.0.1", 25569),
+            Arc::new(ServiceInfo::new(Some("gui"), "127.0.0.1", 25569)),
             Some(Duration::from_secs(2)),
         )));
         let app =
