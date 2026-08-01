@@ -250,6 +250,71 @@ fn a_session_that_cannot_start_leaves_the_engine_ready_for_the_next_one() {
     .expect("session-claim suite");
 }
 
+/// A breakpoint condition can still see the frame's UPVALUES.
+///
+/// The line hook used to fetch `debug.getinfo(2, "nSlf")` on every line of every
+/// debugged chunk, when the common path needs only `source`. `info.func` was
+/// wanted by exactly one branch — resolving upvalues for a conditional
+/// breakpoint — and `info.name` by none, so the fetch was split: `"S"` always,
+/// `"f"` lazily inside that branch. This is the branch that moved, and an
+/// upvalue in the condition is the only thing that exercises the part that
+/// moved: a condition over plain locals would pass with `func` left nil.
+#[test]
+#[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+fn a_condition_over_an_upvalue_still_resolves_after_the_getinfo_split() {
+    let _guard = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let lua = engine_state(false);
+
+    lua.load(
+        r#"
+        local DBG = assert(__DCS_STUDIO_DBG, "the engine installed")
+        DBG.idle_seconds = 30
+
+        local stops = 0
+        DBG.pump = function()
+          if bridge.debug.paused() ~= nil then
+            stops = stops + 1
+            bridge.debug.request_resume("continue")
+          end
+        end
+
+        bridge.debug.clear_breakpoints()
+        -- `threshold` is an UPVALUE of `tick` — Lua captures it only because the
+        -- BODY references it, which is the whole point of the fixture; `i` is one
+        -- of tick's locals. The condition needs both, so it can only be true if
+        -- collect_upvalues got a real function to read.
+        DBG.set_breakpoints({
+          source = "=upval.lua",
+          breakpoints = { { line = 3, condition = "i == threshold" } },
+        })
+
+        hits = 0
+        local outcome = DBG.run(
+          "local threshold = 5\n"
+            .. "local function tick(i)\n"
+            .. "  local seen = i\n"
+            .. "  if seen >= threshold then hits = hits + 1 end\n"
+            .. "end\n"
+            .. "for i = 1, 10 do tick(i) end\n",
+          "=upval.lua",
+          false
+        )
+
+        assert(outcome.ran == true, "the run finished cleanly: " .. tostring(outcome.error))
+        assert(hits == 6, "the whole loop ran (i = 5..10): " .. tostring(hits))
+        -- Exactly once: on i == 5 and no other iteration. A condition that
+        -- errored would fail OPEN and stop on all ten, which is the failure this
+        -- pins — an unresolvable upvalue reads as "attempt to compare nil".
+        assert(stops == 1, "stopped " .. stops .. " times, expected exactly one (i == threshold)")
+        bridge.debug.clear_breakpoints()
+        "#,
+    )
+    .exec()
+    .expect("upvalue condition suite");
+}
+
 /// A pump that raises costs one drain, not the debugger.
 ///
 /// `D.pump` is the host-supplied RPC drain, and the engine calls it from INSIDE

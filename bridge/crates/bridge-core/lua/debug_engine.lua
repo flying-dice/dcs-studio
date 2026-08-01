@@ -676,11 +676,30 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
     local hook = function(_, line)
       -- "l" mask: every event is a line event. Depth is walked on demand
       -- (real_depth), never counted off call/return events.
-      local info = debug.getinfo(2, "nSlf")
+      --
+      -- "S" ONLY, and that is the hot path's whole budget: this runs on every
+      -- line of every debugged chunk, so what it asks for is multiplied by the
+      -- length of the run. All the common path needs is `source`. The "n" ("name"
+      -- — the engine never reads it here) and "f" (`func`) parts were being
+      -- computed on every line for the sake of one branch: `func` is used solely
+      -- to resolve upvalues for a CONDITIONAL breakpoint, so it is fetched
+      -- lazily, there, where it is a per-hit cost instead of a per-line one.
+      local info = debug.getinfo(2, "S")
       local src = (info and info.source) or source
       -- Throttled RPC drain DURING the run, so a manual Pause/Stop (and live
       -- state queries) are delivered even while the chunk holds the sim thread.
       -- The hook is disabled while it runs, so this re-entrant drain is safe.
+      --
+      -- `clock()` is called per line and deliberately NOT hoisted behind a line
+      -- counter. Measured on this harness over 200k calls: clock 0.016s, against
+      -- getinfo "S" at 0.114s and a whole 200k-line debug_run at ~0.40s — so the
+      -- counter would buy about 4% of the run. What it would cost is the reason
+      -- not to: the drain interval is what delivers Stop and Pause while the sim
+      -- thread is held, and pricing it in LINES instead of seconds makes it
+      -- depend on how line-dense the chunk is — the exact variable a wall-clock
+      -- interval exists to be independent of. A tight numeric loop would drain
+      -- far more often than needed and a chunk spending its lines in long C calls
+      -- far less. Not worth 4%.
       local now = clock()
       if (now - last_drain) > DRAIN_INTERVAL_SECONDS then
         last_drain = now
@@ -699,8 +718,15 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
           -- Evaluate the condition in the stopped frame. From the hook, the
           -- debugged frame is level 2 (getinfo(2) above); collect_locals takes
           -- that caller-relative level. Resolve its locals AND upvalues.
+          --
+          -- The frame's function is fetched HERE rather than on the common path
+          -- above: it is needed only to read upvalues for this condition, and a
+          -- conditional breakpoint is hit far less often than a line is executed.
+          -- Still level 2 — this runs in the hook body, the same frame of
+          -- reference the getinfo above used.
+          local finfo = debug.getinfo(2, "f")
           local _, lmap, lpresent = collect_locals(2)
-          local _, umap, upresent = collect_upvalues(info and info.func)
+          local _, umap, upresent = collect_upvalues(finfo and finfo.func)
           local ok, val = eval_expr({
             locals = lmap,
             locals_present = lpresent,
