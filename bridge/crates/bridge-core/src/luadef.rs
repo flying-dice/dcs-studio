@@ -148,11 +148,27 @@ fn param_names(f: &FnDoc) -> String {
         .join(", ")
 }
 
+/// Collapse a doc line's whitespace: runs of spaces and tabs become one space,
+/// and the ends are trimmed.
+///
+/// The doc strings this generator renders are prose assembled from Rust string
+/// literals, and the `\`-at-end-of-line continuation that keeps those literals
+/// readable is easy to lose while leaving its indentation behind. That is not a
+/// hypothetical: a `JsonRpcServer.new` doc carried 18 literal spaces into the
+/// middle of a sentence in both checked-in `.d.lua` goldens, because rustfmt
+/// does not reach inside a string literal and nothing between the literal and
+/// the file did either. Normalising here means the layout of the *source*
+/// literal cannot change the *generated* artefact — the only whitespace that
+/// survives is the line structure, which `push_doc` reads separately.
+fn normalise_doc_line(line: &str) -> String {
+    line.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Push a `---` doc body, one `--- ` line per source line. A blank `doc`
 /// emits nothing.
 fn push_doc(out: &mut String, doc: &str) {
     for line in doc.lines() {
-        let line = line.trim_end();
+        let line = normalise_doc_line(line);
         if line.is_empty() {
             out.push_str("---\n");
         } else {
@@ -217,7 +233,11 @@ pub fn emit_dlua(doc: &ModuleDoc) -> String {
                     "---@field {} {} # {}",
                     field.name,
                     field.ty,
-                    field.doc.replace('\n', " ")
+                    // A `@field` comment is one line by construction, so the
+                    // newlines fold into spaces — and then through the same
+                    // normaliser, so a folded paragraph break does not leave a
+                    // double space behind.
+                    normalise_doc_line(&field.doc.replace('\n', " "))
                 );
             }
         }
@@ -373,7 +393,7 @@ fn emit_global_node(out: &mut String, prefix: &str, node: &GlobalNode) {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod emitter_tests {
     use super::{
-        emit_dlua, emit_globals_dlua, is_emittable_segment, ClassDoc, FieldDoc, GlobalKind,
+        emit_dlua, emit_globals_dlua, is_emittable_segment, ClassDoc, FieldDoc, FnDoc, GlobalKind,
         GlobalNode, ModuleDoc, ScalarTy,
     };
 
@@ -475,5 +495,45 @@ mod emitter_tests {
             out.contains("---@field documented number # Why it exists.\n"),
             "{out}"
         );
+    }
+
+    /// The layout of the source string literal must not reach the generated
+    /// file. Both checked-in goldens carried 18 literal spaces mid-sentence
+    /// because a `\` line-continuation was lost from a Rust string literal and
+    /// its indentation was not — rustfmt does not look inside a literal, and
+    /// nothing downstream looked either. Runs of spaces and tabs collapse, ends
+    /// are trimmed, and a folded paragraph break in a `@field` leaves one space
+    /// rather than two; only the line structure survives.
+    #[test]
+    fn intra_doc_whitespace_is_normalised_away() {
+        let mut class = ClassDoc::new("m");
+        class.doc = "Leaked          continuation.\n\tTabbed  and   spaced.  ".to_string();
+        class.fields = vec![FieldDoc {
+            name: "folded".to_string(),
+            ty: "number".to_string(),
+            doc: "One.\n\nTwo.".to_string(),
+        }];
+        class.functions = vec![FnDoc {
+            name: "f".to_string(),
+            params: vec![],
+            returns: vec![],
+            doc: "Spread    out.".to_string(),
+            is_method: false,
+        }];
+        let out = emit_dlua(&ModuleDoc {
+            root: "m".to_string(),
+            classes: vec![class],
+        });
+
+        assert!(
+            out.contains("--- Leaked continuation.\n--- Tabbed and spaced.\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("---@field folded number # One. Two.\n"),
+            "{out}"
+        );
+        assert!(out.contains("--- Spread out.\n"), "{out}");
+        assert!(!out.contains("  "), "double space survived: {out}");
     }
 }

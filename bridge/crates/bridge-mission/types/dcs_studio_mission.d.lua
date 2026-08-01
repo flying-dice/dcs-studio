@@ -262,7 +262,7 @@ function dcs_studio_mission_logger.error(msg, ns) end
 ---@class dcs_studio_mission.jsonrpc.JsonRpcServer
 local dcs_studio_mission_jsonrpc_JsonRpcServer = {}
 
---- Bind a server. `config = { host = string, port = number, timeout? = number, env? = string, pump_stale_ms? = number }`.                  timeout is the request deadline in seconds (default 30; 0 means effectively never, for interactive debugging). pump_stale_ms is how long this server's queue may go undrained before arriving requests are refused with -32002 'sim not pumping' instead of queueing into the request timeout (default 2000; 0 disables). The same thing `serve` does — prefer `serve`, which is what both bridges' boot code calls.
+--- Bind a server. `config = { host = string, port = number, timeout? = number, env? = string, pump_stale_ms? = number }`. timeout is the request deadline in seconds (default 30; 0 means effectively never, for interactive debugging). pump_stale_ms is how long this server's queue may go undrained before arriving requests are refused with -32002 'sim not pumping' instead of queueing into the request timeout (default 2000; 0 disables). The same thing `serve` does — prefer `serve`, which is what both bridges' boot code calls.
 ---@param config table
 ---@return dcs_studio_mission.jsonrpc.JsonRpcServer
 function dcs_studio_mission_jsonrpc_JsonRpcServer.new(config) end
