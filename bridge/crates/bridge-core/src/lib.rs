@@ -183,7 +183,7 @@ pub fn bootstrap(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<LuaTab
     // Logging is best effort and its outcome is only ever diagnostic: a bridge
     // that could not open its log file is still a working bridge, and the one
     // place a failure could be reported is the log we just failed to open.
-    let logging = logging::init(get_logger_file_path(lua, kind), logger_level);
+    let logging = logging::init(&get_logger_file_path(lua, kind), logger_level);
     info!("{} logging init: {logging:?}", kind.service_name());
 
     // Before the first allocation into the host's state: from here on, an

@@ -69,10 +69,10 @@ local _G = _G
 local debug = {
   getinfo = debug.getinfo,
   getlocal = debug.getlocal,
-  getupvalue = debug.getupvalue, -- absent in DCS's hooks env; the nil is meaningful
+  getupvalue = debug.getupvalue, -- absent in BOTH DCS states; the nil is meaningful
   sethook = debug.sethook,
   setlocal = debug.setlocal,
-  setupvalue = debug.setupvalue, -- absent in DCS's hooks env; the nil is meaningful
+  setupvalue = debug.setupvalue, -- absent in BOTH DCS states; the nil is meaningful
   traceback = debug.traceback,
 }
 local coroutine = {
@@ -122,6 +122,54 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
   -- report of a persistent fault would be a second fault of its own.
   local PUMP_ERROR_INTERVAL = 10
   local pump_reported_at = nil
+
+  -- Shared read-only stand-in for "this frame has no upvalues to offer". Only
+  -- ever read (eval_expr consults the presence set before the map), so one
+  -- table is safe to hand to every caller.
+  local EMPTY = {}
+
+  -- Breakpoints whose condition has already been reported as unresolvable,
+  -- keyed "source:line" — see report_unresolved_condition. Reset per session in
+  -- D.run so a long DCS process cannot accumulate keys.
+  local unresolved_reported = {}
+
+  -- A breakpoint condition named something this state cannot resolve, and the
+  -- reason is a MISSING HOST CAPABILITY rather than a mistake in the condition.
+  --
+  -- `debug.getupvalue` is nil in both of DCS's Lua states (measured live, card
+  -- 30), so a condition mentioning an upvalue of the paused frame resolves that
+  -- name through _G instead, gets nil, and evaluates false. The breakpoint then
+  -- never fires and — before this — nothing said why, which reads exactly like
+  -- "that code path was not hit": the one shape of wrong answer this engine
+  -- otherwise refuses to give.
+  --
+  -- The semantics stay FAIL-CLOSED. Firing instead (fail-open, as a *broken*
+  -- condition does) would stop on every iteration of the loop the condition was
+  -- written to filter, which is its own kind of lie about why the sim stopped.
+  -- So the condition is still false and the report is the whole fix: once per
+  -- breakpoint, through the logger, so the log names the cause on the first hit
+  -- and does not repeat it on the next ten thousand.
+  --
+  -- The name is reported as "cannot be resolved" rather than asserted to BE an
+  -- upvalue: from inside the evaluation all that is knowable is that it was
+  -- neither a local of the frame nor a global. An upvalue is the case that
+  -- brought this about, and the message says so, without claiming a typo'd
+  -- global is one.
+  local function report_unresolved_condition(src, line, name)
+    local key = tostring(src) .. ":" .. tostring(line)
+    if unresolved_reported[key] then
+      return
+    end
+    unresolved_reported[key] = true
+    -- pcall'd for the same reason pump_safely's report is: the logger is a DLL
+    -- export, and reporting a fault must not become one — least of all from
+    -- inside the line hook, where a raise loses the session.
+    pcall(bridge.logger.error, "breakpoint condition at " .. key .. " references '" .. tostring(name)
+      .. "', which is neither a local of that frame nor a global. This Lua state provides no "
+      .. "debug.getupvalue (DCS strips it from both of its states), so an upvalue of that name "
+      .. "cannot be read - the condition was treated as false and the breakpoint will not fire. "
+      .. "Rewrite the condition over the frame's locals or a global. Reported once per breakpoint.")
+  end
 
   -- Drive the RPC drain, ABSORBING anything it raises.
   --
@@ -259,7 +307,8 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
   end
 
   -- Collect a function's upvalues (where the host provides debug.getupvalue —
-  -- DCS's hooks env strips it; the mission env keeps it) into list + map +
+  -- card 30 measured it absent in BOTH of DCS's states, not just the hooks
+  -- env, so in-sim this always returns empty) into list + map +
   -- presence set, like collect_locals.
   local function collect_upvalues(func)
     local list, map, present = {}, {}, {}
@@ -326,7 +375,9 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
   -- Evaluate `expr` (an expression, else a statement) against an environment
   -- that resolves names through the frame's captured locals → upvalues → _G,
   -- using setfenv (Lua 5.1, present in both hosted states). `env` is { locals,
-  -- locals_present, upvals, upvals_present } from collect_locals/collect_upvalues.
+  -- locals_present, upvals, upvals_present } from collect_locals/collect_upvalues,
+  -- plus an optional `on_unresolved(name)` called for a name that resolved to
+  -- nothing anywhere (see the proxy below).
   -- Returns (ok, value-or-error) — the real loadstring/runtime error, never a
   -- generic one — with the run itself bounded by call_bounded.
   local function eval_expr(env, expr)
@@ -346,7 +397,16 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
       __index = function(_, k)
         if env.locals_present and env.locals_present[k] then return env.locals[k] end
         if env.upvals_present and env.upvals_present[k] then return env.upvals[k] end
-        return globals[k]
+        local v = globals[k]
+        -- A name that fell all the way through to a nil global resolved to
+        -- nothing at all. Callers that can say something useful about that
+        -- (the breakpoint-condition branch, on a host without getupvalue)
+        -- supply `on_unresolved`; for everyone else this is nil and the read
+        -- is exactly as it was.
+        if v == nil and env.on_unresolved then
+          env.on_unresolved(k)
+        end
+        return v
       end,
       -- A bare-name write inside an evaluated statement would land in this
       -- throwaway proxy and silently vanish — the worst kind of "worked".
@@ -636,7 +696,7 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
           }
           local upvals, upvals_map, upvals_present = collect_upvalues(info.func)
           -- The Upvalues scope only appears where the host provides getupvalue
-          -- (DCS's hooks env strips it) — i.e. when collect_upvalues found any.
+          -- (neither of DCS's does) — i.e. when collect_upvalues found any.
           if #upvals > 0 then
             table.insert(scopes, { name = "Upvalues", ref = dbg_register({ kind = "scope", items = upvals }) })
           end
@@ -772,14 +832,37 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
           -- conditional breakpoint is hit far less often than a line is executed.
           -- Still level 2 — this runs in the hook body, the same frame of
           -- reference the getinfo above used.
-          local finfo = debug.getinfo(2, "f")
+          --
+          -- And it is fetched only where it can be USED. Without
+          -- `debug.getupvalue` — both of DCS's states — collect_upvalues can
+          -- only ever return empty, so the getinfo would be a per-hit cost
+          -- bought for nothing. Skipping it is why the capability is tested
+          -- here rather than left to collect_upvalues' own guard.
           local _, lmap, lpresent = collect_locals(2)
-          local _, umap, upresent = collect_upvalues(finfo and finfo.func)
+          local umap, upresent = EMPTY, EMPTY
+          -- Set to the first name the condition failed to resolve anywhere,
+          -- and armed ONLY on a host without getupvalue: elsewhere an
+          -- unresolved name is an ordinary nil global, not a capability gap,
+          -- and there would be nothing honest to report about it.
+          local unresolved = nil
+          local on_unresolved = nil
+          if debug.getupvalue then
+            local finfo = debug.getinfo(2, "f")
+            local _u, m, p = collect_upvalues(finfo and finfo.func)
+            umap, upresent = m, p
+          else
+            on_unresolved = function(name)
+              if unresolved == nil then
+                unresolved = name
+              end
+            end
+          end
           local ok, val = eval_expr({
             locals = lmap,
             locals_present = lpresent,
             upvals = umap,
             upvals_present = upresent,
+            on_unresolved = on_unresolved,
           }, cond)
           if not ok then
             -- A broken condition fails OPEN: pause and surface the error, rather
@@ -789,6 +872,11 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
           else
             dbg.cond_error = nil
             hit = val and true or false
+            -- False *because* a name went unresolved on a host that cannot
+            -- read upvalues: still false, but never silently so.
+            if not hit and unresolved ~= nil then
+              report_unresolved_condition(src, line, unresolved)
+            end
           end
         else
           hit = true
@@ -878,6 +966,10 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
     D.error = nil
     dbg.cond_error = nil
     dbg.pause_id = 0
+    -- Once per breakpoint means once per SESSION per breakpoint: a new run is a
+    -- new attempt, and the user is entitled to hear the reason again. Dropping
+    -- the table here is also what bounds it — a DCS process lives for hours.
+    unresolved_reported = {}
     -- Everything from the claim to the restore runs under a pcall so that NO
     -- path can leave the flag (or the hook, or _G.print) stuck: the setup below
     -- calls into the DLL and writes a global, and a state where either raises

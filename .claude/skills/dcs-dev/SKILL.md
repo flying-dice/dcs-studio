@@ -24,7 +24,7 @@ Shared code (debugger, JSON-RPC server/router, Lua surface) lives in crate `dcs-
 | Hook (source of truth) | `bridge/hook/DcsStudio.lua` (what the extension ships/injects) |
 | MissionScripting.lua | `<install>\Scripts\MissionScripting.lua` (desanitize via the extension command, or toggle the sanitize block manually) |
 | DCS log | `<writedir>\Logs\dcs.log` (fresh each launch; hook + boot lines tagged `DCS-STUDIO`) |
-| Bridge logs | `<writedir>\Logs\dcs_studio_gui.log` and `dcs_studio_mission.log` (per-DLL, truncated on first load) |
+| Bridge logs | `<writedir>\Logs\dcs_studio_gui.log` and `dcs_studio_mission.log` (per-DLL, APPENDED never truncated — rolled to `.log.1` at 8 MiB, so both survive a mission change and a DCS restart) |
 | Version/modules | `<install>\autoupdate.cfg` (JSON) |
 
 ## Setup: build + deploy
