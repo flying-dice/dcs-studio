@@ -150,6 +150,19 @@ describe("mklink off Windows", () => {
     if (r.ok) return;
     expect(r.message).toMatch(/^Failed to create symbolic link: /);
   });
+
+  it("reports a directory symlink that could not be created", async () => {
+    // Off Windows a directory is a "dir" symlink rather than a junction — the
+    // other arm of the type choice, and the one no successful case can reach on
+    // an unprivileged Windows box, since a dir symlink needs the privilege
+    // exactly as a file one does. The failure path exercises the choice without
+    // needing to succeed at it.
+    const target = dir("Hooks");
+    const r = await mklink(path.join(root, "missing-parent", "Hooks"), target);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.message).toMatch(/^Failed to create symbolic link: /);
+  });
 });
 
 describe("mklink on Windows", () => {
