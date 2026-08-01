@@ -171,6 +171,13 @@ impl BridgeKind {
 /// Returns any `mlua` error raised while building the binding surface or
 /// loading the embedded runtime/debug-engine chunks into this state.
 pub fn bootstrap(lua: &Lua, kind: BridgeKind, version: &str) -> LuaResult<LuaTable> {
+    // Back to the beginning, explicitly. The phase lives in a per-DLL static and
+    // the mission DLL's `luaopen` runs again for every mission load, so without
+    // this the second mission's load would carry the first one's last phase —
+    // and a panic during it would be reported as "serving" or "releasing",
+    // sending whoever reads the log at code that was not running.
+    lua_panic::enter(lua_panic::Phase::Load);
+
     let logger_level: LevelFilter = module_config::logger_level(lua);
 
     // Logging is best effort and its outcome is only ever diagnostic: a bridge

@@ -45,7 +45,7 @@ use std::error::Error;
 use std::io;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::mpsc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
@@ -54,7 +54,21 @@ use tokio::sync::oneshot::Receiver;
 use tokio::task::spawn_local;
 use tokio::time::timeout;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_mins(5);
+/// How long a request may sit undispatched before the server releases its
+/// caller, when the config does not say.
+///
+/// 30 s, which is what every caller in this repository already sets by hand —
+/// the GUI hook, the mission init, and the WebSocket latency test all pass
+/// `timeout = 30` — and what every document describing the bridge says the
+/// deadline is. This constant said five minutes, and had said so unread: a
+/// config that omitted the field would have got a deadline ten times the
+/// documented one, on the one path nobody exercises.
+///
+/// Deliberately still a default rather than a required field. A hand-written
+/// config table that forgets `timeout` healing to the documented value is
+/// kinder than a bridge that refuses to start over it, and the value is not a
+/// secret the caller has to be told.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long [`JsonRpcServer::new`] waits for its server thread to report
 /// whether the port bound.
@@ -148,7 +162,12 @@ pub(crate) struct AppRequest {
 pub(crate) struct AppData {
     pub(crate) rpc_queue: VecDeque<AppRequest>,
     pub(crate) timeout: Duration,
-    pub(crate) service: ServiceInfo,
+    /// This server's identity, behind an `Arc` because [`drain_queue`] needs a
+    /// copy of it on EVERY pump — 60 times a second on the sim thread, whether
+    /// or not there was anything in the queue. Cloning the struct there meant
+    /// four `String` allocations per frame for a value that never changes after
+    /// the bind; cloning the `Arc` is a refcount bump.
+    pub(crate) service: Arc<ServiceInfo>,
     /// When the Lua-side pump last drained this queue — stamped by
     /// [`drain_queue`], the one funnel every pump goes through: the hook's frame
     /// callback, the mission state's model-time timer, and the debug engine's
@@ -218,12 +237,25 @@ struct Health {
     /// request arriving now would be answered `-32002` rather than dispatched.
     /// Always `false` when the check is disabled.
     pump_stalled: bool,
+    /// How many requests are queued and waiting for the next drain, out of
+    /// [`QUEUE_CAP`]. The third independent signal, after the listener and the
+    /// pump: a bridge can be listening AND pumping and still be behind, and a
+    /// depth that climbs across successive probes is the only way to see that
+    /// from outside before the refusals start.
+    queue_depth: usize,
+    /// The cap `queue_depth` is measured against, reported rather than assumed
+    /// so a client can compute headroom without being recompiled when it moves.
+    queue_capacity: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct ServerConfig {
     host: String,
     port: u16,
+    /// How long a request may sit undispatched before its caller is released.
+    /// Absent uses [`DEFAULT_TIMEOUT`] (30 s, the documented one); `0` means
+    /// effectively never, which is what an interactive debug session — where a
+    /// breakpoint legitimately holds a request for minutes — asks for.
     timeout: Option<u64>,
     /// The environment this bridge serves ("gui" / "mission") — names the
     /// service in `/health` and `rpc.discover`.
@@ -286,13 +318,13 @@ impl AppData {
     /// Test-only: the production path is [`AppData::with_stale_after`], which
     /// takes the threshold from the server's config.
     #[cfg(test)]
-    fn new(timeout: Duration, service: ServiceInfo) -> Self {
+    fn new(timeout: Duration, service: Arc<ServiceInfo>) -> Self {
         AppData::with_stale_after(timeout, service, Some(PUMP_STALE_AFTER))
     }
 
     fn with_stale_after(
         timeout: Duration,
-        service: ServiceInfo,
+        service: Arc<ServiceInfo>,
         pump_stale_after: Option<Duration>,
     ) -> Self {
         AppData {
@@ -345,7 +377,11 @@ impl JsonRpcServer {
     ///    silent success, which is the same failure mode wearing a different
     ///    hat.
     pub(crate) fn new(config: ServerConfig) -> Result<Self, actix_web::Error> {
-        let service = ServiceInfo::new(config.env.as_deref(), &config.host, config.port);
+        let service = Arc::new(ServiceInfo::new(
+            config.env.as_deref(),
+            &config.host,
+            config.port,
+        ));
         let app_data = Data::new(Mutex::new(AppData::with_stale_after(
             get_timeout_duration_from_config(&config),
             service,
@@ -367,73 +403,10 @@ impl JsonRpcServer {
             .name(format!("dcs-studio-jsonrpc-{port}"))
             .spawn(move || {
                 let _exit_signal = exit_tx;
-                actix_web::rt::System::new().block_on(async move {
-                    let bound = HttpServer::new(move || {
-                        App::new()
-                            .wrap(middleware::Logger::default())
-                            .service(get_ws)
-                            .service(get_health)
-                            .service(post_rpc)
-                            .app_data(Data::clone(&app_data_2))
-                    })
-                    .workers(1)
-                    .bind((host, port));
-
-                    let server = match bound {
-                        Ok(bound) => bound.run(),
-                        Err(cause) => {
-                            let _ = outcome_tx.send(Err(cause));
-                            return;
-                        }
-                    };
-
-                    // A caller that already gave up (see `BIND_TIMEOUT`) has no
-                    // way to stop this server, so don't start one: dropping the
-                    // future here releases the listener rather than leaving a
-                    // port bound to nothing for the rest of the DCS session.
-                    if outcome_tx.send(Ok(server.handle())).is_err() {
-                        warn!("jsonrpc: nobody left to serve for, releasing {port}");
-                        return;
-                    }
-
-                    // The `Server` future does NOTHING until it is polled, and
-                    // this await is the only thing that ever polls it. It must
-                    // stay a statement in its own right — computing the outcome
-                    // first and logging it after, never inside a log macro's
-                    // arguments (card 20).
-                    let finished = server.await;
-                    info!("Server run finished: {finished:?}");
-                });
+                serve_until_stopped(host, port, app_data_2, &outcome_tx);
             })?;
 
-        let handle = match outcome_rx.recv_timeout(BIND_TIMEOUT) {
-            Ok(outcome) => outcome?,
-            // The thread neither bound nor failed within the budget. Waiting
-            // longer is not an option — the caller is the sim thread.
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Close the channel BEFORE anything else. A `send` landing in
-                // the window between the timeout and this scope's end would
-                // otherwise succeed, so the thread's "nobody left to serve for"
-                // release would never fire and it would serve forever on a
-                // handle no one can reach — the exact leak the timeout exists
-                // to avoid. Dropping the receiver first makes that late send
-                // fail by construction.
-                drop(outcome_rx);
-                return Err(ErrorInternalServerError(format!(
-                    "jsonrpc.serve: the server thread did not report a bind result for {}:{port} \
-                     within {BIND_TIMEOUT:?}",
-                    config.host
-                )));
-            }
-            // The sender was dropped without sending: the server thread died,
-            // and a panic there would otherwise be swallowed silently.
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(ErrorInternalServerError(format!(
-                    "jsonrpc.serve: the server thread for {}:{port} died before it could bind",
-                    config.host
-                )));
-            }
-        };
+        let handle = await_bind(outcome_rx, BIND_TIMEOUT, &config.host, port)?;
 
         Ok(Self {
             config,
@@ -513,6 +486,95 @@ impl JsonRpcServer {
     }
 }
 
+/// Build, bind and serve on the calling thread until the server stops, reporting
+/// the bind outcome back over `outcome_tx`.
+///
+/// This is the body of [`JsonRpcServer::new`]'s server thread, lifted out so it
+/// can be driven directly by a test — in particular the abandoned-caller path
+/// below, which is otherwise reachable only by making a real bind overrun
+/// [`BIND_TIMEOUT`].
+fn serve_until_stopped(
+    host: String,
+    port: u16,
+    app_data: Data<Mutex<AppData>>,
+    outcome_tx: &mpsc::SyncSender<Result<ServerHandle, io::Error>>,
+) {
+    actix_web::rt::System::new().block_on(async move {
+        let bound = HttpServer::new(move || {
+            App::new()
+                .wrap(middleware::Logger::default())
+                .service(get_ws)
+                .service(get_health)
+                .service(post_rpc)
+                .app_data(Data::clone(&app_data))
+                // The `Json` extractor's own limit, stated rather than
+                // inherited — actix's default is 2 MB. See `MAX_PAYLOAD_BYTES`.
+                .app_data(actix_web::web::JsonConfig::default().limit(MAX_PAYLOAD_BYTES))
+        })
+        .workers(1)
+        .bind((host, port));
+
+        let server = match bound {
+            Ok(bound) => bound.run(),
+            Err(cause) => {
+                let _ = outcome_tx.send(Err(cause));
+                return;
+            }
+        };
+
+        // A caller that already gave up (see `BIND_TIMEOUT`) has no way to stop
+        // this server, so don't start one: dropping the future here releases the
+        // listener rather than leaving a port bound to nothing for the rest of
+        // the DCS session.
+        if outcome_tx.send(Ok(server.handle())).is_err() {
+            warn!("jsonrpc: nobody left to serve for, releasing {port}");
+            return;
+        }
+
+        // The `Server` future does NOTHING until it is polled, and this await is
+        // the only thing that ever polls it. It must stay a statement in its own
+        // right — computing the outcome first and logging it after, never inside
+        // a log macro's arguments (card 20).
+        let finished = server.await;
+        info!("Server run finished: {finished:?}");
+    });
+}
+
+/// Wait `wait` for the server thread's bind outcome and turn it into what the
+/// caller gets: the handle, or the reason there is none.
+///
+/// **Takes the receiver by value on purpose.** A `send` landing in the window
+/// between the timeout and the caller's error return would otherwise succeed, so
+/// the thread's "nobody left to serve for" release would never fire and it would
+/// serve forever on a handle no one can reach — the exact leak the timeout exists
+/// to avoid. Owning the receiver here makes that late send fail by construction,
+/// because the channel is closed before this function can return at all.
+// The receiver is taken by value ON PURPOSE and its being unused after the
+// `recv_timeout` is the point — see the doc comment. A reference would reopen
+// exactly the window this closes.
+#[allow(clippy::needless_pass_by_value)]
+fn await_bind(
+    outcome_rx: mpsc::Receiver<Result<ServerHandle, io::Error>>,
+    wait: Duration,
+    host: &str,
+    port: u16,
+) -> Result<ServerHandle, actix_web::Error> {
+    match outcome_rx.recv_timeout(wait) {
+        Ok(outcome) => Ok(outcome?),
+        // The thread neither bound nor failed within the budget. Waiting longer
+        // is not an option — the caller is the sim thread.
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(ErrorInternalServerError(format!(
+            "jsonrpc.serve: the server thread did not report a bind result for \
+             {host}:{port} within {wait:?}"
+        ))),
+        // The sender was dropped without sending: the server thread died, and a
+        // panic there would otherwise be swallowed silently.
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(ErrorInternalServerError(format!(
+            "jsonrpc.serve: the server thread for {host}:{port} died before it could bind"
+        ))),
+    }
+}
+
 /// Bind a server and hand it to Lua — exposed as `jsonrpc.serve(config)`, which
 /// both bridges' boot code calls. The mission DLL calls it from its embedded init
 /// on EVERY mission load, into a fresh Lua state each time.
@@ -545,26 +607,49 @@ pub(crate) fn ensure_server(config: ServerConfig) -> Result<JsonRpcServer, actix
 /// the sim down. The outcome is logged instead.
 fn stop_on_thread(handle: ServerHandle, budget: StopBudget) {
     let (done_tx, done_rx) = mpsc::sync_channel::<()>(1);
-    if let Err(cause) = thread::Builder::new()
+    let spawned = thread::Builder::new()
         .name("dcs-studio-jsonrpc-stop".to_string())
         .spawn(move || {
             let outcome = Runtime::new().map(|runtime| runtime.block_on(handle.stop(false)));
             info!("Server stop thread finished: {outcome:?}");
-            // The receiver may already be gone (see the timeout arm below);
-            // there is then nobody to tell, which is not a failure.
+            // The receiver may already be gone (see `report_stop`'s timeout
+            // arm); there is then nobody to tell, which is not a failure.
             let _ = done_tx.send(());
         })
-    {
-        error!("jsonrpc: could not spawn a thread to stop the server: {cause}");
-        return;
-    }
+        // Dropping the handle detaches the thread, which is the documented
+        // intent — this stop is never joined.
+        .map(|_detached| ());
 
-    match done_rx.recv_timeout(budget.acknowledge) {
-        Ok(()) => info!("Server stop acknowledged"),
-        Err(cause) => warn!(
-            "jsonrpc: the server did not stop within {:?} ({cause}); leaving the \
-             stop to finish detached rather than blocking the caller",
-            budget.acknowledge
+    // A spawn that failed took `done_tx` with it, so the wait below ends at once
+    // as `Disconnected` rather than burning the budget on a thread that does not
+    // exist. Both outcomes are reported in one place.
+    report_stop(
+        &spawned,
+        done_rx.recv_timeout(budget.acknowledge),
+        budget.acknowledge,
+    );
+}
+
+/// What one detached stop attempt came to, for the log a live session is read
+/// from.
+///
+/// Infallible on purpose — `Drop` is one of `stop_on_thread`'s callers, and
+/// neither an OS refusing a thread nor a stop that overran its budget is
+/// something a caller could act on. A panic here would be a panic while
+/// unwinding, which aborts, which inside DCS is the sim closing itself.
+fn report_stop(
+    spawned: &io::Result<()>,
+    acknowledged: Result<(), mpsc::RecvTimeoutError>,
+    budget: Duration,
+) {
+    match (spawned, acknowledged) {
+        (Err(cause), _) => {
+            error!("jsonrpc: could not spawn a thread to stop the server: {cause}");
+        }
+        (Ok(()), Ok(())) => info!("Server stop acknowledged"),
+        (Ok(()), Err(cause)) => warn!(
+            "jsonrpc: the server did not stop within {budget:?} ({cause}); leaving the \
+             stop to finish detached rather than blocking the caller"
         ),
     }
 }
@@ -687,7 +772,7 @@ fn drain_queue(lua: &Lua, app_data: &Data<Mutex<AppData>>, router: &JsonRpcRoute
         data_guard.mark_drained();
         (
             std::mem::take(&mut data_guard.rpc_queue),
-            data_guard.service.clone(),
+            Arc::clone(&data_guard.service),
         )
     };
 
@@ -757,17 +842,87 @@ enum Queued {
     Waiting(Receiver<JsonRpcResponse>),
     /// Queued as a notification — no id, so there is nothing to await.
     Accepted,
-    /// NOT queued. The Lua-side pump has not drained for long enough that
-    /// nothing would have answered it, so here is that answer instead — now,
-    /// rather than after the request deadline (card 17).
+    /// NOT queued. Either the Lua-side pump has not drained for long enough that
+    /// nothing would have answered it (card 17), or the queue is at
+    /// [`QUEUE_CAP`] — so here is that answer now, rather than after the request
+    /// deadline.
     PumpStalled(Box<JsonRpcResponse>),
+    /// NOT queued, and nothing to answer to: a notification arriving at a queue
+    /// already full of *requests*, which may not be dropped to make room for it.
+    Dropped,
 }
 
-/// Offer `request` to the queue, refusing it outright when the pump is stale.
+/// How many entries this server's queue may hold before an arriving one has to
+/// give way.
 ///
-/// The refusal is deliberately limited to requests carrying an id. A
+/// The queue existed with no cap at all, which is only safe if something else
+/// bounds it — and nothing did. Everything that drains it runs on the sim
+/// thread, and everything that fills it runs on the actix worker, so a sim that
+/// stops pumping (a mission load, a held breakpoint, a paused menu) leaves a
+/// producer running against a consumer that is not, with the process's own
+/// address space as the only limit. Card 17's staleness refusal caps how long
+/// that can go on for requests; it deliberately exempts notifications, which is
+/// exactly the traffic with nobody waiting to notice.
+///
+/// 256 is chosen against what the producers can legitimately have in flight
+/// between two drains, not against a throughput target. The drain runs every
+/// simulation frame, the editor holds one WebSocket plus a 2 s status poll, and
+/// the largest legitimate burst is a debug session's step-and-inspect volley —
+/// tens, not hundreds. 256 is therefore an order of magnitude above anything
+/// healthy while still bounding what a looping or runaway client can make the
+/// sim hold: entries are a parsed request and a channel, so a full queue is
+/// megabytes at worst rather than "until DCS dies".
+///
+/// Reaching it at all means something is wrong, which is why every path here
+/// logs at `warn` rather than silently coping.
+const QUEUE_CAP: usize = 256;
+
+/// The largest body this bridge will accept on either transport.
+///
+/// Declared rather than inherited. Both frameworks pick a default and both
+/// defaults are wrong here in opposite directions: actix-web's `Json` extractor
+/// caps a payload at 2 MB and actix-ws caps a WebSocket frame at 64 KB, so the
+/// exposure — and the capability — moved silently with a dependency bump. A
+/// number written down here is one a review can argue with.
+///
+/// 32 MB is sized against the largest legitimate payload rather than against
+/// generosity: a mission `.miz`'s decoded mission table is the biggest thing
+/// that crosses this boundary, and `db_export`/`repl_export` deliberately do NOT
+/// — they write a file and return its path precisely so a tens-of-megabytes dump
+/// never rides the socket. So this is an order of magnitude above what any
+/// designed call sends, and still a bound: the request is buffered in the sim's
+/// own process, and "as much as the client feels like" is not a size.
+///
+/// Over-limit is a clean refusal on both transports: `413` on `POST /rpc`,
+/// decided from `Content-Length` before a byte of body is read, and a protocol
+/// close on the WebSocket.
+///
+/// The WebSocket half is a bound on buffering rather than a promise about it —
+/// actix's frame codec compares the length against the maximum only once the
+/// frame has arrived, and reserves up to the maximum while it waits. So a
+/// client that declares 32 MB makes this process reserve 32 MB before being
+/// told no. That is a deliberate trade rather than an oversight: both listeners
+/// are bound to loopback and the caller is the user's own editor, so the
+/// exposure is a buggy local client rather than an attacker, and the cost of
+/// the alternative is refusing the largest payload the editor legitimately has.
+/// Anything that would genuinely be tens of megabytes — `db_export`,
+/// `repl_export` — already writes a file and returns its path instead.
+const MAX_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
+
+/// Offer `request` to the queue, refusing it outright when the pump is stale or
+/// the queue is full.
+///
+/// The staleness refusal is deliberately limited to requests carrying an id: a
 /// notification has no caller waiting and no deadline to burn, so queueing it is
 /// free and its side effect still runs on the frame the sim resumes.
+///
+/// The cap is where those two kinds of traffic meet, and the rule is that **a
+/// request carrying an id is never dropped silently**. It is either queued or
+/// answered — with the truth — because a caller is waiting on it and a drop it
+/// cannot see is indistinguishable from a hang. A notification has nobody to
+/// tell, so it is what gives: the oldest queued notification is dropped to make
+/// room for the newest, which keeps the most recent state the client sent (the
+/// interesting one) rather than the staleset.
 fn accept_request(data: &mut AppData, request: JsonRpcRequest) -> Queued {
     if let (Some(idle), Some(id)) = (data.pump_stall(), request.id.clone()) {
         warn!(
@@ -778,10 +933,59 @@ fn accept_request(data: &mut AppData, request: JsonRpcRequest) -> Queued {
         let response = pump_stalled_response(id, &data.service, idle);
         return Queued::PumpStalled(Box::new(response));
     }
+
+    if data.rpc_queue.len() >= QUEUE_CAP {
+        if let Some(id) = request.id.clone() {
+            warn!(
+                "jsonrpc: refusing '{}' [{id}] - the {} bridge's queue is full at \
+                 {QUEUE_CAP} undrained entries",
+                request.method, data.service.env
+            );
+            let response = queue_full_response(id, &data.service);
+            return Queued::PumpStalled(Box::new(response));
+        }
+        if !drop_oldest_notification(data) {
+            warn!(
+                "jsonrpc: dropping the notification '{}' - the {} bridge's queue is \
+                 full at {QUEUE_CAP} entries and every one of them is a request with a \
+                 caller waiting, which may not be dropped to make room",
+                request.method, data.service.env
+            );
+            return Queued::Dropped;
+        }
+    }
+
     match push_rpc_request(data, request) {
         Some(receiver) => Queued::Waiting(receiver),
         None => Queued::Accepted,
     }
+}
+
+/// Drop the oldest queued NOTIFICATION, reporting whether there was one.
+///
+/// Identified by the absent id rather than by the absent response channel: an
+/// entry can lose its channel to a caller that gave up while still being a
+/// request somebody once waited on, and those are not this function's to take.
+fn drop_oldest_notification(data: &mut AppData) -> bool {
+    let Some(index) = data
+        .rpc_queue
+        .iter()
+        .position(|queued| queued.request.id.is_none())
+    else {
+        return false;
+    };
+    // `remove` on an index just found by `position` cannot be `None`; the
+    // `map_or` is how that is said without an `unwrap` on the sim's path.
+    let method = data
+        .rpc_queue
+        .remove(index)
+        .map_or_else(String::new, |queued| queued.request.method);
+    warn!(
+        "jsonrpc: the {} bridge's queue is full at {QUEUE_CAP} - dropping the oldest \
+         queued notification ('{method}') to make room for the newest",
+        data.service.env
+    );
+    true
 }
 
 /// The envelope a caller gets when the transport is healthy but nothing is
@@ -816,6 +1020,36 @@ fn pump_stalled_response(id: String, service: &ServiceInfo, idle: Duration) -> J
     }
 }
 
+/// The envelope a caller gets when the queue is full.
+///
+/// The same code as a stalled pump, because it is the same thing from the
+/// client's side and wants the same handling: the bridge is listening, this call
+/// was understood, and the Lua-side dispatch is not keeping up — try again, do
+/// not reconnect. The `data` string says which of the two it was, because the
+/// remedies differ for whoever reads the log: a stalled pump waits for the sim,
+/// a full queue means something is sending faster than a simulation frame can
+/// absorb.
+fn queue_full_response(id: String, service: &ServiceInfo) -> JsonRpcResponse {
+    let detail = format!(
+        "the {} bridge's queue is full at {QUEUE_CAP} undrained entries - requests are \
+         arriving faster than the simulation frame that dispatches them into Lua can \
+         absorb them. The bridge is listening and no request already queued has been \
+         discarded; this one was refused rather than displacing one of them.",
+        service.env
+    );
+    JsonRpcResponse {
+        jsonrpc: JSON_RPC_VERSION.to_string(),
+        id,
+        result: None,
+        error: serde_json::to_value(JsonRpcError {
+            code: JSON_RPC_PUMP_STALLED,
+            message: "queue full".to_string(),
+            data: serde_json::to_value(detail).ok(),
+        })
+        .ok(),
+    }
+}
+
 #[post("/rpc")]
 async fn post_rpc(
     _req: HttpRequest,
@@ -836,6 +1070,13 @@ async fn post_rpc(
     let receiver = match queued {
         Queued::Waiting(receiver) => receiver,
         Queued::Accepted => return Ok(HttpResponse::Accepted().body("OK")),
+        // 503, not 202: there is no id to put a JSON-RPC envelope on, and
+        // telling a caller its notification was accepted when it was discarded
+        // is the silent loss this whole path exists to avoid.
+        Queued::Dropped => {
+            return Ok(HttpResponse::ServiceUnavailable()
+                .body("the bridge's queue is full of requests that cannot be dropped"))
+        }
         // A JSON-RPC error is still a delivered answer, so 200 with the envelope
         // — exactly as an error from a handler is returned below.
         Queued::PumpStalled(response) => {
@@ -856,17 +1097,38 @@ async fn post_rpc(
 }
 
 #[get("/ws")]
+// This future is deliberately !Send: the server runs `.workers(1)` and every
+// task here is `spawn_local` onto that one worker's LocalSet, by design.
+#[allow(clippy::future_not_send)]
 async fn get_ws(
     req: HttpRequest,
     body: Payload,
     data: Data<Mutex<AppData>>,
 ) -> actix_web::Result<HttpResponse> {
     let (response, mut session, mut msg_stream) = actix_ws::handle(&req, body)?;
+    // Stated rather than inherited, and a raise as well as a bound: actix-ws
+    // defaults to 64 KB, which no mission table fits in. See
+    // `MAX_PAYLOAD_BYTES`.
+    msg_stream = msg_stream.max_frame_size(MAX_PAYLOAD_BYTES);
 
     info!("WebSocket connection established");
 
     spawn_local(async move {
-        while let Some(Ok(msg)) = msg_stream.recv().await {
+        while let Some(frame) = msg_stream.recv().await {
+            let msg = match frame {
+                Ok(msg) => msg,
+                // A protocol error — an over-limit frame is the one this bridge
+                // declares — is the end of THIS session and nothing more. Say so
+                // to the peer rather than dropping the socket silently: a client
+                // that sent something too big needs to learn that, and the
+                // alternative is an editor waiting on a reply that will never
+                // come.
+                Err(cause) => {
+                    warn!("jsonrpc: ending the WebSocket session: {cause}");
+                    let _ = session.close(None).await;
+                    break;
+                }
+            };
             match msg {
                 Message::Text(text) => {
                     // Enqueue the request IN ORDER (synchronously) but await its
@@ -894,18 +1156,14 @@ async fn get_ws(
                         // answer already exists, and writing it in the read loop
                         // keeps it ahead of any later frame's reply (card 17).
                         Some((Queued::PumpStalled(response), _)) => {
-                            match serde_json::to_string(&response) {
-                                Ok(body) => {
-                                    if let Err(cause) = session.text(body).await {
-                                        error!("could not report a stalled pump: {cause}");
-                                    }
-                                }
-                                Err(cause) => error!("could not encode the refusal: {cause}"),
-                            }
+                            report_refusal(&mut session, &response).await;
                         }
-                        // A notification, or a frame that was not a request at
-                        // all: nothing to await and nothing to answer.
-                        Some((Queued::Accepted, _)) | None => {}
+                        // A notification (queued or, at a full queue, dropped),
+                        // or a frame that was not a request at all: nothing to
+                        // await and no id to answer to. The drop is already at
+                        // `warn` in the log, which is the only place it can be
+                        // reported.
+                        Some((Queued::Accepted | Queued::Dropped, _)) | None => {}
                     }
                 }
                 Message::Ping(bytes) => {
@@ -927,6 +1185,30 @@ async fn get_ws(
     Ok(response)
 }
 
+/// Write a refusal straight back over `session`, in the read loop rather than a
+/// detached task: the answer already exists, and writing it here keeps it ahead
+/// of any later frame's reply (card 17).
+///
+/// A write that fails means the peer is already gone, which is a normal end to
+/// one frame and never a reason to take the session down — so it is logged and
+/// nothing more. Encoding cannot fail (a [`JsonRpcResponse`] is strings and
+/// `Value`s), and a failure there would have exactly the same nothing to be done
+/// about it, so both share the one arm.
+async fn report_refusal(session: &mut Session, response: &JsonRpcResponse) {
+    if let Err(cause) = write_json(session, response).await {
+        error!("could not report a stalled pump: {cause}");
+    }
+}
+
+/// Encode `response` and write it over `session`.
+async fn write_json(
+    session: &mut Session,
+    response: &JsonRpcResponse,
+) -> Result<(), Box<dyn Error>> {
+    session.text(serde_json::to_string(response)?).await?;
+    Ok(())
+}
+
 /// Parse one WS text frame and offer it to the queue, returning what that
 /// produced plus the request timeout — or `None` for a malformed frame. The
 /// enqueue is synchronous so frames keep their arrival order in the queue; only
@@ -946,52 +1228,106 @@ fn enqueue_text_frame(message: &str, data: &Data<Mutex<AppData>>) -> Option<(Que
 
 #[get("/health")]
 async fn get_health(data: Data<Mutex<AppData>>) -> Json<Health> {
-    let (service, pump_idle, pump_stalled) = {
+    let (service, pump_idle, pump_stalled, queue_depth) = {
         let guard = lock_app_data(&data);
         (
-            guard.service.clone(),
+            Arc::clone(&guard.service),
             guard.pump_idle(),
             guard.pump_stall().is_some(),
+            guard.rpc_queue.len(),
         )
     };
     Json(Health {
-        name: service.name,
-        env: service.env,
+        name: service.name.clone(),
+        env: service.env.clone(),
         status: "OK".to_string(),
-        version: service.version,
+        version: service.version.clone(),
         // Saturating because this is a report, not a computation: a `u64` of
         // milliseconds is ~584 million years, but a clock that ever hands back
         // something absurd must not cost the only endpoint that still works when
         // the sim is wedged.
         pump_idle_ms: u64::try_from(pump_idle.as_millis()).unwrap_or(u64::MAX),
         pump_stalled,
+        queue_depth,
+        queue_capacity: QUEUE_CAP,
     })
 }
 
-/// Process one queued request and push its response (if any) back over the
-/// requester's channel. Failures are logged — one bad request must not stop
-/// the drain.
+/// Process one queued request and push its response back over the requester's
+/// channel. One bad request must never stop the drain — the sim runs this loop
+/// once per frame.
+///
+/// **A dispatch that fails is still answered.** It used to share an arm with "a
+/// notification produced nothing", so a request whose params could not be
+/// allocated into the Lua state left its caller with no response at all: the
+/// channel dropped, and `post_rpc` turned that into a bare 500 saying nothing,
+/// while the actual cause sat at `info` in a log the user is not reading. Now
+/// the caller gets a JSON-RPC error naming the cause, and the log line is at
+/// `warn` — a request that could not be dispatched is not routine.
 fn respond(lua: &Lua, router: &JsonRpcRouter, app_request: AppRequest, service: &ServiceInfo) {
-    match process_request(lua, router, app_request.request, service) {
-        Ok(Some(response)) => {
-            // At `debug`, not `info`: this is the whole response BODY, written
-            // on the sim thread into a file that never rolls. A paused debug
-            // session polls `debug_state` four times a second and every answer
-            // carries the entire pause snapshot.
-            debug!("Sending response: {response:?}");
-            match app_request.response_sender {
-                Some(sender) => {
-                    if sender.send(response).is_err() {
-                        error!("Failed to send response");
-                    }
-                }
-                None => debug!("Processed notification: {response:?}"),
+    let AppRequest {
+        request,
+        response_sender,
+    } = app_request;
+    // Kept back from the move for the failure arm below, where the request no
+    // longer exists to be asked. Per dispatched request, not per frame: the
+    // empty drain that runs 60 times a second never reaches here.
+    let id = request.id.clone();
+    let method = request.method.clone();
+
+    let response = match process_request(lua, router, request, service) {
+        Ok(Some(response)) => response,
+        // A notification. Its side effect ran; there is no id to answer to.
+        Ok(None) => {
+            debug!("jsonrpc: '{method}' was a notification, so there is nothing to answer");
+            return;
+        }
+        Err(cause) => {
+            warn!("jsonrpc: could not dispatch '{method}' [{id:?}]: {cause}");
+            // Nothing to answer to, and the warning above is the whole report.
+            let Some(id) = id else { return };
+            dispatch_failed_response(id, &method, &cause)
+        }
+    };
+
+    // At `debug`, not `info`: this is the whole response BODY, written on the
+    // sim thread into a file that never rolls. A paused debug session polls
+    // `debug_state` four times a second and every answer carries the entire
+    // pause snapshot.
+    debug!("Sending response: {response:?}");
+    match response_sender {
+        // A caller that gave up (an HTTP request that timed out and dropped its
+        // receiver) is ordinary, not an error: `warn` says it happened without
+        // claiming the bridge did something wrong.
+        Some(sender) => {
+            if sender.send(response).is_err() {
+                warn!("jsonrpc: nobody was left waiting for '{method}''s answer");
             }
         }
-        // A notification and a request that could not be processed at all are
-        // the same thing from here: there is nothing to push back, and neither
-        // may stop the drain — the sim runs this loop once per frame.
-        outcome => info!("No response to send: {outcome:?}"),
+        None => debug!("jsonrpc: '{method}' has an id but no channel; answer dropped"),
+    }
+}
+
+/// The envelope a caller gets when its request never reached a handler at all.
+///
+/// Distinct from a handler that raised (which is [`process_request`]'s own
+/// `LuaError` arm): this is the bridge failing to *dispatch* — params that could
+/// not be allocated into a Lua state the whole mission shares being the case
+/// that actually happens. The caller needs to be able to tell "your call ran and
+/// failed" from "your call never ran", and either way it needs an answer rather
+/// than a closed channel.
+fn dispatch_failed_response(id: String, method: &str, cause: &LuaError) -> JsonRpcResponse {
+    let detail = format!("the bridge could not dispatch '{method}' into Lua: {cause}");
+    JsonRpcResponse {
+        jsonrpc: JSON_RPC_VERSION.to_string(),
+        id,
+        result: None,
+        error: serde_json::to_value(JsonRpcError {
+            code: JSON_RPC_INTERNAL_ERROR,
+            message: "not dispatched".to_string(),
+            data: serde_json::to_value(detail).ok(),
+        })
+        .ok(),
     }
 }
 
@@ -1125,17 +1461,37 @@ fn process_request(
     }
 }
 
+/// One arriving request in one line: what it is, who it is for, and how big it
+/// was — never its body.
+///
+/// The body used to go in whole at `info`, which is a level the shipped bridge
+/// runs at, into a log file that never rolls, written synchronously on the sim
+/// thread. A `repl_export` of a mission table or a paused `debug_state` poll
+/// four times a second put megabytes there. The size is kept because it is the
+/// one thing the summary cannot otherwise convey and the one thing a "why is
+/// this call slow" question needs; the body itself is at `debug`, where somebody
+/// has asked for it.
+fn request_summary(request: &JsonRpcRequest) -> String {
+    let id = request.id.as_deref().unwrap_or("notification");
+    let bytes = request
+        .params
+        .as_ref()
+        .map_or(0, |params| params.to_string().len());
+    format!("[{id}] '{}' ({bytes} B of params)", request.method)
+}
+
 fn push_rpc_request(
     data: &mut AppData,
     request: JsonRpcRequest,
 ) -> Option<Receiver<JsonRpcResponse>> {
     let request_id = &request.id;
 
-    info!(
-        "<< [{}]: '{:?}'",
-        request_id.as_deref().unwrap_or("notification"),
-        request
-    );
+    // The summary at `info`, the body at `debug`. `info` is a level a shipped
+    // bridge actually runs at, this file never rolls, and the bodies are not
+    // small — a `repl_export` or a `debug_state` poll carries whole tables. See
+    // `request_summary`.
+    info!("<< {}", request_summary(&request));
+    debug!("<< body: {request:?}");
 
     if let Some(id) = request_id {
         debug!("Adding request to queue with id: {id}");
@@ -1168,8 +1524,7 @@ async fn notify_session(
     timeout_duration: Duration,
 ) -> Result<(), Box<dyn Error>> {
     let response = timeout(timeout_duration, receiver).await??;
-    session.text(serde_json::to_string(&response)?).await?;
-    Ok(())
+    write_json(&mut session, &response).await
 }
 
 fn get_timeout_duration_from_config(config: &ServerConfig) -> Duration {
@@ -1208,18 +1563,24 @@ fn get_pump_stale_after_from_config(config: &ServerConfig) -> Option<Duration> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod tests {
     use super::{
-        accept_request, drain_queue, enqueue_text_frame, error_response, free_port, get_health,
-        get_pump_stale_after_from_config, get_timeout_duration_from_config, health_over_tcp,
-        lock_app_data, post_rpc, process_request, push_rpc_request, respond, response_for,
-        success_response, AppData, AppRequest, JsonRpcServer, Queued, ServerConfig, ServiceInfo,
-        DEFAULT_TIMEOUT, JSON_RPC_INTERNAL_ERROR, JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_PUMP_STALLED,
-        JSON_RPC_VERSION, PUMP_STALE_AFTER,
+        accept_request, await_bind, drain_queue, enqueue_text_frame, error_response, free_port,
+        get_health, get_pump_stale_after_from_config, get_timeout_duration_from_config,
+        health_over_tcp, lock_app_data, post_rpc, process_request, push_rpc_request,
+        report_refusal, report_stop, request_summary, respond, response_for, serve_until_stopped,
+        success_response, AppData, AppRequest, Health, JsonRpcServer, Queued, ServerConfig,
+        ServiceInfo, StopBudget, DEFAULT_TIMEOUT, JSON_RPC_INTERNAL_ERROR,
+        JSON_RPC_METHOD_NOT_FOUND, JSON_RPC_PUMP_STALLED, JSON_RPC_VERSION, PUMP_STALE_AFTER,
+        QUEUE_CAP,
     };
     use crate::jsonrpc::router::{JsonRpcRouter, MethodMeta};
     use crate::jsonrpc::{JsonRpcRequest, JsonRpcResponse};
+    use actix_web::dev::ServerHandle;
     use actix_web::web::Data;
+    use actix_web::web::Payload;
     use mlua::Lua;
-    use std::sync::Mutex;
+    use std::io;
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::thread;
     use std::time::Duration;
 
     fn config(json: &str) -> ServerConfig {
@@ -1387,12 +1748,12 @@ mod tests {
         let squatter = std::net::TcpListener::bind("127.0.0.1:0").expect("squat");
         let port = squatter.local_addr().expect("addr").port();
 
-        let Err(err) = JsonRpcServer::new(config(&format!(
+        let err = JsonRpcServer::new(config(&format!(
             r#"{{"host":"127.0.0.1","port":{port},"env":"gui"}}"#
-        ))) else {
-            panic!("the port is taken, so there is nothing to serve on");
-        };
-        let err = err.to_string();
+        )))
+        .err()
+        .expect("the port is taken, so there is nothing to serve on")
+        .to_string();
         assert!(
             err.contains("os error"),
             "the real cause reaches Lua: {err}"
@@ -1407,7 +1768,7 @@ mod tests {
     fn app_data() -> Data<Mutex<AppData>> {
         Data::new(Mutex::new(AppData::with_stale_after(
             Duration::from_secs(1),
-            ServiceInfo::new(Some("mission"), "127.0.0.1", 25570),
+            Arc::new(ServiceInfo::new(Some("mission"), "127.0.0.1", 25570)),
             None,
         )))
     }
@@ -1468,7 +1829,13 @@ mod tests {
         );
         assert_eq!(
             get_timeout_duration_from_config(&config(&format!("{base}}}"))),
-            DEFAULT_TIMEOUT
+            DEFAULT_TIMEOUT,
+            "a config that forgets the field heals to the default rather than              failing to start"
+        );
+        assert_eq!(
+            DEFAULT_TIMEOUT,
+            Duration::from_secs(30),
+            "and that default is the 30 s every caller sets by hand and every              document states — it was five minutes, unread, for anyone who did              not set it"
         );
         assert_eq!(
             get_timeout_duration_from_config(&config(&format!("{base},\"timeout\":0}}"))),
@@ -1539,15 +1906,30 @@ mod tests {
     /// A request gets a response channel; a notification (no id) does not, and
     /// still queues so its side effects run. Handing a notification a channel
     /// would leave the HTTP caller waiting for a reply that never comes.
+    ///
+    /// Driven at `Info`, because `log`'s macros do not evaluate their arguments
+    /// at a disabled level and the per-request line is built in one of them —
+    /// so at the default test level this would never build a summary at all,
+    /// and a `request_summary` that panicked on some request shape would sail
+    /// through. Card 20 is this repository's standing reminder that "the log
+    /// level decided whether the code ran" is not a hypothetical here.
+    /// `serially()` because the level is process-wide and one sibling test pins
+    /// it to `Warn` on purpose.
     #[test]
     fn only_a_request_with_an_id_gets_a_response_channel() {
-        let mut data = AppData::new(Duration::from_secs(1), ServiceInfo::default());
+        let _serial = crate::jsonrpc::serially();
+        let restore_level = log::max_level();
+        log::set_max_level(log::LevelFilter::Info);
+
+        let mut data = AppData::new(Duration::from_secs(1), Arc::new(ServiceInfo::default()));
 
         assert!(push_rpc_request(&mut data, request(Some("1"), "echo", None)).is_some());
         assert!(push_rpc_request(&mut data, request(None, "echo", None)).is_none());
         assert_eq!(data.rpc_queue.len(), 2, "both are queued, in arrival order");
         assert_eq!(data.rpc_queue[0].request.id.as_deref(), Some("1"));
         assert!(data.rpc_queue[1].response_sender.is_none());
+
+        log::set_max_level(restore_level);
     }
 
     /// `rpc.discover` is answered by the server itself, ahead of the router, so
@@ -1878,7 +2260,7 @@ mod tests {
             // A 30 s deadline exactly as the hook configures, so the assertion
             // "this answered at all" is itself the proof it did not wait.
             Duration::from_secs(30),
-            ServiceInfo::new(Some("gui"), "127.0.0.1", 25569),
+            Arc::new(ServiceInfo::new(Some("gui"), "127.0.0.1", 25569)),
             Some(Duration::from_secs(2)),
         )));
         let app =
@@ -2017,6 +2399,218 @@ mod tests {
         drop(server);
     }
 
+    /// **The drain runs 60 times a second on the sim thread, and almost always
+    /// over an empty queue.** Every pump — the hook's `onSimulationFrame`, the
+    /// mission state's model-time timer, the debug engine's pause loop — reaches
+    /// `drain_queue`, which needs this server's identity to hand to `respond`.
+    /// Taking a copy of it there cost four `String` allocations per frame, into
+    /// the allocator DCS's own state shares, for a value fixed at bind time.
+    ///
+    /// So the identity is shared, not copied, and this pins both halves: the
+    /// drain still does exactly what it did (stamps the clock, leaves an empty
+    /// queue empty, answers what is queued), and it hands out the SAME
+    /// `ServiceInfo` rather than a fresh one.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn draining_an_empty_queue_shares_the_service_identity_instead_of_copying_it() {
+        let lua = Lua::new();
+        let router = router(&lua);
+        let data = app_data();
+
+        let identity = Arc::as_ptr(&lock_app_data(&data).service);
+        assert_eq!(
+            Arc::strong_count(&lock_app_data(&data).service),
+            1,
+            "the queue holds the only reference before any pump"
+        );
+
+        // The frame-by-frame case: nothing queued, and the drain is still a pump
+        // that ran.
+        pretend_idle_for(&data, Duration::from_secs(5));
+        for _ in 0..3 {
+            drain_queue(&lua, &data, &router);
+        }
+
+        let guard = lock_app_data(&data);
+        assert!(
+            guard.rpc_queue.is_empty(),
+            "nothing was queued, nothing ran"
+        );
+        assert!(
+            guard.last_drained.elapsed() < Duration::from_secs(1),
+            "the empty drain still stamps the liveness clock"
+        );
+        assert_eq!(
+            Arc::as_ptr(&guard.service),
+            identity,
+            "the drain must not replace the identity"
+        );
+        assert_eq!(
+            Arc::strong_count(&guard.service),
+            1,
+            "and must not leave a copy of it behind — three frames, three \
+             refcount bumps, all returned"
+        );
+        assert_eq!(guard.service.env, "mission", "and it is still the real one");
+        drop(guard);
+
+        // And a drain with something in it still answers, through the shared
+        // identity rather than a copy of it.
+        let (sender, receiver) = tokio::sync::oneshot::channel::<JsonRpcResponse>();
+        lock_app_data(&data).rpc_queue.push_back(AppRequest {
+            request: request(Some("q"), "echo", None),
+            response_sender: Some(sender),
+        });
+        drain_queue(&lua, &data, &router);
+        assert_eq!(receiver.blocking_recv().expect("answered").id, "q");
+        assert_eq!(Arc::as_ptr(&lock_app_data(&data).service), identity);
+    }
+
+    /// **The queue had no cap.** Everything that fills it runs on the actix
+    /// worker and everything that drains it runs on the sim thread, so a sim
+    /// that stops pumping — a mission load, a held breakpoint, a paused menu —
+    /// left a producer running against a consumer that was not, bounded by
+    /// nothing but the process's address space. Card 17's staleness refusal
+    /// bounds that for requests and deliberately exempts notifications, which is
+    /// precisely the traffic with nobody waiting to notice.
+    ///
+    /// The rule at the cap: a request carrying an id is NEVER dropped, because a
+    /// caller is waiting on it and a drop it cannot see is indistinguishable
+    /// from a hang. The notification is what gives, oldest first.
+    #[test]
+    fn a_full_queue_drops_the_oldest_notification_and_never_a_waiting_caller() {
+        let data = app_data(); // the staleness refusal is off here
+
+        for n in 0..QUEUE_CAP {
+            assert!(matches!(
+                accept_request(
+                    &mut lock_app_data(&data),
+                    request(None, &format!("n{n}"), None)
+                ),
+                Queued::Accepted
+            ));
+        }
+        assert_eq!(lock_app_data(&data).rpc_queue.len(), QUEUE_CAP);
+
+        // One more notification: the queue does not grow, the OLDEST goes, and
+        // the newest is what was kept — the recent state is the interesting one.
+        assert!(matches!(
+            accept_request(&mut lock_app_data(&data), request(None, "newest", None)),
+            Queued::Accepted
+        ));
+        let guard = lock_app_data(&data);
+        assert_eq!(guard.rpc_queue.len(), QUEUE_CAP, "the cap holds");
+        assert_eq!(
+            guard.rpc_queue[0].request.method, "n1",
+            "'n0' was the oldest, so 'n0' is what went"
+        );
+        assert_eq!(
+            guard.rpc_queue[QUEUE_CAP - 1].request.method,
+            "newest",
+            "and the arrival is at the back, in order"
+        );
+        drop(guard);
+
+        // A request arriving at the full queue is ANSWERED, not queued and not
+        // dropped: -32002 with the real reason, and nothing already queued is
+        // displaced to make room for it.
+        let Queued::PumpStalled(refusal) =
+            accept_request(&mut lock_app_data(&data), request(Some("r"), "eval", None))
+        else {
+            panic!("a request at a full queue must be answered, not swallowed");
+        };
+        assert_eq!(refusal.id, "r");
+        let error = refusal.error.expect("an error envelope");
+        assert_eq!(error["code"], JSON_RPC_PUMP_STALLED);
+        assert_eq!(error["message"], "queue full");
+        let detail = error["data"].as_str().expect("a cause");
+        assert!(detail.contains("queue is full"), "{detail}");
+        assert!(
+            detail.contains("no request already queued has been discarded"),
+            "the caller is told its peers survived, which is the promise: {detail}"
+        );
+        assert_eq!(
+            lock_app_data(&data).rpc_queue.len(),
+            QUEUE_CAP,
+            "the refusal displaced nothing"
+        );
+    }
+
+    /// The corner where the two rules meet: a queue full of REQUESTS, all of
+    /// them with a caller waiting, and a notification arrives. There is nothing
+    /// droppable and nothing may be displaced, so the notification is what goes —
+    /// and the caller is told, because a 202 for a discarded notification is the
+    /// silent loss this whole path exists to prevent.
+    #[actix_web::test]
+    async fn a_notification_gives_way_to_the_waiting_callers_it_cannot_displace() {
+        use actix_web::{test, App};
+
+        let data = app_data();
+        let mut waiting = Vec::new();
+        for n in 0..QUEUE_CAP {
+            let Queued::Waiting(receiver) = accept_request(
+                &mut lock_app_data(&data),
+                request(Some(&n.to_string()), "eval", None),
+            ) else {
+                panic!("a fresh queue takes requests");
+            };
+            waiting.push(receiver);
+        }
+
+        let app =
+            test::init_service(App::new().service(post_rpc).app_data(Data::clone(&data))).await;
+        let dropped = test::call_service(
+            &app,
+            test::TestRequest::post()
+                .uri("/rpc")
+                .set_json(serde_json::json!({ "jsonrpc": "2.0", "method": "bump" }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(
+            dropped.status(),
+            503,
+            "not 202 — it was refused, and saying otherwise loses it silently"
+        );
+
+        let guard = lock_app_data(&data);
+        assert_eq!(guard.rpc_queue.len(), QUEUE_CAP, "the queue did not grow");
+        assert!(
+            guard.rpc_queue.iter().all(|q| q.request.id.is_some()),
+            "and not one waiting caller was dropped to make room"
+        );
+    }
+
+    /// `/health` is the only view a client has of a bridge that is listening,
+    /// pumping, and still falling behind — the state between "fine" and "already
+    /// refusing". So it carries the depth, and the cap it is measured against,
+    /// rather than leaving a client to discover the problem by being refused.
+    #[actix_web::test]
+    async fn health_reports_how_full_the_queue_is_and_what_full_means() {
+        use actix_web::{test, App};
+
+        let data = app_data();
+        let app =
+            test::init_service(App::new().service(get_health).app_data(Data::clone(&data))).await;
+        let probe = || test::TestRequest::get().uri("/health").to_request();
+
+        let body = test::read_body(test::call_service(&app, probe()).await).await;
+        let health: Health = serde_json::from_slice(&body).expect("the published shape");
+        assert_eq!(health.queue_depth, 0);
+        assert_eq!(health.queue_capacity, QUEUE_CAP);
+
+        for n in 0..3 {
+            let _ = accept_request(
+                &mut lock_app_data(&data),
+                request(Some(&n.to_string()), "eval", None),
+            );
+        }
+        let body = test::read_body(test::call_service(&app, probe()).await).await;
+        let health: Health = serde_json::from_slice(&body).expect("the published shape");
+        assert_eq!(health.queue_depth, 3, "what the sim has not drained yet");
+        assert!(!health.pump_stalled, "and the pump itself is fine");
+    }
+
     /// The threshold, and its escape hatch. Configurable because the two pumps
     /// have different natural cadences and a user with a pathological setup must
     /// be able to opt out; `0` means "never refuse", i.e. the pre-card-17
@@ -2062,7 +2656,7 @@ mod tests {
 
         let data = Data::new(Mutex::new(AppData::with_stale_after(
             Duration::from_secs(30),
-            ServiceInfo::new(Some("gui"), "127.0.0.1", 25569),
+            Arc::new(ServiceInfo::new(Some("gui"), "127.0.0.1", 25569)),
             Some(Duration::from_secs(2)),
         )));
         let app =
@@ -2093,6 +2687,18 @@ mod tests {
             health["pump_idle_ms"].as_u64().expect("idle ms") >= 5_000,
             "{health}"
         );
+
+        // And the same bytes read back as the typed payload, not merely as
+        // whatever JSON happened to be there: `/health` is a published shape the
+        // editor's client parses, so a field renamed or dropped here has to fail
+        // a test rather than quietly become `undefined` at the other end.
+        let typed: Health = serde_json::from_slice(&body).expect("the published shape");
+        assert_eq!(typed.name, "dcs-studio-gui");
+        assert_eq!(typed.env, "gui");
+        assert_eq!(typed.status, "OK");
+        assert_eq!(typed.version, env!("CARGO_PKG_VERSION"));
+        assert!(typed.pump_stalled);
+        assert!(typed.pump_idle_ms >= 5_000);
     }
 
     /// An error envelope carries code, message and optional data, and omits
@@ -2181,6 +2787,81 @@ mod tests {
         );
     }
 
+    /// **A request that never reached a handler is still answered.** This used
+    /// to share an arm with "a notification produced nothing": the caller's
+    /// channel was simply dropped, `post_rpc` turned the closed channel into a
+    /// bare 500 that said nothing at all, and the real cause sat at `info` in a
+    /// log nobody was reading.
+    ///
+    /// The case is real rather than theoretical — crossing params into Lua is an
+    /// allocation in a state the whole mission shares — and the caller has to be
+    /// able to tell "your call ran and failed" from "your call never ran".
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_request_that_could_not_be_dispatched_is_answered_with_the_cause() {
+        let lua = Lua::new();
+        let router = router(&lua);
+        let service = ServiceInfo::default();
+        let params =
+            serde_json::json!({ "a": [1, 2, 3], "b": "some text long enough to allocate" });
+
+        let mut answered_with_the_failure = false;
+        for headroom in (0..64_000).step_by(8) {
+            lua.gc_collect().expect("collect");
+            let ceiling = lua.used_memory() + headroom;
+            lua.set_memory_limit(ceiling)
+                .expect("mlua owns this state's allocator");
+            let (sender, receiver) = tokio::sync::oneshot::channel::<JsonRpcResponse>();
+            respond(
+                &lua,
+                &router,
+                AppRequest {
+                    request: request(Some("squeezed"), "echo", Some(params.clone())),
+                    response_sender: Some(sender),
+                },
+                &service,
+            );
+            lua.set_memory_limit(0).expect("lift the ceiling");
+
+            let answer = receiver
+                .blocking_recv()
+                .expect("the caller must be answered either way, never left hanging");
+            if let Some(error) = answer.error {
+                assert_eq!(answer.id, "squeezed");
+                assert_eq!(error["code"], JSON_RPC_INTERNAL_ERROR);
+                assert_eq!(
+                    error["message"], "not dispatched",
+                    "distinct from a handler that raised — the editor needs to \
+                     tell 'it ran and failed' from 'it never ran': {error}"
+                );
+                let detail = error["data"].as_str().expect("a cause");
+                assert!(detail.contains("echo"), "names the call: {detail}");
+                assert!(detail.contains("memory"), "and the real cause: {detail}");
+                answered_with_the_failure = true;
+                break;
+            }
+        }
+        assert!(
+            answered_with_the_failure,
+            "the squeeze never bit, so this test proves nothing"
+        );
+
+        // And a notification that cannot be dispatched has nobody to tell, which
+        // must still not stop the drain.
+        lua.gc_collect().expect("collect");
+        lua.set_memory_limit(lua.used_memory()).expect("squeeze");
+        respond(
+            &lua,
+            &router,
+            AppRequest {
+                request: request(None, "echo", Some(params)),
+                response_sender: None,
+            },
+            &service,
+        );
+        lua.set_memory_limit(0).expect("lift the ceiling");
+    }
+
     /// A poisoned queue lock does not brick the bridge. A `Mutex` stays
     /// poisoned for the life of the process, so propagating it would leave
     /// every request failing and `/health` unanswerable for the rest of the
@@ -2201,11 +2882,9 @@ mod tests {
         assert!(data.lock().is_err(), "the mutex really is poisoned");
 
         // The WS read path still queues ...
+        let queued = enqueue_text_frame(r#"{"jsonrpc":"2.0","id":"1","method":"echo"}"#, &data);
         assert!(
-            matches!(
-                enqueue_text_frame(r#"{"jsonrpc":"2.0","id":"1","method":"echo"}"#, &data),
-                Some((Queued::Waiting(_), _))
-            ),
+            matches!(queued, Some((Queued::Waiting(_), _))),
             "a poisoned lock must not cost the session its frames"
         );
 
@@ -2278,5 +2957,288 @@ mod tests {
         let error = answer.error.expect("an error envelope");
         assert_eq!(error["code"], super::JSON_RPC_BRIDGE_TORN_DOWN);
         assert_eq!(error["data"], crate::jsonrpc::teardown::STATE_GONE);
+    }
+
+    /// **Card 20's bound wait, from the other side.** The caller is the sim
+    /// thread, so a server thread that neither binds nor fails has to become an
+    /// error rather than a wait — and a thread that died before reporting must
+    /// not be mistaken for one still working. Both messages name the address,
+    /// because a bind error the startup `pcall` reports with no address in it
+    /// tells the user nothing.
+    ///
+    /// Driven on the channel directly, with a zero wait: making a real bind
+    /// overrun `BIND_TIMEOUT` would mean ten seconds of test time and no more
+    /// certainty than this.
+    #[test]
+    fn a_bind_that_is_never_reported_and_a_thread_that_died_are_told_apart() {
+        // Nothing ever sent, and the sender kept alive: the thread is still
+        // there, it has simply not answered.
+        let (keep_alive, outcome_rx) = mpsc::sync_channel::<Result<ServerHandle, io::Error>>(1);
+        let err = await_bind(outcome_rx, Duration::ZERO, "127.0.0.1", 25569)
+            .expect_err("nothing was reported, so there is no handle")
+            .to_string();
+        assert!(err.contains("did not report a bind result"), "{err}");
+        assert!(err.contains("127.0.0.1:25569"), "{err}");
+        drop(keep_alive);
+
+        // The sender dropped without sending: the server thread died, which a
+        // panic there would otherwise have made indistinguishable from silence.
+        let (sender, outcome_rx) = mpsc::sync_channel::<Result<ServerHandle, io::Error>>(1);
+        drop(sender);
+        let err = await_bind(outcome_rx, Duration::ZERO, "127.0.0.1", 25570)
+            .expect_err("the thread died, so there is no handle")
+            .to_string();
+        assert!(err.contains("died before it could bind"), "{err}");
+        assert!(err.contains("127.0.0.1:25570"), "{err}");
+
+        // A real bind failure reported by a live thread reaches the caller as
+        // itself — the mirror image, and the one card 20 could have lost.
+        let (sender, outcome_rx) = mpsc::sync_channel::<Result<ServerHandle, io::Error>>(1);
+        sender
+            .send(Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                "address already in use (os error 98)",
+            )))
+            .expect("report the failure");
+        let err = await_bind(outcome_rx, Duration::ZERO, "127.0.0.1", 25569)
+            .expect_err("a bind failure is not a server")
+            .to_string();
+        assert!(err.contains("os error"), "the real cause survives: {err}");
+    }
+
+    /// A caller that gave up on the bind (see `BIND_TIMEOUT`) has no handle and
+    /// so no way to ever stop the server its thread was about to start. Starting
+    /// one anyway would leave a port bound to nothing for the rest of the DCS
+    /// session, and the next mission asking for it would get a bind error caused
+    /// by nobody.
+    ///
+    /// So the thread must notice, release, and RETURN — which is what is asserted
+    /// here, by driving the server thread's body with a receiver that is already
+    /// gone and then proving the port is free.
+    #[test]
+    fn a_server_nobody_is_left_to_serve_for_releases_its_port_and_returns() {
+        let _serial = crate::jsonrpc::serially();
+        let port = free_port();
+        let (outcome_tx, outcome_rx) = mpsc::sync_channel::<Result<ServerHandle, io::Error>>(1);
+        drop(outcome_rx); // the caller timed out and went away
+
+        let data = app_data();
+        thread::spawn(move || {
+            serve_until_stopped("127.0.0.1".to_string(), port, data, &outcome_tx);
+        })
+        .join()
+        .expect("the thread must return, not serve forever");
+
+        assert!(
+            health_over_tcp(port).is_err(),
+            "the listener must have been released — a port bound to a handle \
+             nobody holds is the leak the bind timeout exists to avoid"
+        );
+    }
+
+    /// **Every wait on the stop path is bounded, and an overrun is reported
+    /// rather than waited out.** The caller is the DCS Lua thread: a teardown
+    /// that blocks the sim trades a crash for a freeze, which is not a trade
+    /// worth making. So a budget too small to be met must leave the stop running
+    /// detached and come back saying the thread was not seen to leave.
+    ///
+    /// Driven on the outcomes rather than through a real actix stop: what is
+    /// under test is that each outcome is REPORTED and none of them is allowed
+    /// to become a failure, and racing a real stop against a deadline would
+    /// assert timing instead.
+    #[test]
+    fn every_way_a_stop_can_go_is_reported_and_none_of_them_fails() {
+        // The ordinary one.
+        report_stop(&Ok(()), Ok(()), Duration::from_secs(2));
+        // Overran the budget: left detached, said so.
+        report_stop(
+            &Ok(()),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            Duration::from_secs(2),
+        );
+        // The stop thread went away without acknowledging.
+        report_stop(
+            &Ok(()),
+            Err(mpsc::RecvTimeoutError::Disconnected),
+            Duration::from_secs(2),
+        );
+        // The OS refused the thread outright — the spawn failure wins the log
+        // line, because "did not acknowledge" would be a misleading way to
+        // describe a stop that was never started.
+        report_stop(
+            &Err(io::Error::other("no threads left")),
+            Err(mpsc::RecvTimeoutError::Disconnected),
+            Duration::from_secs(2),
+        );
+    }
+
+    /// The half of "stopped" that [`ServerHandle::stop`] alone does not promise,
+    /// and the half card 18 cares about: the thread that owned the actix `System`
+    /// has left it. Nothing is ever sent on that channel — the channel
+    /// *disconnecting* is the thread returning — so both answers are asserted
+    /// here against a channel held open and then dropped, which is exactly the
+    /// distinction and involves no timing at all.
+    #[test]
+    fn a_system_thread_that_has_not_left_is_reported_as_not_left() {
+        let zero = StopBudget {
+            acknowledge: Duration::ZERO,
+            system_exit: Duration::ZERO,
+        };
+        let (still_running, system_exited) = mpsc::channel::<std::convert::Infallible>();
+        assert!(
+            !super::wait_for_system_exit(25570, &system_exited, zero),
+            "the thread is still in its System, and a hopeful `true` here is \
+             precisely the claim card 18 disproved"
+        );
+
+        drop(still_running); // the server thread returned
+        assert!(
+            super::wait_for_system_exit(25570, &system_exited, zero),
+            "the channel disconnecting IS the thread leaving"
+        );
+    }
+
+    /// A caller that already gave up is nobody to tell. `fail_queued` counts the
+    /// callers it actually reached, so a queue full of abandoned entries must
+    /// report zero rather than claiming to have answered them — the number goes
+    /// straight into the teardown log line a live session is read from.
+    #[test]
+    fn failing_the_queue_does_not_count_callers_that_had_already_gone() {
+        let _serial = crate::jsonrpc::serially();
+        let port = free_port();
+        let server = JsonRpcServer::new(config(&format!(
+            r#"{{"host":"127.0.0.1","port":{port},"env":"mission"}}"#
+        )))
+        .expect("a free port binds");
+
+        let gave_up = super::queue_against(&server, request(Some("gave-up"), "echo", None))
+            .expect("a request queues");
+        drop(gave_up);
+        // A notification has no channel at all — likewise nothing to report to.
+        assert!(super::queue_against(&server, request(None, "bump", None)).is_none());
+
+        assert_eq!(
+            server.fail_queued("mission end"),
+            0,
+            "two entries, no reachable callers"
+        );
+        assert!(lock_app_data(&server.app_data).rpc_queue.is_empty());
+    }
+
+    /// The WebSocket peer going away is a normal end to one frame, never a reason
+    /// to take the session down: the editor holds one socket for a whole debug
+    /// run, and every later step and inspect rides it. So a refusal that cannot
+    /// be written is logged and nothing more.
+    #[actix_web::test]
+    async fn a_refusal_that_cannot_be_written_is_logged_not_fatal() {
+        use actix_web::test;
+
+        use actix_web::FromRequest;
+
+        let (req, mut payload) = test::TestRequest::get()
+            .insert_header(("upgrade", "websocket"))
+            .insert_header(("connection", "upgrade"))
+            .insert_header(("sec-websocket-version", "13"))
+            .insert_header(("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ=="))
+            .to_http_parts();
+        let (_response, mut session, _stream) = actix_ws::handle(
+            &req,
+            Payload::from_request(&req, &mut payload)
+                .await
+                .expect("the request's own body"),
+        )
+        .expect("a well-formed handshake");
+
+        let refusal = super::pump_stalled_response(
+            "1".to_string(),
+            &ServiceInfo::new(Some("gui"), "127.0.0.1", 25569),
+            Duration::from_secs(5),
+        );
+        session
+            .clone()
+            .close(None)
+            .await
+            .expect("close the session");
+
+        // The assertion is that this RETURNS. A write into a closed session
+        // fails, and anything but swallowing it here ends the read loop.
+        report_refusal(&mut session, &refusal).await;
+    }
+
+    /// **The line the shipped bridge writes per request.** It used to be the
+    /// whole request body at `info`, synchronously on the sim thread, into a log
+    /// that never rolls — a `repl_export` or a paused `debug_state` poll put
+    /// megabytes there. What a reader needs is which call, for whom, and how big;
+    /// the body is at `debug`, for whoever asked for it.
+    #[test]
+    fn the_per_request_log_line_summarises_rather_than_repeating_the_body() {
+        let big = serde_json::json!({ "code": "x".repeat(4096) });
+        let summary = request_summary(&request(Some("42"), "eval", Some(big.clone())));
+        assert!(summary.contains("[42]"), "{summary}");
+        assert!(summary.contains("'eval'"), "{summary}");
+        assert!(
+            summary.contains(&format!("{} B", big.to_string().len())),
+            "the size is the one thing a summary cannot otherwise convey: {summary}"
+        );
+        assert!(
+            !summary.contains("xxxx"),
+            "the body must NOT be in the info line: {summary}"
+        );
+
+        // A notification says so rather than showing an empty id, and a request
+        // with no params is 0 bytes rather than a missing field.
+        let bare = request_summary(&request(None, "bump", None));
+        assert_eq!(bare, "[notification] 'bump' (0 B of params)");
+    }
+
+    /// The two userdata methods whose "there was nothing left to do" answers only
+    /// Lua ever sees: `stop()` on an already-stopped server, and `teardown()`
+    /// called without a reason — the shape `mission_init.lua` uses when the
+    /// mission simply ended.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn the_lua_facing_stop_and_teardown_answer_when_there_is_nothing_left_to_do() {
+        let _serial = crate::jsonrpc::serially();
+        let lua = Lua::new();
+        let port = free_port();
+        let server = JsonRpcServer::new(config(&format!(
+            r#"{{"host":"127.0.0.1","port":{port},"env":"mission"}}"#
+        )))
+        .expect("a free port binds");
+        lua.globals()
+            .set("server", lua.create_userdata(server).expect("userdata"))
+            .expect("park it as the mission init does");
+        lua.globals()
+            .set(
+                "router",
+                lua.create_userdata(router(&lua)).expect("userdata"),
+            )
+            .expect("park the router too");
+
+        let (stopped, exited): (bool, bool) =
+            lua.load("return server:stop()").eval().expect("stop");
+        assert!(stopped, "it was serving");
+        assert!(
+            exited,
+            "and its System thread left within the explicit budget"
+        );
+
+        let (stopped, exited): (bool, bool) = lua
+            .load("return server:stop()")
+            .eval()
+            .expect("stop, again");
+        assert!(!stopped, "a stopped server has no handle left to stop");
+        assert!(exited, "and nothing to wait for");
+
+        // No reason given: the teardown names itself rather than logging an
+        // empty one.
+        let (handlers, failed, stopped_port, exited): (usize, usize, Option<u16>, bool) = lua
+            .load("return server:teardown(router)")
+            .eval()
+            .expect("teardown");
+        assert_eq!(handlers, 2, "the router's handlers went with it");
+        assert_eq!(failed, 0, "nothing was queued");
+        assert_eq!(stopped_port, None, "already stopped");
+        assert!(exited);
     }
 }

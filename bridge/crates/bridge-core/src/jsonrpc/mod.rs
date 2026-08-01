@@ -65,7 +65,7 @@ pub fn register(sub: &mut Sub) -> LuaResult<()> {
                 "new",
                 &[p("config", "table")],
                 &[r(&server_ty)],
-                "Bind a server. `config = { host = string, port = number, timeout? = number, env? = string, pump_stale_ms? = number }`. \
+                "Bind a server. `config = { host = string, port = number, timeout? = number, env? = string, pump_stale_ms? = number }`.                  timeout is the request deadline in seconds (default 30; 0 means effectively never, for interactive debugging). \
                  pump_stale_ms is how long this server's queue may go undrained before arriving requests are refused with \
                  -32002 'sim not pumping' instead of queueing into the request timeout (default 2000; 0 disables). \
                  The same thing `serve` does — prefer `serve`, which is what both bridges' boot code calls.",

@@ -116,6 +116,13 @@ pub(crate) fn release(
     router: &mut JsonRpcRouter,
     reason: &str,
 ) -> Released {
+    // What a panic with no protected frame would be blamed on from here. An
+    // atomic store and nothing else, because the handler that reads it runs on a
+    // thread that is about to die (see `lua_panic`), and because the next line
+    // starts dropping live mlua references into a state DCS is about to close —
+    // which is the frame worth naming if the process ends inside it.
+    crate::lua_panic::enter(crate::lua_panic::Phase::Teardown);
+
     // 1. The Lua handles, while the state can still take the drops.
     let handlers = router.release();
     // 2. The queue, read off the still-running server.
@@ -144,6 +151,14 @@ pub(crate) fn release(
             "teardown ({reason}): the GUI bridge's server is left serving — its \
              state outlives every mission"
         ),
+    }
+
+    // The GUI bridge's state outlives every mission and goes straight back to
+    // serving, so leaving it stamped `Teardown` would misname every panic for
+    // the rest of the process. The mission bridge's state is about to be closed;
+    // `Teardown` is the truthful last thing it was doing.
+    if !server.serves_mission_state() {
+        crate::lua_panic::enter(crate::lua_panic::Phase::Ready);
     }
 
     Released {
@@ -255,6 +270,16 @@ teardown = function(why) return server:teardown(router, why) end
             .unwrap(),
         )
         .expect("a free port binds");
+
+        // The handlers are live and answering right up to the release — which is
+        // what makes dropping them the interesting act rather than a bookkeeping
+        // one.
+        let answered: String = router
+            .get_method("echo")
+            .expect("registered")
+            .call("alive")
+            .unwrap();
+        assert_eq!(answered, "alive");
 
         let released = release(&mut server, &mut router, "mission end");
         assert_eq!(released.handlers, 2, "both handler references were dropped");

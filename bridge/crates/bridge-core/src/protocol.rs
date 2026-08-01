@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 pub const JSON_RPC_VERSION: &str = "2.0";
 
 /// <https://www.jsonrpc.org/specification#request_object>
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct JsonRpcRequest {
     pub jsonrpc: String,
     pub method: String,
@@ -22,7 +22,7 @@ pub struct JsonRpcRequest {
 }
 
 /// <https://www.jsonrpc.org/specification#response_object>
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
     pub id: String,
@@ -35,7 +35,7 @@ pub struct JsonRpcResponse {
 }
 
 /// <https://www.jsonrpc.org/specification#error_object>
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct JsonRpcError {
     pub code: i32,
     pub message: String,

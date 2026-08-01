@@ -50,7 +50,19 @@ exit = "deny"
 [workspace.dependencies]
 dcs-bridge-core = { path = "crates/bridge-core" }
 mlua = { version = "0.10", features = ["lua51", "module", "serialize", "macros"] }
-tokio = { version = "1", features = ["full"] }
+# Only what the bridge uses, rather than "full": `rt`/`rt-multi-thread` for the
+# `Runtime::new()` the stop thread builds (kept exactly as the live-verified stop
+# path has it), `sync` for the oneshot channel every queued request carries,
+# `time` for the request deadline, `macros` for `join!` and `#[tokio::test]`.
+# "full" also pulls in `net`, `fs`, `process` and `signal`, none of which this
+# DLL wants compiled into a flight simulator's address space.
+tokio = { version = "1", features = [
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "time",
+    "macros",
+] }
 actix-web = "4"
 actix-ws = "0.3"
 serde = { version = "1", features = ["derive"] }

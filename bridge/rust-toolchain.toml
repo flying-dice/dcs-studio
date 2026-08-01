@@ -1,0 +1,15 @@
+# Pin the toolchain, because this workspace already depends on a recent one
+# without saying so anywhere.
+#
+# `Duration::from_mins` (used in the tests) and `&raw mut` (used in
+# `lua_panic::error_object`) both need a 2024-era compiler, and the workspace
+# lint policy denies warnings — so a clippy version drift is a red build too,
+# and CI has already been bitten once by a lint that fired on stable but not
+# locally (7fb7d93). An unpinned toolchain makes "it builds" a property of
+# whoever built it.
+#
+# Raise this deliberately when the code needs something newer, rather than
+# discovering the requirement from a failed build on somebody else's machine.
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]

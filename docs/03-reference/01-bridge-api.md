@@ -65,8 +65,16 @@ Endpoints on each port (both transports carry the same JSON-RPC protocol):
 
 - `POST /rpc` — JSON-RPC over HTTP
 - `GET /ws` — JSON-RPC over WebSocket
-- `GET /health` — identity + pump liveness (`name`, `env`, `status`, `version`,
-  `pump_idle_ms`, `pump_stalled`)
+- `GET /health` — identity + pump liveness + queue depth (`name`, `env`,
+  `status`, `version`, `pump_idle_ms`, `pump_stalled`, `queue_depth`,
+  `queue_capacity`)
+
+Both transports cap a body at **32 MB** — stated by the bridge rather than
+inherited from the web framework's defaults (which are 2 MB for HTTP and 64 KB
+for a WebSocket frame). Over that, `POST /rpc` answers `413` from the
+`Content-Length` alone and the WebSocket session is closed. Nothing the editor
+sends comes near it: anything that would genuinely be tens of megabytes
+(`db_export`, `repl_export`) writes a file and returns its path instead.
 
 Three rules that bite first-time callers:
 
@@ -81,7 +89,10 @@ Three rules that bite first-time callers:
   even when no request can be dispatched at all. The two fields that tell you
   whether a call will actually be *served* are `pump_idle_ms` (how long since the
   Lua-side queue drain last ran) and `pump_stalled` (whether that is now past the
-  refusal threshold). Reachability is not liveness — read these, not the socket.
+  refusal threshold), plus `queue_depth` against `queue_capacity` — a bridge can
+  be listening AND pumping and still be behind, and a depth climbing across
+  successive probes is the only warning before the refusals start. Reachability
+  is not liveness — read these, not the socket.
 
 ### `-32002 sim not pumping`
 
@@ -95,8 +106,16 @@ error instead of being parked until the request timeout:
   "data": "the gui bridge's queue has not been drained for 4310 ms — …" } }
 ```
 
-Nothing is broken when you see it, and nothing needs reconnecting: the bridge is
-listening and serves again on the very next frame it is pumped. Treat it as "not
+The same code, with `"message": "queue full"`, means the other half of the same
+problem: the queue has reached its 256-entry cap. A request carrying an id is
+never dropped to make room — it is refused like this, and nothing already queued
+is displaced. A *notification* is what gives way, oldest first, because it has
+no caller waiting; the drop is logged at `warn`, and a notification arriving at a
+queue full of undroppable requests gets `503` rather than a `202` that would lose
+it silently.
+
+Nothing is broken when you see either one, and nothing needs reconnecting: the
+bridge is listening and serves again on the very next frame it is pumped. Treat it as "not
 right now" — the sim is paused, loading, or a debug session or long call owns the
 sim thread. It is distinct from `-32001 bridge torn down`, which means the Lua
 state that would have answered has gone away (mission end).
