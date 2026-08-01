@@ -200,10 +200,35 @@ Every wait on the shutdown path is bounded, because the caller is the sim thread
 The queue is drained once per simulation frame. The pump stamps a liveness clock,
 and a request arriving while that clock is stale fast-fails `-32002` "sim not
 pumping" rather than burning the 30s request deadline (card 17). Default 2000ms,
-overridable per server with `pump_stale_ms`, `0` disables. `GET /health` exposes
-`pump_idle_ms` and `pump_stalled` for exactly this reason: **status OK is about the
-listener, not the sim** — a client deciding whether the sim will answer reads
-`pump_stalled`, not `status`.
+overridable per server with `pump_stale_ms`, `0` disables.
+
+`-32002` carries a second meaning as well, told apart by the message rather than
+the code: `"queue full"`. The queue is capped at 256 undrained entries
+(`QUEUE_CAP`), because everything that fills it runs on the actix worker and
+everything that drains it runs on the sim thread — a sim that stops pumping left
+a producer running against a stopped consumer with the address space as the only
+bound. A *request* arriving at a full queue is refused with the code rather than
+dropped, because a caller is waiting and a silent drop is indistinguishable from
+a hang. A *notification* has nobody to tell, so it is what gives way: the oldest
+queued notification is dropped to make room, and if every entry is an undroppable
+request then the arriving notification is dropped instead. `pump_stale_ms = 0`
+disables the staleness half only; the cap always applies.
+
+`GET /health` exposes `pump_idle_ms` and `pump_stalled` for exactly this reason:
+**status OK is about the listener, not the sim** — a client deciding whether the
+sim will answer reads `pump_stalled`, not `status`. It also reports `queue_depth`
+against `queue_capacity`, which is the third independent signal after the listener
+and the pump: a bridge can be listening *and* pumping and still be falling behind,
+and a depth climbing across successive probes is the only way to see that from
+outside before the refusals begin.
+
+Both transports also declare a `MAX_PAYLOAD_BYTES` cap of **32 MB**, stated rather
+than inherited — actix-web's `Json` extractor defaults to 2 MB and actix-ws to a
+64 KB frame, so the limit would otherwise move with a dependency bump. Over-limit
+is a clean refusal on both: `413` on `POST /rpc`, decided from `Content-Length`
+before the body is read, and a protocol close on the WebSocket. Anything that would
+genuinely be tens of megabytes (`db_export`, `repl_export`) writes a file and
+returns its path instead of riding the socket.
 
 ### Two guards worth knowing
 
@@ -234,12 +259,13 @@ explained in `.github/workflows/ci.yml`).
 | Unit | `npm run test:unit` | `test/unit/**` | `src/core/**`, `media/*-core.js` |
 | Integration | `npm run test:integration` | `test/integration/**` | `src/**` minus the hexagon |
 | E2E | `npm run test:e2e` | `tests/**` | `media/*.js` in real Chromium |
-| Rust | `cargo test --workspace` | `bridge/crates/**` | the bridge workspace (`cargo llvm-cov`) |
+| Rust | `cargo test --workspace` | `bridge/crates/**` | the bridge workspace (`node scripts/llvm-cov.mjs`) |
 
 `npm test` runs the three JavaScript layers in sequence; `npm run coverage` does
-the same with each gate enforced. CI runs one job per layer, plus `cargo llvm-cov`
-for the Rust bridge and a Windows job that re-runs the headless layers on the
-shipping OS. Operational detail — prerequisites, and which layer a new test belongs
+the same with each gate enforced. CI runs one job per layer, plus
+`node scripts/llvm-cov.mjs` for the Rust bridge — the locking wrapper, never
+`cargo llvm-cov` directly — and a Windows job that re-runs the headless layers on
+the shipping OS. Operational detail — prerequisites, and which layer a new test belongs
 in — is [docs/02-guides/01-running-the-tests.md](docs/02-guides/01-running-the-tests.md).
 
 **Run the gates serially, and never two `cargo llvm-cov` invocations at once.**
@@ -257,6 +283,14 @@ than no gate:
   whichever test happens to be late in the run order. Cargo's file lock does not
   cover it, because `llvm-cov` owns that directory. If a second measurement is
   genuinely needed, give it its own `--target-dir`.
+
+  This half is no longer a rule anyone has to remember: it is **mechanically
+  enforced by `scripts/llvm-cov.mjs`**, which takes an exclusive lock on the
+  target directory it is about to build into. A second run fails immediately and
+  names the holder, rather than corrupting the first ten minutes in. Go through
+  the script — CI does, so CI and a developer's machine run the identical
+  command. A run given its own `--target-dir` moves the lock with it and is free
+  to proceed in parallel, which is the same escape hatch as before.
 
 - **Unit** is pure logic: no filesystem, no child processes, no `vscode`. Anything
   needing a seam belongs in integration.

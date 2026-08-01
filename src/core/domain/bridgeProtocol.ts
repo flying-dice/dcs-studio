@@ -117,6 +117,18 @@ export const BRIDGE_TORN_DOWN = -32001;
  * `onSimulationFrame` drain while its socket still answers `/health` in 1–2 ms.
  * Nothing has gone away and the very next frame serves again — so this is a
  * condition to report, never a defect to file.
+ *
+ * The name records the first cause, not the only one. `-32002` carries TWO
+ * bridge-side refusals, told apart by the message rather than by the code:
+ *
+ * - `"sim not pumping"` — the staleness refusal described above.
+ * - `"queue full"` — the bridge's request queue is at its 256-entry cap, so a
+ *   request arriving at a full one is answered rather than queued.
+ *
+ * They are the same thing from this side: transient back-pressure against a
+ * perfectly well-formed request, where the remedy is to retry and nothing is
+ * broken. Nothing in this extension branches on which one it was, and the
+ * constant is deliberately not split in two to invite that.
  */
 export const PUMP_STALLED = -32002;
 
@@ -188,6 +200,13 @@ export class BridgeRpcError extends Error {
  * (`-32002`) are both the bridge working correctly and saying so. Putting them
  * behind a report button trains users to file noise and buries the reports
  * that mean something.
+ *
+ * `-32002` covers both of its transient conditions here — `"sim not pumping"`
+ * AND `"queue full"` — and suppressing both is DELIBERATE, not an accident of
+ * matching on the code alone. A full queue is the bridge applying back-pressure
+ * exactly as designed; there is no defect for a user to report and no action
+ * for them to take beyond retrying. The unit suite pins both messages so this
+ * stays a decision rather than a side effect of the coarser check.
  *
  * Note this is about the *report affordance*, not about silence: callers still
  * tell the user what happened, just as transient status rather than a fault.

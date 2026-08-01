@@ -248,6 +248,14 @@ struct Health {
     queue_capacity: usize,
 }
 
+/// What Lua passes to `jsonrpc.serve` / `JsonRpcServer.new`. The `.d.lua`
+/// goldens describe this table, so keep the prose in [`crate::jsonrpc::register`]
+/// in step with these fields.
+///
+/// Note that `pump_stale_ms` tunes only ONE of the two refusals this server
+/// makes with [`JSON_RPC_PUMP_STALLED`]. The other — `"queue full"`, at
+/// [`QUEUE_CAP`] undrained entries — is not configurable, and applies whatever
+/// `pump_stale_ms` is set to, `0` included.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct ServerConfig {
     host: String,
@@ -261,9 +269,10 @@ pub(crate) struct ServerConfig {
     /// service in `/health` and `rpc.discover`.
     env: Option<String>,
     /// How long this server's queue may go undrained before arriving requests are
-    /// refused with [`JSON_RPC_PUMP_STALLED`] instead of queued. Absent uses
-    /// [`PUMP_STALE_AFTER`]; `0` disables the check, which is what a test wanting
-    /// a request to sit undrained in the queue asks for.
+    /// refused with [`JSON_RPC_PUMP_STALLED`] and `"sim not pumping"` instead of
+    /// queued. Absent uses [`PUMP_STALE_AFTER`]; `0` disables THIS check — not
+    /// the `"queue full"` refusal, which shares the code — and is what a test
+    /// wanting a request to sit undrained in the queue asks for.
     pump_stale_ms: Option<u64>,
 }
 
@@ -842,11 +851,16 @@ enum Queued {
     Waiting(Receiver<JsonRpcResponse>),
     /// Queued as a notification — no id, so there is nothing to await.
     Accepted,
-    /// NOT queued. Either the Lua-side pump has not drained for long enough that
-    /// nothing would have answered it (card 17), or the queue is at
-    /// [`QUEUE_CAP`] — so here is that answer now, rather than after the request
-    /// deadline.
-    PumpStalled(Box<JsonRpcResponse>),
+    /// NOT queued, but answered. Either the Lua-side pump has not drained for
+    /// long enough that nothing would have answered it (card 17), or the queue
+    /// is at [`QUEUE_CAP`] — so here is that answer now, rather than after the
+    /// request deadline.
+    ///
+    /// Named for what it is rather than for one of its two causes: this was
+    /// `PumpStalled`, which described the staleness refusal and quietly lied
+    /// about the queue-full one. Both carry `-32002`; the message inside the
+    /// envelope says which.
+    Refused(Box<JsonRpcResponse>),
     /// NOT queued, and nothing to answer to: a notification arriving at a queue
     /// already full of *requests*, which may not be dropped to make room for it.
     Dropped,
@@ -931,7 +945,7 @@ fn accept_request(data: &mut AppData, request: JsonRpcRequest) -> Queued {
             request.method, data.service.env
         );
         let response = pump_stalled_response(id, &data.service, idle);
-        return Queued::PumpStalled(Box::new(response));
+        return Queued::Refused(Box::new(response));
     }
 
     if data.rpc_queue.len() >= QUEUE_CAP {
@@ -942,7 +956,7 @@ fn accept_request(data: &mut AppData, request: JsonRpcRequest) -> Queued {
                 request.method, data.service.env
             );
             let response = queue_full_response(id, &data.service);
-            return Queued::PumpStalled(Box::new(response));
+            return Queued::Refused(Box::new(response));
         }
         if !drop_oldest_notification(data) {
             warn!(
@@ -1079,7 +1093,7 @@ async fn post_rpc(
         }
         // A JSON-RPC error is still a delivered answer, so 200 with the envelope
         // — exactly as an error from a handler is returned below.
-        Queued::PumpStalled(response) => {
+        Queued::Refused(response) => {
             let body = serde_json::to_string(&response).map_err(ErrorInternalServerError)?;
             return Ok(HttpResponse::Ok().body(body));
         }
@@ -1155,7 +1169,7 @@ async fn get_ws(
                         // Answered here rather than in a detached task: the
                         // answer already exists, and writing it in the read loop
                         // keeps it ahead of any later frame's reply (card 17).
-                        Some((Queued::PumpStalled(response), _)) => {
+                        Some((Queued::Refused(response), _)) => {
                             report_refusal(&mut session, &response).await;
                         }
                         // A notification (queued or, at a full queue, dropped),
@@ -1777,14 +1791,14 @@ mod tests {
     /// refusal at all.
     ///
     /// Total on purpose, and the reason these exist rather than
-    /// `let Queued::PumpStalled(x) = q else { panic!(..) }`: a let-else failure
+    /// `let Queued::Refused(x) = q else { panic!(..) }`: a let-else failure
     /// arm is a line that only ever runs when the test is ALREADY broken, so it
     /// can never be covered, and an uncovered line in a suite gated at zero
     /// reports as a coverage regression while saying nothing about the code.
     /// `Option` + `expect` puts the same assertion on a line that does run.
     fn refusal_of(queued: Queued) -> Option<Box<JsonRpcResponse>> {
         match queued {
-            Queued::PumpStalled(response) => Some(response),
+            Queued::Refused(response) => Some(response),
             Queued::Waiting(_) | Queued::Accepted | Queued::Dropped => None,
         }
     }
@@ -1794,7 +1808,7 @@ mod tests {
     fn waiting_on(queued: Queued) -> Option<tokio::sync::oneshot::Receiver<JsonRpcResponse>> {
         match queued {
             Queued::Waiting(receiver) => Some(receiver),
-            Queued::PumpStalled(_) | Queued::Accepted | Queued::Dropped => None,
+            Queued::Refused(_) | Queued::Accepted | Queued::Dropped => None,
         }
     }
 

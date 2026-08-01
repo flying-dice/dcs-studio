@@ -225,7 +225,17 @@ describe("isExpectedBridgeFailure", () => {
   });
 
   it("says yes to a sim that is not pumping this instant", () => {
-    expect(isExpectedBridgeFailure(new BridgeRpcError("pump stalled", PUMP_STALLED))).toBe(true);
+    expect(isExpectedBridgeFailure(new BridgeRpcError("sim not pumping", PUMP_STALLED))).toBe(true);
+  });
+
+  it("says yes to a full bridge queue, which shares the same code", () => {
+    // -32002 carries two refusals — "sim not pumping" and "queue full" — and
+    // suppressing the report affordance for BOTH is the decision, not a side
+    // effect of matching on the code alone. A full queue is the bridge applying
+    // back-pressure as designed: nothing for a user to report, nothing for them
+    // to do but retry. Pinned here so that splitting the code, or narrowing the
+    // check to the staleness message, has to break a test that says why.
+    expect(isExpectedBridgeFailure(new BridgeRpcError("queue full", PUMP_STALLED))).toBe(true);
   });
 
   it("says no to any other server error code", () => {

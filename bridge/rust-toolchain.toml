@@ -12,4 +12,12 @@
 # discovering the requirement from a failed build on somebody else's machine.
 [toolchain]
 channel = "1.97.0"
-components = ["rustfmt", "clippy"]
+# llvm-tools-preview is here because CI's coverage gate needs it and a
+# directory override wins over whatever the CI action installed: asking
+# dtolnay/rust-toolchain for `stable` + llvm-tools-preview installs the
+# component against *stable*, then this file selects 1.97.0 for every cargo
+# invocation under bridge/ — a toolchain without it. That was green only for
+# as long as stable happened to be 1.97.0. The workflow now names 1.97.0
+# explicitly and the component is listed here, so the pin, the cache key and
+# the installed toolchain all agree.
+components = ["rustfmt", "clippy", "llvm-tools-preview"]

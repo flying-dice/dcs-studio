@@ -110,9 +110,18 @@ The same code, with `"message": "queue full"`, means the other half of the same
 problem: the queue has reached its 256-entry cap. A request carrying an id is
 never dropped to make room — it is refused like this, and nothing already queued
 is displaced. A *notification* is what gives way, oldest first, because it has
-no caller waiting; the drop is logged at `warn`, and a notification arriving at a
-queue full of undroppable requests gets `503` rather than a `202` that would lose
-it silently.
+no caller waiting; the drop is logged at `warn`.
+
+What a dropped notification is *told* differs by transport, and the difference is
+structural rather than an oversight. On `POST /rpc` the notification arrives on a
+request that is still open, so a notification discarded at a full queue is
+answered `503` rather than the `202` that would lose it silently. On the
+**WebSocket** there is no reply channel for a notification at all — it carries no
+id, so there is nothing to correlate an answer to and nothing the client would
+match it against — so the drop is logged at `warn` and the notification is
+simply lost. The bridge log is the only place a WebSocket client's dropped
+notification is ever reported. Send anything you must know the fate of as a
+request with an id.
 
 Nothing is broken when you see either one, and nothing needs reconnecting: the
 bridge is listening and serves again on the very next frame it is pumped. Treat it as "not
