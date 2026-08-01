@@ -313,6 +313,32 @@ pub fn register(sub: &mut Sub) -> Result<()> {
         |lua: &Lua, ()| monotonic().into_lua_multi(lua),
     )?;
 
+    sub.func(
+        "sleep_ms",
+        &[p("ms", "number")],
+        &[],
+        "Block the calling thread for `ms` milliseconds (clamped to 0-1000). \
+         Used by the engine's pause hold, which is a wait, not a computation: \
+         the resume that ends a pause is delivered by the drain the loop itself \
+         runs, so between drains there is nothing whatever to do and spinning \
+         only pegs a core for the length of the pause. Deliberately blocks the \
+         sim thread — a held breakpoint already owns it by construction, and \
+         the idle release still measures real time on `monotonic`, so a pause \
+         no editor is polling ends on schedule regardless.",
+        |lua: &Lua, ms: f64| {
+            // Clamped rather than trusted: this parks the sim thread, so a
+            // typo'd or computed argument must not be able to hold it for a
+            // minute. NaN falls through `clamp` to the low end.
+            let ms = if ms.is_nan() {
+                0.0
+            } else {
+                ms.clamp(0.0, 1000.0)
+            };
+            std::thread::sleep(std::time::Duration::from_secs_f64(ms / 1000.0));
+            ().into_lua_multi(lua)
+        },
+    )?;
+
     // --- pause control: driven by the sim's line hook (debug_run) and the
     // editor/MCP (debug_state / debug_continue). ---
 
@@ -718,6 +744,23 @@ mod tests {
             local t = dbg.monotonic()
             assert(type(t) == "number" and t >= 0, "monotonic seconds")
             assert(dbg.monotonic() >= t, "never rewinds")
+
+            -- The pause hold sleeps between drains rather than spinning, so
+            -- sleeping has to actually elapse — measured on the clock above,
+            -- which is the same one the idle release uses.
+            local before = dbg.monotonic()
+            dbg.sleep_ms(20)
+            local slept = dbg.monotonic() - before
+            assert(slept >= 0.015, "20ms of sleep read as " .. slept .. "s")
+
+            -- Clamped, not trusted: this parks the SIM thread, so a bad
+            -- argument must not be able to hold it. Both ends return promptly.
+            local t0 = dbg.monotonic()
+            dbg.sleep_ms(-5)
+            dbg.sleep_ms(0)
+            dbg.sleep_ms(1e9)
+            local capped = dbg.monotonic() - t0
+            assert(capped < 3, "a huge sleep was capped, not honoured: " .. capped)
 
             dbg.request_pause()
             dbg.reset_session()

@@ -48,6 +48,10 @@ end
 -- engine is installed, so install ours over it.
 if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
   local DRAIN_INTERVAL_SECONDS = 0.05 -- max sim stall between RPC drains during a run
+  -- Slept between drains while a pause is held, so the hold waits instead of
+  -- spinning. Well under DRAIN_INTERVAL_SECONDS so the drain cadence is
+  -- unchanged; see hold_pause.
+  local HOLD_SLEEP_MS = 5
   local MAX_TABLE_CHILDREN = 1000 -- cap children returned/previewed for one table
   local MAX_REFS = 100000 -- per-pause ref ceiling so a cyclic/huge tree can't pin unbounded memory
   local EVAL_CHECK_INSTRUCTIONS = 2000 -- VM instructions between deadline checks in a bounded call
@@ -639,6 +643,15 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
       -- core plus the bridge's process-wide queue/resume mutexes taken millions
       -- of times a second, contending with the very actix worker that has to
       -- enqueue the request.
+      --
+      -- Throttling the DRAIN was only half of that, though: the loop still ran
+      -- flat out between drains, so a core sat at 100% for the whole pause — up
+      -- to idle_seconds (30) on a breakpoint the user is reading. So the gap is
+      -- SLEPT rather than spun. Blocking the sim thread here is not a cost: a
+      -- held breakpoint already owns it by construction, and there is nothing
+      -- for this loop to do until the next drain. 5ms is a hundredth of the
+      -- 50ms cadence, so the drain still lands on time, and it bounds how long
+      -- the release can overshoot to the same 5ms.
       local last_pump = nil
       repeat
         local now = clock()
@@ -649,6 +662,9 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
           if not mode and (clock() - dbg.last_ping) > D.idle_seconds then
             mode = "continue" -- the editor stopped polling (gone): don't freeze forever
           end
+        end
+        if mode == nil then
+          bridge.debug.sleep_ms(HOLD_SLEEP_MS)
         end
       until mode ~= nil
       bridge.debug.clear_paused()

@@ -91,6 +91,18 @@ fn an_abandoned_pause_is_released_in_a_state_with_no_lua_clock() {
           if bridge.debug.paused() ~= nil then held = true end
         end
 
+        -- The hold WAITS between drains rather than spinning. Throttling the
+        -- drain alone still left the loop running flat out in the gaps, pegging
+        -- a core for the whole pause — up to the full 30s idle window on a
+        -- breakpoint someone is reading. Spied through the live table because
+        -- the engine looks the export up per call.
+        local real_sleep, sleeps, slept_ms = bridge.debug.sleep_ms, 0, 0
+        bridge.debug.sleep_ms = function(ms)
+          sleeps = sleeps + 1
+          slept_ms = slept_ms + ms
+          return real_sleep(ms)
+        end
+
         bridge.debug.clear_breakpoints()
         DBG.set_breakpoints({ source = "=idle.lua", breakpoints = { { line = 1 } } })
 
@@ -111,6 +123,18 @@ fn an_abandoned_pause_is_released_in_a_state_with_no_lua_clock() {
         assert(elapsed >= 0.1, "the countdown measured real elapsed time: " .. elapsed)
         assert(elapsed < 10, "and released as soon as it expired: " .. elapsed)
         assert(bridge.debug.paused() == nil, "the pause was cleared on release")
+
+        bridge.debug.sleep_ms = real_sleep
+        -- The loop slept rather than spun, and slept for most of the hold: a
+        -- handful of iterations over a 0.1s pause, not the millions a spin
+        -- would turn in. Asserted as a FRACTION of the hold so the bound stays
+        -- meaningful on any machine.
+        assert(sleeps > 0, "the hold never slept — it is still spinning")
+        assert((slept_ms / 1000) > (elapsed * 0.5),
+          "the hold spent " .. slept_ms .. "ms asleep across " .. elapsed .. "s: mostly spinning")
+        -- And the sleeping did not cost the drain cadence, which is what
+        -- delivers the resume: still ~one pump per 0.05s, per the bound above.
+        assert(pumps >= 1, "the drain still ran while the hold slept")
         bridge.debug.clear_breakpoints()
         "#,
     )
