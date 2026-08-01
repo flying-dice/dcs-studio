@@ -111,6 +111,11 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # The packaging test reads the real `out/` to prove nothing in it has
+      # lost its source file, so this job needs an actual build — the `lint`
+      # job's compile happens in a different runner.
+      - name: TypeScript compile
+        run: npm run compile
       - name: Integration tests + coverage gate
         run: npm run coverage:integration
       - uses: actions/upload-artifact@v4

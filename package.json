@@ -495,7 +495,8 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile && node scripts/check-prebuilt.mjs",
-    "compile": "tsc -p ./",
+    "clean": "node scripts/clean-out.mjs",
+    "compile": "npm run clean && tsc -p ./",
     "typecheck:tests": "tsc -p tsconfig.test.json --noEmit",
     "package": "vsce package",
     "watch": "tsc -watch -p ./",
