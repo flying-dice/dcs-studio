@@ -270,7 +270,16 @@ end
     -- Fire-and-forget into the real mission state via the trigger sandbox's
     -- a_do_script. No return value: success is observable as port 25570
     -- coming up; failures land in dcs.log via the snippet's env.error.
-    pcall(net.dostring_in, "mission", string.format("a_do_script(%q)", mission_boot_source()))
+    --
+    -- The boot-source construction is INSIDE the protected call, and that is the
+    -- point of the closure: as a bare argument, `mission_boot_source()` — and the
+    -- `lfs.writedir()` inside it — was evaluated BEFORE pcall was entered, so a
+    -- raising `lfs` escaped past the guard into whichever dispatcher called this.
+    -- The two callers are DCS's own C++ callbacks (onSimulationStart /
+    -- onSimulationFrame) and the mission_boot RPC handler.
+    pcall(function()
+      net.dostring_in("mission", string.format("a_do_script(%q)", mission_boot_source()))
+    end)
   end
 
   router:add_method("mission_boot", function()

@@ -773,7 +773,7 @@ mod gui_method_tests {
       }
       lfs = { writedir = function() return "C:/wd/" end }
 
-      register_methods(router, deps)
+      REG = register_methods(router, deps)
 
       -- Every debugger method answers with the reason. Before the guard they
       -- indexed a nil engine, so the editor got "attempt to index a nil value"
@@ -805,6 +805,37 @@ mod gui_method_tests {
       local ok, err = pcall(H.repl_export, { expr = "{ answer = 42 }" })
       assert(not ok, "a failed write must not report success")
       assert(string.find(tostring(err), "The disc is full", 1, true), tostring(err))
+
+      -- ── The mission-boot dispatch contains everything it touches ──
+      -- Its callers are DCS C++ entry points (onSimulationStart, and
+      -- onSimulationFrame via mission_boot_tick), so a raise escaping it has
+      -- nothing to catch it. The pcall used to cover `net.dostring_in` ALONE:
+      -- mission_boot_source() and its lfs.writedir() were evaluated as
+      -- ARGUMENTS, i.e. before pcall was ever entered, so a raising `lfs` went
+      -- straight past the guard.
+      net = { dostring_in = function(env, src) DISPATCHED = { env = env, src = src } end }
+
+      DISPATCHED = nil
+      REG.dispatch_mission_boot()
+      assert(DISPATCHED and DISPATCHED.env == "mission", "the good path still dispatches")
+      assert(string.find(DISPATCHED.src, "a_do_script", 1, true), DISPATCHED.src)
+      assert(string.find(DISPATCHED.src, "dcs_studio_mission", 1, true), "the boot snippet rode along")
+      assert(string.find(DISPATCHED.src, "C:/wd/", 1, true), "writedir reached the snippet")
+
+      -- A writedir that raises is contained, and the dispatch is simply skipped.
+      local real_writedir = lfs.writedir
+      lfs.writedir = function() error("lfs is gone in this state", 0) end
+      DISPATCHED = nil
+      local contained = pcall(REG.dispatch_mission_boot)
+      lfs.writedir = real_writedir
+      assert(contained, "a raising lfs must not escape into DCS's dispatcher")
+      assert(DISPATCHED == nil, "and nothing was dispatched")
+
+      -- Still working afterwards: the guard swallows the fault, it does not
+      -- wedge the boot for the rest of the session.
+      DISPATCHED = nil
+      REG.dispatch_mission_boot()
+      assert(DISPATCHED ~= nil, "the next dispatch goes through")
     "#;
 }
 
