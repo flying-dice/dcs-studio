@@ -1179,30 +1179,81 @@ async fn get_health(data: Data<Mutex<AppData>>) -> Json<Health> {
     })
 }
 
-/// Process one queued request and push its response (if any) back over the
-/// requester's channel. Failures are logged — one bad request must not stop
-/// the drain.
+/// Process one queued request and push its response back over the requester's
+/// channel. One bad request must never stop the drain — the sim runs this loop
+/// once per frame.
+///
+/// **A dispatch that fails is still answered.** It used to share an arm with "a
+/// notification produced nothing", so a request whose params could not be
+/// allocated into the Lua state left its caller with no response at all: the
+/// channel dropped, and `post_rpc` turned that into a bare 500 saying nothing,
+/// while the actual cause sat at `info` in a log the user is not reading. Now
+/// the caller gets a JSON-RPC error naming the cause, and the log line is at
+/// `warn` — a request that could not be dispatched is not routine.
 fn respond(lua: &Lua, router: &JsonRpcRouter, app_request: AppRequest, service: &ServiceInfo) {
-    match process_request(lua, router, app_request.request, service) {
-        Ok(Some(response)) => {
-            // At `debug`, not `info`: this is the whole response BODY, written
-            // on the sim thread into a file that never rolls. A paused debug
-            // session polls `debug_state` four times a second and every answer
-            // carries the entire pause snapshot.
-            debug!("Sending response: {response:?}");
-            match app_request.response_sender {
-                Some(sender) => {
-                    if sender.send(response).is_err() {
-                        error!("Failed to send response");
-                    }
-                }
-                None => debug!("Processed notification: {response:?}"),
+    let AppRequest {
+        request,
+        response_sender,
+    } = app_request;
+    // Kept back from the move for the failure arm below, where the request no
+    // longer exists to be asked. Per dispatched request, not per frame: the
+    // empty drain that runs 60 times a second never reaches here.
+    let id = request.id.clone();
+    let method = request.method.clone();
+
+    let response = match process_request(lua, router, request, service) {
+        Ok(Some(response)) => response,
+        // A notification. Its side effect ran; there is no id to answer to.
+        Ok(None) => {
+            debug!("jsonrpc: '{method}' was a notification, so there is nothing to answer");
+            return;
+        }
+        Err(cause) => {
+            warn!("jsonrpc: could not dispatch '{method}' [{id:?}]: {cause}");
+            // Nothing to answer to, and the warning above is the whole report.
+            let Some(id) = id else { return };
+            dispatch_failed_response(id, &method, &cause)
+        }
+    };
+
+    // At `debug`, not `info`: this is the whole response BODY, written on the
+    // sim thread into a file that never rolls. A paused debug session polls
+    // `debug_state` four times a second and every answer carries the entire
+    // pause snapshot.
+    debug!("Sending response: {response:?}");
+    match response_sender {
+        // A caller that gave up (an HTTP request that timed out and dropped its
+        // receiver) is ordinary, not an error: `warn` says it happened without
+        // claiming the bridge did something wrong.
+        Some(sender) => {
+            if sender.send(response).is_err() {
+                warn!("jsonrpc: nobody was left waiting for '{method}''s answer");
             }
         }
-        // A notification and a request that could not be processed at all are
-        // the same thing from here: there is nothing to push back, and neither
-        // may stop the drain — the sim runs this loop once per frame.
-        outcome => info!("No response to send: {outcome:?}"),
+        None => debug!("jsonrpc: '{method}' has an id but no channel; answer dropped"),
+    }
+}
+
+/// The envelope a caller gets when its request never reached a handler at all.
+///
+/// Distinct from a handler that raised (which is [`process_request`]'s own
+/// `LuaError` arm): this is the bridge failing to *dispatch* — params that could
+/// not be allocated into a Lua state the whole mission shares being the case
+/// that actually happens. The caller needs to be able to tell "your call ran and
+/// failed" from "your call never ran", and either way it needs an answer rather
+/// than a closed channel.
+fn dispatch_failed_response(id: String, method: &str, cause: &LuaError) -> JsonRpcResponse {
+    let detail = format!("the bridge could not dispatch '{method}' into Lua: {cause}");
+    JsonRpcResponse {
+        jsonrpc: JSON_RPC_VERSION.to_string(),
+        id,
+        result: None,
+        error: serde_json::to_value(JsonRpcError {
+            code: JSON_RPC_INTERNAL_ERROR,
+            message: "not dispatched".to_string(),
+            data: serde_json::to_value(detail).ok(),
+        })
+        .ok(),
     }
 }
 
@@ -2654,6 +2705,81 @@ mod tests {
             },
             &service,
         );
+    }
+
+    /// **A request that never reached a handler is still answered.** This used
+    /// to share an arm with "a notification produced nothing": the caller's
+    /// channel was simply dropped, `post_rpc` turned the closed channel into a
+    /// bare 500 that said nothing at all, and the real cause sat at `info` in a
+    /// log nobody was reading.
+    ///
+    /// The case is real rather than theoretical — crossing params into Lua is an
+    /// allocation in a state the whole mission shares — and the caller has to be
+    /// able to tell "your call ran and failed" from "your call never ran".
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_request_that_could_not_be_dispatched_is_answered_with_the_cause() {
+        let lua = Lua::new();
+        let router = router(&lua);
+        let service = ServiceInfo::default();
+        let params =
+            serde_json::json!({ "a": [1, 2, 3], "b": "some text long enough to allocate" });
+
+        let mut answered_with_the_failure = false;
+        for headroom in (0..64_000).step_by(8) {
+            lua.gc_collect().expect("collect");
+            let ceiling = lua.used_memory() + headroom;
+            lua.set_memory_limit(ceiling)
+                .expect("mlua owns this state's allocator");
+            let (sender, receiver) = tokio::sync::oneshot::channel::<JsonRpcResponse>();
+            respond(
+                &lua,
+                &router,
+                AppRequest {
+                    request: request(Some("squeezed"), "echo", Some(params.clone())),
+                    response_sender: Some(sender),
+                },
+                &service,
+            );
+            lua.set_memory_limit(0).expect("lift the ceiling");
+
+            let answer = receiver
+                .blocking_recv()
+                .expect("the caller must be answered either way, never left hanging");
+            if let Some(error) = answer.error {
+                assert_eq!(answer.id, "squeezed");
+                assert_eq!(error["code"], JSON_RPC_INTERNAL_ERROR);
+                assert_eq!(
+                    error["message"], "not dispatched",
+                    "distinct from a handler that raised — the editor needs to \
+                     tell 'it ran and failed' from 'it never ran': {error}"
+                );
+                let detail = error["data"].as_str().expect("a cause");
+                assert!(detail.contains("echo"), "names the call: {detail}");
+                assert!(detail.contains("memory"), "and the real cause: {detail}");
+                answered_with_the_failure = true;
+                break;
+            }
+        }
+        assert!(
+            answered_with_the_failure,
+            "the squeeze never bit, so this test proves nothing"
+        );
+
+        // And a notification that cannot be dispatched has nobody to tell, which
+        // must still not stop the drain.
+        lua.gc_collect().expect("collect");
+        lua.set_memory_limit(lua.used_memory()).expect("squeeze");
+        respond(
+            &lua,
+            &router,
+            AppRequest {
+                request: request(None, "echo", Some(params)),
+                response_sender: None,
+            },
+            &service,
+        );
+        lua.set_memory_limit(0).expect("lift the ceiling");
     }
 
     /// A poisoned queue lock does not brick the bridge. A `Mutex` stays
