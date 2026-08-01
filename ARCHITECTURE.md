@@ -151,6 +151,75 @@ the catalog the day a second launcher exists.
 - Bridge protocol + DAP session translation logic extracted into `core/domain/` pure
   functions where feasible; live transports stay adapters.
 
+## The bridge (Rust)
+
+The `bridge/` cargo workspace builds **two** DLLs from a shared `bridge-core`, one
+per Lua state DCS gives us. They are separate DLLs because the states have
+different lifetimes, and that difference is the whole design.
+
+| DLL | Port | Loaded by | Lives for |
+|---|---|---|---|
+| `dcs_studio_gui.dll` | `127.0.0.1:25569` | the GameGUI hook (`bridge/hook/DcsStudio.lua`), `require`d once at startup | the process |
+| `dcs_studio_mission.dll` | `127.0.0.1:25570` | `require`d into **each** mission scripting state by `mission_init.lua` | one mission, torn down at its end |
+
+Both serve JSON-RPC over WebSocket (`/ws`) plus `POST /rpc` and `GET /health`. The
+hook dispatches the mission bridge's boot at mission start; that path needs a
+desanitized `MissionScripting.lua` (`require`/`package` restored), which is what
+`missionSanitizeService` exists to arrange.
+
+### Resources belong to the Lua state that asked for them
+
+Statics are per-DLL and deliberately minimal, and **the JSON-RPC server is not one
+of them**. `jsonrpc.serve` constructs the server inside the Lua call and returns it
+as an mlua **userdata that owns it** — listener, actix `System` thread and request
+queue together. Each bridge's boot code parks that userdata in its own state (the
+hook in its frame callbacks, `mission_init.lua` in its pump closures), so the server
+lives exactly as long as the state that asked for it, and `Drop` stops it. There is
+no server static and no queue static, so a dead state cannot be reached through one.
+
+This is the repository owner's Lua-lifecycle directive — see
+[decision 08](decisions/08-lua-state-owns-its-resources.md). It was born from the
+card-18 crash: a server that spanned mission unloads killed DCS roughly ten seconds
+after quitting, 6 reproductions out of 6.
+
+Every wait on the shutdown path is bounded, because the caller is the sim thread:
+2s + 2s (acknowledge + `System` exit) on the explicit path, 250ms + 250ms when
+`Drop` is reached from `__gc` inside DCS's own `lua_close`.
+
+**Teardown ordering is load-bearing** and was verified live. On `S_EVENT_MISSION_END`:
+
+1. release the registered handlers first — each is a live mlua reference into the
+   state DCS is about to close;
+2. *then* answer the requests stranded in the queue with `-32001`, which reads the
+   still-running server's queue and so must precede the stop (40-odd real callers
+   per unload in the live runs);
+3. *then* stop the listener and wait, bounded, for the actix `System` thread.
+
+### The pump clock, and what "OK" means
+
+The queue is drained once per simulation frame. The pump stamps a liveness clock,
+and a request arriving while that clock is stale fast-fails `-32002` "sim not
+pumping" rather than burning the 30s request deadline (card 17). Default 2000ms,
+overridable per server with `pump_stale_ms`, `0` disables. `GET /health` exposes
+`pump_idle_ms` and `pump_stalled` for exactly this reason: **status OK is about the
+listener, not the sim** — a client deciding whether the sim will answer reads
+`pump_stalled`, not `status`.
+
+### Two guards worth knowing
+
+- **The RT guard** (`lua/rt.lua`) serves user chunks a *guarded* view of `DCS`:
+  `DCS.getMissionLoaded()` with a mission loaded takes the process down on the spot
+  inside ED's own `copyindex` recursion, and no `pcall` can contain it — measured
+  live, `pcall(DCS.getMissionLoaded)` dies exactly like the bare call (card 19). The
+  guarded view is rebuilt fresh per chunk.
+- **Config arrives via `_G.DCS_STUDIO`** (`logger_level`), and the `_G` is explicit
+  because DCS sandboxes hook chunk environments — a bare `DCS_STUDIO = ...` lands in
+  the chunk's own table and never reaches the globals the DLL reads on `require`
+  (card 16).
+
+Evidence trail: issue #69 and board cards 16–21 (16 log level, 17 pump staleness,
+18 the crash and the ownership rework, 19 the RT guard).
+
 ## Testing & coverage
 
 Three layers, each runnable on its own command, each gating its own coverage at
