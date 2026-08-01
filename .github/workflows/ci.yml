@@ -189,8 +189,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Named version, not `@stable`. bridge/rust-toolchain.toml pins 1.97.0,
+      # and a directory override beats whatever this step installed — so
+      # asking for `stable` installed one toolchain and every cargo command
+      # below ran on another. It was green only while stable *was* 1.97.0, and
+      # it silently warmed the rust-cache under the wrong key. Keep this in
+      # step with the channel in bridge/rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.97.0"
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
         with:
@@ -201,6 +208,21 @@ jobs:
       - name: Install Lua 5.1 (test-time link target)
         run: sudo apt-get update && sudo apt-get install -y liblua5.1-0-dev
       - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@cargo-audit
+
+      # The npm side has `npm audit` for free; the cargo side had no advisory
+      # check at all until the 2026-08-01 sprint survey noticed. Advisories
+      # only — this must not fail on unmaintained/yanked informational notices,
+      # so warnings are not denied.
+      #
+      # Ahead of the coverage gate deliberately: the two are independent, and
+      # behind it an advisory was only ever reported after a multi-minute
+      # instrumented test run — or not at all, on the run where the gate went
+      # red. This one is seconds.
+      - name: Rust dependency advisories
+        run: cargo audit
+        working-directory: bridge
+
       # Regions is llvm-cov's branch-equivalent metric, and the one that matters
       # most here: a `?` early return or an unexercised match arm can sit at 100%
       # line coverage, and an unexercised error path in this workspace panics the
@@ -266,16 +288,6 @@ jobs:
           node scripts/llvm-cov.mjs --workspace
           --fail-uncovered-lines 0 --fail-under-functions 100 --fail-under-regions 99.5
 
-      # The npm side has `npm audit` for free; the cargo side had no advisory
-      # check at all until the 2026-08-01 sprint survey noticed. Advisories
-      # only — this must not fail on unmaintained/yanked informational notices,
-      # so warnings are not denied.
-      - name: Rust dependency advisories
-        run: |
-          cargo install cargo-audit --locked
-          cargo audit
-        working-directory: bridge
-
   windows:
     name: Shipping target (Windows)
     if: github.event_name != 'push' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/')
@@ -295,7 +307,11 @@ jobs:
       - name: Unit + integration on the shipping OS
         run: npm run test:unit && npm run test:integration
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Same reason as the rust job: bridge/rust-toolchain.toml's pin overrides
+      # whatever `@stable` resolves to, so name the pinned version here.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.0"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: bridge
