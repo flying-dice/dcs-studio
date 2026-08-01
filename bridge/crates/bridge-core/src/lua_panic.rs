@@ -56,29 +56,38 @@ pub(crate) enum Phase {
     Engine,
     /// Module load finished; the bridge is serving.
     Ready,
+    /// The state is being released — handlers dropped, the queue failed, the
+    /// listener stopped (see [`crate::jsonrpc::teardown`]). A different suspect
+    /// from a panic while serving: this frame drops live mlua references into a
+    /// state that is about to be closed, which is where card 18's crash lived.
+    Teardown,
 }
 
 impl Phase {
     /// What the log line says the bridge was doing.
-    fn describe(self) -> &'static str {
+    pub(crate) fn describe(self) -> &'static str {
         match self {
             Phase::Load => "loading the module, before the binding surface",
             Phase::Surface => "registering the binding surface",
             Phase::Methods => "loading the JSON-RPC method registration chunk",
             Phase::Engine => "installing the console runtime and debug engine",
             Phase::Ready => "serving, after the module finished loading",
+            Phase::Teardown => "releasing this state's handlers, queue and listener",
         }
     }
 
     /// The phase [`enter`] last recorded. The discriminants are written and
     /// read in two places, so `phase_round_trips_through_the_atomic` pins the
     /// pairing rather than trusting it.
-    fn current() -> Self {
+    pub(crate) fn current() -> Self {
         match PHASE.load(Ordering::Relaxed) {
             0 => Phase::Load,
             1 => Phase::Surface,
             2 => Phase::Methods,
             3 => Phase::Engine,
+            5 => Phase::Teardown,
+            // Including 4. A value `enter` never wrote does not deserve a
+            // distinct answer, and serving is where the bridge spends its life.
             _ => Phase::Ready,
         }
     }
@@ -201,6 +210,7 @@ mod tests {
             Phase::Methods,
             Phase::Engine,
             Phase::Ready,
+            Phase::Teardown,
         ] {
             enter(phase);
             let recorded = Phase::current().describe();
@@ -210,6 +220,83 @@ mod tests {
                 "{phase:?} came back as {recorded}"
             );
         }
+
+        // Every phase names something distinct. Two that read alike would let
+        // the one log line anybody ever sees point at the wrong code, which is
+        // the entire failure this vocabulary exists to prevent.
+        let described = [
+            Phase::Load,
+            Phase::Surface,
+            Phase::Methods,
+            Phase::Engine,
+            Phase::Ready,
+            Phase::Teardown,
+        ]
+        .map(Phase::describe);
+        let unique: std::collections::BTreeSet<&str> = described.iter().copied().collect();
+        assert_eq!(unique.len(), described.len(), "{described:?}");
+    }
+
+    /// **The vocabulary predated the Lua-owned-userdata refactor**, so everything
+    /// after the module finished loading reported "serving" — including a
+    /// mission-end release, which is the frame card 18's crash actually lived
+    /// in, and including the *next* mission's module load, because the phase
+    /// lives in a per-DLL static and `luaopen` runs again for every mission.
+    ///
+    /// So the two ends are pinned here: a release says it is releasing, and a
+    /// fresh bootstrap goes back to the beginning rather than inheriting the
+    /// previous mission's last word.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn a_release_and_the_next_mission_are_named_rather_than_reported_as_serving() {
+        let _serial = crate::jsonrpc::serially();
+        let lua = Lua::new();
+        crate::bootstrap(&lua, BridgeKind::Mission, "test").expect("bootstrap");
+        assert_eq!(Phase::current().describe(), Phase::Ready.describe());
+
+        let port = crate::jsonrpc::server::free_port();
+        let mut server = crate::jsonrpc::server::JsonRpcServer::new(
+            serde_json::from_str(&format!(
+                r#"{{"host":"127.0.0.1","port":{port},"env":"mission"}}"#
+            ))
+            .unwrap(),
+        )
+        .expect("a free port binds");
+        let mut router = crate::jsonrpc::router::JsonRpcRouter::default();
+        crate::jsonrpc::teardown::release(&mut server, &mut router, "mission end");
+        assert_eq!(
+            Phase::current().describe(),
+            Phase::Teardown.describe(),
+            "the mission state's last act is what a panic there must be blamed on"
+        );
+
+        // The next mission's luaopen, into a fresh state over the same DLL
+        // image. Without the reset this would still say "releasing".
+        let next = Lua::new();
+        crate::bootstrap(&next, BridgeKind::Mission, "test").expect("bootstrap");
+        assert_eq!(
+            Phase::current().describe(),
+            Phase::Ready.describe(),
+            "a fresh load walks Load..Ready again rather than inheriting"
+        );
+
+        // The GUI bridge's state outlives every mission, so a release evaluated
+        // against it must hand the phase back rather than leave every later
+        // panic misnamed for the rest of the process.
+        let gui_port = crate::jsonrpc::server::free_port();
+        let mut gui = crate::jsonrpc::server::JsonRpcServer::new(
+            serde_json::from_str(&format!(
+                r#"{{"host":"127.0.0.1","port":{gui_port},"env":"gui"}}"#
+            ))
+            .unwrap(),
+        )
+        .expect("a free port binds");
+        crate::jsonrpc::teardown::release(&mut gui, &mut router, "requested");
+        assert_eq!(
+            Phase::current().describe(),
+            Phase::Ready.describe(),
+            "the GUI bridge goes straight back to serving, and says so"
+        );
     }
 
     /// The line has to be readable by someone who is looking at a DCS that
