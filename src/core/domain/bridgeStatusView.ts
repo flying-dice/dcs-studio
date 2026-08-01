@@ -6,7 +6,7 @@
 // there). Kept apart from bridgeProtocol so that module stays pure JSON-RPC
 // protocol logic with no view concerns.
 
-import { type DualBridgeStatus, displayTime } from "./bridgeProtocol";
+import { combinedState, type DualBridgeStatus, displayTime } from "./bridgeProtocol";
 
 /** Status-bar rendering for the dual status (pure, testable). */
 export function statusBarView(s: DualBridgeStatus): { text: string; tooltip: string } {
@@ -15,6 +15,32 @@ export function statusBarView(s: DualBridgeStatus): { text: string; tooltip: str
       text: "$(debug-disconnect) DCS: offline",
       tooltip:
         "Neither bridge is reachable. Click for options: Launch DCS (with bridge), Open Lua Console, or Inject Bridge.",
+    };
+  }
+  // A connected-but-unservable bridge, before any of the "which states exist"
+  // branches below — those describe what is loaded, and this describes whether
+  // it can be reached, which is the more urgent of the two.
+  //
+  // The copy is the careful part. Three different situations land here — a
+  // breakpoint the user is holding, an ESC pause, and a briefing screen that has
+  // not started yet — and the extension cannot tell them apart, because the
+  // bridge cannot either (its own message says the queue has not been drained
+  // rather than naming a cause, for exactly this reason). So the text claims
+  // only the thing common to all three: the sim is not running its callbacks.
+  // "Paused" would be wrong on a briefing screen and "paused by you" wrong at
+  // two of the three; "not responding" would say something is broken, when in
+  // fact the bridge is answering and serves again on the very next frame.
+  //
+  // The sim clock is deliberately dropped here even though a stale one is
+  // available. A frozen number ticking nowhere beside a live-looking status is
+  // precisely the symptom card 04 predicted, and the state itself is the honest
+  // version of what that number was trying to say.
+  if (combinedState(s) === "stalled") {
+    return {
+      text: "$(debug-pause) DCS: sim idle",
+      tooltip:
+        "The bridge is connected but DCS is not running the sim callbacks that serve it — paused, on a briefing screen, or held at a breakpoint. " +
+        "Nothing is broken: calls fail fast until it resumes, and it serves again on the very next frame. Click for the Lua console.",
     };
   }
   const t = displayTime(s);

@@ -44,13 +44,13 @@ describe("combined status", () => {
   });
 
   it("replays a full dual status to a new subscriber", () => {
-    gui.emit({ connected: true, dcsTime: 12 });
+    gui.emit({ connected: true, dcsTime: 12, stalled: false });
     const seen: DualBridgeStatus[] = [];
     clients.onStatus((s) => seen.push(s));
     // Each underlying client replays on subscribe, so the pair converges on the
     // live value without the caller having to ask for it.
     expect(seen[seen.length - 1]).toEqual({
-      gui: { connected: true, dcsTime: 12 },
+      gui: { connected: true, dcsTime: 12, stalled: false },
       mission: OFFLINE,
     });
   });
@@ -64,8 +64,11 @@ describe("combined status", () => {
     expect(seen).toEqual([{ gui: CONNECTED, mission: OFFLINE }]);
 
     // A mission starting must not blank out what we know about the GUI bridge.
-    mission.emit({ connected: true, dcsTime: 3.5 });
-    expect(seen[1]).toEqual({ gui: CONNECTED, mission: { connected: true, dcsTime: 3.5 } });
+    mission.emit({ connected: true, dcsTime: 3.5, stalled: false });
+    expect(seen[1]).toEqual({
+      gui: CONNECTED,
+      mission: { connected: true, dcsTime: 3.5, stalled: false },
+    });
   });
 
   it("unsubscribes from both bridges when the merged subscription is disposed", () => {

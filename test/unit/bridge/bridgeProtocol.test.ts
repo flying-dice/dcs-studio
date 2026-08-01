@@ -12,9 +12,12 @@ import {
   isExpectedBridgeFailure,
   nextBackoff,
   PING_INTERVAL_MS,
+  PING_STALLED_INTERVAL_MS,
   PING_TIMEOUT_MS,
   PUMP_STALLED,
   parseResponse,
+  pingIntervalFor,
+  pumpStateFromReply,
 } from "../../../src/core/domain/bridgeProtocol";
 
 describe("constants", () => {
@@ -24,7 +27,39 @@ describe("constants", () => {
     expect(BRIDGE_BACKOFF_FACTOR).toBe(1.6);
     expect(PING_INTERVAL_MS).toBe(2000);
     expect(PING_TIMEOUT_MS).toBe(4000);
-    expect(INITIAL_BRIDGE_STATUS).toEqual({ connected: false, dcsTime: null });
+    expect(PING_STALLED_INTERVAL_MS).toBe(10000);
+    expect(INITIAL_BRIDGE_STATUS).toEqual({ connected: false, dcsTime: null, stalled: false });
+  });
+});
+
+describe("pingIntervalFor", () => {
+  it("keeps the 2 s cadence while the pump is serving", () => {
+    expect(pingIntervalFor(false)).toBe(PING_INTERVAL_MS);
+  });
+
+  it("backs off to 10 s while it is stalled, rather than polling a queue that cannot drain", () => {
+    expect(pingIntervalFor(true)).toBe(PING_STALLED_INTERVAL_MS);
+    expect(PING_STALLED_INTERVAL_MS).toBeGreaterThan(PING_INTERVAL_MS);
+  });
+});
+
+describe("pumpStateFromReply", () => {
+  it("reads -32002 as first-hand evidence the pump is stale", () => {
+    expect(pumpStateFromReply(PUMP_STALLED)).toBe(true);
+  });
+
+  it("reads any served reply — result or ordinary error — as evidence it drained", () => {
+    // A result: nothing but a drain could have produced one.
+    expect(pumpStateFromReply(undefined)).toBe(false);
+    // A Lua error had to run on the sim thread to be raised at all.
+    expect(pumpStateFromReply(-32603)).toBe(false);
+    expect(pumpStateFromReply(-32601)).toBe(false);
+  });
+
+  it("makes no claim at all about a torn-down bridge", () => {
+    // -32001 comes from the teardown path failing the queue wholesale, not from
+    // a drain, so reading it as "healthy" would paint a dying bridge green.
+    expect(pumpStateFromReply(BRIDGE_TORN_DOWN)).toBeNull();
   });
 });
 
@@ -282,16 +317,20 @@ import {
   MISSION_BRIDGE_PORT,
 } from "../../../src/core/domain/bridgeProtocol";
 
-function dual(
-  gui: { connected: boolean; dcsTime: number | null },
-  mission: { connected: boolean; dcsTime: number | null },
-): DualBridgeStatus {
-  return { gui, mission };
+// `stalled` defaults to false so every pre-existing case still reads as the
+// unremarkable "the pump is fine" one it was written for; the cases that are
+// about a stall say so explicitly.
+type Half = { connected: boolean; dcsTime: number | null; stalled?: boolean };
+
+function dual(gui: Half, mission: Half): DualBridgeStatus {
+  return { gui: { stalled: false, ...gui }, mission: { stalled: false, ...mission } };
 }
 
-const OFF = { connected: false, dcsTime: null };
+const OFF = { connected: false, dcsTime: null, stalled: false };
 const MENU = { connected: true, dcsTime: 0 };
 const IN_MISSION = { connected: true, dcsTime: 87.5 };
+const STALLED_MENU = { connected: true, dcsTime: 0, stalled: true };
+const STALLED_MISSION = { connected: true, dcsTime: 87.5, stalled: true };
 
 describe("two-bridge constants and routing", () => {
   it("pins the well-known ports and the initial dual status", () => {
@@ -327,6 +366,30 @@ describe("combinedState", () => {
 
   it("is mission when the GUI bridge reports mission time (mission bridge not up)", () => {
     expect(combinedState(dual(IN_MISSION, OFF))).toBe("mission");
+  });
+
+  it("is stalled when a connected bridge cannot be served — either one, alone", () => {
+    // The briefing screen / ESC pause: model time frozen, mission pump stale,
+    // the GUI bridge drawing frames and serving perfectly.
+    expect(combinedState(dual(MENU, STALLED_MISSION))).toBe("stalled");
+    // The held mission breakpoint: the exact mirror image (card 17).
+    expect(combinedState(dual(STALLED_MENU, IN_MISSION))).toBe("stalled");
+    // And with only the GUI bridge up at all.
+    expect(combinedState(dual(STALLED_MENU, OFF))).toBe("stalled");
+  });
+
+  it("outranks mission and menu, so a frozen sim is never reported as running", () => {
+    expect(combinedState(dual(STALLED_MISSION, STALLED_MISSION))).toBe("stalled");
+    expect(combinedState(dual(STALLED_MISSION, OFF))).toBe("stalled");
+  });
+
+  it("stays offline when the only bridge claiming a stall is disconnected", () => {
+    // `stalled` is meaningless without a connection; a bridge that is gone must
+    // never be rendered as a sim that is merely idle.
+    expect(combinedState(dual({ ...OFF, stalled: true }, { ...OFF, stalled: true }))).toBe(
+      "offline",
+    );
+    expect(combinedState(dual({ ...OFF, stalled: true }, IN_MISSION))).toBe("mission");
   });
 });
 

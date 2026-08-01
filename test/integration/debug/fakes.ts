@@ -94,7 +94,7 @@ export class FakeScheduler implements SchedulerPort {
  * benign default, so a spec overrides only the RPC its scenario is about.
  */
 export class FakeBridge {
-  status: BridgeStatus = { connected: true, dcsTime: 1 };
+  status: BridgeStatus = { connected: true, dcsTime: 1, stalled: false };
 
   get current(): BridgeStatus {
     return this.status;
