@@ -14,6 +14,14 @@
     // the code carry it (a tuple return, `entries()` over a loop index, a guard
     // that binds what it checks) rather than to assert past the flag.
     "noUncheckedIndexedAccess": true,
+    // Zero hits today — nothing in src/ or the suite overrides an inherited
+    // member — so this buys no cleanup, only the ratchet. The subclasses that
+    // exist are the ones where a silent override would be worth catching:
+    // `InjectError`/`BridgeRpcError` over `Error`, whose `name`/`toString` feed
+    // the messages users see, and the suite's `FakeChild` over `EventEmitter`,
+    // where quietly shadowing `emit` or `on` would make the double lie about
+    // the process it stands in for.
+    "noImplicitOverride": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
