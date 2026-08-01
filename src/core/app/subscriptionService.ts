@@ -174,14 +174,17 @@ export class SubscriptionService {
       throw new Error("7-Zip not found — install 7-Zip (7-zip.org) to install mods.");
     }
     const volumes = selectPayloadVolumes(target.assets);
-    if (!volumes.length) throw new Error("This release has no .7z payload to install.");
+    // Bind the first volume through the same guard that rejects an empty list:
+    // it is the one the extract step opens, and taking it here means that step
+    // reads a value the guard has already proved present.
+    const [firstVolume] = volumes;
+    if (!firstVolume) throw new Error("This release has no .7z payload to install.");
 
     const dir = path.join(this.ports.roots.dataDir(), dataDirName(target.repo));
     const dl = path.join(dir, ".download");
     await this.ports.fs.remove(dl);
     await this.ports.fs.mkdirp(dl);
-    for (let i = 0; i < volumes.length; i++) {
-      const v = volumes[i];
+    for (const [i, v] of volumes.entries()) {
       const label = `Downloading ${v.name} (${i + 1}/${volumes.length})`;
       onProgress({ phase: "download", label, pct: 0 });
       await this.ports.downloader.download(v.url, path.join(dl, v.name), token, (f) =>
@@ -195,7 +198,7 @@ export class SubscriptionService {
     try {
       await this.ports.fs.remove(staging);
       await this.ports.fs.mkdirp(staging);
-      await this.ports.archive.extract(path.join(dl, volumes[0].name), staging);
+      await this.ports.archive.extract(path.join(dl, firstVolume.name), staging);
     } catch (e) {
       // Nothing was extracted, and the live payload has not been touched: bin
       // the staged copy so a retry starts clean and report the real failure.

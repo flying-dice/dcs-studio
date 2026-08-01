@@ -7,6 +7,45 @@
     "rootDir": "src",
     "sourceMap": true,
     "strict": true,
+    // `arr[i]` and `rec[k]` yield `T | undefined`. The point is the reads where
+    // nothing proves the element is there — see the owner/name split in
+    // adapters/github/marketplace.ts, which this flag caught building a GitHub
+    // URL out of `undefined`. Where an invariant does hold, the fix is to make
+    // the code carry it (a tuple return, `entries()` over a loop index, a guard
+    // that binds what it checks) rather than to assert past the flag.
+    "noUncheckedIndexedAccess": true,
+    // Zero hits today — nothing in src/ or the suite overrides an inherited
+    // member — so this buys no cleanup, only the ratchet. The subclasses that
+    // exist are the ones where a silent override would be worth catching:
+    // `InjectError`/`BridgeRpcError` over `Error`, whose `name`/`toString` feed
+    // the messages users see, and the suite's `FakeChild` over `EventEmitter`,
+    // where quietly shadowing `emit` or `on` would make the double lie about
+    // the process it stands in for.
+    "noImplicitOverride": true,
+    // Also zero hits: every case in the message-dispatch switches that each
+    // presenter is built around already ends in `return` or `break`. The flag
+    // holds that shape. Those switches are the widest branch points in the
+    // codebase — a case falling into the next one would run a second webview
+    // command nobody asked for — and they grow a case every time a panel gains
+    // a message, which is when the mistake would be made.
+    "noFallthroughCasesInSwitch": true,
+    // `verbatimModuleSyntax` is deliberately absent, and this note is here so
+    // the next person does not spend the afternoon finding out why.
+    //
+    // It is usually described as an import-type discipline flag, and that half
+    // of it is already enforced: biome's `style/useImportType` is on via the
+    // recommended preset and errors on a type-only import written as a value
+    // import — verified by writing one and watching `npm run lint` reject it.
+    // Turning the flag on would add nothing there.
+    //
+    // The other half is not optional and does not fit. Under `"module":
+    // "commonjs"` the flag forbids ESM import/export syntax outright, on the
+    // grounds that it will not be down-levelled: 767 errors across src/, every
+    // one of them TS1287/TS1295 saying this file must become an ES module.
+    // Satisfying it means emitting ESM, which is a build change, not a
+    // strictness change — the extension host loads `out/extension.js` by
+    // `require`, and `vscode` itself is only available as a CommonJS module.
+    // The flag belongs to a bundler-and-ESM setup this extension is not.
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true

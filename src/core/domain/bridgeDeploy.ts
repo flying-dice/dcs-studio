@@ -98,8 +98,12 @@ export function partialInstallMessage(installed: readonly string[]): string | un
 /** Basenames of a list of paths, as prose. */
 function fileList(paths: readonly string[]): string {
   const names = paths.map((p) => path.basename(p));
-  if (names.length === 1) return names[0];
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  // Sliced rather than indexed: same two shapes as before ("a" / "a, b and c"),
+  // but the head/tail split is expressed without a last-element read that the
+  // type system would have to be told cannot miss.
+  const head = names.slice(0, -1);
+  const last = names.slice(-1).join("");
+  return head.length ? `${head.join(", ")} and ${last}` : last;
 }
 
 /** Which DLLs are being taken from the workspace build rather than the shipped

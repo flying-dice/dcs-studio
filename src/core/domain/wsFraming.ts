@@ -16,7 +16,13 @@ export interface DecodedFrame {
 /** XOR `payload` with the 4-byte `maskKey` (RFC-6455 masking), returning a fresh array. */
 export function applyMask(payload: Uint8Array, maskKey: Uint8Array): Uint8Array {
   const out = new Uint8Array(payload.length);
-  for (let i = 0; i < payload.length; i++) out[i] = payload[i] ^ maskKey[i & 3];
+  // Both reads are in bounds by construction, and the assertions say so rather
+  // than introducing a branch no test could ever cover: `i` is held below
+  // `payload.length` by the loop, and `i & 3` is 0..3 against a mask RFC-6455
+  // fixes at four bytes — `readFrame` slices exactly four, and the transport
+  // generates exactly four (`crypto.randomBytes(4)`).
+  // biome-ignore lint/style/noNonNullAssertion: in-bounds byte reads, see above
+  for (let i = 0; i < payload.length; i++) out[i] = payload[i]! ^ maskKey[i & 3]!;
   return out;
 }
 
@@ -28,8 +34,12 @@ export function applyMask(payload: Uint8Array, maskKey: Uint8Array): Uint8Array 
 export function readFrame(buffer: Uint8Array): DecodedFrame | null {
   if (buffer.length < 2) return null;
   const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-  const b0 = buffer[0];
-  const b1 = buffer[1];
+  // Read the two header bytes through the `DataView` rather than by index: the
+  // `buffer.length < 2` guard above already proves both are present, but that is
+  // not a fact the indexed-access type can carry. `getUint8` is the same read and
+  // is how the rest of this codec pulls its header fields.
+  const b0 = view.getUint8(0);
+  const b1 = view.getUint8(1);
   const fin = (b0 & 0x80) !== 0;
   const opcode = b0 & 0x0f;
   const masked = (b1 & 0x80) !== 0;

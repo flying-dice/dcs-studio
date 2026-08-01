@@ -109,7 +109,11 @@ export class MiniWebSocket {
     if (!this.handshakeDone) {
       const idx = this.buffer.indexOf("\r\n\r\n");
       if (idx === -1) return;
-      const statusLine = this.buffer.slice(0, idx).toString("utf8").split("\r\n")[0];
+      // The status line is the header block's first line. `split(sep, 1).join("")`
+      // collapses the at-most-one-element result to the string itself — `split`
+      // never returns an empty array, so this is the same value the old `[0]`
+      // read produced, without a bounds case that cannot happen.
+      const statusLine = this.buffer.slice(0, idx).toString("utf8").split("\r\n", 1).join("");
       if (!/ 101 /.test(statusLine)) {
         this.fail(`WebSocket handshake failed: ${statusLine}`);
         return;

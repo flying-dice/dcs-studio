@@ -37,7 +37,11 @@ export function parseFrontmatter(text: string): Frontmatter {
   if (end < 0) return {};
   const fm: Frontmatter = {};
   for (const line of normalized.slice(4, end).split("\n")) {
-    const m = /^(name|description|version):\s*(.*)$/.exec(line);
+    // Key and value are both mandatory groups (`(.*)` matches the empty value),
+    // so a match fills both.
+    const m = /^(name|description|version):\s*(.*)$/.exec(line) as
+      | [full: string, key: string, value: string]
+      | null;
     if (m) fm[m[1] as keyof Frontmatter] = m[2].trim().replace(/^["']|["']$/g, "");
   }
   return fm;

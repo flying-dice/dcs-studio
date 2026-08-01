@@ -44,14 +44,30 @@ export interface ParsedContinuation {
 
 export type ParsedLine = ParsedLogEntry | ParsedContinuation;
 
+/**
+ * The shape of a successful `exec` against the two patterns above. Neither
+ * pattern has an optional group — every one of them is either a fixed-width
+ * field or a `*` quantifier that matches the empty string — so a match fills
+ * all of them, and the `string | undefined` element type of `RegExpExecArray`
+ * describes a case that cannot arise. Naming the tuple here states that
+ * contract once, beside the patterns it is a property of, rather than
+ * re-asserting it at each of the nine capture reads below. Changing a group in
+ * either pattern to optional means changing the tuple to match.
+ */
+type Match<T extends string[]> = [full: string, ...groups: T] | null;
+
 /** Parse one raw (already line-split, `\r`-stripped) `dcs.log` line. */
 export function parseDcsLogLine(raw: string): ParsedLine {
-  const withThread = WITH_THREAD.exec(raw);
+  const withThread = WITH_THREAD.exec(raw) as Match<
+    [time: string, level: string, subsystem: string, thread: string, message: string]
+  >;
   if (withThread) {
     const [, time, level, subsystem, thread, message] = withThread;
     return { kind: "entry", time, level: level as LogLevel, subsystem, thread, message };
   }
-  const noThread = NO_THREAD.exec(raw);
+  const noThread = NO_THREAD.exec(raw) as Match<
+    [time: string, level: string, subsystem: string, message: string]
+  >;
   if (noThread) {
     const [, time, level, subsystem, message] = noThread;
     return { kind: "entry", time, level: level as LogLevel, subsystem, thread: null, message };

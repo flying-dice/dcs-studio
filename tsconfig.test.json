@@ -6,6 +6,18 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
+    // Deliberately off for this unit, where the base turns it on. The flag earns
+    // its keep in src/ because an absent index there becomes a wrong value that
+    // travels — the marketplace adapter was building a GitHub URL containing
+    // "undefined". In test code the same read is an assertion against a fixture
+    // or a recorded mock call (`calls[0].opts`, `mock.calls[0][2]`), where an
+    // absent element does not travel anywhere: it throws on the spot and fails
+    // the test with a stack trace pointing at the line. Enabling it here flagged
+    // 468 such reads and not one defect, so it would buy noise and a standing
+    // temptation to answer that noise with `!`. Note src/ is inside this unit's
+    // `include` too, but `npm run compile` is what governs src/ and it does hold
+    // the flag — nothing in src/ is checked more loosely than the base demands.
+    "noUncheckedIndexedAccess": false,
     // The base pins rootDir to src/ for the out/ layout; this unit spans the
     // repo and emits nothing, so the constraint has no meaning here.
     "rootDir": ".",
