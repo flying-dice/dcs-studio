@@ -67,6 +67,20 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 3) then
     return sa < sb
   end
 
+  -- Indentation for one nesting level, memoised. A pretty encode needs the same
+  -- two pads for every table at a given depth, and string.rep was rebuilding
+  -- both of them per table — thousands of identical strings for one export of a
+  -- wide sim table. Bounded by MAX_DEPTH, so the cache is at most 201 entries.
+  local INDENT = {}
+  local function indent(depth)
+    local pad = INDENT[depth]
+    if not pad then
+      pad = string.rep("  ", depth)
+      INDENT[depth] = pad
+    end
+    return pad
+  end
+
   -- Cycle-safe JSON encoder (the DLL's json.* is unreachable from remote
   -- states, and the Rust serializer has no cycle guard anyway). `seen` marks
   -- tables on the CURRENT descent path only, so shared (DAG) tables still
@@ -97,8 +111,8 @@ if not (__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 3) then
       local nl, pad, pad0 = "", "", ""
       if pretty then
         nl = "\n"
-        pad = string.rep("  ", depth + 1)
-        pad0 = string.rep("  ", depth)
+        pad = indent(depth + 1)
+        pad0 = indent(depth)
       end
       local arr, n = is_array(v)
       if arr then
