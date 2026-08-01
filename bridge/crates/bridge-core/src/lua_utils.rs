@@ -1,4 +1,3 @@
-use log::debug;
 use mlua::prelude::{LuaTable, LuaValue};
 use serde_json::Value;
 
@@ -46,33 +45,6 @@ pub fn opt_str(opts: Option<&LuaTable>, key: &str) -> Option<String> {
     opts.and_then(|t| t.get::<Option<String>>(key).ok().flatten())
 }
 
-/// Whether a Lua table is an array: contiguous integer keys starting from 1.
-///
-/// Total by construction — iterating as `LuaValue`/`LuaValue` makes both
-/// conversions the identity, so there is no read failure to report and callers
-/// get a plain answer rather than a `Result` with an unreachable error arm.
-pub fn is_lua_array(table: &LuaTable) -> bool {
-    let mut last_index = 0;
-
-    for (key, _) in table
-        .pairs::<LuaValue, LuaValue>()
-        .filter_map(std::result::Result::ok)
-    {
-        let index = match key {
-            LuaValue::Integer(i) if i > 0 => i,
-            _ => return false, // Non-integer or non-positive index
-        };
-
-        if index != last_index + 1 {
-            return false; // Not contiguous
-        }
-
-        last_index = index;
-    }
-
-    true
-}
-
 /// How deep [`serialize_lua_to_json`] recurses into nested Lua tables before
 /// refusing. A self-referential table (`t.self = t`, reachable from
 /// `json.safe_encode`, `file.write_json`/`dump`, `toml.encode`, or any RPC
@@ -101,7 +73,6 @@ fn serialize_at(lua_value: &LuaValue, depth: usize) -> Result<Value, String> {
     if depth >= MAX_JSON_DEPTH {
         return Err(format!("depth limit exceeded at depth {depth}"));
     }
-    debug!("Serializing Lua value: {lua_value:?}");
     match lua_value {
         LuaValue::Nil => Ok(Value::Null),
         LuaValue::Boolean(b) => Ok(Value::Bool(*b)),
@@ -116,13 +87,7 @@ fn serialize_at(lua_value: &LuaValue, depth: usize) -> Result<Value, String> {
         // serializer (and the sim). Decode lossily — invalid bytes become the
         // replacement char rather than aborting.
         LuaValue::String(s) => Ok(Value::String(s.to_string_lossy())),
-        LuaValue::Table(table) => {
-            if is_lua_array(table) {
-                serialize_lua_array_to_json(table, depth)
-            } else {
-                serialize_lua_table_to_json(table, depth)
-            }
-        }
+        LuaValue::Table(table) => serialize_lua_table_to_json(table, depth),
         other => Err(format!(
             "value is not JSON-serializable: {}",
             other.type_name()
@@ -130,48 +95,84 @@ fn serialize_at(lua_value: &LuaValue, depth: usize) -> Result<Value, String> {
     }
 }
 
+/// A table becomes a JSON array or a JSON object, and only its keys decide
+/// which — in **one** traversal.
+///
+/// The classification cannot be read off `raw_len` and a probe of the first
+/// key: `#t` sees the array part only, so `{ 1, 2, a = 3 }` and `{ 1, 2 }`
+/// are indistinguishable by length, and only `pairs` reveals a hash-part key.
+/// Since the walk that answers the question is exactly the walk that reads the
+/// values, the entries are buffered once and classified from the buffer —
+/// rather than the previous shape, which traversed the whole table to classify
+/// it (materialising every key *and* every value through mlua) and then threw
+/// that away and traversed it again to encode.
+///
+/// Iterating as `LuaValue`/`LuaValue` makes both conversions the identity, so a
+/// pair can never fail to materialise; taking the ones that do keeps the walk
+/// total, the same way `globals::walk_table` stays total over a live `_G`.
 fn serialize_lua_table_to_json(table: &LuaTable, depth: usize) -> Result<Value, String> {
-    let mut map = serde_json::Map::new();
-    // Iterating as `LuaValue` makes both conversions the identity, so a pair
-    // can never fail to materialise; taking the ones that do keeps the walk
-    // total, the same way `globals::walk_table` stays total over a live `_G`.
-    for (key, value) in table
+    let entries: Vec<(LuaValue, LuaValue)> = table
         .pairs::<LuaValue, LuaValue>()
         .filter_map(std::result::Result::ok)
-    {
+        .collect();
+
+    if is_array(entries.iter().map(|(key, _)| key)) {
+        let values = entries
+            .iter()
+            .map(|(_, value)| serialize_at(value, depth + 1))
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(Value::Array(values));
+    }
+
+    let mut map = serde_json::Map::with_capacity(entries.len());
+    for (key, value) in &entries {
         // A key that can't be stringified names no JSON field — skip it rather
         // than fail the whole object (pre-Result behavior preserved).
-        if let Ok(key_str) = key.to_string() {
-            debug!("Serializing Lua table key: {key_str:?}");
-            map.insert(key_str, serialize_at(&value, depth + 1)?);
+        if let Some(key_str) = key_to_string(key) {
+            map.insert(key_str, serialize_at(value, depth + 1)?);
         }
     }
     Ok(Value::Object(map))
 }
 
-fn serialize_lua_array_to_json(table: &LuaTable, depth: usize) -> Result<Value, String> {
-    debug!(
-        "Serializing Lua array: {:?} with {:?} elements",
-        table,
-        table.len()
-    );
-    let mut vec = Vec::new();
-    // See `serialize_lua_table_to_json`: a `LuaValue`/`LuaValue` pair cannot
-    // fail to materialise, so there is no error arm to handle here.
-    for (_, value) in table
-        .pairs::<LuaValue, LuaValue>()
-        .filter_map(std::result::Result::ok)
-    {
-        debug!("Serializing Lua array element: {value:?}");
-        vec.push(serialize_at(&value, depth + 1)?);
+/// Whether these keys, **in iteration order**, are a JSON array's: contiguous
+/// integers from 1. Order-sensitive by design and unchanged from the predicate
+/// this replaced — Lua walks the array part in order, so a real sequence always
+/// classifies, while a table whose integer keys live in the hash part is
+/// iterated in an order Lua does not define and is treated as an object.
+fn is_array<'a>(keys: impl Iterator<Item = &'a LuaValue>) -> bool {
+    let mut last_index = 0;
+    for key in keys {
+        match key {
+            // Non-integer, non-positive, or non-contiguous: an object.
+            LuaValue::Integer(i) if *i == last_index + 1 => last_index = *i,
+            _ => return false,
+        }
     }
-    Ok(Value::Array(vec))
+    true
+}
+
+/// The JSON field name a Lua key becomes, or `None` when it names none.
+///
+/// The two key types that make up essentially all sim data are answered without
+/// entering Lua at all. Only the rest reach [`LuaValue::to_string`], which
+/// pushes the value and runs `__tostring` — a metamethod that can raise, which
+/// is why the whole thing is fallible in the first place. Both fast paths
+/// reproduce `to_string`'s answer exactly, including that a non-UTF-8 byte
+/// string is *not* a field name (it is dropped, not lossily decoded — unlike a
+/// string *value*, which coerces).
+fn key_to_string(key: &LuaValue) -> Option<String> {
+    match key {
+        LuaValue::Integer(i) => Some(i.to_string()),
+        LuaValue::String(s) => s.to_str().ok().map(|s| s.to_string()),
+        other => other.to_string().ok(),
+    }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // idiomatic in tests
 mod tests {
-    use super::{is_lua_array, serialize_lua_to_json, to_json_string, to_safe_json_string};
+    use super::{serialize_lua_to_json, to_json_string, to_safe_json_string};
     use mlua::prelude::{LuaTable, LuaValue};
     use mlua::Lua;
 
@@ -187,18 +188,82 @@ mod tests {
     /// everything else is an object. Sim data is full of both shapes (a group's
     /// `units` list vs. a unit's keyed record), and misclassifying one emits
     /// `{"1":...}` where the editor expects `[...]`.
+    ///
+    /// Asserted through the serializer rather than a private predicate: the
+    /// shape the editor receives *is* the classification, so this pins the
+    /// observable and stays true however the walk is arranged internally.
     #[test]
     #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
     fn array_detection_requires_contiguous_one_based_keys() {
         let lua = Lua::new();
-        let is_array = |chunk: &str| is_lua_array(&eval_table(&lua, chunk));
+        let shape = |chunk: &str| {
+            serialize_lua_to_json(&eval(&lua, chunk))
+                .expect("serialize")
+                .is_array()
+        };
 
-        assert!(is_array("return {}"), "empty is a (degenerate) array");
-        assert!(is_array("return {10, 20, 30}"));
-        assert!(!is_array("return { a = 1 }"), "string key");
-        assert!(!is_array("return { [0] = 1 }"), "0-based");
-        assert!(!is_array("return { [1] = 1, [3] = 3 }"), "hole at 2");
-        assert!(!is_array("return { [1.5] = 1 }"), "fractional key");
+        assert!(shape("return {}"), "empty is a (degenerate) array");
+        assert!(shape("return {10, 20, 30}"), "dense array");
+        assert!(!shape("return { a = 1 }"), "string keys only");
+        assert!(!shape("return { [0] = 1 }"), "0-based");
+        assert!(!shape("return { [1] = 1, [3] = 3 }"), "hole at 2");
+        assert!(
+            !shape("return { [2] = 1, [5] = 2 }"),
+            "numeric, non-contiguous"
+        );
+        assert!(
+            !shape("return { 1, 2, a = 3 }"),
+            "mixed integer and string keys"
+        );
+        assert!(!shape("return { [1.5] = 1 }"), "fractional key");
+    }
+
+    /// The exact JSON each of those shapes produces — not just array-vs-object
+    /// but the field names a non-array table's integer keys become. A table
+    /// with a hole is an object keyed `"1"`/`"3"`, and the editor's decoders
+    /// are written against that; a "smarter" classifier that filled the hole
+    /// with null, or renumbered, would break them silently.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn the_classified_shapes_render_exactly_these_documents() {
+        let lua = Lua::new();
+        let json = |chunk: &str| {
+            serialize_lua_to_json(&eval(&lua, chunk))
+                .expect("serialize")
+                .to_string()
+        };
+
+        assert_eq!(json("return {}"), "[]");
+        assert_eq!(json("return {10, 20, 30}"), "[10,20,30]");
+        assert_eq!(json("return { a = 1 }"), r#"{"a":1}"#);
+        assert_eq!(json("return { [0] = 1 }"), r#"{"0":1}"#);
+        assert_eq!(json("return { [1] = 1, [3] = 3 }"), r#"{"1":1,"3":3}"#);
+        assert_eq!(json("return { [2] = 1, [5] = 2 }"), r#"{"2":1,"5":2}"#);
+        assert_eq!(json("return { 1, 2, a = 3 }"), r#"{"1":1,"2":2,"a":3}"#);
+        assert_eq!(json("return { [1.5] = 1 }"), r#"{"1.5":1}"#);
+    }
+
+    /// Key stringification is Lua's, not Rust's, and the difference is visible:
+    /// a float key renders through Lua's `%.14g` (`1.5`, and `2.0` as the
+    /// integer `2` because mlua hands whole numbers back as integers), while a
+    /// non-UTF-8 byte string names no field at all and is dropped. Both are
+    /// load-bearing — a fast path for the common String/Integer keys must not
+    /// change either answer.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn key_stringification_is_pinned_for_every_key_type() {
+        let lua = Lua::new();
+        let json = |chunk: &str| {
+            serialize_lua_to_json(&eval(&lua, chunk))
+                .expect("serialize")
+                .to_string()
+        };
+
+        assert_eq!(json("return { [2.0] = 'x', z = 1 }"), r#"{"2":"x","z":1}"#);
+        assert_eq!(json("return { [-1] = 'x' }"), r#"{"-1":"x"}"#);
+        assert_eq!(json("return { [true] = 'x' }"), r#"{"true":"x"}"#);
+        // A non-UTF-8 key cannot name a JSON field: dropped, siblings survive.
+        assert_eq!(json(r"return { ['\255'] = 1, ok = 2 }"), r#"{"ok":2}"#);
     }
 
     /// The sim-unsafe scalars a mission can hand us — `0/0`, `math.huge`, a
