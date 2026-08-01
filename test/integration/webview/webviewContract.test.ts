@@ -56,16 +56,15 @@ describe("the webview contract's census", () => {
     expect(new Set(UNCOVERED_WEBVIEWS).size).toBe(UNCOVERED_WEBVIEWS.length);
   });
 
-  it.each(Object.entries(WEBVIEW_PROTOCOLS))(
-    "%s names the preview page and scripts that actually implement it",
-    (name, protocol) => {
-      expect(protocol.preview).toBe(`${name}.html`);
-      expect(previews).toContain(name);
-      // The declared scripts are the webview half of the protocol — the files
-      // the e2e drive measures. Comparing them to what the page really loads
-      // stops the declaration naming a file that no longer exists, or missing
-      // one that quietly took over part of the dispatch.
-      expect(previewScripts(name).filter((s) => s !== ALWAYS)).toEqual([...protocol.scripts]);
-    },
-  );
+  it.each(
+    Object.entries(WEBVIEW_PROTOCOLS),
+  )("%s names the preview page and scripts that actually implement it", (name, protocol) => {
+    expect(protocol.preview).toBe(`${name}.html`);
+    expect(previews).toContain(name);
+    // The declared scripts are the webview half of the protocol — the files
+    // the e2e drive measures. Comparing them to what the page really loads
+    // stops the declaration naming a file that no longer exists, or missing
+    // one that quietly took over part of the dispatch.
+    expect(previewScripts(name).filter((s) => s !== ALWAYS)).toEqual([...protocol.scripts]);
+  });
 });

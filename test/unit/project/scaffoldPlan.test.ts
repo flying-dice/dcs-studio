@@ -33,14 +33,21 @@ describe("assertValidFolderName", () => {
     expect(() => assertValidFolderName("a.b-c_d 1")).not.toThrow();
   });
 
-  it.each(["<", ">", ":", '"', "/", "\\", "|", "?", "*"])(
-    "rejects the Windows-invalid character %s",
-    (ch) => {
-      expect(() => assertValidFolderName(`bad${ch}name`)).toThrow(
-        `"bad${ch}name" isn't a valid folder name.`,
-      );
-    },
-  );
+  it.each([
+    "<",
+    ">",
+    ":",
+    '"',
+    "/",
+    "\\",
+    "|",
+    "?",
+    "*",
+  ])("rejects the Windows-invalid character %s", (ch) => {
+    expect(() => assertValidFolderName(`bad${ch}name`)).toThrow(
+      `"bad${ch}name" isn't a valid folder name.`,
+    );
+  });
 
   it("rejects control characters", () => {
     expect(() => assertValidFolderName("bad\x00name")).toThrow("isn't a valid folder name");
