@@ -256,6 +256,16 @@ teardown = function(why) return server:teardown(router, why) end
         )
         .expect("a free port binds");
 
+        // The handlers are live and answering right up to the release — which is
+        // what makes dropping them the interesting act rather than a bookkeeping
+        // one.
+        let answered: String = router
+            .get_method("echo")
+            .expect("registered")
+            .call("alive")
+            .unwrap();
+        assert_eq!(answered, "alive");
+
         let released = release(&mut server, &mut router, "mission end");
         assert_eq!(released.handlers, 2, "both handler references were dropped");
         assert_eq!(released.stopped_port, Some(port), "the listener stopped");

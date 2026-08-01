@@ -150,11 +150,11 @@ fn serialize_lua_table_to_json(table: &LuaTable, depth: usize) -> Result<Value, 
 }
 
 fn serialize_lua_array_to_json(table: &LuaTable, depth: usize) -> Result<Value, String> {
-    debug!(
-        "Serializing Lua array: {:?} with {:?} elements",
-        table,
-        table.len()
-    );
+    // Inline captured args only, and no `table.len()`: a positional expression
+    // in a log macro is a region that only ever runs at the matching level, and
+    // the shipped level is `warn`. The elements are logged individually below
+    // anyway, so the length said nothing the next lines do not.
+    debug!("Serializing Lua array: {table:?}");
     let mut vec = Vec::new();
     // See `serialize_lua_table_to_json`: a `LuaValue`/`LuaValue` pair cannot
     // fail to materialise, so there is no error arm to handle here.
