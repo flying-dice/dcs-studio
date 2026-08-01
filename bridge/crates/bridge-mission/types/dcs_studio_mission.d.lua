@@ -156,6 +156,10 @@ function dcs_studio_mission_debug.breakpoints() end
 ---@return number seconds
 function dcs_studio_mission_debug.monotonic() end
 
+--- Block the calling thread for `ms` milliseconds (clamped to 0-1000). Used by the engine's pause hold, which is a wait, not a computation: the resume that ends a pause is delivered by the drain the loop itself runs, so between drains there is nothing whatever to do and spinning only pegs a core for the length of the pause. Deliberately blocks the sim thread — a held breakpoint already owns it by construction, and the idle release still measures real time on `monotonic`, so a pause no editor is polling ends on schedule regardless.
+---@param ms number
+function dcs_studio_mission_debug.sleep_ms(ms) end
+
 --- Record that execution is paused at a breakpoint, with a JSON snapshot of source/line/locals. Called by the line hook.
 ---@param snapshot string
 function dcs_studio_mission_debug.set_paused(snapshot) end

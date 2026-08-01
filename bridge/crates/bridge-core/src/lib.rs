@@ -512,6 +512,41 @@ mod bootstrap_tests {
         assert_eq!(engine.get::<i64>("version").expect("version"), 1);
     }
 
+    /// The same collision, one global over: `__DCS_STUDIO_RT`. rt.lua's install
+    /// guard used to read `__DCS_STUDIO_RT and __DCS_STUDIO_RT.version == 3`,
+    /// which indexes whatever is there — and a NUMBER has no metatable in Lua
+    /// 5.1, so a co-installed mod owning the name raised "attempt to index a
+    /// number value" at chunk load. That raise comes back through `bootstrap`'s
+    /// `?` and fails the whole `require`, so the user loses the bridge —
+    /// server, methods, debugger and all — over a name another mod happened to
+    /// pick. A number is the case that matters (a string would have indexed
+    /// harmlessly through the string metatable), so it is the one planted here.
+    #[test]
+    #[cfg_attr(windows, ignore = "needs DCS's lua.dll on the runtime path")]
+    fn another_mod_owning_the_runtime_global_does_not_fail_the_module_load() {
+        // SAFETY: test-only state; matches the state the DLL bootstraps into.
+        let lua = unsafe { Lua::unsafe_new() };
+        lua.globals()
+            .set("__DCS_STUDIO_RT", 42)
+            .expect("plant a non-table");
+
+        let exports = bootstrap(&lua, BridgeKind::Gui, "test").expect("bootstrap");
+        exports.get::<LuaTable>("json").expect("json survived");
+        let rt: LuaTable = lua
+            .globals()
+            .get("__DCS_STUDIO_RT")
+            .expect("the runtime installed over the collision");
+        assert_eq!(rt.get::<i64>("version").expect("version"), 3);
+        // And it is the working runtime, not a husk: the console path the REPL
+        // drives answers through it.
+        lua.globals().set("rt", rt).expect("bind rt");
+        let json: String = lua
+            .load(r#"return rt.eval_json("return 1 + 1")"#)
+            .eval()
+            .expect("the installed runtime evaluates");
+        assert!(json.contains(r#""result":2"#), "{json}");
+    }
+
     /// The engine chunk is loaded with `?`, so whatever it raises fails the
     /// module load. It is written never to raise — it RETURNS a reason string
     /// when the state cannot host it — but it reads `debug` and `coroutine` out
@@ -738,7 +773,7 @@ mod gui_method_tests {
       }
       lfs = { writedir = function() return "C:/wd/" end }
 
-      register_methods(router, deps)
+      REG = register_methods(router, deps)
 
       -- Every debugger method answers with the reason. Before the guard they
       -- indexed a nil engine, so the editor got "attempt to index a nil value"
@@ -770,6 +805,48 @@ mod gui_method_tests {
       local ok, err = pcall(H.repl_export, { expr = "{ answer = 42 }" })
       assert(not ok, "a failed write must not report success")
       assert(string.find(tostring(err), "The disc is full", 1, true), tostring(err))
+
+      -- An unknown environment says what the known ones ARE. "unknown
+      -- environment 'sever'" alone told a user nothing they could act on: the
+      -- valid set is not discoverable from anywhere else they were looking.
+      local ok2, err2 = pcall(H.repl_eval, { code = "1", env = "sever" })
+      assert(not ok2, "an unknown environment is refused")
+      err2 = tostring(err2)
+      for _, name in ipairs({ "gui", "server", "config", "export" }) do
+        assert(string.find(err2, name, 1, true), name .. " is missing from: " .. err2)
+      end
+      assert(string.find(err2, "25570", 1, true), "and mission is pointed at its own bridge: " .. err2)
+
+      -- ── The mission-boot dispatch contains everything it touches ──
+      -- Its callers are DCS C++ entry points (onSimulationStart, and
+      -- onSimulationFrame via mission_boot_tick), so a raise escaping it has
+      -- nothing to catch it. The pcall used to cover `net.dostring_in` ALONE:
+      -- mission_boot_source() and its lfs.writedir() were evaluated as
+      -- ARGUMENTS, i.e. before pcall was ever entered, so a raising `lfs` went
+      -- straight past the guard.
+      net = { dostring_in = function(env, src) DISPATCHED = { env = env, src = src } end }
+
+      DISPATCHED = nil
+      REG.dispatch_mission_boot()
+      assert(DISPATCHED and DISPATCHED.env == "mission", "the good path still dispatches")
+      assert(string.find(DISPATCHED.src, "a_do_script", 1, true), DISPATCHED.src)
+      assert(string.find(DISPATCHED.src, "dcs_studio_mission", 1, true), "the boot snippet rode along")
+      assert(string.find(DISPATCHED.src, "C:/wd/", 1, true), "writedir reached the snippet")
+
+      -- A writedir that raises is contained, and the dispatch is simply skipped.
+      local real_writedir = lfs.writedir
+      lfs.writedir = function() error("lfs is gone in this state", 0) end
+      DISPATCHED = nil
+      local contained = pcall(REG.dispatch_mission_boot)
+      lfs.writedir = real_writedir
+      assert(contained, "a raising lfs must not escape into DCS's dispatcher")
+      assert(DISPATCHED == nil, "and nothing was dispatched")
+
+      -- Still working afterwards: the guard swallows the fault, it does not
+      -- wedge the boot for the rest of the session.
+      DISPATCHED = nil
+      REG.dispatch_mission_boot()
+      assert(DISPATCHED ~= nil, "the next dispatch goes through")
     "#;
 }
 

@@ -44,6 +44,7 @@ const SIM: &str = r#"
 SPY = { logs = {}, callbacks = nil, pumped = 0, boot_ticks = 0, boot_dispatches = 0 }
 CLOCK = 0
 FAIL_PUMP = nil
+FAIL_BOOT = nil
 
 os.clock = function() return CLOCK end
 
@@ -79,7 +80,10 @@ package.preload["dcs_studio_gui"] = function()
       SPY.ctx = ctx
       return {
         mission_boot_tick = function() SPY.boot_ticks = SPY.boot_ticks + 1 end,
-        dispatch_mission_boot = function() SPY.boot_dispatches = SPY.boot_dispatches + 1 end,
+        dispatch_mission_boot = function()
+          SPY.boot_dispatches = SPY.boot_dispatches + 1
+          if FAIL_BOOT then error(FAIL_BOOT, 0) end
+        end,
       }
     end,
   }
@@ -122,6 +126,13 @@ fn frame(lua: &Lua) {
     lua.load("SPY.callbacks.onSimulationFrame()")
         .exec()
         .expect("the frame callback must never raise into DCS's dispatcher");
+}
+
+/// Run the registered `onSimulationStart` once, as DCS would at mission start.
+fn sim_start(lua: &Lua) {
+    lua.load("SPY.callbacks.onSimulationStart()")
+        .exec()
+        .expect("the start callback must never raise into DCS's dispatcher");
 }
 
 #[test]
@@ -267,12 +278,78 @@ fn a_persistent_frame_fault_is_throttled_rather_than_repeated_every_frame() {
 #[test]
 fn the_mission_boot_is_dispatched_when_a_mission_starts() {
     let lua = hooked();
-    lua.load("SPY.callbacks.onSimulationStart()")
-        .exec()
-        .expect("the start callback");
+    sim_start(&lua);
 
     let dispatches: u32 = lua.load("SPY.boot_dispatches").eval().expect("boot spy");
     assert_eq!(dispatches, 1);
+    assert_eq!(errors(&lua), Vec::<String>::new(), "a good start is quiet");
+}
+
+#[test]
+fn a_raise_inside_the_start_callback_is_reported_instead_of_escaping() {
+    // `onSimulationStart` is a DCS C++ entry point exactly like the frame
+    // callback, and what it calls reaches live globals in a state shared with
+    // every other mod — `lfs.writedir` and `net.dostring_in`, inside
+    // dispatch_mission_boot. Unprotected, a raise from either went straight into
+    // DCS's dispatcher: the mission bridge never booted, and nothing on the
+    // bridge side said so.
+    let lua = hooked();
+    lua.load(r#"FAIL_BOOT = "attempt to call a nil value (field 'writedir')""#)
+        .exec()
+        .expect("arm the fault");
+
+    sim_start(&lua); // the `expect` inside is the assertion: it must not raise
+
+    assert_eq!(
+        errors(&lua),
+        vec![
+            "ERROR: simulation start error: attempt to call a nil value (field 'writedir')"
+                .to_string()
+        ]
+    );
+}
+
+/// The two callbacks throttle independently. A frame fault fires 60 times a
+/// second and would otherwise consume the throttle window that the once-per-
+/// mission start report has to fit into — hiding the one line that explains why
+/// the mission bridge is not there.
+#[test]
+fn a_frame_fault_does_not_swallow_the_report_a_mission_start_gets() {
+    let lua = hooked();
+    lua.load(r#"FAIL_PUMP = "still broken"; FAIL_BOOT = "no writedir""#)
+        .exec()
+        .expect("arm both faults");
+
+    frame(&lua);
+    sim_start(&lua);
+
+    assert_eq!(
+        errors(&lua),
+        vec![
+            "ERROR: simulation frame error: still broken".to_string(),
+            "ERROR: simulation start error: no writedir".to_string(),
+        ],
+        "each callback reports its own first fault"
+    );
+}
+
+/// A mission started, then restarted, inside one throttle window: the start
+/// callback throttles too, since a persistent fault will report on every
+/// mission load for the rest of the session.
+#[test]
+fn a_repeated_start_fault_is_throttled_like_the_frame_one() {
+    let lua = hooked();
+    lua.load(r#"FAIL_BOOT = "no writedir""#)
+        .exec()
+        .expect("arm the fault");
+
+    sim_start(&lua);
+    sim_start(&lua);
+    assert_eq!(errors(&lua).len(), 1, "one line inside the window");
+
+    lua.load("CLOCK = 10.5").exec().expect("advance the clock");
+    sim_start(&lua);
+    assert_eq!(errors(&lua).len(), 2, "past 10s it is reported again");
 }
 
 #[test]

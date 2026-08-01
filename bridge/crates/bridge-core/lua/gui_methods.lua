@@ -89,13 +89,29 @@ return function(router, deps)
   local MISSION_MOVED = "the 'mission' environment is served by the mission bridge on 127.0.0.1:25570 "
     .. "(it runs while a mission is up and needs a desanitized MissionScripting.lua)"
 
+  -- The valid names, listed once for the error below. Sorted so the message is
+  -- stable rather than following the hash order `pairs` happens to give — an
+  -- error that reshuffles itself between runs reads like two different errors.
+  local REPL_ENV_NAMES
+  do
+    local names = {}
+    for name in pairs(REPL_ENVS) do
+      names[#names + 1] = name
+    end
+    table.sort(names)
+    REPL_ENV_NAMES = table.concat(names, ", ")
+  end
+
   local function repl_env(params)
     local envname = (params and params.env) or "gui"
     if envname == "mission" then
       error(MISSION_MOVED, 0)
     end
     if not REPL_ENVS[envname] then
-      error("unknown environment '" .. tostring(envname) .. "'", 0)
+      error("unknown environment '" .. tostring(envname) .. "', so there is nowhere to run this. "
+        .. "This bridge reaches the GUI/hooks state and the DCS Lua states it can call into with "
+        .. "net.dostring_in, and those are the only names it knows. Use one of: " .. REPL_ENV_NAMES
+        .. " (or omit `env` for gui). For the mission state, " .. MISSION_MOVED .. ".", 0)
     end
     return envname
   end
@@ -270,7 +286,16 @@ end
     -- Fire-and-forget into the real mission state via the trigger sandbox's
     -- a_do_script. No return value: success is observable as port 25570
     -- coming up; failures land in dcs.log via the snippet's env.error.
-    pcall(net.dostring_in, "mission", string.format("a_do_script(%q)", mission_boot_source()))
+    --
+    -- The boot-source construction is INSIDE the protected call, and that is the
+    -- point of the closure: as a bare argument, `mission_boot_source()` — and the
+    -- `lfs.writedir()` inside it — was evaluated BEFORE pcall was entered, so a
+    -- raising `lfs` escaped past the guard into whichever dispatcher called this.
+    -- The two callers are DCS's own C++ callbacks (onSimulationStart /
+    -- onSimulationFrame) and the mission_boot RPC handler.
+    pcall(function()
+      net.dostring_in("mission", string.format("a_do_script(%q)", mission_boot_source()))
+    end)
   end
 
   router:add_method("mission_boot", function()

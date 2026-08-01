@@ -41,6 +41,54 @@ if type(coroutine) ~= "table" or type(coroutine.create) ~= "function" then
     .. "so the debugger would risk freezing the sim"
 end
 
+-- ── The stdlib is captured, not looked up ──
+-- Below this line every stdlib name is the local captured here, resolved once,
+-- after the guards above have established that `debug` and `coroutine` are
+-- really present. The engine runs in a state shared with DCS, every mission
+-- script and every other mod, and a global any of them assigns over would
+-- otherwise be consulted mid-session — while the sim thread is held inside the
+-- line hook, which is the worst possible moment to discover `table.insert` is
+-- nil.
+--
+-- The library tables are captured as private COPIES rather than by reference,
+-- and that is the whole protection: `local debug = debug` still points at the
+-- shared table, so a later `debug.sethook = nil` would reach through it. Copying
+-- into same-named locals keeps every call site reading as ordinary
+-- `debug.getinfo(...)`, so this is one block rather than hundreds of renames.
+-- Nothing here uses method syntax (`s:sub()`), which would bypass the copy.
+--
+-- `print` is deliberately absent: swapping `_G.print` is how a debugged run's
+-- output is captured (see D.run), and every access here already goes through
+-- `_G.print` so it stays live by construction. `_G` itself, `__DCS_STUDIO_RT`
+-- and `bridge` are likewise read live — the first two on purpose, and `bridge`
+-- is the DLL's own table, which nothing else can reach.
+local type, tostring, pairs, ipairs = type, tostring, pairs, ipairs
+local pcall, xpcall, error, setmetatable = pcall, xpcall, error, setmetatable
+local loadstring, setfenv = loadstring, setfenv
+local _G = _G
+local debug = {
+  getinfo = debug.getinfo,
+  getlocal = debug.getlocal,
+  getupvalue = debug.getupvalue, -- absent in DCS's hooks env; the nil is meaningful
+  sethook = debug.sethook,
+  setlocal = debug.setlocal,
+  setupvalue = debug.setupvalue, -- absent in DCS's hooks env; the nil is meaningful
+  traceback = debug.traceback,
+}
+local coroutine = {
+  create = coroutine.create,
+  resume = coroutine.resume,
+  status = coroutine.status,
+}
+local string = {
+  find = string.find,
+  gsub = string.gsub,
+  lower = string.lower,
+  match = string.match,
+  sub = string.sub,
+}
+local table = { insert = table.insert, sort = table.sort }
+
 -- `type(...) == "table"` rather than a plain truth test: the global belongs to a
 -- state shared with every other mod, and indexing a non-table one raises at
 -- CHUNK LOAD — which the DLL propagates with `?`, so the whole module fails to
@@ -48,6 +96,10 @@ end
 -- engine is installed, so install ours over it.
 if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
   local DRAIN_INTERVAL_SECONDS = 0.05 -- max sim stall between RPC drains during a run
+  -- Slept between drains while a pause is held, so the hold waits instead of
+  -- spinning. Well under DRAIN_INTERVAL_SECONDS so the drain cadence is
+  -- unchanged; see hold_pause.
+  local HOLD_SLEEP_MS = 5
   local MAX_TABLE_CHILDREN = 1000 -- cap children returned/previewed for one table
   local MAX_REFS = 100000 -- per-pause ref ceiling so a cyclic/huge tree can't pin unbounded memory
   local EVAL_CHECK_INSTRUCTIONS = 2000 -- VM instructions between deadline checks in a bounded call
@@ -64,6 +116,43 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
 
   local D = { version = 1, running = false, error = nil }
   D.pump = function() end -- the installer wires the env-specific RPC drain
+
+  -- Seconds between repeats of a pump fault. The drain runs on every qualifying
+  -- line of the debuggee and on the pause's own 0.05s cadence, so an unthrottled
+  -- report of a persistent fault would be a second fault of its own.
+  local PUMP_ERROR_INTERVAL = 10
+  local pump_reported_at = nil
+
+  -- Drive the RPC drain, ABSORBING anything it raises.
+  --
+  -- This is called from inside the line hook — from the run-loop drain and from
+  -- hold_pause — and a raise out of it there is not a lost drain but a lost
+  -- SESSION: it unwinds past hold_pause's `bridge.debug.clear_paused()` and the
+  -- per-pause vars release, so the DLL is left believing the sim is still
+  -- stopped. D.run's own guard then refuses every later debug_run with "a debug
+  -- session is already running" for the rest of the DCS process.
+  --
+  -- Swallowing is right rather than merely convenient: the drain is best-effort
+  -- by construction. It exists so a Pause/Stop can arrive while the chunk holds
+  -- the sim thread, and one that fails is one missed opportunity to deliver
+  -- them — the next line, or the next 0.05s tick, tries again. The pump reaches
+  -- a server userdata and a router owned by the host state, which a mission
+  -- unload or another mod can take out from under it at any moment; none of
+  -- that is a reason to strand the debugger.
+  local function pump_safely()
+    local ok, err = pcall(D.pump)
+    if ok then
+      return
+    end
+    local now = clock()
+    if not pump_reported_at or (now - pump_reported_at) > PUMP_ERROR_INTERVAL then
+      pump_reported_at = now
+      -- pcall'd in turn: the logger is a DLL export reached through the same
+      -- `bridge` table, and reporting a fault must not become one.
+      pcall(bridge.logger.error, "debug pump error (the RPC drain is best-effort; "
+        .. "the pause is unaffected): " .. tostring(err))
+    end
+  end
 
   -- The pause-safety budgets. Fields rather than locals so they can be retuned
   -- on a live state — which is also how the tests drive these paths without
@@ -85,18 +174,11 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
     return dbg.n
   end
 
-  -- A short, single-line preview of a value for the variables tree. Deliberately
-  -- MIRRORS (does not share) rt.lua's `preview`: the two diverge on functions —
-  -- the debugger renders a bare "function" here, the REPL explorer shows arity —
-  -- and the engine stays self-contained: it must not depend on __DCS_STUDIO_RT
-  -- being the matching build inside a paused, possibly sanitized state. The
-  -- key-order comparator in D.expand mirrors rt.lua's key_order the same way.
-  -- Kept in sync by hand.
   -- Globals as a user-facing evaluation should see them: through the console
   -- runtime's guarded environment when that runtime is installed in this state
   -- (card 19 — its `DCS` refuses the calls that kill the process outright),
   -- else plain `_G`. A SOFT dependency by design, like dbg_preview's deliberate
-  -- duplication above: the engine must keep working in a state without the RT.
+  -- duplication below: the engine must keep working in a state without the RT.
   local function RT_GLOBALS()
     local rt = __DCS_STUDIO_RT
     if rt and rt.global_env then
@@ -105,6 +187,13 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
     return _G
   end
 
+  -- A short, single-line preview of a value for the variables tree. Deliberately
+  -- MIRRORS (does not share) rt.lua's `preview`: the two diverge on functions —
+  -- the debugger renders a bare "function" here, the REPL explorer shows arity —
+  -- and the engine stays self-contained: it must not depend on __DCS_STUDIO_RT
+  -- being the matching build inside a paused, possibly sanitized state. The
+  -- key-order comparator in D.expand mirrors rt.lua's key_order the same way.
+  -- Kept in sync by hand.
   local function dbg_preview(v)
     local t = type(v)
     if t == "string" then
@@ -225,7 +314,11 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
     if suspended then
       -- It yielded, so it never produced a value; resuming again could block
       -- for another full budget. Report it rather than pretend it returned nil.
-      return false, "evaluation yielded instead of returning a value"
+      return false, "evaluation yielded instead of returning a value, so there is nothing to show. "
+        .. "Every watch, hover, console line and breakpoint condition runs on its own coroutine — "
+        .. "that is what lets a runaway one be cut off — and a yield suspends it mid-way rather "
+        .. "than producing a result. Rewrite the expression so it returns without yielding; if you "
+        .. "need to drive a coroutine, resume one you create inside the expression itself."
     end
     return ok, res
   end
@@ -598,16 +691,28 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
       -- core plus the bridge's process-wide queue/resume mutexes taken millions
       -- of times a second, contending with the very actix worker that has to
       -- enqueue the request.
+      --
+      -- Throttling the DRAIN was only half of that, though: the loop still ran
+      -- flat out between drains, so a core sat at 100% for the whole pause — up
+      -- to idle_seconds (30) on a breakpoint the user is reading. So the gap is
+      -- SLEPT rather than spun. Blocking the sim thread here is not a cost: a
+      -- held breakpoint already owns it by construction, and there is nothing
+      -- for this loop to do until the next drain. 5ms is a hundredth of the
+      -- 50ms cadence, so the drain still lands on time, and it bounds how long
+      -- the release can overshoot to the same 5ms.
       local last_pump = nil
       repeat
         local now = clock()
         if last_pump == nil or (now - last_pump) > DRAIN_INTERVAL_SECONDS then
           last_pump = now
-          D.pump() -- a debug_state during this drain refreshes last_ping
+          pump_safely() -- a debug_state during this drain refreshes last_ping
           mode = bridge.debug.take_resume()
           if not mode and (clock() - dbg.last_ping) > D.idle_seconds then
             mode = "continue" -- the editor stopped polling (gone): don't freeze forever
           end
+        end
+        if mode == nil then
+          bridge.debug.sleep_ms(HOLD_SLEEP_MS)
         end
       until mode ~= nil
       bridge.debug.clear_paused()
@@ -619,15 +724,34 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
     local hook = function(_, line)
       -- "l" mask: every event is a line event. Depth is walked on demand
       -- (real_depth), never counted off call/return events.
-      local info = debug.getinfo(2, "nSlf")
+      --
+      -- "S" ONLY, and that is the hot path's whole budget: this runs on every
+      -- line of every debugged chunk, so what it asks for is multiplied by the
+      -- length of the run. All the common path needs is `source`. The "n" ("name"
+      -- — the engine never reads it here) and "f" (`func`) parts were being
+      -- computed on every line for the sake of one branch: `func` is used solely
+      -- to resolve upvalues for a CONDITIONAL breakpoint, so it is fetched
+      -- lazily, there, where it is a per-hit cost instead of a per-line one.
+      local info = debug.getinfo(2, "S")
       local src = (info and info.source) or source
       -- Throttled RPC drain DURING the run, so a manual Pause/Stop (and live
       -- state queries) are delivered even while the chunk holds the sim thread.
       -- The hook is disabled while it runs, so this re-entrant drain is safe.
+      --
+      -- `clock()` is called per line and deliberately NOT hoisted behind a line
+      -- counter. Measured on this harness over 200k calls: clock 0.016s, against
+      -- getinfo "S" at 0.114s and a whole 200k-line debug_run at ~0.40s — so the
+      -- counter would buy about 4% of the run. What it would cost is the reason
+      -- not to: the drain interval is what delivers Stop and Pause while the sim
+      -- thread is held, and pricing it in LINES instead of seconds makes it
+      -- depend on how line-dense the chunk is — the exact variable a wall-clock
+      -- interval exists to be independent of. A tight numeric loop would drain
+      -- far more often than needed and a chunk spending its lines in long C calls
+      -- far less. Not worth 4%.
       local now = clock()
       if (now - last_drain) > DRAIN_INTERVAL_SECONDS then
         last_drain = now
-        D.pump()
+        pump_safely()
       end
       -- Cooperative Stop: unwind the chunk so a runaway/looping run can be
       -- killed (there is no terminate primitive over the bridge otherwise).
@@ -642,8 +766,15 @@ if type(__DCS_STUDIO_DBG) ~= "table" or __DCS_STUDIO_DBG.version ~= 1 then
           -- Evaluate the condition in the stopped frame. From the hook, the
           -- debugged frame is level 2 (getinfo(2) above); collect_locals takes
           -- that caller-relative level. Resolve its locals AND upvalues.
+          --
+          -- The frame's function is fetched HERE rather than on the common path
+          -- above: it is needed only to read upvalues for this condition, and a
+          -- conditional breakpoint is hit far less often than a line is executed.
+          -- Still level 2 — this runs in the hook body, the same frame of
+          -- reference the getinfo above used.
+          local finfo = debug.getinfo(2, "f")
           local _, lmap, lpresent = collect_locals(2)
-          local _, umap, upresent = collect_upvalues(info and info.func)
+          local _, umap, upresent = collect_upvalues(finfo and finfo.func)
           local ok, val = eval_expr({
             locals = lmap,
             locals_present = lpresent,

@@ -86,35 +86,65 @@ local started, err = pcall(function()
 
   local cb = {}
 
-  -- Seconds between repeats of the frame-callback error; the callback runs 60x
-  -- a second forever, so an unthrottled report of a persistent fault would
-  -- write ~200k lines a minute into dcs.log.
-  local FRAME_ERROR_INTERVAL = 10
-  local reported_at = nil
+  -- Seconds between repeats of a callback's error; onSimulationFrame runs 60x a
+  -- second forever, so an unthrottled report of a persistent fault would write
+  -- ~200k lines a minute into dcs.log.
+  local CALLBACK_ERROR_INTERVAL = 10
 
-  -- Protected like mission_init.lua's pump, and for the same reason: a raise
-  -- from the live globals this touches (DCS.getModelTime, lfs.writedir,
-  -- net.dostring_in) would otherwise vanish into DCS's callback dispatcher with
-  -- no bridge-side diagnostic, and would skip the RPC drain — the editor sees
-  -- an unexplained dead bridge.
-  function cb.onSimulationFrame()
-    local drained, frame_err = pcall(function()
-      server:process_rpc(router) -- drains queued WS/HTTP requests (fires at the menu too)
-      reg.mission_boot_tick() -- self-heals the mission bridge boot while a mission runs
-    end)
-    if not drained then
-      -- os.clock, like the boot-dispatch rate limit in gui_methods.lua: this
-      -- runs at the main menu too, where there is no model time to measure.
+  -- One independent throttle per callback. Independent deliberately: a frame
+  -- fault firing 60x a second must not swallow the one report a mission start
+  -- gets, and vice versa — a shared stamp would make whichever fires first hide
+  -- the other for ten seconds.
+  --
+  -- os.clock, like the boot-dispatch rate limit in gui_methods.lua: these run at
+  -- the main menu too, where there is no model time to measure.
+  local function reporter(what)
+    local reported_at = nil
+    return function(err)
       local now = os.clock()
-      if not reported_at or (now - reported_at) > FRAME_ERROR_INTERVAL then
+      if not reported_at or (now - reported_at) > CALLBACK_ERROR_INTERVAL then
         reported_at = now
-        log.write("DCS-STUDIO", log.ERROR, "simulation frame error: " .. tostring(frame_err))
+        log.write("DCS-STUDIO", log.ERROR, what .. ": " .. tostring(err))
       end
     end
   end
 
+  local report_frame_error = reporter("simulation frame error")
+  local report_start_error = reporter("simulation start error")
+
+  -- The frame body, hoisted out of the callback rather than built inside it.
+  -- pcall needs a function value, and written inline that is a fresh closure
+  -- constructed 60 times a second for the entire life of the process — a
+  -- garbage allocation per frame, forever, for a function that closes over
+  -- nothing that changes. One named upvalue costs one allocation, once.
+  local function drain_frame()
+    server:process_rpc(router) -- drains queued WS/HTTP requests (fires at the menu too)
+    reg.mission_boot_tick() -- self-heals the mission bridge boot while a mission runs
+  end
+
+  -- BOTH callbacks are protected, and for the same reason mission_init.lua's
+  -- pump is: these are C++ entry points. DCS calls them from its own dispatcher,
+  -- which has nothing to catch a raise, so a fault in the live globals they
+  -- touch (DCS.getModelTime, lfs.writedir, net.dostring_in) would vanish with no
+  -- bridge-side diagnostic at all — the editor just sees a dead bridge.
+  function cb.onSimulationFrame()
+    -- A raise here also SKIPS the RPC drain, so the bridge is up and answering
+    -- nothing until it is fixed.
+    local drained, frame_err = pcall(drain_frame)
+    if not drained then
+      report_frame_error(frame_err)
+    end
+  end
+
   function cb.onSimulationStart()
-    reg.dispatch_mission_boot()
+    -- dispatch_mission_boot reaches lfs.writedir and net.dostring_in — both live
+    -- globals, in a state shared with every other mod. Unprotected, a raise from
+    -- either escaped straight into DCS's dispatcher: the mission bridge silently
+    -- never booted and nothing anywhere said why.
+    local dispatched, start_err = pcall(reg.dispatch_mission_boot)
+    if not dispatched then
+      report_start_error(start_err)
+    end
   end
 
   DCS.setUserCallbacks(cb)

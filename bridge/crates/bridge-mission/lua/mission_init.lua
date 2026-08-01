@@ -177,6 +177,16 @@ if DBG then
   end
 end
 
+-- The pump body, hoisted out of the scheduled callback rather than built inside
+-- it. pcall needs a function value, and written inline that is a fresh closure
+-- allocated on every tick for the whole mission — garbage per tick, forever, for
+-- a function that closes over nothing that changes. One named local costs one
+-- allocation, once. (The same reasoning as the GameGUI hook's frame callback,
+-- where it runs six times as often.)
+local function drain_queue()
+  server:process_rpc(router)
+end
+
 -- Queue pump on model time (the DCS-gRPC pattern): does not fire while the
 -- sim is paused or between missions — requests queue until the 30s server
 -- timeout then. A debug_run processed inside this drain blocks the callback
@@ -189,9 +199,7 @@ timer.scheduleFunction(function()
   if torn_down then
     return nil
   end
-  local ok, err = pcall(function()
-    server:process_rpc(router)
-  end)
+  local ok, err = pcall(drain_queue)
   if not ok then
     report_error("mission pump error: " .. tostring(err))
   end
