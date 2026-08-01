@@ -32,6 +32,32 @@ function measuredFiles() {
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(rawDir, { recursive: true });
 
+// A cold box has no Chromium, and playwright's own failure for that is a wall
+// of text ending in "npx playwright install" — after which the run has already
+// failed and has to be started again. Install it up front instead: it is a
+// no-op costing under a second when the browser is already there, and it makes
+// `npm run coverage:e2e` work on a fresh clone with nothing else done first.
+//
+// PW_CHROMIUM_PATH still overrides everything (see playwright.config.ts), and
+// remains the escape hatch for a box that must use a Chromium it already has —
+// a locked-down network, a distro build, a shared cache. Skip the download when
+// it is set, since the download would go unused.
+if (!process.env.PW_CHROMIUM_PATH) {
+  const install = spawnSync("npx", ["playwright", "install", "chromium"], {
+    cwd: root,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+  if (install.status !== 0) {
+    console.error(
+      "\n`npx playwright install chromium` failed. If this box cannot download " +
+        "browsers, point PW_CHROMIUM_PATH at an existing Chromium executable and " +
+        "re-run.\n",
+    );
+    process.exit(install.status ?? 1);
+  }
+}
+
 const run = spawnSync("npx", ["playwright", "test"], {
   cwd: root,
   stdio: "inherit",

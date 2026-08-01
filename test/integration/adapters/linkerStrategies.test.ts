@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSpawnHarness, type SpawnHarness } from "../../support/fakeChildProcess";
+import { canSymlink, linkForSetup, symlinkSkipReason } from "../../support/linkCapability";
 
 // The Windows half of the linker, plus the failure paths.
 //
@@ -23,6 +24,13 @@ import { createSpawnHarness, type SpawnHarness } from "../../support/fakeChildPr
 // demand, is injected — and "different volumes" is expressed with a UNC-shaped
 // path, which win32 path parsing reads as a different root while Linux still
 // resolves it to the same file.
+//
+// Real symlinks, though, are a privilege on Windows (SeCreateSymbolicLinkPrivilege
+// — Developer Mode or elevation), which an ordinary dev box does not hold. Only
+// the cross-volume case is genuinely *about* creating one, so only that case is
+// skipped when the privilege is absent; every other test here wanted a link on
+// disk to set the scene, and takes one it can have — see test/support/
+// linkCapability.ts. CI holds the privilege and refuses to skip.
 
 let spawner: SpawnHarness;
 let hostPlatform = "linux";
@@ -142,6 +150,19 @@ describe("mklink off Windows", () => {
     if (r.ok) return;
     expect(r.message).toMatch(/^Failed to create symbolic link: /);
   });
+
+  it("reports a directory symlink that could not be created", async () => {
+    // Off Windows a directory is a "dir" symlink rather than a junction — the
+    // other arm of the type choice, and the one no successful case can reach on
+    // an unprivileged Windows box, since a dir symlink needs the privilege
+    // exactly as a file one does. The failure path exercises the choice without
+    // needing to succeed at it.
+    const target = dir("Hooks");
+    const r = await mklink(path.join(root, "missing-parent", "Hooks"), target);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.message).toMatch(/^Failed to create symbolic link: /);
+  });
 });
 
 describe("mklink on Windows", () => {
@@ -185,15 +206,20 @@ describe("mklink on Windows", () => {
     expect(r.message).toMatch(/^Failed to create hard link: /);
   });
 
-  it("symlinks a file across volumes when the user may already do so", async () => {
-    // Developer Mode (or an admin session) makes symlink creation permitted;
-    // no UAC prompt should appear in that case.
-    const target = file("mod.lua");
-    const link = otherVolume(path.join(dest, "mod.lua"));
-    expect(await mklink(link, target)).toEqual({ ok: true });
-    expect(nodeFs.lstatSync(link).isSymbolicLink()).toBe(true);
-    expect(spawner.calls).toEqual([]);
-  });
+  // The only test here that needs a real symlink to be creatable: its whole
+  // subject is the branch taken when the user already has the privilege.
+  it.skipIf(!canSymlink())(
+    `symlinks a file across volumes when the user may already do so [${symlinkSkipReason}]`,
+    async () => {
+      // Developer Mode (or an admin session) makes symlink creation permitted;
+      // no UAC prompt should appear in that case.
+      const target = file("mod.lua");
+      const link = otherVolume(path.join(dest, "mod.lua"));
+      expect(await mklink(link, target)).toEqual({ ok: true });
+      expect(nodeFs.lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(spawner.calls).toEqual([]);
+    },
+  );
 
   it("reports a cross-volume symlink failure that elevation would not fix", async () => {
     // Only EPERM means "you lack the privilege"; anything else is a real
@@ -341,7 +367,9 @@ describe("enable failure paths", () => {
     // meant it to reference.
     const target = dir("Hooks");
     const link = path.join(dest, "Hooks");
-    nodeFs.symlinkSync(path.join(root, "deleted"), link, "dir");
+    // Deliberately broken: the target does not exist. A junction may point at
+    // nothing just as a symlink may, so this stays a broken link on Windows.
+    linkForSetup(path.join(root, "deleted"), link, "dir");
 
     const res = await new Linker().enable([{ id: "m:0", src: target, dest: link }]);
     expect(res.ok).toBe(false);
@@ -367,7 +395,8 @@ describe("enable failure paths", () => {
     // The parent lstats fine (it is a link), so nothing is created for it, and
     // the failure only shows up when the link itself is attempted.
     const parent = path.join(dest, "Hooks");
-    nodeFs.symlinkSync(path.join(root, "gone"), parent, "dir");
+    // Also deliberately broken — see above; a junction lstats as a link too.
+    linkForSetup(path.join(root, "gone"), parent, "dir");
 
     const res = await new Linker().enable([
       { id: "m:0", src: file("mod.lua"), dest: path.join(parent, "mod.lua") },
@@ -382,6 +411,11 @@ describe("enable failure paths", () => {
     // undoing the outer link first makes the inner path vanish, so rollback
     // has to tolerate links that are already gone. Throwing here would abort
     // the rollback and leave the mod half-installed.
+    // Nothing here is about the link *type*, only about undoing links in an
+    // order that makes some of them vanish early — so run it as Windows, where
+    // the folder becomes a junction and the file a hard link and no symlink
+    // privilege is needed. The rollback path is identical either way.
+    hostPlatform = "win32";
     const inner = dir("Hooks");
     const res = await new Linker().enable([
       { id: "m:0", src: inner, dest: path.join(dest, "Hooks") },
@@ -416,7 +450,7 @@ describe("disable", () => {
     // missing path to `rmSync(..., { force: true })` on Windows, which counts
     // as removed. What is under test is the per-link bookkeeping, not the OS.
     const good = path.join(dest, "good.lua");
-    nodeFs.symlinkSync(file("mod.lua"), good, "file");
+    linkForSetup(file("mod.lua"), good, "file");
     const held = path.join(dest, "held.lua");
     nodeFs.writeFileSync(held, "in use by DCS");
     rmFault = (target) => {
@@ -439,7 +473,7 @@ describe("disable", () => {
     // Uninstall reports the failed links back to the user; an object with no
     // `.message` would otherwise be shown as "undefined" next to the link id.
     const link = path.join(dest, "mod.lua");
-    nodeFs.symlinkSync(file("mod.lua"), link, "file");
+    linkForSetup(file("mod.lua"), link, "file");
     rmFault = () => {
       throw "device is busy";
     };

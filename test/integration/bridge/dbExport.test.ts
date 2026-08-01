@@ -10,6 +10,11 @@ import type { BridgeClient } from "../../../src/bridge/client";
 import { BridgeClients } from "../../../src/bridge/clients";
 import { dbExportCommand } from "../../../src/bridge/dbExport";
 import { EXPORT_OPEN_LIMIT_BYTES } from "../../../src/core/domain/bridgeConsole";
+import {
+  BRIDGE_TORN_DOWN,
+  BridgeRpcError,
+  PUMP_STALLED,
+} from "../../../src/core/domain/bridgeProtocol";
 import { CONNECTED, FakeBridgeClient } from "./fakeBridgeClient";
 
 // Exporting the DCS database is a quick-pick funnel onto one RPC, and the whole
@@ -245,5 +250,47 @@ describe("when the export fails", () => {
     await dbExportCommand(clients);
 
     expect(state.errors).toEqual(["DCS database export failed: bridge closed"]);
+  });
+
+  // A long export straddling a mission change, or a held breakpoint stopping
+  // the GUI bridge's frame drain, are both ordinary. The user still needs to
+  // hear that the export did not finish — what they must not be handed is a
+  // button offering to file the sim's own lifecycle as an extension bug.
+  it("does not invite a bug report when the mission ended mid-export", async () => {
+    gui.answer("dbExport", () => {
+      throw new BridgeRpcError("bridge torn down", BRIDGE_TORN_DOWN);
+    });
+    state.quickPickReplies = [scope("all")];
+
+    await dbExportCommand(clients);
+
+    expect(state.errors).toEqual([]);
+    expect(state.warnings).toEqual(["DCS database export did not finish: bridge torn down"]);
+  });
+
+  it("does not invite a bug report when the sim was not pumping", async () => {
+    gui.answer("dbExport", () => {
+      throw new BridgeRpcError("pump stalled", PUMP_STALLED);
+    });
+    state.quickPickReplies = [scope("all")];
+
+    await dbExportCommand(clients);
+
+    expect(state.errors).toEqual([]);
+    expect(state.warnings).toEqual(["DCS database export did not finish: pump stalled"]);
+  });
+
+  it("still invites a bug report for a genuine bridge fault", async () => {
+    // The suppression has to be narrow: an internal error carries a code too,
+    // and it is exactly the kind of thing worth a report.
+    gui.answer("dbExport", () => {
+      throw new BridgeRpcError("internal error", -32603);
+    });
+    state.quickPickReplies = [scope("all")];
+
+    await dbExportCommand(clients);
+
+    expect(state.errors).toEqual(["DCS database export failed: internal error"]);
+    expect(state.warnings).toEqual([]);
   });
 });

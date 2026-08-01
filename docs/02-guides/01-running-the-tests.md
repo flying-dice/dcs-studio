@@ -13,7 +13,7 @@ full spec is the "Testing & coverage" section of
 | Unit | `npm run test:unit` | `npm run coverage:unit` | `test/unit/**` | `src/core/**`, `media/*-core.js` |
 | Integration | `npm run test:integration` | `npm run coverage:integration` | `test/integration/**` | `src/**` minus the hexagon |
 | E2E | `npm run test:e2e` | `npm run coverage:e2e` | `tests/**` | `media/*.js` in real Chromium |
-| Rust | `cargo test --workspace` | `cargo llvm-cov --workspace` | `bridge/crates/**` | the bridge workspace |
+| Rust | `cargo test --workspace` | `node scripts/llvm-cov.mjs --workspace` | `bridge/crates/**` | the bridge workspace |
 
 `npm test` runs the three JavaScript layers in sequence. `npm run coverage` does
 the same with each gate enforced.
@@ -22,6 +22,30 @@ The three JavaScript layers gate at **100% per file**. Rust gates lines and
 functions at 100 and regions at 99.5 — see the comment in
 `.github/workflows/ci.yml` for why that floor is 99.5 and why it should not be
 lowered.
+
+## Environment prerequisites
+
+Three of the four layers need nothing but `npm ci`. The **e2e** layer drives real
+Chromium, so it needs a browser binary present:
+
+```bash
+npx playwright install chromium
+```
+
+Without it the layer fails at launch rather than at an assertion, which reads as a
+broken test rather than a missing dependency — a preflight check is being added to
+the coverage script this sprint so the message says which one it is.
+
+If Chromium is already on the machine and you would rather not have Playwright
+download its own, point at the existing binary instead:
+
+```bash
+PW_CHROMIUM_PATH=/path/to/chromium npm run test:e2e
+```
+
+`playwright.config.ts` reads `PW_CHROMIUM_PATH` and, when set, passes it through as
+the launch `executablePath`. It is an escape hatch, not the supported path: the
+managed download is the version the suite is verified against.
 
 ## Two rules that are not optional
 
@@ -34,15 +58,34 @@ other's shards.
 `projects` config, and vitest treats `coverage` as a root-only option, so every
 per-layer threshold is silently ignored. Coverage gets computed and discarded.
 This is not hypothetical: it is how the release workflow gated nothing for a
-while. Use the per-layer commands.
+while. Use the per-layer commands. `vitest.config.ts` now refuses to load when
+coverage is requested, so this one is enforced rather than remembered.
 
 **Never run two `cargo llvm-cov` invocations at once.** They share
 `bridge/target/llvm-cov-target`, and the second's rebuild deletes the first's
 test binaries. The first then dies with
 `could not execute process … (never executed)` on whichever test is late in the
 run order — which looks exactly like a flaky test and is not one. Cargo's file
-lock does not cover it. If you genuinely need a second measurement, give it its
-own `--target-dir`.
+lock does not cover it.
+
+`scripts/llvm-cov.mjs` enforces this. Run llvm-cov through it — CI does too —
+and a second run fails immediately with an explanation instead of corrupting
+the first:
+
+```bash
+node scripts/llvm-cov.mjs --workspace   # everything after the script goes to cargo llvm-cov
+```
+
+It holds `.llvm-cov.lock` inside the target directory for the duration. If you
+genuinely need a second measurement, give it its own `--target-dir`: the lock
+follows the target directory, so runs that do not share artefacts do not
+contend.
+
+If a run is killed in a way that skips its cleanup, the lock can outlive it.
+The refusal message says so — it reports the holding pid and whether that
+process still exists — and prints the `rm` for the stale file. Nothing removes
+it automatically, because "the pid is gone" and "the pid was reused" look the
+same from here.
 
 ## Running the Rust tests off-Windows
 

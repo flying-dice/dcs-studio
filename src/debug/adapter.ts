@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
+import { isExpectedBridgeFailure } from "../core/domain/bridgeProtocol";
 import { missionStartFailure } from "../core/domain/bridgeStatusView";
 import {
   actionForResume,
@@ -326,7 +327,7 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
       // No answer means no way to know whether the engine is free — and the
       // poll loop this session depends on speaks the same call. Refuse rather
       // than clear a registry that may belong to somebody else.
-      this.abort(`Cannot start the debug session: ${errText(e)}`);
+      this.abort(`Cannot start the debug session: ${errText(e)}`, e);
       return;
     }
 
@@ -339,7 +340,7 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
       await this.client.debugClearBreakpoints();
       await this.pushAllBreakpoints();
     } catch (e) {
-      this.abort(`Failed to set breakpoints: ${errText(e)}`);
+      this.abort(`Failed to set breakpoints: ${errText(e)}`, e);
       return;
     }
 
@@ -376,9 +377,19 @@ export class DcsDebugAdapter implements vscode.DebugAdapter {
     }
   }
 
-  private abort(message: string): void {
+  /**
+   * End the session before it started, telling the user why.
+   *
+   * `cause` is the rejection behind `message`, when there was one. A mission
+   * that ended (`-32001`) or a sim that is not pumping (`-32002`) is the bridge
+   * answering correctly, not the extension failing — pressing "Debug" during a
+   * mission unload is an ordinary mistiming. Those still reach the user through
+   * the Debug Console line below; what they do not get is a modal-ish toast
+   * offering to file them as a bug.
+   */
+  private abort(message: string, cause?: unknown): void {
     this.output(message, "stderr");
-    void showError(message);
+    if (!isExpectedBridgeFailure(cause)) void showError(message);
     this.finish(undefined, /*quiet*/ true);
   }
 
