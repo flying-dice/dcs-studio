@@ -301,12 +301,23 @@ export function activate(
   // Installed skill files older than what this build ships: nudge once per
   // skill per bundled version (a workspaceState key remembers the nudge, so
   // updating the extension re-alerts but reloading the window doesn't).
-  void skills.updatesAvailable().then((outdated) => {
-    for (const s of outdated) {
-      if (context.workspaceState.get(nudgeKey(s))) continue;
-      void nudgeSkillUpdate(context, skills, s);
-    }
-  });
+  //
+  // Deferred a tick rather than started inline. `updatesAvailable` reads every
+  // bundled and installed SKILL.md through `workspace.fs`, and nothing about
+  // activation depends on the answer — it only decides whether to show a toast
+  // later. Kicking it off inside `activate()` puts that I/O on the path VS Code
+  // measures as this extension's startup cost, for a notification the user
+  // would not miss a few milliseconds later. The timeout is disposed with the
+  // extension so a window closed during activation does not leave it pending.
+  const skillScan = setTimeout(() => {
+    void skills.updatesAvailable().then((outdated) => {
+      for (const s of outdated) {
+        if (context.workspaceState.get(nudgeKey(s))) continue;
+        void nudgeSkillUpdate(context, skills, s);
+      }
+    });
+  }, 0);
+  context.subscriptions.push(new vscode.Disposable(() => clearTimeout(skillScan)));
 
   // First run: if no DCS paths are configured, nudge to the selector once.
   const cfg = vscode.workspace.getConfiguration("dcsStudio");
