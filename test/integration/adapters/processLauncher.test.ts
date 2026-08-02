@@ -1,8 +1,6 @@
-import * as nodeFs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSpawnHarness, type SpawnHarness } from "../../support/fakeChildProcess";
+import { tmpRoot } from "../../support/tmpDir";
 
 // ProcessLauncher runs third-party mod executables on a user's machine and is
 // the only thing tracking them afterwards. Its bookkeeping is what the My Mods
@@ -27,7 +25,7 @@ vi.mock("child_process", () => ({
 
 import { ProcessLauncher } from "../../../src/adapters/node/processLauncher";
 
-let root: string;
+const tmp = tmpRoot("dcs-launch-");
 let exe: string;
 const PLATFORM = process.platform;
 
@@ -41,20 +39,17 @@ function setPlatform(value: string): void {
 beforeEach(() => {
   spawner = createSpawnHarness();
   spawner.plan(live);
-  root = nodeFs.mkdtempSync(path.join(os.tmpdir(), "dcs-launch-"));
-  exe = path.join(root, "mod.exe");
-  nodeFs.writeFileSync(exe, "");
+  exe = tmp.file("mod.exe", "");
 });
 
 afterEach(() => {
   setPlatform(PLATFORM);
   vi.restoreAllMocks();
-  nodeFs.rmSync(root, { recursive: true, force: true });
 });
 
 const plan = (over: Partial<{ exe: string; cwd: string; args: string[] }> = {}) => ({
   exe,
-  cwd: root,
+  cwd: tmp.path,
   args: ["--fullscreen"],
   ...over,
 });
@@ -70,7 +65,7 @@ describe("launch", () => {
     expect(spawner.calls[0]).toEqual({
       cmd: exe,
       args: ["--fullscreen"],
-      opts: { cwd: root, detached: true, stdio: "ignore" },
+      opts: { cwd: tmp.path, detached: true, stdio: "ignore" },
     });
     expect(spawner.children[0].unrefCount).toBe(1);
     expect(launcher.isRunning("me/mod::app")).toBe(true);
@@ -80,7 +75,7 @@ describe("launch", () => {
   it("refuses to launch an executable that is not on disk", () => {
     // A partially-extracted or hand-deleted install would otherwise surface as
     // an opaque spawn error long after the click.
-    const missing = path.join(root, "gone.exe");
+    const missing = tmp.join("gone.exe");
     expect(() => new ProcessLauncher().launch("k", plan({ exe: missing }))).toThrow(
       `Executable not found: ${missing}`,
     );

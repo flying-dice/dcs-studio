@@ -1,10 +1,11 @@
 import type * as fsTypes from "node:fs";
 import * as nodeFs from "node:fs";
-import * as os from "node:os";
+import type * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSpawnHarness, type SpawnHarness } from "../../support/fakeChildProcess";
 import { canSymlink, linkForSetup, symlinkSkipReason } from "../../support/linkCapability";
+import { type TmpTree, tmpRoot } from "../../support/tmpDir";
 
 // The Windows half of the linker, plus the failure paths.
 //
@@ -70,8 +71,8 @@ vi.mock("node:fs", async (importOriginal) => {
 
 import { Linker, mklink } from "../../../src/adapters/node/linker";
 
-let root: string;
-let src: string;
+const tmp = tmpRoot("dcs-linker-");
+let src: TmpTree;
 let dest: string;
 
 /**
@@ -92,37 +93,28 @@ let dest: string;
  */
 const otherVolume = (p: string) => (process.platform === "win32" ? `\\\\?\\${p}` : `/${p}`);
 
+// Clear the faults before the temp dir is removed, or the removal trips them
+// too — `beforeCleanup` is where the helper guarantees that ordering.
+tmp.beforeCleanup(() => {
+  symlinkFault = null;
+  rmFault = null;
+});
+
 beforeEach(() => {
   spawner = createSpawnHarness();
   hostPlatform = "linux";
   symlinkFault = null;
   rmFault = null;
-  root = nodeFs.mkdtempSync(path.join(os.tmpdir(), "dcs-linker-"));
-  src = path.join(root, "data");
-  dest = path.join(root, "dcs");
-  nodeFs.mkdirSync(src, { recursive: true });
-  nodeFs.mkdirSync(dest, { recursive: true });
-});
-
-afterEach(() => {
-  // Clear the faults before cleanup, or the temp-dir removal trips them too.
-  symlinkFault = null;
-  rmFault = null;
-  nodeFs.rmSync(root, { recursive: true, force: true });
+  src = tmp.tree("data");
+  dest = tmp.dir("dcs");
 });
 
 function file(rel: string, content = "payload"): string {
-  const p = path.join(src, rel);
-  nodeFs.mkdirSync(path.dirname(p), { recursive: true });
-  nodeFs.writeFileSync(p, content);
-  return p;
+  return src.file(rel, content);
 }
 
 function dir(rel: string): string {
-  const p = path.join(src, rel);
-  nodeFs.mkdirSync(p, { recursive: true });
-  nodeFs.writeFileSync(path.join(p, "inner.lua"), "payload");
-  return p;
+  return src.dir(rel, { "inner.lua": "payload" });
 }
 
 describe("mklink refuses to clobber", () => {
@@ -144,7 +136,7 @@ describe("mklink refuses to clobber", () => {
 describe("mklink off Windows", () => {
   it("reports a symlink that could not be created", async () => {
     const target = file("mod.lua");
-    const link = path.join(root, "missing-parent", "mod.lua");
+    const link = tmp.join("missing-parent", "mod.lua");
     const r = await mklink(link, target);
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -158,7 +150,7 @@ describe("mklink off Windows", () => {
     // exactly as a file one does. The failure path exercises the choice without
     // needing to succeed at it.
     const target = dir("Hooks");
-    const r = await mklink(path.join(root, "missing-parent", "Hooks"), target);
+    const r = await mklink(tmp.join("missing-parent", "Hooks"), target);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.message).toMatch(/^Failed to create symbolic link: /);
@@ -182,7 +174,7 @@ describe("mklink on Windows", () => {
 
   it("reports a junction that could not be created", async () => {
     const target = dir("Hooks");
-    const r = await mklink(path.join(root, "missing-parent", "Hooks"), target);
+    const r = await mklink(tmp.join("missing-parent", "Hooks"), target);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.message).toMatch(/^Failed to create junction: /);
@@ -200,7 +192,7 @@ describe("mklink on Windows", () => {
 
   it("reports a hard link that could not be created", async () => {
     const target = file("mod.lua");
-    const r = await mklink(path.join(root, "missing-parent", "mod.lua"), target);
+    const r = await mklink(tmp.join("missing-parent", "mod.lua"), target);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.message).toMatch(/^Failed to create hard link: /);
@@ -225,7 +217,7 @@ describe("mklink on Windows", () => {
     // Only EPERM means "you lack the privilege"; anything else is a real
     // problem and prompting for admin would just waste the user's time.
     const target = file("mod.lua");
-    const r = await mklink(otherVolume(path.join(root, "missing-parent", "mod.lua")), target);
+    const r = await mklink(otherVolume(tmp.join("missing-parent", "mod.lua")), target);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.message).toMatch(/^Failed to create symbolic link: /);
@@ -369,7 +361,7 @@ describe("enable failure paths", () => {
     const link = path.join(dest, "Hooks");
     // Deliberately broken: the target does not exist. A junction may point at
     // nothing just as a symlink may, so this stays a broken link on Windows.
-    linkForSetup(path.join(root, "deleted"), link, "dir");
+    linkForSetup(tmp.join("deleted"), link, "dir");
 
     const res = await new Linker().enable([{ id: "m:0", src: target, dest: link }]);
     expect(res.ok).toBe(false);
@@ -396,7 +388,7 @@ describe("enable failure paths", () => {
     // the failure only shows up when the link itself is attempted.
     const parent = path.join(dest, "Hooks");
     // Also deliberately broken — see above; a junction lstats as a link too.
-    linkForSetup(path.join(root, "gone"), parent, "dir");
+    linkForSetup(tmp.join("gone"), parent, "dir");
 
     const res = await new Linker().enable([
       { id: "m:0", src: file("mod.lua"), dest: path.join(parent, "mod.lua") },
@@ -420,12 +412,12 @@ describe("enable failure paths", () => {
     const res = await new Linker().enable([
       { id: "m:0", src: inner, dest: path.join(dest, "Hooks") },
       { id: "m:1", src: file("extra.lua"), dest: path.join(dest, "Hooks", "extra.lua") },
-      { id: "m:2", src: path.join(src, "missing"), dest: path.join(dest, "missing") },
+      { id: "m:2", src: src.join("missing"), dest: path.join(dest, "missing") },
     ]);
 
     expect(res.ok).toBe(false);
     if (res.ok) return;
-    expect(res.message).toBe(`Source path does not exist: ${path.join(src, "missing")}`);
+    expect(res.message).toBe(`Source path does not exist: ${src.join("missing")}`);
     expect(nodeFs.existsSync(path.join(dest, "Hooks"))).toBe(false);
   });
 });

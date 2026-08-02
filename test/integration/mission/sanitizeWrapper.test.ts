@@ -1,7 +1,5 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { NodeFileSystem } from "../../../src/adapters/node/fs";
 import { MissionSanitizeService } from "../../../src/core/app/missionSanitizeService";
 import {
@@ -10,6 +8,7 @@ import {
   backupStampPath,
   ITEMS,
 } from "../../../src/core/domain/missionSanitize";
+import { tmpRoot } from "../../support/tmpDir";
 
 // Integration test: the real Node fs adapter wired into MissionSanitizeService
 // (exactly as the composition root wires it), exercised against actual temp
@@ -30,17 +29,11 @@ const PRISTINE = [
   "end",
 ].join("\r\n");
 
-let dir: string;
+const tmp = tmpRoot("dcs-sanitize-");
 let lua: string;
 
 beforeEach(() => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), "dcs-sanitize-"));
-  lua = path.join(dir, "MissionScripting.lua");
-  fs.writeFileSync(lua, PRISTINE);
-});
-
-afterEach(() => {
-  fs.rmSync(dir, { recursive: true, force: true });
+  lua = tmp.file("MissionScripting.lua", PRISTINE);
 });
 
 describe("MissionSanitizeService over the Node fs adapter (real fs)", () => {
@@ -48,7 +41,7 @@ describe("MissionSanitizeService over the Node fs adapter (real fs)", () => {
     const s = await status(lua);
     expect(s).toMatchObject({ path: lua, exists: true, backupExists: false });
     expect(s.items).toHaveLength(ITEMS.length);
-    const missing = await status(path.join(dir, "nope.lua"));
+    const missing = await status(tmp.join("nope.lua"));
     expect(missing).toMatchObject({ exists: false, items: [] });
   });
 
