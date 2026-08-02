@@ -1,9 +1,7 @@
 import type { spawn as nodeSpawn } from "node:child_process";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSpawnHarness, type SpawnHarness } from "../../support/fakeChildProcess";
+import { tmpRoot } from "../../support/tmpDir";
 import { resetVscode, state, vscodeMock } from "../support/vscode";
 
 vi.mock("vscode", () => vscodeMock());
@@ -34,7 +32,7 @@ const WRITE_DIR = "D:\\Saved Games\\DCS";
 const GAME_INSTALL = "D:\\DCS World";
 const EXE = "D:\\DCS World\\bin\\DCS.exe";
 
-let root: string;
+const tmp = tmpRoot("bridge-launch-");
 let io: MappedBridgeFs;
 let harness: SpawnHarness;
 // One launcher per test: it owns the "a DCS is already running" state, so a
@@ -57,8 +55,7 @@ async function launchLive(): Promise<void> {
 }
 
 beforeEach(() => {
-  root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "bridge-launch-"));
-  io = mappedBridgeFs(root);
+  io = mappedBridgeFs(tmp.path);
   harness = createSpawnHarness();
   launcher = new DcsLauncher(io, installRoots, fakeSpawn());
   resetVscode({
@@ -78,7 +75,6 @@ afterEach(async () => {
   // make the next test look like a double launch.
   for (const child of harness.children) child.emit("exit", 0);
   await new Promise((r) => setTimeout(r, 10));
-  fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("preconditions", () => {
@@ -116,7 +112,7 @@ describe("preconditions", () => {
       releaseCopy = r;
     });
     const copyFile = io.copyFile;
-    io = mappedBridgeFs(root, {
+    io = mappedBridgeFs(tmp.path, {
       copyFile: async (src, dest) => {
         await held;
         return copyFile(src, dest);
@@ -156,7 +152,7 @@ describe("injecting before launch", () => {
   });
 
   it("aborts when a DLL is locked, because DCS is already running", async () => {
-    io = mappedBridgeFs(root, { copyFile: () => Promise.reject(lockedError()) });
+    io = mappedBridgeFs(tmp.path, { copyFile: () => Promise.reject(lockedError()) });
     launcher = new DcsLauncher(io, installRoots, fakeSpawn());
 
     await launcher.launch(context());
@@ -167,7 +163,7 @@ describe("injecting before launch", () => {
   });
 
   it("reports any other inject failure and does not launch", async () => {
-    io = mappedBridgeFs(root, { mkdir: () => Promise.reject(new Error("EACCES: denied")) });
+    io = mappedBridgeFs(tmp.path, { mkdir: () => Promise.reject(new Error("EACCES: denied")) });
     launcher = new DcsLauncher(io, installRoots, fakeSpawn());
 
     await launcher.launch(context());
@@ -181,7 +177,7 @@ describe("injecting before launch", () => {
     // earlier one succeeded leaves a mixed install, and "close DCS and try
     // again" alone would not tell the user their bridge is now half-replaced.
     const copyFile = io.copyFile;
-    io = mappedBridgeFs(root, {
+    io = mappedBridgeFs(tmp.path, {
       copyFile: (src, dest) =>
         dest.endsWith(MISSION_DLL) ? Promise.reject(lockedError()) : copyFile(src, dest),
     });
@@ -196,7 +192,7 @@ describe("injecting before launch", () => {
   });
 
   it("reports a non-Error inject failure rather than launching regardless", async () => {
-    io = mappedBridgeFs(root, { copyFile: () => Promise.reject("weird") });
+    io = mappedBridgeFs(tmp.path, { copyFile: () => Promise.reject("weird") });
     launcher = new DcsLauncher(io, installRoots, fakeSpawn());
 
     await launcher.launch(context());

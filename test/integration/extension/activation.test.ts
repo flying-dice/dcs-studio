@@ -1,8 +1,7 @@
-import * as fs from "node:fs";
 import { readFileSync } from "node:fs";
-import * as os from "node:os";
 import * as nodePath from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { tmpRoot } from "../../support/tmpDir";
 import { mappedBridgeFs } from "../bridge/mappedBridgeFs";
 import {
   type FakeWebviewPanel,
@@ -101,10 +100,11 @@ const declaredCommands: string[] = JSON.parse(
 ).contributes.commands.map((c: { command: string }) => c.command);
 
 // My Mods regenerates uninstall-all.bat on the real filesystem through the
-// ledger adapter, so point the data dir somewhere disposable.
-const dataDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "dcs-studio-activation-"));
+// ledger adapter, so point the data dir somewhere disposable — one directory
+// for the whole suite, as the ledger it accumulates is.
+const dataDir = tmpRoot("dcs-studio-activation-", { scope: "suite" }).path;
 /** The temp root the mapped bridge filesystem writes DCS paths into. */
-let bridgeRoot: string;
+const bridge = tmpRoot("dcs-studio-bridge-");
 let io: ReturnType<typeof mappedBridgeFs>;
 
 let contexts: vscode.ExtensionContext[] = [];
@@ -175,8 +175,7 @@ function doc(fsPath: string, scheme = "file") {
 }
 
 beforeEach(() => {
-  bridgeRoot = fs.mkdtempSync(nodePath.join(os.tmpdir(), "dcs-studio-bridge-"));
-  io = mappedBridgeFs(bridgeRoot);
+  io = mappedBridgeFs(bridge.path);
   // A configured Saved Games path keeps the first-run nudge (asserted on its
   // own further down) out of every other test's message queue.
   resetVscode({
@@ -209,11 +208,6 @@ afterEach(() => {
   for (const panel of [...state.panels]) panel.dispose();
   for (const ctx of contexts) for (const d of ctx.subscriptions) d.dispose();
   vi.unstubAllGlobals();
-  fs.rmSync(bridgeRoot, { recursive: true, force: true });
-});
-
-afterAll(() => {
-  fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
 describe("activation", () => {

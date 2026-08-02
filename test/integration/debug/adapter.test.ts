@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetVscode, state, vscodeMock } from "../support/vscode";
 
 vi.mock("vscode", () => vscodeMock());
@@ -23,8 +23,6 @@ vi.mock("fs", async (importOriginal) => {
 });
 
 import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import type * as vscode from "vscode";
 import { installRoots } from "../../../src/adapters/vscode/installRoots";
 import type { BridgeClient } from "../../../src/bridge/client";
@@ -36,6 +34,7 @@ import {
 } from "../../../src/core/domain/bridgeProtocol";
 import type { DebugSnapshot, DebugState } from "../../../src/core/domain/debugProtocol";
 import { DcsDebugAdapter } from "../../../src/debug/adapter";
+import { tmpRoot } from "../../support/tmpDir";
 import { FakeBridge, FakeScheduler, flush, settle } from "./fakes";
 
 // The DAP session shell for DCS Lua: the piece between VS Code's debugger UI
@@ -123,23 +122,17 @@ describe("DcsDebugAdapter", () => {
   let mission: FakeBridge;
   let clients: BridgeClients;
   let scheduler: FakeScheduler;
-  let dir: string;
+  const tmp = tmpRoot("dcs-debug-");
   let program: string;
 
   beforeEach(() => {
     resetVscode();
     disk.missionScript = undefined;
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "dcs-debug-"));
-    program = path.join(dir, "script.lua");
-    fs.writeFileSync(program, "print('on disk')", "utf8");
+    program = tmp.file("script.lua", "print('on disk')");
     gui = new FakeBridge();
     mission = new FakeBridge();
     clients = new BridgeClients(gui as unknown as BridgeClient, mission as unknown as BridgeClient);
     scheduler = new FakeScheduler();
-  });
-
-  afterEach(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   function open(config: Record<string, unknown> = {}): Dap {
@@ -307,7 +300,7 @@ describe("DcsDebugAdapter", () => {
 
   it("aborts when the program cannot be read", async () => {
     longRun(mission);
-    const missing = path.join(dir, "gone.lua");
+    const missing = tmp.join("gone.lua");
     const dap = await started({ program: missing });
     expect(dap.output("stderr")[0]).toContain(`Cannot read ${missing}`);
     expect(mission.debugRun).not.toHaveBeenCalled();
@@ -418,7 +411,7 @@ describe("DcsDebugAdapter", () => {
       { uri: { fsPath: program, scheme: "file" }, isDirty: true, getText: () => "print('buffer')" },
       // A same-named document from another scheme (a diff view, say) must not win.
       { uri: { fsPath: program, scheme: "git" }, isDirty: false, getText: () => "print('git')" },
-      { uri: { fsPath: path.join(dir, "other.lua"), scheme: "file" }, isDirty: false },
+      { uri: { fsPath: tmp.join("other.lua"), scheme: "file" }, isDirty: false },
     );
     longRun(mission);
     await started();
@@ -572,7 +565,7 @@ describe("DcsDebugAdapter", () => {
     // to judge against, greying them all out would be its own lie.
     const dap = open();
     const res = await dap.request("setBreakpoints", {
-      source: { path: path.join(dir, "gone.lua") },
+      source: { path: tmp.join("gone.lua") },
       breakpoints: [{ line: 4000 }],
     });
     expect(res.body.breakpoints).toEqual([{ verified: true, line: 4000 }]);

@@ -1,7 +1,5 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as nodePath from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tmpRoot } from "../../support/tmpDir";
 import { mappedBridgeFs } from "../bridge/mappedBridgeFs";
 import { resetVscode, state, vscodeMock } from "../support/vscode";
 
@@ -42,7 +40,7 @@ const SAVED_GAMES = "D:\\Saved Games\\DCS";
 const GUI_DLL = `${SAVED_GAMES}\\Mods\\tech\\DcsStudio\\bin\\dcs_studio_gui.dll`;
 const HOOK = `${SAVED_GAMES}\\Scripts\\Hooks\\DcsStudio.lua`;
 
-let root: string;
+const tmp = tmpRoot("dcs-studio-deactivate-");
 let io: ReturnType<typeof mappedBridgeFs>;
 
 /** The eject is fire-and-forget (nothing may block shutdown), so poll for it. */
@@ -59,14 +57,9 @@ function seedInjectedBridge(): void {
 }
 
 beforeEach(() => {
-  root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "dcs-studio-deactivate-"));
-  io = mappedBridgeFs(root);
+  io = mappedBridgeFs(tmp.path);
   resetVscode({ config: { "dcsStudio.savedGamesPath": SAVED_GAMES } });
   transport.conns.length = 0;
-});
-
-afterEach(() => {
-  fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("deactivate", () => {
