@@ -14,7 +14,7 @@ be exercised inside a running editor.
 
 The testing audit measured what that costs: 62% of shipped lines had no test that
 imported them, and the panels holding most of the decision logic were at zero
-(`docs/04-quality/01-testing-audit.md:18-27`, `:68-76`).
+(`docs/04-quality/02-testing-audit-2026-07.md:18-27`, `:68-76`).
 
 Dated from `ARCHITECTURE.md`, which is the authoritative statement of the rule
 and calls itself that in its first line. The structure predates the document.

@@ -47,7 +47,7 @@ thread where a panic takes the user's flight with it.
   part of the product rather than a convenience.
 - A localhost port is an attack surface for anything already on the machine,
   which is why `path_guard.rs` exists and why its hardening was treated as a
-  data-loss defect (`docs/04-quality/01-testing-audit.md:328-332`).
+  data-loss defect (`docs/04-quality/02-testing-audit-2026-07.md:328-332`).
 - Panic paths are the failure mode that matters. Hence `lua_atpanic`
   (`bridge/crates/bridge-core/src/lua_panic.rs`, #62), and the unresolved
   prevention half in #63.

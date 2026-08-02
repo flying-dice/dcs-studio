@@ -1,3 +1,28 @@
+> **This is a historical document — preserved verbatim.** Everything below the
+> horizontal rule is the July 2026 testing audit and the remediation trail it
+> grew, kept as it was written. **Its measurements are period artifacts.** They
+> describe the tree at `main` @ `8c45b98` (v0.16.0), and at the several points
+> during the remediation when each addendum was added. Nothing in it is
+> maintained against the current tree, and it should not be updated to match it.
+>
+> **For what the gates are and what is covered NOW, read
+> [Testing & quality, current state](01-testing-quality.md).**
+>
+> The document already quarantines its own numbers: the status note immediately
+> below says the whole audit has been addressed, and the G5 note under "What is
+> deliberately not done" says out loud which era its panel figures belong to.
+> That framing is the reason this record is worth keeping — the audit is the
+> argument, not the arithmetic.
+>
+> **On line references.** This file was renamed here from
+> `docs/04-quality/01-testing-audit.md`. Board-card journals and `decisions/`
+> cite it with line numbers taken before this header existed: the paths have
+> been repointed, the numbers have not been rewritten, because each is a
+> quotation from the moment its entry was written. **Add 25** to locate the same
+> content in this file.
+
+---
+
 # Testing pyramid audit
 
 Audit of the test suite and the structural seams that make code testable, taken

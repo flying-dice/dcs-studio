@@ -11,7 +11,7 @@ core, a strong DOM-level UI layer, and almost nothing verifying the band between
 them. Coverage was scoped to `src/core/**` and one `media/*-core.js`, so
 everything else was not merely uncovered but **unmeasured** — no gate could
 regress and nobody would see it drift
-(`docs/04-quality/01-testing-audit.md:62-79`).
+(`docs/04-quality/02-testing-audit-2026-07.md:62-79`).
 
 Two more findings shaped the answer. The Rust bridge's tests never ran in CI at
 all. And one coverage run over everything would have hidden the real problem:
@@ -48,7 +48,7 @@ gates serially, and never run two `cargo llvm-cov` invocations at once.
   the same line. This is what made everything else measurable.
 - 2,022 tests, up from 905 — and the work found eleven defects, none of which a
   coverage percentage would have revealed on its own
-  (`docs/04-quality/01-testing-audit.md:322-357`).
+  (`docs/04-quality/02-testing-audit-2026-07.md:322-357`).
 - `vitest run --coverage` at the repo root is actively wrong: the root config is a
   `projects` config and vitest treats `coverage` as root-only, so every per-layer
   threshold is silently ignored. Use the per-layer commands.

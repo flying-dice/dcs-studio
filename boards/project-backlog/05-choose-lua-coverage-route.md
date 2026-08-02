@@ -15,7 +15,7 @@ issue comments.
 
 Four gates cover TypeScript, the webviews and Rust. None of them is Lua, and
 ~2,050 lines of Lua run inside the sim on the sim thread — enumerated per file in
-`docs/04-quality/01-testing-audit.md:405-418`. Those chunks are loaded into real
+`docs/04-quality/02-testing-audit-2026-07.md:405-418`. Those chunks are loaded into real
 Lua states by the Rust tests, so they execute; `cargo llvm-cov` measures Rust
 regions and a Lua chunk is opaque to it, so nothing measures them.
 
