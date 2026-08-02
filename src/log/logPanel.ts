@@ -5,7 +5,7 @@ import { MANIFEST_FILE } from "../core/domain/manifestFile";
 import type { InstallRootsPort } from "../core/ports/installRoots";
 import type { ManifestPort } from "../core/ports/manifest";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel, webviewPoster } from "../webview/panel";
 import { LogTailer } from "./tailer";
 
 // The DCS Log viewer: a singleton WebviewPanel (shape copied from
@@ -64,7 +64,7 @@ export class LogPanel {
       roots,
       parseManifest: (text) => manifestPort.parseToml(text),
       manifestText: () => this.manifestText(),
-      post: (msg) => void this.panel.webview.postMessage(msg),
+      post: webviewPoster(panel),
       effect: (effect) => this.perform(effect),
     });
     this.panel.webview.html = this.html(context);

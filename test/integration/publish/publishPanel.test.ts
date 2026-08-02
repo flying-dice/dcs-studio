@@ -49,6 +49,9 @@ let toolFacts = {
   gitAvailable: true,
   gh: { present: true, authed: true },
 };
+/** Indirection so one spec can hold the probe in flight; defaults to resolving
+ *  with `toolFacts` immediately, which every other spec relies on. */
+let toolFactsImpl: () => Promise<typeof toolFacts> = async () => toolFacts;
 let remote: string | null = "https://github.com/Owner/Repo.git";
 let shareImpl: (log: (l: string) => void) => Promise<unknown> = async () => ({ url: "u" });
 let releaseImpl: (log: (l: string) => void) => Promise<unknown> = async () => ({ url: "u" });
@@ -59,7 +62,7 @@ let releaseArgs: unknown[] = [];
 
 function publishService(): PublishService {
   return {
-    toolFacts: async () => toolFacts,
+    toolFacts: () => toolFactsImpl(),
     remoteUrl: async () => remote,
     share: async (root: string, opts: unknown, log: (l: string) => void) => {
       shareArgs = [root, opts];
@@ -104,6 +107,7 @@ path = "Scripts"
     gitAvailable: true,
     gh: { present: true, authed: true },
   };
+  toolFactsImpl = async () => toolFacts;
   remote = "https://github.com/Owner/Repo.git";
   shareImpl = async () => ({ url: "u" });
   releaseImpl = async () => ({ url: "u" });
@@ -307,6 +311,24 @@ describe("panel plumbing", () => {
     const panel = await show();
     panel.dispose();
     expect(PublishPanel.current).toBeUndefined();
+  });
+
+  // The opening preflight now spawns real CLI probes (gh --version, gh auth
+  // status) and takes seconds cold. A user can close the panel inside that
+  // window, and the real webview THROWS on a post after dispose — a rejection
+  // nothing awaits, surfaced as an extension-host error. The shell's poster
+  // must drop late output instead.
+  it("drops presenter output that resolves after the panel was closed", async () => {
+    let release!: () => void;
+    toolFactsImpl = () => new Promise((r) => (release = () => r(toolFacts)));
+    PublishPanel.show(context(), publishService(), new VsCodeManifest(context()));
+    const panel = state.panels[0];
+    await flush();
+    expect(panel.webview.posted).toHaveLength(0); // still probing
+    panel.dispose();
+    release();
+    await flush();
+    expect(panel.webview.posted).toHaveLength(0); // late init was dropped
   });
 });
 

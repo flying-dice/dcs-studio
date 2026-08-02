@@ -6,7 +6,7 @@ import type {
 } from "../core/app/consolePresenter";
 import { ConsolePresenter } from "../core/app/consolePresenter";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel, webviewPoster } from "../webview/panel";
 import type { BridgeClients } from "./clients";
 import { saveExport } from "./saveExport";
 
@@ -67,7 +67,7 @@ export class ConsolePanel {
       // knowledge — the presenter only knows it has to tail each of them.
       tailed: [clients.gui, clients.mission],
       wildcardDepth: () => this.wildcardDepth(),
-      post: (msg) => void this.panel.webview.postMessage(msg),
+      post: webviewPoster(panel),
       effect: (effect) => this.perform(effect),
       saveExport: (request) => this.save(request),
     });

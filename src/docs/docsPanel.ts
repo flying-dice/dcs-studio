@@ -3,7 +3,7 @@ import type { DocsInbound } from "../core/app/docsPresenter";
 import { DocsPresenter } from "../core/app/docsPresenter";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel, webviewPoster } from "../webview/panel";
 
 // The Documentation experience: a webview panel with a table-of-contents
 // sidebar and per-feature guide pages (Mod Manager, manifest reference,
@@ -41,7 +41,7 @@ export class DocsPanel {
       DocsPanel.current = undefined;
     });
     this.presenter = new DocsPresenter({
-      post: (msg) => void this.panel.webview.postMessage(msg),
+      post: webviewPoster(panel),
       effect: (e) => {
         switch (e.kind) {
           case "runCommand":

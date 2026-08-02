@@ -276,7 +276,17 @@ export class FakeWebview {
   posted: unknown[] = [];
   private handler: ((msg: unknown) => unknown) | undefined;
 
+  /** Reports whether the panel/view that owns this webview has been disposed —
+   * the real extension host throws on any use of a disposed webview, and a
+   * fake that quietly accepts the post would hide exactly the late-async bug
+   * class (a probe resolving after the user closed the panel) this double
+   * exists to catch. */
+  constructor(private readonly ownerDisposed: () => boolean = () => false) {}
+
   postMessage(msg: unknown): Promise<boolean> {
+    // Mirrors vscode's ExtHostWebview.assertNotDisposed: posting to a disposed
+    // webview is a synchronous throw, not a resolved `false`.
+    if (this.ownerDisposed()) throw new Error("Webview is disposed");
     this.posted.push(msg);
     return Promise.resolve(true);
   }
@@ -313,7 +323,7 @@ export class FakeWebview {
 }
 
 export class FakeWebviewPanel {
-  readonly webview = new FakeWebview();
+  readonly webview = new FakeWebview(() => this.disposed);
   visible = true;
   disposed = false;
   iconPath: unknown;
@@ -398,7 +408,7 @@ export class FakeFileSystemWatcher {
 
 /** A sidebar view host, as `WebviewViewProvider.resolveWebviewView` receives. */
 export class FakeWebviewView {
-  readonly webview = new FakeWebview();
+  readonly webview = new FakeWebview(() => this.disposed);
   visible = true;
   private readonly disposeEmitter = new FakeEventEmitter<void>();
   readonly onDidDispose = this.disposeEmitter.event;

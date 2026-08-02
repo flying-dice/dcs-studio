@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import { type NewProjectEffect, NewProjectPresenter } from "../core/app/newProjectPresenter";
 import type { NewProjectWebviewMessage } from "../core/app/webviewContract";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel, webviewPoster } from "../webview/panel";
 import { scaffoldInPlace, scaffoldNewFolder } from "./scaffold";
 
 // The guided New Project experience — the VS Code port of the real app's
@@ -54,7 +54,7 @@ export class NewProjectPanel {
         scaffoldInPlace(this.context.extensionUri, template, name, folder),
       scaffoldNewFolder: (template, name, location) =>
         scaffoldNewFolder(this.context.extensionUri, template, name, location),
-      post: (msg) => void this.panel.webview.postMessage(msg),
+      post: webviewPoster(panel),
       effect: (effect) => this.run(effect),
     });
     this.panel.webview.html = this.html();
