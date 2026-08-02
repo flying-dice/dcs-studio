@@ -47,6 +47,23 @@
     // `require`, and `vscode` itself is only available as a CommonJS module.
     // The flag belongs to a bundler-and-ESM setup this extension is not.
     "esModuleInterop": true,
+    // TypeScript 6 changed the default of `types` from "every @types package
+    // under node_modules" to `[]`, so the ambient packages now have to be named
+    // or they are simply not loaded — the failure is 200-odd TS2591/TS2304
+    // errors claiming `fs`, `process`, `Buffer`, `NodeJS` and `fetch` do not
+    // exist. Both entries here are load-bearing and neither is a `@types`
+    // package we merely happen to have installed:
+    //   node   — every adapter under src/adapters/node is written against it,
+    //            and it is also what supplies the `fetch`/`Response` globals
+    //            the marketplace adapter uses (via undici-types, not the DOM
+    //            lib, which this unit deliberately does not include).
+    //   vscode — `import * as vscode from "vscode"` resolves through an ambient
+    //            `declare module` rather than a node_modules entry point, so it
+    //            disappears entirely if it is not listed.
+    // Naming them is the better state regardless of the default: the extension
+    // host's globals are now a decision in this file instead of a side effect
+    // of the dependency tree.
+    "types": ["node", "vscode"],
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
