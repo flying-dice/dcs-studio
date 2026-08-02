@@ -49,7 +49,11 @@ exit = "deny"
 
 [workspace.dependencies]
 dcs-bridge-core = { path = "crates/bridge-core" }
-mlua = { version = "0.10", features = ["lua51", "module", "serialize", "macros"] }
+# No `macros` feature: it only adds the `chunk!` macro (unused here) and pulls
+# proc-macro-error2, which trips a future-incompat warning (rust-lang/rust#127909)
+# fixed upstream only in mlua 0.12's derive. `#[mlua::lua_module]` comes from
+# `module`, not `macros`.
+mlua = { version = "0.10", features = ["lua51", "module", "serialize"] }
 # Only what the bridge uses, rather than "full": `rt`/`rt-multi-thread` for the
 # `Runtime::new()` the stop thread builds (kept exactly as the live-verified stop
 # path has it), `sync` for the oneshot channel every queued request carries,
