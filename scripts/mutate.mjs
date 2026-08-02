@@ -56,6 +56,15 @@ const GATES = {
     "npx vitest run -c vitest.integration.config.ts test/integration/webview/panel.test.ts",
   integrationManifestForm:
     "npx vitest run -c vitest.integration.config.ts test/integration/manifest/formPanel.test.ts",
+  unitPublishService:
+    "npx vitest run -c vitest.unit.config.ts test/unit/publish/publishService.test.ts",
+  unitDap: "npx vitest run -c vitest.unit.config.ts test/unit/debug/dapTranslation.test.ts",
+  integrationPublishPanel:
+    "npx vitest run -c vitest.integration.config.ts test/integration/publish/publishPanel.test.ts",
+  integrationErrors:
+    "npx vitest run -c vitest.integration.config.ts test/integration/webview/htmlAndErrors.test.ts",
+  integrationPackaging:
+    "npx vitest run -c vitest.integration.config.ts test/integration/architecture/packaging.test.ts",
   e2eNewProject: "npx playwright test tests/newproject.spec.ts tests/webviewContract.spec.ts",
   cargoServer:
     "cargo test --manifest-path bridge/Cargo.toml -p dcs-bridge-core --lib -- jsonrpc::server::tests jsonrpc::teardown::tests",
@@ -155,6 +164,47 @@ const MUTATIONS = [
     find: "    if (!page) return;",
     replace: "    // MUTANT: every reveal yanks the reader to a page",
     expectFailIn: "unitDocs",
+  },
+  {
+    id: "poster-disposed-latch",
+    file: "src/webview/panel.ts",
+    note: "sprint — webviewPoster's disposed latch: a presenter resolving after close must post into silence, not a throw",
+    find: "    if (!disposed) void panel.webview.postMessage(msg);",
+    replace: "    void panel.webview.postMessage(msg); // MUTANT: posts outlive the panel",
+    expectFailIn: "integrationPublishPanel",
+  },
+  {
+    id: "publish-facts-single-pass",
+    file: "src/core/app/publishService.ts",
+    note: "card 34 — toolFacts makes ONE gh probe pass; a cold gh --version is 9.8s and auth status hits the network",
+    find: "      gh.facts(),",
+    replace:
+      "      gh.facts().then(async (f) => (await gh.facts(), f)), // MUTANT: the probe pass runs twice",
+    expectFailIn: "unitPublishService",
+  },
+  {
+    id: "dap-fastpath-snapshot",
+    file: "src/core/domain/dapTranslation.ts",
+    note: "card 39 — a live pause snapshot hands the outcome to the poll loop; finishing anyway tears down a paused session",
+    find: "  if (hasSnapshot) return { finish: false };",
+    replace: "  // MUTANT: the fast path finishes even mid-pause",
+    expectFailIn: "unitDap",
+  },
+  {
+    id: "errors-stack-cap",
+    file: "src/errors.ts",
+    note: "card 35 — the stack cap chooses truncation only OVER the limit; a short stack must go into the issue whole",
+    find: "      error.stack.length > MAX_STACK_CHARS",
+    replace: "      error.stack.length > 0 // MUTANT: every stack truncates",
+    expectFailIn: "integrationErrors",
+  },
+  {
+    id: "trust-declaration",
+    file: "package.json",
+    note: "card 38 — untrustedWorkspaces: VS Code's default for an undeclared extension is to run it untrusted",
+    find: '      "supported": false,',
+    replace: '      "supported": true,',
+    expectFailIn: "integrationPackaging",
   },
   {
     id: "rust-drop-stops-server",
