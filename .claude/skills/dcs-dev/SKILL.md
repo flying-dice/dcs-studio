@@ -59,7 +59,9 @@ If health never comes up: check `dcs.log` for `DCS-STUDIO` lines (hook load / mi
 
 RPC alone gets stuck: DCS boots into modals that no amount of JSON-RPC clears. Expect to drive the actual window, and expect the obvious approaches not to work.
 
-**Keyboard: DirectInput only.** DCS reads the keyboard through DirectInput, so `SendKeys`, `WM_KEYDOWN` and every other message-posting trick are **silently ignored** — the call succeeds and nothing happens. Use `SendInput` with `KEYEVENTF_SCANCODE` and send scan codes, not virtual key codes (ESC = `0x01`).
+**Keyboard: DirectInput only.** DCS reads the keyboard through DirectInput, so `SendKeys`, `WM_KEYDOWN` and every other message-posting trick are **silently ignored** — the call succeeds and nothing happens. Use `SendInput` with `KEYEVENTF_SCANCODE` and send scan codes, not virtual key codes (ESC = `0x01`). Even the scancode route is unreliable for ESC when the window focus is ambiguous (2026-08-02 live session: ESC never opened the pause menu).
+
+**Pausing the sim: use RPC, not the keyboard.** `DCS.setPause(true)` / `DCS.setPause(false)` eval'd through the GUI bridge is headless, deterministic, and verified live — it stalls/recovers the mission pump exactly like the ESC menu. Prefer it for every pump-stall or pause test; reach for keystrokes only when a modal needs dismissing.
 
 **Mouse: make the process DPI-aware first.** The display here is 3840x2160 at 150% scaling. Without `SetProcessDPIAware()` the coordinates you pass `SetCursorPos` are interpreted in the virtualized 2560x1440 space, so every click lands 1.5x off — usually on nothing, occasionally on the wrong button. Call `SetProcessDPIAware()` **before** the first `SetCursorPos`.
 
