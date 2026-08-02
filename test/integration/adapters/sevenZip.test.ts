@@ -5,6 +5,7 @@ import {
   createSpawnHarness,
   type SpawnCall,
   type SpawnHarness,
+  type SpawnPlanner,
 } from "../../support/fakeChildProcess";
 import { tmpRoot } from "../../support/tmpDir";
 
@@ -27,8 +28,6 @@ let spawner: SpawnHarness;
 vi.mock("child_process", () => ({
   spawn: (cmd: string, args: string[], opts: Record<string, unknown>) =>
     spawner.spawn(cmd, args, opts),
-  spawnSync: (cmd: string, args: string[], opts: Record<string, unknown>) =>
-    spawner.spawnSync(cmd, args, opts),
 }));
 
 // Two of the four discovery candidates are absolute Program Files paths probed
@@ -79,52 +78,52 @@ function archiverWriting(size: number) {
 }
 
 describe("find7z", () => {
-  it("prefers a bare 7z on PATH and confirms it actually runs", () => {
+  it("prefers a bare 7z on PATH and confirms it actually starts", async () => {
     // A candidate on PATH is only usable if it starts: a stale shim entry that
     // fails to launch must not be reported as the archiver.
-    spawner.planSync((c) => (c.cmd === "7z" ? { status: 0 } : { error: new Error("ENOENT") }));
-    expect(find7z()).toBe("7z");
+    spawner.plan((c) => (c.cmd === "7z" ? { code: 0 } : { error: new Error("ENOENT") }));
+    expect(await find7z()).toBe("7z");
   });
 
-  it("falls through to the next candidate when the first will not run", () => {
-    spawner.planSync((c) => (c.cmd === "7za" ? { status: 0 } : { error: new Error("ENOENT") }));
-    expect(find7z()).toBe("7za");
+  it("falls through to the next candidate when the first will not start", async () => {
+    spawner.plan((c) => (c.cmd === "7za" ? { code: 0 } : { error: new Error("ENOENT") }));
+    expect(await find7z()).toBe("7za");
   });
 
-  it("returns null when nothing on the machine is usable", () => {
+  it("returns null when nothing on the machine is usable", async () => {
     // This is what turns into "7-Zip not found — install 7-Zip" for the user.
-    spawner.planSync(() => ({ error: new Error("ENOENT") }));
-    expect(find7z()).toBeNull();
+    spawner.plan(() => ({ error: new Error("ENOENT") }));
+    expect(await find7z()).toBeNull();
   });
 
-  it("treats a candidate as unusable when probing it throws outright", () => {
-    spawner.planSync(() => {
+  it("treats a candidate as unusable when probing it throws outright", async () => {
+    spawner.plan(() => {
       throw new Error("EACCES");
     });
-    expect(find7z()).toBeNull();
+    expect(await find7z()).toBeNull();
   });
 
-  it("lets a configured path win over everything on PATH", () => {
+  it("lets a configured path win over everything on PATH", async () => {
     // dcsStudio.sevenZipPath exists so a user with a portable 7-Zip can point
     // at it; being overruled by a PATH entry would make the setting useless.
     const exe = tmp.join("7z.exe");
     nodeFs.writeFileSync(exe, "");
-    spawner.planSync(() => ({ status: 0 }));
-    expect(find7z(exe)).toBe(exe);
+    spawner.plan(() => ({ code: 0 }));
+    expect(await find7z(exe)).toBe(exe);
     // A path-shaped candidate is checked on disk, never launched.
-    expect(spawner.syncCalls).toEqual([]);
+    expect(spawner.calls).toEqual([]);
   });
 
-  it("ignores a configured path that no longer exists and keeps looking", () => {
+  it("ignores a configured path that no longer exists and keeps looking", async () => {
     // Users move or uninstall 7-Zip; a stale setting must degrade to discovery
     // rather than break every install.
-    spawner.planSync((c) => (c.cmd === "7z" ? { status: 0 } : { error: new Error("ENOENT") }));
-    expect(find7z(tmp.join("gone", "7z.exe"))).toBe("7z");
+    spawner.plan((c) => (c.cmd === "7z" ? { code: 0 } : { error: new Error("ENOENT") }));
+    expect(await find7z(tmp.join("gone", "7z.exe"))).toBe("7z");
   });
 
-  it("accepts a configured bare command by launching it", () => {
-    spawner.planSync((c) => (c.cmd === "my7z" ? { status: 0 } : { error: new Error("ENOENT") }));
-    expect(find7z("my7z")).toBe("my7z");
+  it("accepts a configured bare command by launching it", async () => {
+    spawner.plan((c) => (c.cmd === "my7z" ? { code: 0 } : { error: new Error("ENOENT") }));
+    expect(await find7z("my7z")).toBe("my7z");
   });
 });
 
@@ -237,16 +236,24 @@ describe("packagePayload", () => {
   });
 });
 
+// The discovery probe is itself an async spawn now, so it shares `spawner.plan`
+// with the 7z operation that follows it: a probe call has no args, an operation
+// call does.
+const probing =
+  (op: SpawnPlanner): SpawnPlanner =>
+  (call) =>
+    call.args.length === 0 ? { code: 0 } : op(call);
+
 describe("SevenZipArchive", () => {
   it("resolves the archiver with no configured path supplier at all", async () => {
-    spawner.planSync((c) => (c.cmd === "7z" ? { status: 0 } : { error: new Error("ENOENT") }));
+    spawner.plan((c) => (c.cmd === "7z" ? { code: 0 } : { error: new Error("ENOENT") }));
     expect(await new SevenZipArchive().available()).toBe("7z");
   });
 
   it("treats a blank configured path as unset rather than as a candidate", async () => {
     // The setting defaults to "" and users clear it by blanking the field;
     // passing that through would make every discovery attempt fail on "".
-    spawner.planSync((c) => (c.cmd === "7z" ? { status: 0 } : { error: new Error("ENOENT") }));
+    spawner.plan((c) => (c.cmd === "7z" ? { code: 0 } : { error: new Error("ENOENT") }));
     expect(await new SevenZipArchive(() => "   ").available()).toBe("7z");
   });
 
@@ -257,46 +264,43 @@ describe("SevenZipArchive", () => {
   });
 
   it("reports no archiver as null so callers can prompt for an install", async () => {
-    spawner.planSync(() => ({ error: new Error("ENOENT") }));
+    spawner.plan(() => ({ error: new Error("ENOENT") }));
     expect(await new SevenZipArchive(() => undefined).available()).toBeNull();
   });
 
   it("extracts an archive family by pointing 7z at its first volume", async () => {
-    spawner.planSync(() => ({ status: 0 }));
-    spawner.plan(() => ({ code: 0 }));
+    spawner.plan(probing(() => ({ code: 0 })));
     const outDir = tmp.join("unpacked");
     await new SevenZipArchive().extract("D:\\cache\\mod.7z.001", outDir);
-    expect(spawner.calls[0].args).toEqual(["x", "-y", `-o${outDir}`, "D:\\cache\\mod.7z.001"]);
+    // calls[0] is the discovery probe; calls[1] is the extraction itself.
+    expect(spawner.calls[1].args).toEqual(["x", "-y", `-o${outDir}`, "D:\\cache\\mod.7z.001"]);
   });
 
   it("tells the user to install 7-Zip when extraction has no archiver", async () => {
     // The whole install flow dead-ends here, so the message has to name the fix.
-    spawner.planSync(() => ({ error: new Error("ENOENT") }));
+    spawner.plan(() => ({ error: new Error("ENOENT") }));
     await expect(new SevenZipArchive().extract("a.7z", "out")).rejects.toThrow(
       "7-Zip not found — install 7-Zip (7-zip.org) to install mods.",
     );
   });
 
   it("reports an extract that never started", async () => {
-    spawner.planSync(() => ({ status: 0 }));
-    spawner.plan(() => ({ error: new Error("EACCES") }));
+    spawner.plan(probing(() => ({ error: new Error("EACCES") })));
     await expect(new SevenZipArchive().extract("a.7z", "out")).rejects.toThrow("7z: EACCES");
   });
 
   it("reports a corrupt or incomplete archive with 7z's own diagnosis", async () => {
     // A truncated download is the common cause; the user needs 7z's wording to
     // tell that apart from a missing sibling volume.
-    spawner.planSync(() => ({ status: 0 }));
-    spawner.plan(() => ({ code: 2, stderr: "ERROR: Unexpected end of archive\n" }));
+    spawner.plan(probing(() => ({ code: 2, stderr: "ERROR: Unexpected end of archive\n" })));
     await expect(new SevenZipArchive().extract("a.7z", "out")).rejects.toThrow(
       "7z extract exited 2: ERROR: Unexpected end of archive",
     );
   });
 
   it("packages through the resolved archiver, with and without an explicit size", async () => {
-    spawner.planSync(() => ({ status: 0 }));
     const out = tmp.join("out");
-    spawner.plan(archiverWriting(64));
+    spawner.plan(probing(archiverWriting(64)));
 
     const archive = new SevenZipArchive();
     expect(await archive.packagePayload(tmp.path, ["mod"], out, "base", 1024)).toMatchObject({
@@ -309,7 +313,7 @@ describe("SevenZipArchive", () => {
   });
 
   it("refuses to package when no archiver is available", async () => {
-    spawner.planSync(() => ({ error: new Error("ENOENT") }));
+    spawner.plan(() => ({ error: new Error("ENOENT") }));
     await expect(
       new SevenZipArchive().packagePayload(tmp.path, ["mod"], "out", "b"),
     ).rejects.toThrow("7z not found.");

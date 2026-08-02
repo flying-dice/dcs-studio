@@ -64,13 +64,9 @@ class FakeGh implements GhPort {
   releaseExists = false;
   attachedAssets: string[] = [];
   assetDeleteOk = true;
-  async isInstalled(): Promise<boolean> {
-    this.calls.push(["isInstalled"]);
-    return true;
-  }
-  async isAuthed(): Promise<boolean> {
-    this.calls.push(["isAuthed"]);
-    return true;
+  async facts(): Promise<{ present: boolean; authed: boolean }> {
+    this.calls.push(["facts"]);
+    return { present: true, authed: true };
   }
   async login(): Promise<string | null> {
     this.calls.push(["login"]);
@@ -651,8 +647,9 @@ describe("PublishService.toolFacts", () => {
     });
     expect(r.archive.calls).toContainEqual(["available"]);
     expect(r.git.calls).toContainEqual(["isInstalled"]);
-    expect(r.gh.calls).toContainEqual(["isInstalled"]);
-    expect(r.gh.calls).toContainEqual(["isAuthed"]);
+    // ONE gh probe pass per toolFacts call: presence and auth arrive together,
+    // because separate calls each re-ran the cold, network-bound gh CLI.
+    expect(r.gh.calls).toEqual([["facts"]]);
   });
 
   it("reports missing tools as null / false", async () => {

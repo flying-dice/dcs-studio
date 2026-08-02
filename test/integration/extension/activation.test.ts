@@ -51,14 +51,15 @@ vi.mock("../../../src/install/shortcut", async (importOriginal) => ({
 }));
 
 // Opening the Publish and Setup panels probes the real CLIs — `7z`, `git
-// --version`, `gh --version` and `gh auth status` — through SYNCHRONOUS spawns
-// (find7z / hasGitSync / ghFactsSync), and `gh auth status` goes to the
-// network. On a cold windows-latest runner the first `gh --version` alone was
-// measured at 9.8s (CI run 30763593695), which timed the panel-commands test
-// out at 5000ms and leaked its continuation into the next two tests. The
-// probes are adapter behaviour with their own specs (adapters/sevenZip,
-// adapters/gitCli, adapters/systemProbes); here the subject is the composition
-// root's wiring, so the tool adapters answer instantly instead of spawning.
+// --version`, `gh --version` and `gh auth status` — and `gh auth status` goes
+// to the network. The probes are async now (they no longer freeze the
+// extension host), but they still spawn real processes: on a cold
+// windows-latest runner the first `gh --version` alone was measured at 9.8s
+// (CI run 30763593695), which timed the panel-commands test out at 5000ms and
+// leaked its continuation into the next two tests. The probes are adapter
+// behaviour with their own specs (adapters/sevenZip, adapters/gitCli,
+// adapters/ghCli); here the subject is the composition root's wiring, so the
+// tool adapters answer instantly instead of spawning.
 vi.mock("../../../src/adapters/node/sevenZip", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../src/adapters/node/sevenZip")>()),
   SevenZipArchive: class {
@@ -87,11 +88,8 @@ vi.mock("../../../src/adapters/node/gh", async (importOriginal) => {
   return {
     ...original,
     GhCli: class extends original.GhCli {
-      override isInstalled(): Promise<boolean> {
-        return Promise.resolve(false);
-      }
-      override isAuthed(): Promise<boolean> {
-        return Promise.resolve(false);
+      override facts(): Promise<{ present: boolean; authed: boolean }> {
+        return Promise.resolve({ present: false, authed: false });
       }
       override login(): Promise<string | null> {
         return Promise.resolve(null);

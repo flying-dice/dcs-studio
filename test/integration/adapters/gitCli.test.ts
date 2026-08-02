@@ -20,11 +20,9 @@ let spawner: SpawnHarness;
 vi.mock("child_process", () => ({
   spawn: (cmd: string, args: string[], opts: Record<string, unknown>) =>
     spawner.spawn(cmd, args, opts),
-  spawnSync: (cmd: string, args: string[], opts: Record<string, unknown>) =>
-    spawner.spawnSync(cmd, args, opts),
 }));
 
-import { GitCli, hasGitSync, isGitRepoSync } from "../../../src/adapters/node/git";
+import { GitCli } from "../../../src/adapters/node/git";
 
 const ROOT = "D:\\proj\\my-mod";
 
@@ -32,63 +30,50 @@ beforeEach(() => {
   spawner = createSpawnHarness();
 });
 
-describe("hasGitSync", () => {
-  it("reports git present when the version probe starts", () => {
-    spawner.planSync(() => ({ status: 0, stdout: "git version 2.44.0" }));
-    expect(hasGitSync()).toBe(true);
-    expect(spawner.syncCalls[0]).toMatchObject({ cmd: "git", args: ["--version"] });
+describe("GitCli.isInstalled", () => {
+  it("reports git present when the version probe runs, with no cwd imposed", async () => {
+    spawner.plan(() => ({ code: 0, stdout: "git version 2.44.0" }));
+    expect(await new GitCli().isInstalled()).toBe(true);
+    expect(spawner.calls[0]).toMatchObject({ cmd: "git", args: ["--version"] });
+    // The presence probe has no repo to be in; passing one would fail when the
+    // workspace folder does not exist yet.
+    expect(spawner.calls[0].opts).toEqual({ windowsHide: true });
   });
 
-  it("reports git absent when the binary cannot be started", () => {
-    spawner.planSync(() => ({ error: new Error("ENOENT") }));
-    expect(hasGitSync()).toBe(false);
+  it("reports git absent when the binary cannot be started", async () => {
+    spawner.plan(() => ({ error: new Error("ENOENT") }));
+    expect(await new GitCli().isInstalled()).toBe(false);
   });
 
-  it("reports git absent rather than throwing when spawnSync blows up", () => {
-    // Preflight runs synchronously as the publish panel opens; a throw here
-    // would replace the checklist with a broken panel.
-    spawner.planSync(() => {
+  it("reports git absent rather than throwing when spawn blows up", async () => {
+    // The probe runs as the publish panel opens; a throw here would replace
+    // the checklist with a broken panel.
+    spawner.plan(() => {
       throw new Error("EACCES");
     });
-    expect(hasGitSync()).toBe(false);
+    expect(await new GitCli().isInstalled()).toBe(false);
   });
 });
 
-describe("isGitRepoSync", () => {
-  it("asks git about the given root and accepts only a literal true", () => {
-    spawner.planSync(() => ({ status: 0, stdout: "true\n" }));
-    expect(isGitRepoSync(ROOT)).toBe(true);
-    expect(spawner.syncCalls[0]).toMatchObject({
+describe("GitCli.isRepo", () => {
+  it("asks git about the given root and accepts only a literal true", async () => {
+    spawner.plan(() => ({ code: 0, stdout: "true\n" }));
+    expect(await new GitCli().isRepo(ROOT)).toBe(true);
+    expect(spawner.calls[0]).toMatchObject({
       cmd: "git",
       args: ["rev-parse", "--is-inside-work-tree"],
-      opts: { cwd: ROOT, windowsHide: true, encoding: "utf8" },
+      opts: { cwd: ROOT, windowsHide: true },
     });
   });
 
-  it("reports false inside a bare repo, where git answers false", () => {
-    spawner.planSync(() => ({ status: 0, stdout: "false\n" }));
-    expect(isGitRepoSync(ROOT)).toBe(false);
+  it("reports false inside a bare repo, where git answers false", async () => {
+    spawner.plan(() => ({ code: 0, stdout: "false\n" }));
+    expect(await new GitCli().isRepo(ROOT)).toBe(false);
   });
 
-  it("reports false when git is missing or the path is not a repo", () => {
-    spawner.planSync(() => ({ error: new Error("ENOENT"), stdout: "" }));
-    expect(isGitRepoSync(ROOT)).toBe(false);
-  });
-
-  it("reports false rather than throwing when spawnSync blows up", () => {
-    spawner.planSync(() => {
-      throw new Error("EACCES");
-    });
-    expect(isGitRepoSync(ROOT)).toBe(false);
-  });
-});
-
-describe("GitCli probes", () => {
-  it("delegates isInstalled and isRepo to the sync probes", async () => {
-    spawner.planSync(() => ({ status: 0, stdout: "true\n" }));
-    const git = new GitCli();
-    expect(await git.isInstalled()).toBe(true);
-    expect(await git.isRepo(ROOT)).toBe(true);
+  it("reports false when git is missing or the path is not a repo", async () => {
+    spawner.plan(() => ({ error: new Error("ENOENT"), stdout: "" }));
+    expect(await new GitCli().isRepo(ROOT)).toBe(false);
   });
 });
 

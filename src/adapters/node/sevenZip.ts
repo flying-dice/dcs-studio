@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "child_process";
+import { spawn } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import {
@@ -34,23 +34,28 @@ const CANDIDATES = [
 ];
 
 /** Whether a 7z candidate is usable: an absolute/path form must exist on disk; a
- *  bare command must run. */
-function usable(c: string): boolean {
-  if (/[\\/]/.test(c)) return fs.existsSync(c);
-  try {
-    return !spawnSync(c, [], { windowsHide: true }).error;
-  } catch {
-    return false;
-  }
+ *  bare command must start. Async because a synchronous launch probe froze the
+ *  extension host for the whole cold start (measured at 640ms). */
+function usable(c: string): Promise<boolean> {
+  if (/[\\/]/.test(c)) return Promise.resolve(fs.existsSync(c));
+  return new Promise((resolve) => {
+    try {
+      const p = spawn(c, [], { windowsHide: true });
+      p.on("error", () => resolve(false));
+      p.on("exit", () => resolve(true));
+    } catch {
+      resolve(false);
+    }
+  });
 }
 
 /** Resolve a usable 7-Zip command, or null. `configured` (the user's
  *  dcsStudio.sevenZipPath) wins when supplied — node-tier adapters never read
  *  vscode themselves, so the composition root / a vscode-tier caller passes it. */
-export function find7z(configured?: string): string | null {
+export async function find7z(configured?: string): Promise<string | null> {
   const candidates = configured ? [configured, ...CANDIDATES] : CANDIDATES;
   for (const c of candidates) {
-    if (usable(c)) return c;
+    if (await usable(c)) return c;
   }
   return null;
 }
@@ -139,7 +144,7 @@ export class SevenZipArchive implements ArchivePort {
   }
 
   async extract(archive: string, outDir: string): Promise<void> {
-    const cmd = find7z(this.configured());
+    const cmd = await find7z(this.configured());
     if (!cmd) throw new Error("7-Zip not found — install 7-Zip (7-zip.org) to install mods.");
     await extract7z(cmd, archive, outDir);
   }
@@ -151,7 +156,7 @@ export class SevenZipArchive implements ArchivePort {
     base: string,
     volumeBytes: number = DEFAULT_VOLUME_BYTES,
   ): Promise<PackagedPayload> {
-    const cmd = find7z(this.configured());
+    const cmd = await find7z(this.configured());
     if (!cmd) throw new Error("7z not found.");
     return packagePayload(cmd, root, files, outDir, base, volumeBytes);
   }

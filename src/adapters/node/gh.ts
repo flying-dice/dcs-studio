@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "child_process";
+import { spawn } from "child_process";
 import { ghArgs } from "../../core/domain/cliArgs";
 import type { GhFacts } from "../../core/domain/publishChecks";
 import type {
@@ -11,8 +11,9 @@ import type {
 
 // Node adapter for `GhPort`, driving the GitHub CLI. Owns every gh process
 // spawn used by the publish flow; the orchestration policy lives in
-// core/app/publishService.ts. The sync probes (ghLoginSync/ghFactsSync) exist
-// for the synchronous preflight/panel paths.
+// core/app/publishService.ts. Every probe is async: a synchronous spawn here
+// used to freeze the extension host for the whole probe (a cold `gh --version`
+// was measured at 9.8s, and `gh auth status` goes to the network).
 
 interface RunResult {
   code: number;
@@ -22,13 +23,19 @@ interface RunResult {
 
 function run(cmd: string, args: string[]): Promise<RunResult> {
   return new Promise((resolve) => {
-    const p = spawn(cmd, args, { windowsHide: true });
-    let stdout = "";
-    let stderr = "";
-    p.stdout.on("data", (d) => (stdout += d.toString()));
-    p.stderr.on("data", (d) => (stderr += d.toString()));
-    p.on("error", (e) => resolve({ code: -1, stdout, stderr: stderr || e.message }));
-    p.on("exit", (c) => resolve({ code: c ?? -1, stdout, stderr }));
+    try {
+      const p = spawn(cmd, args, { windowsHide: true });
+      let stdout = "";
+      let stderr = "";
+      p.stdout.on("data", (d) => (stdout += d.toString()));
+      p.stderr.on("data", (d) => (stderr += d.toString()));
+      p.on("error", (e) => resolve({ code: -1, stdout, stderr: stderr || e.message }));
+      p.on("exit", (c) => resolve({ code: c ?? -1, stdout, stderr }));
+    } catch (e) {
+      // spawn can throw outright (EACCES, bad options); a probe that runs as
+      // the publish panel opens must degrade to "not available", never throw.
+      resolve({ code: -1, stdout: "", stderr: (e as Error).message });
+    }
   });
 }
 
@@ -39,42 +46,20 @@ async function must(cmd: string, args: string[], label: string): Promise<string>
   return r.stdout.trim();
 }
 
-/** The signed-in GitHub login, or null (sync, for the publish panel). */
-export function ghLoginSync(): string | null {
-  const r = spawnSync("gh", ghArgs.apiUser(), {
-    windowsHide: true,
-    encoding: "utf8",
-  });
-  return !r.error && r.status === 0 ? r.stdout.trim() : null;
-}
-
-/** gh CLI presence + auth facts (sync, for the preflight panel). */
-export function ghFactsSync(): GhFacts {
-  let present = false;
-  let authed = false;
-  try {
-    present = !spawnSync("gh", ghArgs.version(), { windowsHide: true }).error;
-    if (present) {
-      authed = spawnSync("gh", ghArgs.authStatus(), { windowsHide: true }).status === 0;
-    }
-  } catch {
-    /* not installed */
-  }
-  return { present, authed };
-}
-
 /** `GhPort` over the GitHub CLI. */
 export class GhCli implements GhPort {
-  async isInstalled(): Promise<boolean> {
-    return ghFactsSync().present;
-  }
-
-  async isAuthed(): Promise<boolean> {
-    return ghFactsSync().authed;
+  /** One probe pass: `gh --version` once, then — only when gh is present —
+   *  `gh auth status` once (it hits the network, so it is never run early). */
+  async facts(): Promise<GhFacts> {
+    const present = (await run("gh", ghArgs.version())).code === 0;
+    if (!present) return { present: false, authed: false };
+    const authed = (await run("gh", ghArgs.authStatus())).code === 0;
+    return { present, authed };
   }
 
   async login(): Promise<string | null> {
-    return ghLoginSync();
+    const r = await run("gh", ghArgs.apiUser());
+    return r.code === 0 ? r.stdout.trim() : null;
   }
 
   async repoCreate(opts: GhRepoCreateOptions): Promise<GhRepoCreateResult> {
