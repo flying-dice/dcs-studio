@@ -24,8 +24,8 @@ that correspond to an issue link back to it. Issues stay the place discussion
 happens and the source of truth for issue state; the board is the source of truth
 for what contributors here are doing next. The board also carries work no issue
 tracks — in-source TODOs, and the items the
-[testing audit](../04-quality/01-testing-audit.md) recorded as deliberately not
-done.
+[2026-07 testing audit](../04-quality/02-testing-audit-2026-07.md) recorded as
+deliberately not done.
 
 If you close an issue, close its card. If you open an issue that changes what
 happens next, add a card.

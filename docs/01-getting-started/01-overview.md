@@ -56,5 +56,6 @@ on install. See
 | What is being worked on next? | [`boards/project-backlog/`](../../boards/project-backlog) |
 | What does a feature actually promise? | [`spec/stories/`](../../spec/stories) — 24 Gherkin stories |
 | What does the bridge expose? | [Bridge JSON-RPC API](../03-reference/01-bridge-api.md) |
-| How healthy is the test suite? | [Testing pyramid audit](../04-quality/01-testing-audit.md) |
+| What are the test gates, and what do they cover? | [Testing & quality](../04-quality/01-testing-quality.md) |
+| How did the suite get that way? | [The 2026-07 testing audit](../04-quality/02-testing-audit-2026-07.md) — historical |
 | How do I drive the bridge from an agent? | [`skills/dcs-studio/SKILL.md`](../../skills/dcs-studio/SKILL.md) |

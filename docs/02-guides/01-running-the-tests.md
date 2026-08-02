@@ -4,7 +4,9 @@ Four layers, each with its own command and its own coverage gate over an include
 set that does not overlap the others'. The rationale is
 [decision 05](../../decisions/05-four-disjoint-test-layers-each-at-100.md); the
 full spec is the "Testing & coverage" section of
-[ARCHITECTURE.md](../../ARCHITECTURE.md). This page is the operational version.
+[ARCHITECTURE.md](../../ARCHITECTURE.md). This page is the operational version;
+what the gates currently measure and where the numbers stand is
+[Testing & quality](../04-quality/01-testing-quality.md).
 
 ## The commands
 
