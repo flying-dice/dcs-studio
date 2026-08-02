@@ -1,8 +1,7 @@
 import * as nodeFs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { downloadTo, FetchDownloader } from "../../../src/adapters/node/downloader";
+import { tmpRoot } from "../../support/tmpDir";
 
 // The downloader fetches mod release payloads, which are routinely hundreds of
 // megabytes and sometimes multi-gigabyte. Two properties matter and neither is
@@ -15,7 +14,7 @@ import { downloadTo, FetchDownloader } from "../../../src/adapters/node/download
 // the file really lands in a temp dir, because "did the bytes arrive intact"
 // is the whole point of the adapter.
 
-let root: string;
+const tmp = tmpRoot("dcs-dl-");
 const REAL_FETCH = globalThis.fetch;
 
 /** A response whose body is a real web stream delivered in several chunks. */
@@ -50,21 +49,16 @@ function stubFetch(respond: () => Response): FetchCall[] {
   return calls;
 }
 
-beforeEach(() => {
-  root = nodeFs.mkdtempSync(path.join(os.tmpdir(), "dcs-dl-"));
-});
-
 afterEach(() => {
   globalThis.fetch = REAL_FETCH;
   vi.restoreAllMocks();
-  nodeFs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("downloadTo", () => {
   it("streams the body to disk, creating the parent directories", async () => {
     // Downloads land in <dataDir>/<repo>/… which the caller has not created.
     stubFetch(() => streamed(["hello ", "world"]));
-    const dest = path.join(root, "cache", "owner__repo", "payload.7z");
+    const dest = tmp.join("cache", "owner__repo", "payload.7z");
 
     await downloadTo("https://example.test/p.7z", dest, undefined);
     expect(nodeFs.readFileSync(dest, "utf8")).toBe("hello world");
@@ -75,7 +69,7 @@ describe("downloadTo", () => {
     // sending none is what keeps public mod installs working for signed-out users.
     const calls = stubFetch(() => streamed(["x"]));
 
-    await downloadTo("https://example.test/p.7z", path.join(root, "p.7z"), undefined);
+    await downloadTo("https://example.test/p.7z", tmp.join("p.7z"), undefined);
     expect(calls).toEqual([
       {
         url: "https://example.test/p.7z",
@@ -93,13 +87,13 @@ describe("downloadTo", () => {
     // enough that a signed-in user should never be subject to it.
     const calls = stubFetch(() => streamed(["x"]));
 
-    await downloadTo("https://example.test/p.7z", path.join(root, "p.7z"), "gho_secret");
+    await downloadTo("https://example.test/p.7z", tmp.join("p.7z"), "gho_secret");
     expect(calls[0].headers.Authorization).toBe("Bearer gho_secret");
   });
 
   it("follows redirects, as GitHub asset URLs always issue one", async () => {
     const calls = stubFetch(() => streamed(["x"]));
-    await downloadTo("https://example.test/p.7z", path.join(root, "p.7z"), undefined);
+    await downloadTo("https://example.test/p.7z", tmp.join("p.7z"), undefined);
     expect(calls[0].redirect).toBe("follow");
   });
 
@@ -107,7 +101,7 @@ describe("downloadTo", () => {
     // A deleted release or a private repo without a token; the code is the
     // only thing that tells those apart in a bug report.
     stubFetch(() => new Response("nope", { status: 404 }));
-    const dest = path.join(root, "p.7z");
+    const dest = tmp.join("p.7z");
 
     await expect(downloadTo("https://example.test/p.7z", dest, undefined)).rejects.toThrow(
       "Download failed (404) for https://example.test/p.7z",
@@ -120,7 +114,7 @@ describe("downloadTo", () => {
     // that 7-Zip then reports as corrupt, hiding the real cause.
     stubFetch(() => new Response(null, { status: 200 }));
     await expect(
-      downloadTo("https://example.test/p.7z", path.join(root, "p.7z"), undefined),
+      downloadTo("https://example.test/p.7z", tmp.join("p.7z"), undefined),
     ).rejects.toThrow("Download failed (200) for https://example.test/p.7z");
   });
 
@@ -128,9 +122,7 @@ describe("downloadTo", () => {
     stubFetch(() => streamed(["aaaa", "bbbb"], { "content-length": "8" }));
     const seen: number[] = [];
 
-    await downloadTo("https://example.test/p.7z", path.join(root, "p.7z"), undefined, (f) =>
-      seen.push(f),
-    );
+    await downloadTo("https://example.test/p.7z", tmp.join("p.7z"), undefined, (f) => seen.push(f));
     expect(seen).toEqual([0.5, 1]);
   });
 
@@ -140,9 +132,7 @@ describe("downloadTo", () => {
     stubFetch(() => streamed(["aaaa", "bbbb"], { "content-length": "4" }));
     const seen: number[] = [];
 
-    await downloadTo("https://example.test/p.7z", path.join(root, "p.7z"), undefined, (f) =>
-      seen.push(f),
-    );
+    await downloadTo("https://example.test/p.7z", tmp.join("p.7z"), undefined, (f) => seen.push(f));
     expect(seen).toEqual([1, 1]);
   });
 
@@ -151,7 +141,7 @@ describe("downloadTo", () => {
     // a failed download is not.
     stubFetch(() => streamed(["chunked payload"]));
     const seen: number[] = [];
-    const dest = path.join(root, "p.7z");
+    const dest = tmp.join("p.7z");
 
     await downloadTo("https://example.test/p.7z", dest, undefined, (f) => seen.push(f));
     expect(seen).toEqual([]);
@@ -160,7 +150,7 @@ describe("downloadTo", () => {
 
   it("downloads without a progress callback at all", async () => {
     stubFetch(() => streamed(["x"], { "content-length": "1" }));
-    const dest = path.join(root, "p.7z");
+    const dest = tmp.join("p.7z");
     await downloadTo("https://example.test/p.7z", dest, undefined);
     expect(nodeFs.readFileSync(dest, "utf8")).toBe("x");
   });
@@ -170,7 +160,7 @@ describe("FetchDownloader", () => {
   it("passes every argument through to the streaming download", async () => {
     const calls = stubFetch(() => streamed(["ab", "cd"], { "content-length": "4" }));
     const seen: number[] = [];
-    const dest = path.join(root, "nested", "p.7z");
+    const dest = tmp.join("nested", "p.7z");
 
     await new FetchDownloader().download("https://example.test/p.7z", dest, "tok", (f) =>
       seen.push(f),

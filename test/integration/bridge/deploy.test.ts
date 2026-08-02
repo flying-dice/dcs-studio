@@ -1,8 +1,7 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
-import * as nodePath from "node:path";
 import { win32 as path } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tmpRoot } from "../../support/tmpDir";
 import { resetVscode, state, vscodeMock } from "../support/vscode";
 
 vi.mock("vscode", () => vscodeMock());
@@ -47,7 +46,7 @@ const MISSION_DLL = "dcs_studio_mission.dll";
 const EXT = "C:\\Users\\pilot\\.vscode\\extensions\\dcs-studio";
 const WRITE_DIR = "D:\\Saved Games\\DCS";
 
-let root: string;
+const tmp = tmpRoot("bridge-deploy-");
 let io: MappedBridgeFs;
 
 function context(): vscode.ExtensionContext {
@@ -56,21 +55,16 @@ function context(): vscode.ExtensionContext {
 
 /** Keep the mapping but fail one operation. */
 function failWith(over: BridgeFsOverrides): void {
-  io = mappedBridgeFs(root, over);
+  io = mappedBridgeFs(tmp.path, over);
 }
 
 beforeEach(() => {
-  root = fs.mkdtempSync(nodePath.join(os.tmpdir(), "bridge-deploy-"));
-  io = mappedBridgeFs(root);
+  io = mappedBridgeFs(tmp.path);
   resetVscode({ config: { "dcsStudio.savedGamesPath": WRITE_DIR } });
   // A complete extension install: both prebuilt DLLs and the hook script.
   io.seed(shippedDllPath(EXT, GUI_DLL), "shipped-gui");
   io.seed(shippedDllPath(EXT, MISSION_DLL), "shipped-mission");
   io.seed(hookSourcePath(EXT), "-- hook");
-});
-
-afterEach(() => {
-  fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("the default filesystem", () => {

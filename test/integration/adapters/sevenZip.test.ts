@@ -1,12 +1,12 @@
 import * as nodeFs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSpawnHarness,
   type SpawnCall,
   type SpawnHarness,
 } from "../../support/fakeChildProcess";
+import { tmpRoot } from "../../support/tmpDir";
 
 // The 7-Zip adapter decides two things a user feels directly: whether mods can
 // be installed at all (7-Zip discovery — the CLI is not bundled, so a wrong
@@ -58,15 +58,10 @@ import {
   SevenZipArchive,
 } from "../../../src/adapters/node/sevenZip";
 
-let root: string;
+const tmp = tmpRoot("dcs-7z-");
 
 beforeEach(() => {
   spawner = createSpawnHarness();
-  root = nodeFs.mkdtempSync(path.join(os.tmpdir(), "dcs-7z-"));
-});
-
-afterEach(() => {
-  nodeFs.rmSync(root, { recursive: true, force: true });
 });
 
 /** The `-v<n>b` flag position differs between pack and split, so find the path. */
@@ -112,7 +107,7 @@ describe("find7z", () => {
   it("lets a configured path win over everything on PATH", () => {
     // dcsStudio.sevenZipPath exists so a user with a portable 7-Zip can point
     // at it; being overruled by a PATH entry would make the setting useless.
-    const exe = path.join(root, "7z.exe");
+    const exe = tmp.join("7z.exe");
     nodeFs.writeFileSync(exe, "");
     spawner.planSync(() => ({ status: 0 }));
     expect(find7z(exe)).toBe(exe);
@@ -124,7 +119,7 @@ describe("find7z", () => {
     // Users move or uninstall 7-Zip; a stale setting must degrade to discovery
     // rather than break every install.
     spawner.planSync((c) => (c.cmd === "7z" ? { status: 0 } : { error: new Error("ENOENT") }));
-    expect(find7z(path.join(root, "gone", "7z.exe"))).toBe("7z");
+    expect(find7z(tmp.join("gone", "7z.exe"))).toBe("7z");
   });
 
   it("accepts a configured bare command by launching it", () => {
@@ -135,13 +130,13 @@ describe("find7z", () => {
 
 describe("cleanVolumeFamily", () => {
   it("does nothing when the output directory has never been created", () => {
-    expect(() => cleanVolumeFamily(path.join(root, "nope"), "base")).not.toThrow();
+    expect(() => cleanVolumeFamily(tmp.join("nope"), "base")).not.toThrow();
   });
 
   it("removes only the named family, leaving other releases' assets alone", () => {
     // Publish reuses one out dir across mods and tags; deleting a neighbour's
     // volumes would silently corrupt the other release's assets.
-    const out = path.join(root, "out");
+    const out = tmp.join("out");
     nodeFs.mkdirSync(out);
     for (const f of ["mine.7z", "mine.7z.001", "mine.7z.002", "theirs.7z", "manifest.toml"]) {
       nodeFs.writeFileSync(path.join(out, f), "x");
@@ -153,14 +148,14 @@ describe("cleanVolumeFamily", () => {
 
 describe("packagePayload", () => {
   it("packs a small payload as a single archive and reports its real size", async () => {
-    const out = path.join(root, "out");
+    const out = tmp.join("out");
     spawner.plan(archiverWriting(64));
-    const res = await packagePayload("7z", root, ["mod"], out, "base", 1024);
+    const res = await packagePayload("7z", tmp.path, ["mod"], out, "base", 1024);
 
     expect(res).toEqual({ volumes: [path.join(out, "base.7z")], totalBytes: 64, split: false });
     // One pass only: a payload under the limit must never be repacked.
     expect(spawner.calls).toHaveLength(1);
-    expect(spawner.calls[0].opts).toEqual({ cwd: root, windowsHide: true });
+    expect(spawner.calls[0].opts).toEqual({ cwd: tmp.path, windowsHide: true });
     expect(spawner.calls[0].args).toEqual([
       "a",
       "-t7z",
@@ -174,12 +169,12 @@ describe("packagePayload", () => {
   it("creates the output directory and clears a previous packaging run", async () => {
     // Re-publishing the same tag after shrinking a payload would otherwise
     // leave orphan .002/.003 volumes that the release then ships.
-    const out = path.join(root, "out");
+    const out = tmp.join("out");
     nodeFs.mkdirSync(out, { recursive: true });
     nodeFs.writeFileSync(path.join(out, "base.7z.003"), "stale");
     spawner.plan(archiverWriting(64));
 
-    const res = await packagePayload("7z", root, ["mod"], out, "base", 1024);
+    const res = await packagePayload("7z", tmp.path, ["mod"], out, "base", 1024);
     expect(res.split).toBe(false);
     expect(nodeFs.readdirSync(out)).toEqual(["base.7z"]);
   });
@@ -188,7 +183,7 @@ describe("packagePayload", () => {
     // The single-archive attempt is discarded, not shipped alongside the
     // volumes — a release carrying both would confuse the installer's
     // first-volume selection.
-    const out = path.join(root, "out");
+    const out = tmp.join("out");
     spawner.plan((call) =>
       call.args.some((a) => a.startsWith("-v"))
         ? {
@@ -201,7 +196,7 @@ describe("packagePayload", () => {
         : archiverWriting(32)(call),
     );
 
-    const res = await packagePayload("7z", root, ["mod"], out, "base", 8);
+    const res = await packagePayload("7z", tmp.path, ["mod"], out, "base", 8);
     expect(res).toEqual({
       volumes: [path.join(out, "base.7z.001"), path.join(out, "base.7z.002")],
       totalBytes: 12,
@@ -214,29 +209,29 @@ describe("packagePayload", () => {
   it("defaults to the shared 1.5 GiB volume size when none is given", async () => {
     // The default is what publish actually uses; a payload of ordinary size
     // must stay a single archive under it.
-    const out = path.join(root, "out");
+    const out = tmp.join("out");
     spawner.plan(archiverWriting(2048));
-    const res = await packagePayload("7z", root, ["mod"], out, "base");
+    const res = await packagePayload("7z", tmp.path, ["mod"], out, "base");
     expect(res.split).toBe(false);
   });
 
   it("reports a 7z that never started, distinctly from one that failed", async () => {
     spawner.plan(() => ({ error: new Error("spawn 7z ENOENT") }));
-    await expect(packagePayload("7z", root, ["mod"], path.join(root, "o"), "b")).rejects.toThrow(
+    await expect(packagePayload("7z", tmp.path, ["mod"], tmp.join("o"), "b")).rejects.toThrow(
       "7z failed to start: spawn 7z ENOENT",
     );
   });
 
   it("reports 7z's own stderr when it exits non-zero", async () => {
     spawner.plan(() => ({ code: 2, stderr: "ERROR: Can not open output file\n" }));
-    await expect(packagePayload("7z", root, ["mod"], path.join(root, "o"), "b")).rejects.toThrow(
+    await expect(packagePayload("7z", tmp.path, ["mod"], tmp.join("o"), "b")).rejects.toThrow(
       "7z exited 2: ERROR: Can not open output file",
     );
   });
 
   it("still says something useful when 7z fails without printing anything", async () => {
     spawner.plan(() => ({ code: 255 }));
-    await expect(packagePayload("7z", root, ["mod"], path.join(root, "o"), "b")).rejects.toThrow(
+    await expect(packagePayload("7z", tmp.path, ["mod"], tmp.join("o"), "b")).rejects.toThrow(
       "7z exited 255: (no output)",
     );
   });
@@ -256,7 +251,7 @@ describe("SevenZipArchive", () => {
   });
 
   it("uses the configured path when the setting holds one", async () => {
-    const exe = path.join(root, "7z.exe");
+    const exe = tmp.join("7z.exe");
     nodeFs.writeFileSync(exe, "");
     expect(await new SevenZipArchive(() => `  ${exe}  `).available()).toBe(exe);
   });
@@ -269,7 +264,7 @@ describe("SevenZipArchive", () => {
   it("extracts an archive family by pointing 7z at its first volume", async () => {
     spawner.planSync(() => ({ status: 0 }));
     spawner.plan(() => ({ code: 0 }));
-    const outDir = path.join(root, "unpacked");
+    const outDir = tmp.join("unpacked");
     await new SevenZipArchive().extract("D:\\cache\\mod.7z.001", outDir);
     expect(spawner.calls[0].args).toEqual(["x", "-y", `-o${outDir}`, "D:\\cache\\mod.7z.001"]);
   });
@@ -300,23 +295,23 @@ describe("SevenZipArchive", () => {
 
   it("packages through the resolved archiver, with and without an explicit size", async () => {
     spawner.planSync(() => ({ status: 0 }));
-    const out = path.join(root, "out");
+    const out = tmp.join("out");
     spawner.plan(archiverWriting(64));
 
     const archive = new SevenZipArchive();
-    expect(await archive.packagePayload(root, ["mod"], out, "base", 1024)).toMatchObject({
+    expect(await archive.packagePayload(tmp.path, ["mod"], out, "base", 1024)).toMatchObject({
       split: false,
       totalBytes: 64,
     });
-    expect(await archive.packagePayload(root, ["mod"], out, "base")).toMatchObject({
+    expect(await archive.packagePayload(tmp.path, ["mod"], out, "base")).toMatchObject({
       split: false,
     });
   });
 
   it("refuses to package when no archiver is available", async () => {
     spawner.planSync(() => ({ error: new Error("ENOENT") }));
-    await expect(new SevenZipArchive().packagePayload(root, ["mod"], "out", "b")).rejects.toThrow(
-      "7z not found.",
-    );
+    await expect(
+      new SevenZipArchive().packagePayload(tmp.path, ["mod"], "out", "b"),
+    ).rejects.toThrow("7z not found.");
   });
 });

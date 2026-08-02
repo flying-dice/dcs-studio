@@ -1,9 +1,8 @@
 import type { spawn as nodeSpawn } from "node:child_process";
-import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSpawnHarness, type SpawnHarness } from "../../support/fakeChildProcess";
+import { tmpRoot } from "../../support/tmpDir";
 import { resetVscode, state, vscodeMock } from "../support/vscode";
 
 vi.mock("vscode", () => vscodeMock());
@@ -18,11 +17,11 @@ import { buildBridge } from "../../../src/bridge/build";
 // them. `bridgeDir` is inside the extension's install directory, so unlike the
 // DCS write dir it is a real path on this host and gets a real temp directory.
 
-let ext: string;
+const tmp = tmpRoot("bridge-build-");
 let harness: SpawnHarness;
 
 function context(): vscode.ExtensionContext {
-  return { extensionUri: vscode.Uri.file(ext) } as unknown as vscode.ExtensionContext;
+  return { extensionUri: vscode.Uri.file(tmp.path) } as unknown as vscode.ExtensionContext;
 }
 
 function fakeSpawn(): typeof nodeSpawn {
@@ -31,8 +30,7 @@ function fakeSpawn(): typeof nodeSpawn {
 
 /** The bridge workspace as a published extension with its source included. */
 function seedBridgeSource(manifest = "[workspace]\n"): void {
-  fs.mkdirSync(path.join(ext, "bridge"), { recursive: true });
-  fs.writeFileSync(path.join(ext, "bridge", "Cargo.toml"), manifest);
+  tmp.file(path.join("bridge", "Cargo.toml"), manifest);
 }
 
 function channel() {
@@ -40,13 +38,8 @@ function channel() {
 }
 
 beforeEach(() => {
-  ext = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-build-"));
   harness = createSpawnHarness();
   resetVscode();
-});
-
-afterEach(() => {
-  fs.rmSync(ext, { recursive: true, force: true });
 });
 
 describe("without the bridge source", () => {
@@ -71,7 +64,7 @@ describe("running cargo", () => {
       {
         cmd: "cargo",
         args: ["build", "--release"],
-        opts: { cwd: path.join(ext, "bridge"), shell: true },
+        opts: { cwd: tmp.join("bridge"), shell: true },
       },
     ]);
   });

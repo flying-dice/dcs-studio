@@ -1,9 +1,7 @@
-import * as nodeFs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll } from "vitest";
 import { NodeFileSystem } from "../../../src/adapters/node/fs";
 import { describeFileSystemPortContract } from "../../support/filesystemContract";
+import { tmpRoot } from "../../support/tmpDir";
 
 // The real adapter against a real temp tree — the fidelity that matters for a
 // filesystem port, where the interesting behaviour is what node:fs actually
@@ -14,17 +12,11 @@ import { describeFileSystemPortContract } from "../../support/filesystemContract
 // creating parent directories on write, this fails even though every core test
 // still passes against its fake.
 
-const roots: string[] = [];
+// Every contract case asks for its own root, so `make()` — one temp dir per
+// call, all of them removed when the test that asked for them ends.
+const tmp = tmpRoot("dcs-fs-");
 
 describeFileSystemPortContract("NodeFileSystem", () => new NodeFileSystem(), {
-  makeRoot: () => {
-    const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), "dcs-fs-"));
-    roots.push(dir);
-    return dir;
-  },
+  makeRoot: () => tmp.make(),
   join: (...parts: string[]) => path.join(...parts),
-});
-
-afterAll(() => {
-  for (const dir of roots) nodeFs.rmSync(dir, { recursive: true, force: true });
 });

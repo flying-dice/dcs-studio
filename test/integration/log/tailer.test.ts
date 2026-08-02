@@ -1,7 +1,7 @@
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { tmpRoot } from "../../support/tmpDir";
 
 // One failure mode here cannot be arranged against a real file: an open/read
 // that fails on a file whose stat just succeeded (the deletion race, a share
@@ -30,13 +30,12 @@ import { LogTailer, type LogTailerOptions } from "../../../src/log/tailer";
 // so exercising it end-to-end against a real temp file is more honest than
 // mocking fs. `waitFor` polls a predicate instead of racing a fixed sleep.
 
-let tmpDir: string;
+const tmp = tmpRoot("dcslog-");
 const tailers: LogTailer[] = [];
 
 afterEach(() => {
   for (const t of tailers.splice(0)) t.stop();
   hooks.openFailures = 0;
-  if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 function makeTailer(opts: LogTailerOptions): LogTailer {
@@ -53,9 +52,9 @@ async function waitFor(pred: () => boolean, timeoutMs = 3000): Promise<void> {
   }
 }
 
+/** A log path in a scratch directory of its own — the file need not exist. */
 function tmpFile(): string {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcslog-"));
-  return path.join(tmpDir, "dcs.log");
+  return path.join(tmp.make(), "dcs.log");
 }
 
 describe("LogTailer", () => {
@@ -207,8 +206,7 @@ describe("LogTailer", () => {
   });
 
   it("reports a missing file, then transitions to ok once it appears (with backfill)", async () => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcslog-"));
-    const file = path.join(tmpDir, "dcs.log");
+    const file = tmpFile();
     const states: string[] = [];
     const lines: string[] = [];
     const tailer = makeTailer({
@@ -332,8 +330,7 @@ describe("LogTailer", () => {
       // portable produces "stats fine, will not open": the alternatives need an
       // ACL, a foreign process holding an exclusive handle, or a real race
       // between the stat and the open.
-      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcslog-"));
-      const file = path.join(tmpDir, "dcs.log");
+      const file = tmpFile();
       fs.mkdirSync(file);
       const states: string[] = [];
       const lines: string[] = [];
