@@ -13,8 +13,9 @@
 
 ```gherkin
 Feature: Product page
-  A two-column page: README and metadata on the left, an action card
-  and install facts on the right.
+  A two-column page: README, metadata and the install-manifest breakdown in
+  the main column; an action card, required modules and download details in
+  the aside.
 
   Background:
     Given the user opened a mod from the storefront
@@ -28,6 +29,9 @@ Feature: Product page
     Scenario: Rendered content
       Then the page shows the avatar, name, "by <author>", star count,
         and the latest release tag when one exists
+      And a release-recency chip beside the tag (e.g. "3 days ago")
+      And a risk-badge row above the description when the manifest warrants it
+        ("links-files", "runs-executable", "pre-sanitize-script")
       And the repository README rendered as formatted text
       And "This repo has no README." when none exists
       And a "View on GitHub ↗" footer button
@@ -89,12 +93,16 @@ Feature: Product page
       And the missing payload is only reported after the click, as
         "This release has no .7z payload to install."
 
-  Rule: The aside states the install facts
+  Rule: The page states the install facts
 
-    Scenario: Install plan
-      Given the release manifest declares [[symlink]] rules
-      Then an "Install plan" card lists each rule as
-        source → resolved absolute destination on this machine
+    Scenario: Install-manifest breakdown
+      Given the release manifest declares install rules
+      Then the main column shows an install-manifest block above the README
+        with four sections, each with a count badge:
+        "Bundled content", "Symlinks" (source → resolved absolute destination
+        on this machine), "Executables" and "Mission scripts"
+      And the Executables section warns
+        "This mod can launch executable programs on your machine…"
 
     Scenario: Required DCS modules
       Given the manifest declares [[requires_module]] entries
@@ -163,8 +171,9 @@ Feature: Product page
 
 ## Design intent (not yet implemented)
 
-The preview fixtures (`src/marketplace/mockData.ts`) model one behaviour the live page does not yet render:
+One behaviour the live page does not yet render:
 
-- **Owned/missing verdicts** on required DCS modules (green "owned" / red "missing" per module).
+- **Owned/missing verdicts** on required DCS modules (green "owned" / red "missing" per module) — today the card lists bare module ids.
 
-This should be treated as intended future scope for this story.
+This should be treated as intended future scope for this story. (The sample
+catalog that models marketplace data lives in `test/support/mockMarketplace.ts`.)

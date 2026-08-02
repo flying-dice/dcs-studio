@@ -32,7 +32,8 @@ Feature: New Project panel
       When the user creates a project named "my mod" from "<template>"
       Then the project contains <files>
       And every manifest has a [project] block seeded with the name,
-        version 0.1.0 and dcs_min_version 2.9.0
+        version 0.1.0, dcs_min_version 2.9.0, empty author and description,
+        and template = "<template id>"
 
       Examples:
         | template           | files                                                                                      |
@@ -40,6 +41,7 @@ Feature: New Project panel
         | Lua Mission Script | dcs-studio.toml, Scripts/my-mod.lua sample, README.md; bundle + symlink rule → {SavedGames}/Scripts |
         | Lua GameGUI Hook   | dcs-studio.toml, Scripts/Hooks/<ident>_hook.lua, README.md; bundle + symlink rule → {SavedGames}/Scripts/Hooks |
         | Rust DLL Mod       | dcs-studio.toml (DLL + hook bundle/symlink rules), Cargo.toml, .cargo/config.toml, lua5.1/lua.lib, src/lib.rs, Scripts/Hooks/<ident>_hook.lua, README.md |
+        | Share a Mission    | dcs-studio.toml, Missions/README.md; bundle + symlink rule → {SavedGames}/Missions/<slug>.miz |
 
     Scenario: Names become safe identifiers
       Given the project name contains spaces or punctuation
@@ -66,7 +68,11 @@ Feature: New Project panel
     Scenario: No folder is open
       Then only new-folder mode is available
       And the user must pick a Location (Browse… opens a native folder picker)
-      And the default location suggestion is the last-used location or ~/DCSStudio
+      And the Location starts empty, showing
+        "Choose where to create the project…"
+      And the picker opens at the last-used location, else ~/DCSStudio
+      # The last-used/~/DCSStudio value only prefills the field when a
+      # folder IS open; with no folder it seeds the picker's start directory.
 
     Scenario: Live path preview
       Then the panel previews where files will be written as "→ <path>"

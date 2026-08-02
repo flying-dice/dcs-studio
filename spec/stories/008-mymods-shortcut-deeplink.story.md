@@ -9,7 +9,7 @@
 ## Context
 
 - Entry points: command **"DCS Studio: Add My Mods Shortcut (Desktop / Start Menu)"** (`dcs.mymods.createShortcut`) and the **"Add shortcut"** button in the My Mods panel header.
-- The shortcut launches VS Code with `--new-window --open-url -- vscode://dcs-studio.dcs-studio/mymods`; the extension's URI handler routes the deep link.
+- The shortcut launches VS Code with `--new-window --open-url -- vscode://dcs-studio.dcs-studio/mymods` (the scheme and extension id come from `vscode.env.uriScheme` / the extension's own id, so on Insiders it is `vscode-insiders://…`); the extension's URI handler routes the deep link.
 
 ```gherkin
 Feature: Creating the My Mods shortcut
@@ -88,7 +88,8 @@ Feature: Creating the My Mods shortcut
     Given the extension's global storage is not writable
     When the user confirms a location
     Then the command aborts before any .lnk is written, and no shortcut appears
-    And the user is told why # UNVERIFIED: the icon write is unguarded and the command is invoked fire-and-forget, so today the rejection escapes as an unhandled promise rejection with no notification at all
+    And an error reads
+      "Couldn't create the shortcut — its icon could not be written: <reason>"
 
 Feature: The mymods deep link
   vscode://dcs-studio.dcs-studio/mymods always lands in a clean,

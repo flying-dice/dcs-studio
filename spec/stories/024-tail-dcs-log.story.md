@@ -30,7 +30,7 @@ Feature: DCS Log viewer
     Scenario: dcs.log is missing
       Then a hint pane explains dcs.log wasn't found, referencing the
         configured Saved Games path
-      And an "Open Settings" button opens DCS Studio's settings
+      And an "Open Settings" button opens the DCS Studio Setup panel (dcs.setup.open)
       When the file later appears
       Then the hint pane is replaced by the live tail, backfilled
 

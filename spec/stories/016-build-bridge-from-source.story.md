@@ -8,7 +8,7 @@
 
 ## Context
 
-- Command: **"DCS Studio: Build Bridge (cargo)"** (`dcs.bridge.build`). The extension ships a prebuilt DLL, so this is only needed after editing `bridge/`.
+- Command: **"DCS Studio: Build Bridge (cargo)"** (`dcs.bridge.build`). The extension ships prebuilt DLLs, so this is only needed after editing `bridge/`.
 - Output streams to an Output channel named **"DCS Studio Bridge Build"**; a non-cancellable notification spinner shows while building.
 
 ```gherkin

@@ -30,10 +30,13 @@ Feature: One-click mod install
         | Phase    | Label                                |
         | download | Downloading <asset> (<i>/<n>) with a percentage bar |
         | extract  | Extracting payload…                  |
+        | done     | Subscribed (downloaded & unpacked).  |
         | link     | Linking into DCS…                    |
         | done     | Installed.                           |
       And the card flips to the "Installed" state with an "Uninstall" button
       And a toast confirms "Installed <name> into your DCS folders."
+      And enabling regenerates both mission-script aggregator files under
+        "<SavedGames>\Scripts" from the full set of enabled subscriptions
 
     Scenario: Multi-volume payloads
       Given the release payload is split into .7z.001, .7z.002, … volumes
@@ -87,7 +90,12 @@ Feature: One-click mod install
       Given extraction succeeded into the staging folder
       When renaming it over the mod's data dir fails
       Then the install fails with the underlying rename error
-      And the staged copy is removed rather than left occupying the disk
+      And the previous payload is moved back into place from "<dir>.previous"
+      And the staged copy at "<dir>.unpacking" is deliberately kept — deleting
+        a complete payload is this method's one forbidden move; the next
+        attempt clears that fixed name before extracting
+      And if the restore also fails, both copies are kept and the error names
+        both paths with manual-recovery instructions
       And no ledger entry is written for the new tag
 
     @chaos
@@ -266,6 +274,17 @@ Feature: Uninstall from the product page
     And the card returns to the "Install" state
 
   @chaos
+  Scenario: A link DCS holds open survives the unlink
+    Given DCS holds one of the mod's links open
+    When the user clicks "Uninstall"
+    Then the surviving link is detected after the unlink pass
+    And the payload is NOT deleted and the ledger entry is kept with
+      enabled forced back to true, so the state stays coherent and retryable
+    And the aggregator files are regenerated
+    And the error reads "<N> of <M> link(s) could not be removed — close DCS
+      and try again. Still linked: …"
+
+  @chaos
   Scenario: The unpacked folder cannot be deleted
     Given DCS or another process holds a file open in the mod's unpacked folder
     When the user clicks "Uninstall"
@@ -274,8 +293,8 @@ Feature: Uninstall from the product page
     And the failure is shown inline on the card, without an error notification
     And the mod is still recorded as installed while its links are gone
     # UNVERIFIED: whether leaving the ledger entry (rather than rolling the
-    # links back) is intended — uninstall unlinks first and deletes second,
-    # with no compensation if the delete throws.
+    # links back) is intended — the folder-delete step specifically has no
+    # compensation if the delete throws (a surviving *link* is handled above).
 
   @chaos
   Scenario: Uninstalling a mod that is no longer in the ledger

@@ -28,6 +28,9 @@ Feature: My Mods panel
       And each installed mod shows its name, repo, release tag,
         an enable/disable toggle, and a status pill:
         "<n> links" (green) when enabled or "disabled" (muted) when off
+      And an install-manifest breakdown (bundles / symlinks / executables /
+        mission scripts) derived from the ledger snapshot, destinations shown
+        as their declared tokens
 
     Scenario: Empty state
       Given no mods are installed
@@ -40,6 +43,9 @@ Feature: My Mods panel
         that is not a ledger object at all
       When the user opens My Mods
       Then the unreadable file is preserved as "subscriptions.json.corrupt"
+      And the current "uninstall-all.bat" is copied to
+        "uninstall-all.bat.corrupt", because the next install would rewrite
+        the live script from an almost-empty ledger
       And a warning names that file, because it is the only remaining record
         of the links still in the DCS folders
       And "uninstall-all.bat" is NOT regenerated from the empty read, so it
@@ -218,6 +224,11 @@ Feature: My Mods panel
         the row acts on the ledger entry, not on what is on disk
 
   Rule: Entrypoints run a stranger's executable, so the path is always shown
+
+    Scenario: Entrypoint rows only exist while the mod is enabled
+      Given a mod declares [[entrypoint]] rows
+      Then Launch/Stop rows render only when the mod is enabled —
+        a disabled mod shows no Launch button at all
 
     @chaos
     Scenario: Launching an entrypoint whose exe is missing

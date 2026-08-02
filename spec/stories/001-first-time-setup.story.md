@@ -195,8 +195,11 @@ Feature: DCS path setup
     Scenario Outline: A browsed path that fails its role probe is still accepted
       When the user browses to <path> for the <card> card
       Then the path is placed in that card's field
-      And no validity line is shown for it, because the panel only claims
-        validity for paths it detected itself
+      And a red ⚠ validity line is shown in the role's own words —
+        "no Config folder — run DCS once, or pick another folder" for userdata,
+        "no bin\DCS.exe in this folder" for the installation
+        (only a hand-typed path shows no line, because it was never probed;
+        the data-dir and 7-Zip cards never show a validity line at all)
       And "Save DCS paths" stays available
 
       Examples:

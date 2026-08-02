@@ -27,7 +27,7 @@ Feature: Documentation panel
         | Getting Started | Welcome to DCS Studio                                                   |
         | Mod Manager     | Finding Mods, Installing Mods, What Is a Mod Bundle?, Updating & Uninstalling |
         | Creating Mods   | Creating a Project, dcs-studio.toml Reference, Publishing Your Mod      |
-        | Tools           | DCS Console, MissionScripting Sanitization, Lua Debugger, The Bridge — Inject/Launch, Settings & Paths |
+        | Tools           | DCS Console, DCS Unit Database, MissionScripting Sanitization, Scripting Sandbox & Trust, Lua Debugger, The Bridge (Inject / Launch), Settings & Paths |
 
     Scenario: First open lands on the overview
       Given the user has never viewed a docs page
@@ -62,14 +62,15 @@ Feature: Documentation panel
     Scenario Outline: A page id that does not exist
       Given the bundled content has no page with the id "<id>"
       When the panel is asked for it <via>
-      Then the "Welcome to DCS Studio" page renders instead
-      And the body is never left blank
+      Then <outcome>
 
       Examples:
-        | id           | via                                        |
-        | renamed-away | as a deep link on first open               |
-        | no-such-page | as a navigation message to an open panel   |
-        | deleted-page | as the page remembered from the last visit |
+        | id           | via                                        | outcome                                                                        |
+        | renamed-away | as a deep link on first open               | the "Welcome to DCS Studio" page renders instead                               |
+        | deleted-page | as the page remembered from the last visit | the "Welcome to DCS Studio" page renders instead                               |
+        | no-such-page | as a navigation message to an open panel   | nothing renders; the reader stays on their current page and the stored page is not overwritten |
+      # Only the boot paths fall back to Welcome; an unknown id sent to a live
+      # panel is deliberately ignored so the reader's place is never lost.
 
     @chaos
     Scenario: The bundled content fails to load

@@ -31,6 +31,7 @@ Feature: Launcher sidebar navigation
         | My Mods          | Enable, update & remove installed mods   | dcs.mymods.open      |
         | Create a Mod     | Start a new project from a template      | dcs.manifest.author  |
         | DCS Console      | Run Lua in the live sim                  | dcs.bridge.console   |
+        | DCS Log          | Tail dcs.log with filters                | dcs.log.open         |
         | MissionScripting | Sanitization toggle                      | dcs.mission.open     |
         | Agent Skills     | AI skill files for your repo             | dcs.skills.open      |
       And footer rows:
@@ -181,6 +182,16 @@ Feature: Status bar entry points
       | offline              | $(debug-disconnect) DCS: offline | a quick pick offers Launch DCS (with bridge) / Open Lua Console / Inject Bridge |
       | connected, at menu   | $(plug) DCS: at menu             | the Lua console opens directly                                          |
       | mission running (N s) | $(rocket) DCS: mission <N>s      | the Lua console opens directly                                          |
+      | stalled (connected, callbacks not running) | $(debug-pause) DCS: sim idle | the Lua console opens directly                    |
+
+  Scenario: The stalled state pre-empts the other connected states
+    Given a bridge socket is up but DCS is not draining the queue
+      (paused, a briefing screen, or held at a breakpoint)
+    Then the status bar shows "$(debug-pause) DCS: sim idle" with the sim
+      clock deliberately suppressed
+    And this branch is checked before "at menu", "mission <N>s" and
+      "$(warning) DCS: mission (no mission bridge)"
+    # The launcher footer is unaffected — it only receives connected/dcsTime.
 
   Scenario: Offline click routes to the launch entrypoint (story 015)
     Given the GUI bridge is not connected

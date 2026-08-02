@@ -9,7 +9,7 @@
 ## Context
 
 - Command: **"DCS Studio: Launch DCS (with bridge)"** (`dcs.bridge.launch`). Requires `dcsStudio.gameInstallPath`. This is the single implementation — every entrypoint below funnels into the same command.
-- The bridge serves a WebSocket on `ws://127.0.0.1:25569/ws` (GUI bridge) and `ws://127.0.0.1:25570/ws` (mission bridge, up only while a mission is loaded); the extension pings both every 2 s and reconnects automatically with backoff.
+- The bridge serves a WebSocket on `ws://127.0.0.1:<port>/ws` — GUI bridge on `dcsStudio.bridgeGuiPort` (default 25569) and mission bridge on `dcsStudio.bridgeMissionPort` (default 25570, up only while a mission is loaded). The extension pings both every 2 s while they are serving, backing off to 10 s while the sim's Lua pump is stalled, and reconnects automatically with backoff; any reply clears the stall on the spot.
 - Connection state is mirrored in the status bar item, the launcher footer (story 002) and the Lua console header (story 017).
 - "DCS offline" always means the **GUI bridge** is unreachable — it's up whenever DCS runs, so it is the "is DCS running" signal. A mission bridge that's down while the GUI bridge is up (at the menu, or between missions) is never treated as "DCS offline".
 - Beyond the Command Palette, three prominent entrypoints reach the launch command:
@@ -161,7 +161,7 @@ Feature: Prominent launch entrypoints
     When the user clicks it
     Then "dcs.bridge.launch" runs
     And the button reads "Launching…" and is disabled while the launch is in flight
-    And the button disappears once the GUI bridge connects
+    And the button disappears once either bridge connects (story 017)
 
 Feature: Live connection state
 
@@ -174,6 +174,14 @@ Feature: Live connection state
       | unreachable                  | $(debug-disconnect) DCS: offline |
       | connected, at the main menu  | $(plug) DCS: at menu             |
       | connected, mission running   | $(rocket) DCS: mission <N>s      |
+      | connected, sim not pumping   | $(debug-pause) DCS: sim idle     |
+
+  Scenario: A stalled sim outranks menu and mission
+    Given a bridge socket is up but the sim's Lua pump is not draining
+      (a held breakpoint, an ESC pause, a briefing screen)
+    Then the status bar shows "$(debug-pause) DCS: sim idle"
+    And the frozen sim clock is deliberately not shown
+    And this state is never rendered as "DCS: offline" — the socket is alive
 
   Scenario: Transition on boot
     Given DCS is loading
