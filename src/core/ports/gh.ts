@@ -1,6 +1,8 @@
 // Port: GitHub CLI operations used by publish, expressed as intents (no raw
 // command strings). The adapter drives the `gh` CLI.
 
+import type { GhFacts } from "../domain/publishChecks";
+
 /** Outcome of a repo-create attempt (idempotent — reuse when it already exists). */
 export interface GhRepoCreateResult {
   created: boolean;
@@ -36,10 +38,11 @@ export interface GhReleaseEditOptions {
 }
 
 export interface GhPort {
-  /** Whether the gh CLI is available. */
-  isInstalled(): Promise<boolean>;
-  /** Whether gh is signed in. */
-  isAuthed(): Promise<boolean>;
+  /** gh CLI presence + auth, gathered in ONE probe pass. A single method by
+   *  design: separate installed/authed probes each re-ran `gh --version` and
+   *  the network-bound `gh auth status`, doubling a cost measured at seconds
+   *  on a cold machine. */
+  facts(): Promise<GhFacts>;
   /** The signed-in GitHub login, or null. */
   login(): Promise<string | null>;
   /** Create (or reuse) a GitHub repo, optionally pushing. */

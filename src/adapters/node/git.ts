@@ -1,11 +1,12 @@
-import { spawn, spawnSync } from "child_process";
+import { spawn } from "child_process";
 import { gitArgs } from "../../core/domain/cliArgs";
 import type { GitPort } from "../../core/ports/git";
 
 // Node adapter for `GitPort`, driving the `git` CLI. Owns every git process
 // spawn used by the publish flow; the orchestration policy lives in
-// core/app/publishService.ts. The sync probes (hasGitSync/isGitRepoSync) back
-// the GitCli port methods used on the synchronous-feeling adapter paths.
+// core/app/publishService.ts. Every probe is async: the presence/repo probes
+// used to spawn synchronously and froze the extension host while a cold git
+// started up.
 
 interface RunResult {
   code: number;
@@ -13,15 +14,21 @@ interface RunResult {
   stderr: string;
 }
 
-function run(cmd: string, args: string[], cwd: string): Promise<RunResult> {
+function run(cmd: string, args: string[], cwd?: string): Promise<RunResult> {
   return new Promise((resolve) => {
-    const p = spawn(cmd, args, { cwd, windowsHide: true });
-    let stdout = "";
-    let stderr = "";
-    p.stdout.on("data", (d) => (stdout += d.toString()));
-    p.stderr.on("data", (d) => (stderr += d.toString()));
-    p.on("error", (e) => resolve({ code: -1, stdout, stderr: stderr || e.message }));
-    p.on("exit", (c) => resolve({ code: c ?? -1, stdout, stderr }));
+    try {
+      const p = spawn(cmd, args, cwd ? { cwd, windowsHide: true } : { windowsHide: true });
+      let stdout = "";
+      let stderr = "";
+      p.stdout.on("data", (d) => (stdout += d.toString()));
+      p.stderr.on("data", (d) => (stderr += d.toString()));
+      p.on("error", (e) => resolve({ code: -1, stdout, stderr: stderr || e.message }));
+      p.on("exit", (c) => resolve({ code: c ?? -1, stdout, stderr }));
+    } catch (e) {
+      // spawn can throw outright (EACCES, bad options); the probes run as the
+      // publish panel opens and must degrade to "not available", never throw.
+      resolve({ code: -1, stdout: "", stderr: (e as Error).message });
+    }
   });
 }
 
@@ -32,37 +39,15 @@ async function must(cmd: string, args: string[], cwd: string, label: string): Pr
   return r.stdout.trim();
 }
 
-/** Whether git is available on PATH (sync, for the preflight panel). */
-export function hasGitSync(): boolean {
-  try {
-    return !spawnSync("git", gitArgs.version(), { windowsHide: true }).error;
-  } catch {
-    return false;
-  }
-}
-
-/** Whether `root` is inside a git work tree (sync, for the preflight panel). */
-export function isGitRepoSync(root: string): boolean {
-  try {
-    const r = spawnSync("git", gitArgs.isRepo(), {
-      cwd: root,
-      windowsHide: true,
-      encoding: "utf8",
-    });
-    return !r.error && r.stdout.trim() === "true";
-  } catch {
-    return false;
-  }
-}
-
 /** `GitPort` over the git CLI. */
 export class GitCli implements GitPort {
   async isInstalled(): Promise<boolean> {
-    return hasGitSync();
+    return (await run("git", gitArgs.version())).code === 0;
   }
 
   async isRepo(root: string): Promise<boolean> {
-    return isGitRepoSync(root);
+    const r = await run("git", gitArgs.isRepo(), root);
+    return r.code === 0 && r.stdout.trim() === "true";
   }
 
   async init(root: string): Promise<void> {

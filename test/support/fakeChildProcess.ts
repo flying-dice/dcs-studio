@@ -13,9 +13,9 @@ import { EventEmitter } from "node:events";
 //
 // So the seam is the module: each spec does
 //
-//   vi.mock("child_process", () => ({ spawn: ..., spawnSync: ... }))
+//   vi.mock("child_process", () => ({ spawn: ... }))
 //
-// wiring both to a harness from here. What the adapter sees is a real
+// wiring it to a harness from here. What the adapter sees is a real
 // EventEmitter emitting real events in real event-loop order; only the OS is
 // fake. Vitest routes `node:child_process` imports through the same mock, so
 // adapters using either specifier are covered.
@@ -79,51 +79,31 @@ export class FakeChild extends EventEmitter {
   }
 }
 
-/** The shape `spawnSync` returns, as the sync probes read it. */
-export interface FakeSyncResult {
-  status?: number | null;
-  stdout?: string;
-  stderr?: string;
-  error?: Error;
-}
-
-/** Decides what a given spawn does; returning undefined leaves the child live. */
+/** Decides what a given spawn does; returning undefined leaves the child live.
+ *  Throwing models `spawn` itself throwing, which exercises the catch paths. */
 export type SpawnPlanner = (call: SpawnCall) => FakeRun | undefined;
-/** Decides what a given spawnSync returns; throwing exercises the catch paths. */
-export type SyncPlanner = (call: SpawnCall) => FakeSyncResult;
 
 export interface SpawnHarness {
-  /** Every async spawn, in order. */
+  /** Every spawn, in order. */
   readonly calls: SpawnCall[];
-  /** Every sync spawn, in order. */
-  readonly syncCalls: SpawnCall[];
   /** The children handed back, in order — for driving lifecycle by hand. */
   readonly children: FakeChild[];
-  /** Script the async spawns. Default: an immediate clean exit. */
+  /** Script the spawns. Default: an immediate clean exit. */
   plan(fn: SpawnPlanner): void;
-  /** Script the sync spawns. Default: status 0, no error. */
-  planSync(fn: SyncPlanner): void;
   spawn(cmd: string, args?: string[], opts?: Record<string, unknown>): FakeChild;
-  spawnSync(cmd: string, args?: string[], opts?: Record<string, unknown>): FakeSyncResult;
 }
 
 /** A fresh harness; make one per test so recorded calls never leak between them. */
 export function createSpawnHarness(): SpawnHarness {
   const calls: SpawnCall[] = [];
-  const syncCalls: SpawnCall[] = [];
   const children: FakeChild[] = [];
   let planner: SpawnPlanner = () => ({ code: 0 });
-  let syncPlanner: SyncPlanner = () => ({ status: 0, stdout: "", stderr: "" });
 
   return {
     calls,
-    syncCalls,
     children,
     plan(fn) {
       planner = fn;
-    },
-    planSync(fn) {
-      syncPlanner = fn;
     },
     spawn(cmd, args = [], opts = {}) {
       const call: SpawnCall = { cmd, args, opts };
@@ -133,11 +113,6 @@ export function createSpawnHarness(): SpawnHarness {
       const run = planner(call);
       if (run) child.play(run, call);
       return child;
-    },
-    spawnSync(cmd, args = [], opts = {}) {
-      const call: SpawnCall = { cmd, args, opts };
-      syncCalls.push(call);
-      return syncPlanner(call);
     },
   };
 }

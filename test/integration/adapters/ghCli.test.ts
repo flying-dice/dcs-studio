@@ -18,82 +18,66 @@ let spawner: SpawnHarness;
 vi.mock("child_process", () => ({
   spawn: (cmd: string, args: string[], opts: Record<string, unknown>) =>
     spawner.spawn(cmd, args, opts),
-  spawnSync: (cmd: string, args: string[], opts: Record<string, unknown>) =>
-    spawner.spawnSync(cmd, args, opts),
 }));
 
-import { GhCli, ghFactsSync, ghLoginSync } from "../../../src/adapters/node/gh";
+import { GhCli } from "../../../src/adapters/node/gh";
 
 beforeEach(() => {
   spawner = createSpawnHarness();
 });
 
-describe("ghLoginSync", () => {
-  it("returns the trimmed login the CLI printed", () => {
+describe("GhCli.login", () => {
+  it("returns the trimmed login the CLI printed", async () => {
     // gh prints a trailing newline; the raw value is shown in the publish panel.
-    spawner.planSync(() => ({ status: 0, stdout: "flying-dice\n" }));
-    expect(ghLoginSync()).toBe("flying-dice");
-    expect(spawner.syncCalls[0]).toMatchObject({
+    spawner.plan(() => ({ code: 0, stdout: "flying-dice\n" }));
+    expect(await new GhCli().login()).toBe("flying-dice");
+    expect(spawner.calls[0]).toMatchObject({
       cmd: "gh",
       args: ["api", "user", "-q", ".login"],
     });
   });
 
-  it("returns null when gh is not installed at all", () => {
-    // spawnSync reports a missing binary via `error`, not a status.
-    spawner.planSync(() => ({ error: new Error("ENOENT"), status: null, stdout: "" }));
-    expect(ghLoginSync()).toBeNull();
+  it("returns null when gh is not installed at all", async () => {
+    // A missing binary is an `error` event, never an exit code.
+    spawner.plan(() => ({ error: new Error("ENOENT") }));
+    expect(await new GhCli().login()).toBeNull();
   });
 
-  it("returns null when gh ran but is not signed in", () => {
-    spawner.planSync(() => ({ status: 1, stdout: "" }));
-    expect(ghLoginSync()).toBeNull();
+  it("returns null when gh ran but is not signed in", async () => {
+    spawner.plan(() => ({ code: 1, stdout: "" }));
+    expect(await new GhCli().login()).toBeNull();
   });
 });
 
-describe("ghFactsSync", () => {
-  it("reports present and authed when gh is installed and signed in", () => {
-    spawner.planSync(() => ({ status: 0 }));
-    expect(ghFactsSync()).toEqual({ present: true, authed: true });
-    expect(spawner.syncCalls.map((c) => c.args)).toEqual([["--version"], ["auth", "status"]]);
+describe("GhCli.facts", () => {
+  it("reports present and authed in ONE pass: one version probe, one auth probe", async () => {
+    // The publish preflight calls this exactly once per pass — a cold
+    // `gh --version` was measured at 9.8s, and `gh auth status` hits the
+    // network, so doubling either is a real UX cost.
+    spawner.plan(() => ({ code: 0 }));
+    expect(await new GhCli().facts()).toEqual({ present: true, authed: true });
+    expect(spawner.calls.map((c) => c.args)).toEqual([["--version"], ["auth", "status"]]);
   });
 
-  it("reports present but not authed when the auth probe exits non-zero", () => {
+  it("reports present but not authed when the auth probe exits non-zero", async () => {
     // The distinction drives the preflight message: "sign in" vs "install gh".
-    spawner.planSync((call) => (call.args[0] === "--version" ? { status: 0 } : { status: 1 }));
-    expect(ghFactsSync()).toEqual({ present: true, authed: false });
+    spawner.plan((call) => (call.args[0] === "--version" ? { code: 0 } : { code: 1 }));
+    expect(await new GhCli().facts()).toEqual({ present: true, authed: false });
   });
 
-  it("reports absent — and never probes auth — when gh is missing", () => {
-    spawner.planSync(() => ({ error: new Error("ENOENT") }));
-    expect(ghFactsSync()).toEqual({ present: false, authed: false });
-    expect(spawner.syncCalls).toHaveLength(1);
+  it("reports absent — and never probes auth — when gh is missing", async () => {
+    spawner.plan(() => ({ error: new Error("ENOENT") }));
+    expect(await new GhCli().facts()).toEqual({ present: false, authed: false });
+    expect(spawner.calls).toHaveLength(1);
   });
 
-  it("reports absent rather than throwing when spawnSync itself blows up", () => {
+  it("reports absent rather than throwing when spawn itself blows up", async () => {
     // Preflight runs on panel open; an exception here would break the panel
     // instead of showing "gh not found".
-    spawner.planSync(() => {
+    spawner.plan(() => {
       throw new Error("EACCES");
     });
-    expect(ghFactsSync()).toEqual({ present: false, authed: false });
-  });
-});
-
-describe("GhCli probes", () => {
-  it("exposes installed/authed/login over the sync probes", async () => {
-    spawner.planSync(() => ({ status: 0, stdout: "pilot\n" }));
-    const gh = new GhCli();
-    expect(await gh.isInstalled()).toBe(true);
-    expect(await gh.isAuthed()).toBe(true);
-    expect(await gh.login()).toBe("pilot");
-  });
-
-  it("reports not-installed and not-authed when gh is absent", async () => {
-    spawner.planSync(() => ({ error: new Error("ENOENT") }));
-    const gh = new GhCli();
-    expect(await gh.isInstalled()).toBe(false);
-    expect(await gh.isAuthed()).toBe(false);
+    expect(await new GhCli().facts()).toEqual({ present: false, authed: false });
   });
 });
 

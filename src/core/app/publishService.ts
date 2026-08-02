@@ -75,16 +75,16 @@ export class PublishService {
   constructor(private readonly ports: PublishPorts) {}
 
   /** Gather the preflight tool facts (7-Zip, git, gh presence/auth) via the
-   *  ports, so the Publish panel reaches them through this service. */
+   *  ports, so the Publish panel reaches them through this service. One probe
+   *  per tool per pass: `gh.facts()` answers presence and auth together. */
   async toolFacts(): Promise<PublishToolFacts> {
     const { archive, git, gh } = this.ports;
-    const [sevenZip, gitAvailable, present, authed] = await Promise.all([
+    const [sevenZip, gitAvailable, ghFacts] = await Promise.all([
       archive.available(),
       git.isInstalled(),
-      gh.isInstalled(),
-      gh.isAuthed(),
+      gh.facts(),
     ]);
-    return { sevenZip, gitAvailable, gh: { present, authed } };
+    return { sevenZip, gitAvailable, gh: ghFacts };
   }
 
   /** The URL of `root`'s `remote` (default `origin`), or null — routed through
