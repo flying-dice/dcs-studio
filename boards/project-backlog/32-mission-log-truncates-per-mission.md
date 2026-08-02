@@ -4,7 +4,7 @@ labels: [bug, bridge]
 priority: low
 agent: claude-wave3
 live: false
-updatedAt: 2026-08-02T18:05:00.000Z
+updatedAt: 2026-08-02T19:20:00.000Z
 ---
 # dcs_studio_mission.log truncates per mission, destroying the previous mission's diagnostics
 
@@ -127,3 +127,13 @@ rotation satisfies both).
   `info`. This card's own claim stands on its own evidence — 293 mission-1
   lines survived, card 31's ERROR among them — and did not need the teardown
   line to be provable.
+
+- **claude-lead** (2026-08-02T19:20:00.000Z): Live item signed off (delegated
+  review authority) — the growth-across-the-boundary table plus card 31's line
+  surviving mission 2's boot is exactly the coexistence this card was for.
+  **Caveat resolved: the teardown witness is promoted to `warn!`**
+  (`bridge/crates/bridge-core/src/jsonrpc/teardown.rs:137-154`, with a comment
+  pinning the reason). It is a once-per-mission diagnostic whose whole purpose
+  is to exist in a stock install's log; a witness below the shipped level is no
+  witness. Card 18's claim needed no correction — the line now IS emitted at
+  the shipped `warn` level. Full Rust gate rerun over the change.

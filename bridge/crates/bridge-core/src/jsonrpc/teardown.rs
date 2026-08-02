@@ -68,7 +68,7 @@
 
 use crate::jsonrpc::router::JsonRpcRouter;
 use crate::jsonrpc::server::JsonRpcServer;
-use log::info;
+use log::warn;
 
 /// What the bridge tells a stranded caller when its Lua state went away without
 /// asking — the `Drop`-from-`lua_close` path.
@@ -134,20 +134,24 @@ pub(crate) fn release(
         None
     };
 
-    info!(
+    // `warn!`, not `info!`: the product ships at `logger_level = "warn"`, and
+    // this line is card 18's designated in-log witness of a clean unload — a
+    // once-per-mission line that must exist on a stock install (card 32's live
+    // session found it silently absent at `info!`).
+    warn!(
         "teardown ({reason}): released {handlers} Lua handler(s), \
          failed {failed} queued request(s)"
     );
     match stopped {
-        Some(stop) => info!(
+        Some(stop) => warn!(
             "teardown ({reason}): stopped the mission HTTP server on port {} \
              (server thread exited: {}) — the next mission binds a fresh one",
             stop.port, stop.system_exited
         ),
         None if server.serves_mission_state() => {
-            info!("teardown ({reason}): the mission HTTP server had already stopped");
+            warn!("teardown ({reason}): the mission HTTP server had already stopped");
         }
-        None => info!(
+        None => warn!(
             "teardown ({reason}): the GUI bridge's server is left serving — its \
              state outlives every mission"
         ),

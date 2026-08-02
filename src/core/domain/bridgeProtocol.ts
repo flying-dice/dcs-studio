@@ -123,6 +123,14 @@ export const PING_TIMEOUT_MS = 4000;
  * spot and restores the fast cadence. The slow case is therefore an idle editor
  * whose user is watching only the status bar, and 10 s of a truthful "sim idle"
  * is a far smaller lie than 2 s pings into a queue that cannot drain.
+ *
+ * The other direction — serving → stalled — is NOT "~2 s": measured live at
+ * 2–8 s (card 33's journal). The bridge queues rather than refuses until the
+ * pump has been idle ~2 s, so a ping landing inside that window is queued, its
+ * lone timeout is deliberately ignored (see `PING_TIMEOUT_MS`), and only the
+ * NEXT ping is refused: worst case 2 + 4 + 2 ≈ 8 s. Do not "fix" this by
+ * treating a lone timeout as stall evidence — that rule exists on its own
+ * grounds and both states are truthful throughout.
  */
 export const PING_STALLED_INTERVAL_MS = 10000;
 

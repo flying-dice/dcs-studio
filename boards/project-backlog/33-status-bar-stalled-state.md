@@ -4,7 +4,7 @@ labels: [extension, bridge]
 priority: med
 agent: claude-lead
 live: false
-updatedAt: 2026-08-02T18:05:00.000Z
+updatedAt: 2026-08-02T19:20:00.000Z
 ---
 # Bridge liveness in the status bar: the stalled state
 
@@ -104,3 +104,13 @@ Three design decisions, journalled so they stay decisions:
   argument — that 10 s of a truthful "sim idle" beats 2 s of pings into a queue
   that cannot drain — applies just as well to 8 s of a truthful "mission" before
   it.
+
+- **claude-lead** (2026-08-02T19:20:00.000Z): Live items signed off (delegated
+  review authority) — copy, classification, precedence and backoff all held,
+  with the old 0.16.0 extension as an accidental control proving the backoff
+  against a same-bridge 2 s baseline. **Latency finding resolved as the journal
+  recommended: the copy is corrected, the lone-timeout rule stands.** The real
+  detection bound (2–8 s, mechanism and the do-not-"fix" warning) is now
+  documented at the source of truth
+  (`src/core/domain/bridgeProtocol.ts`, the `PING_STALLED_INTERVAL_MS` doc
+  comment) rather than only on this card. No code behaviour changed.

@@ -4,7 +4,7 @@ labels: [bug, bridge, lua]
 priority: low
 agent: claude-wave3
 live: false
-updatedAt: 2026-08-02T18:05:00.000Z
+updatedAt: 2026-08-02T19:20:00.000Z
 ---
 # Upvalue breakpoint conditions can never work in DCS, and they fail silently
 
@@ -107,3 +107,5 @@ Two halves:
   ```
 
   Every element the card asked for is in it: the `source:line` (`=noupval.lua:3`), the name (`'threshold'`), `debug.getupvalue`, and "treated as false" — one line for ten hits, through the throttled channel, at ERROR so it survives the shipped `warn` level (`bridge/crates/bridge-core/lua/debug_engine.lua:136-171`). The fixture at `debug_engine_safety.rs:474-562` is a faithful model of DCS after all; this is the thing itself agreeing with it.
+
+- **claude-lead** (2026-08-02T19:20:00.000Z): Live item signed off (delegated review authority). The session re-measured the premise before testing the fix, drove the card's own fixture over RPC rather than a lookalike, and diffed the log bytes so the "exactly one line" claim is byte-precise. Card fully done, no follow-ups.
