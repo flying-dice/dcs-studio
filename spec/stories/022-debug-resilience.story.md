@@ -68,6 +68,14 @@ Feature: The sim is never held hostage
     Then the editor can still inspect, step and evaluate
       because the bridge keeps serving requests on a background thread
 
+  Scenario: A held pause is visible as "sim idle", not "mission"
+    Given execution is held at a mission breakpoint
+    Then the GUI bridge's frame drain stops and the bridge answers -32002
+    And the status bar shows "$(debug-pause) DCS: sim idle" rather than
+      "DCS: mission <N>s"
+    And the state clears on the first served call (a step, an eval) rather
+      than waiting out the stalled 10 s ping cadence
+
   Scenario: Bridge disconnects mid-session
     Given a debug session is running
     When the bridge connection is lost

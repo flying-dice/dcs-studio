@@ -57,10 +57,9 @@ Feature: Manifest form panel
       When the document changes from outside — a raw-text edit, an undo,
         or a revert
       Then the form re-seeds from the document, discarding the pending change
-      And when the debounce fires it emits the re-seeded text, which equals
-        the document, so the host applies no edit
+      And the pending debounce timer is cancelled outright when the external
+        change arrives, so the form's stale model is never emitted
       And the user's keystroke is lost silently
-        # UNVERIFIED: read off the debounce closure in media/manifest.js re-reading state.model at fire time and formPanel.ts skipping an identical edit; no test drives the two events into that window
 
     @chaos
     Scenario: The form's own edit is not fed back to it
@@ -98,6 +97,18 @@ Feature: Manifest form panel
         and a live "→ <resolved absolute path>" preview
       And a rule under {GameInstall} with no configured game install path
         shows "⚠ {GameInstall} not configured"
+
+    Scenario: Executables
+      Then the Executables ([[entrypoint]]) card lets the user add and remove
+        entries with an id and an exe path
+      And validation flags "Executable N: exe is not inside any bundled path."
+        and "Executable N: duplicate id \"<id>\"."
+
+    Scenario: Mission scripts
+      Then the Mission scripts ([[mission_script]]) card lets the user add and
+        remove entries
+      And validation flags an empty name/path and a script not inside any
+        bundled path
 
     Scenario: Required modules
       Then the [[requires_module]] card captures a Module id and optional Name

@@ -29,6 +29,8 @@ Feature: Publish preflight
       | Bundle paths    | warn: "No [[bundle]] paths — the release will ship only the manifest." |
       | Bundle paths    | "N of M bundle path(s) missing — build the project first." or "N bundle path(s) are symlinks (refused by the packager)." |
       | Symlink coverage | "N symlink source(s) not inside any [[bundle]] path."                |
+      | Executables     | "N entrypoint exe(s) not inside any [[bundle]] path." / "N duplicate entrypoint id(s) …" |
+      | Mission scripts | script not inside any [[bundle]] path / invalid run_on / empty name  |
       | 7-Zip           | "7z not found. Install 7-Zip (7-zip.org) and retry."                 |
       | git             | "git not found on PATH."                                             |
       | GitHub CLI      | "gh not found. Install from cli.github.com." / "gh is not signed in. Run: gh auth login" |
@@ -55,13 +57,11 @@ Feature: Publish preflight
       by this process
 
   @chaos
-  Scenario: A [project] name written as a TOML number breaks preflight
+  Scenario: A [project] name written as a TOML number
     Given the manifest carries name = 2024 — a valid TOML integer,
       not a quoted string
-    Then computing the checks throws, because the name check calls trim()
-      on a number
-    And the panel never receives its checks, so it renders nothing
-      the user can act on # UNVERIFIED: the TypeError from computePreflight is confirmed by direct evaluation; the resulting panel state follows from pushInit() rejecting under `void`, and was not observed
+    Then the parser normalises the value to its literal source text "2024"
+    And the Project name check is simply green, exactly as the form shows it
 
   @chaos
   Scenario: A bundle path that exists but is a symlink
@@ -105,7 +105,8 @@ Feature: Step 1 — Share to GitHub
       creates the public repo and pushes,
       and tags the repo with the "dcs-studio" topic
     And the result reads "Shared → <owner>/<name>. Create a release below."
-    And the release step's Repo field is prefilled
+    And the release step's Repo field is prefilled — but only when it is
+      empty; a repo the user typed is never overwritten
 
   Scenario: Repo already exists on GitHub
     Given a repo with that name already exists

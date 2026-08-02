@@ -110,10 +110,13 @@ Feature: Starting a debug session
   Scenario: The sim is paused in DCS when the session starts
     Given a mission is loaded but the sim is paused
     When a mission-environment session starts
-    Then its setup calls queue behind the mission bridge's model-time pump,
-      which does not run while the sim is paused
-    And after the client-side timeout the session aborts with
-      "Cannot start the debug session: Mission bridge call 'debug_state' timed out"
+    Then the bridge refuses the setup call outright — the pump has been idle,
+      so it answers with its pump-stalled error (-32002) instead of queueing
+    And the session aborts with "Cannot start the debug session: <bridge refusal>"
+    And the reason goes to the Debug Console only — an expected bridge answer
+      earns no "Report Issue" toast
+    And the client-side 5 s debug_state timeout remains only as the fallback
+      when nothing answers at all
     And the registry is left alone, because an engine that cannot be asked
       may well belong to a session that is still using it
     And debug_run is never sent
