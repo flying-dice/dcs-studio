@@ -36,17 +36,11 @@ const CANDIDATES = [
 /** Whether a 7z candidate is usable: an absolute/path form must exist on disk; a
  *  bare command must run. */
 function usable(c: string): boolean {
-  const t = Date.now();
+  if (/[\\/]/.test(c)) return fs.existsSync(c);
   try {
-    if (/[\\/]/.test(c)) return fs.existsSync(c);
-    try {
-      return !spawnSync(c, [], { windowsHide: true }).error;
-    } catch {
-      return false;
-    }
-  } finally {
-    process.stderr.write(`PROBE usable(${c}): ${Date.now() - t}ms
-`);
+    return !spawnSync(c, [], { windowsHide: true }).error;
+  } catch {
+    return false;
   }
 }
 

@@ -6,7 +6,9 @@ on:
 
 jobs:
   probe-windows:
-    name: Probe activation test (Windows)
+    # Mirrors the real "Shipping target (Windows)" test steps to verify the
+    # activation-test fix on windows-latest before it reaches develop.
+    name: Probe unit + integration (Windows)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,5 +17,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - name: Activation integration test with probe timings
-        run: npx vitest run -c vitest.integration.config.ts test/integration/extension/activation.test.ts
+      - name: TypeScript compile
+        run: npm run compile
+      - name: Unit + integration on the shipping OS
+        run: npm run test:unit && npm run test:integration

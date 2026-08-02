@@ -50,6 +50,56 @@ vi.mock("../../../src/install/shortcut", async (importOriginal) => ({
   },
 }));
 
+// Opening the Publish and Setup panels probes the real CLIs — `7z`, `git
+// --version`, `gh --version` and `gh auth status` — through SYNCHRONOUS spawns
+// (find7z / hasGitSync / ghFactsSync), and `gh auth status` goes to the
+// network. On a cold windows-latest runner the first `gh --version` alone was
+// measured at 9.8s (CI run 30763593695), which timed the panel-commands test
+// out at 5000ms and leaked its continuation into the next two tests. The
+// probes are adapter behaviour with their own specs (adapters/sevenZip,
+// adapters/gitCli, adapters/systemProbes); here the subject is the composition
+// root's wiring, so the tool adapters answer instantly instead of spawning.
+vi.mock("../../../src/adapters/node/sevenZip", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/adapters/node/sevenZip")>()),
+  SevenZipArchive: class {
+    constructor(private readonly configuredPath?: () => string | undefined) {}
+    // The composition root's job — handing the sevenZipPath reader in — is
+    // still exercised; only the CLI probe behind it is skipped.
+    available = (): Promise<string | null> => Promise.resolve(this.configuredPath?.() ?? null);
+    extract = (): Promise<void> => Promise.reject(new Error("7z stubbed in activation tests"));
+    packagePayload = (): Promise<never> =>
+      Promise.reject(new Error("7z stubbed in activation tests"));
+  },
+}));
+vi.mock("../../../src/adapters/node/git", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../../src/adapters/node/git")>();
+  return {
+    ...original,
+    GitCli: class extends original.GitCli {
+      override isInstalled(): Promise<boolean> {
+        return Promise.resolve(false);
+      }
+    },
+  };
+});
+vi.mock("../../../src/adapters/node/gh", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../../src/adapters/node/gh")>();
+  return {
+    ...original,
+    GhCli: class extends original.GhCli {
+      override isInstalled(): Promise<boolean> {
+        return Promise.resolve(false);
+      }
+      override isAuthed(): Promise<boolean> {
+        return Promise.resolve(false);
+      }
+      override login(): Promise<string | null> {
+        return Promise.resolve(null);
+      }
+    },
+  };
+});
+
 import * as vscode from "vscode";
 import { ConsolePanel } from "../../../src/bridge/consolePanel";
 import { DocsPanel } from "../../../src/docs/docsPanel";
@@ -365,32 +415,15 @@ describe("manifest commands", () => {
 
 describe("panel commands", () => {
   it("opens the marketplace, my mods, publish, setup, skills and log panels", async () => {
-    // PROBE: per-command wall-clock timing (temporary, ci-probe branch only).
-    const t0 = Date.now();
-    let last = t0;
-    const mark = (label: string) => {
-      const now = Date.now();
-      process.stderr.write(`PROBE ${label}: +${now - last}ms (total ${now - t0}ms)
-`);
-      last = now;
-    };
     await activateExtension();
-    mark("activate");
 
     await run("dcs.marketplace.open");
-    mark("marketplace");
     await run("dcs.mymods.open");
-    mark("mymods");
     await run("dcs.publish.open");
-    mark("publish");
     await run("dcs.setup.open");
-    mark("setup");
     await run("dcs.skills.open");
-    mark("skills");
     await run("dcs.log.open");
-    mark("log");
     await run("dcs.bridge.console");
-    mark("console");
 
     expect(titles()).toEqual([
       "DCS Marketplace",
@@ -401,7 +434,7 @@ describe("panel commands", () => {
       "DCS Log",
       "DCS Lua Console",
     ]);
-  }, 30000);
+  });
 
   it("opens the docs at the requested page", async () => {
     await activateExtension();
