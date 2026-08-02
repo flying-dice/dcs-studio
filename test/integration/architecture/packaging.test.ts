@@ -58,6 +58,17 @@ describe("the compiled output directory", () => {
     expect(pkg.scripts["vscode:prepublish"]).toContain("npm run compile");
   });
 
+  // Card 38: without an `untrustedWorkspaces` declaration VS Code's default is
+  // to RUN the extension in untrusted workspaces — and this one spawns
+  // workspace-driven tools (git, gh, 7-Zip, cargo) and writes into DCS
+  // directories. The declaration is a one-key manifest fact nothing else
+  // exercises, so it is pinned here with the rest of what ships.
+  it("declares workspace trust required, with the reason", () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+    expect(pkg.capabilities.untrustedWorkspaces.supported).toBe(false);
+    expect(pkg.capabilities.untrustedWorkspaces.description).toMatch(/trust/i);
+  });
+
   // The behavioural half. Driven against a scratch directory rather than the
   // real `out/`, so it neither depends on nor destroys the build the rest of
   // this suite reads.
