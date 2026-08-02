@@ -123,13 +123,23 @@ describe("showError", () => {
 
   it("opens a prefilled issue when Report Issue is chosen", async () => {
     state.messageReplies.push("Report Issue");
-    await showError("Install failed", new Error("disk full"));
+    // Pin the stack: a real one's length depends on how deep the repo is
+    // checked out (every frame carries the absolute path), and a deep enough
+    // checkout would push it over the truncation cap — making which arm of
+    // the truncation branch runs depend on the checkout path. Both arms are
+    // exercised deterministically: the short one here, the long one below.
+    const error = new Error("disk full");
+    error.stack = "Error: disk full\n    at install (extension.ts:1:1)";
+    await showError("Install failed", error);
 
     const url = state.openedExternal[0];
     expect(url).toContain("https://github.com/o/r/issues/new?labels=bug");
     const body = decodeURIComponent(new URL(url).searchParams.get("body") ?? "");
     expect(body).toContain("Install failed");
     expect(body).toContain("disk full");
+    // A stack under the cap goes in whole, untruncated.
+    expect(body).toContain("at install (extension.ts:1:1)");
+    expect(body).not.toContain("… (truncated)");
     expect(body).toContain("- DCS Studio: 0.16.0");
     expect(body).toContain("- VS Code: 1.125.0");
     expect(body).toContain("- OS: win32 10.0.22631");
