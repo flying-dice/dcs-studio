@@ -111,6 +111,10 @@ describe("running cargo", () => {
 });
 
 describe("with the real toolchain", () => {
+  // A real cold cargo spawn on a windows-latest runner has been measured
+  // anywhere from 1.6s (CI run 30763059390) to 5.0s (run 30763863385, a
+  // timeout at the 5000ms default) — legitimately slow I/O, so this one test
+  // gets headroom instead of sitting on the cliff.
   it("shells out for real and reports what the toolchain said", async () => {
     // The seam is for these specs; the shipped command has to reach a real
     // cargo. A manifest cargo rejects gets a verdict without a compile.
@@ -120,5 +124,5 @@ describe("with the real toolchain", () => {
 
     expect(state.errors).toEqual([expect.stringContaining("Bridge build failed")]);
     expect(channel().lines.join("")).toContain("cargo exited with code");
-  });
+  }, 30000);
 });
