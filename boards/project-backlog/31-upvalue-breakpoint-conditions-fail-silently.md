@@ -4,7 +4,7 @@ labels: [bug, bridge, lua]
 priority: low
 agent: claude-wave3
 live: false
-updatedAt: 2026-08-02T00:30:00.000Z
+updatedAt: 2026-08-02T18:05:00.000Z
 ---
 # Upvalue breakpoint conditions can never work in DCS, and they fail silently
 
@@ -32,8 +32,7 @@ Two halves:
 - [x] Decide silent-false vs loud-report vs fail-open; implement with tests
       — LOUD REPORT, fail-closed semantics kept
 - [x] Off-sim test with a getupvalue-less state
-- [ ] Live confirm the report line — queued for a future live session (see the
-      journal); nothing off-sim can stand in for DCS's own stripped state
+- [x] Live confirm the report line — confirmed in DCS 2026-08-02 (see journal)
 
 ## Comments
 
@@ -98,3 +97,13 @@ Two halves:
   `dcs_studio_mission.log` for the report — and card 32 (landing in the same commit
   series) is what makes that log survive long enough to read.
 - **claude-lead** (2026-08-02T00:30:00.000Z): Reviewed and approved (delegated review authority). The fail-closed-loud decision is argued correctly against fail-open, the detection honesty (cannot know it IS an upvalue, says so) is the right shape, and the counting-shim test has verified teeth. Live confirmation rides the next sim session per the card-33 pattern. Done.
+
+- **claude-livetrio** (2026-08-02T18:05:00.000Z): **LIVE CONFIRMED in DCS — PASS.** Session on `live-trio`, develop build deployed from the tree (`bridge/deploy/deploy.ps1`), DCS OpenBeta, mission `test.miz`, mission bridge on 25570. First the premise, measured rather than assumed — `eval` in the live mission state returned
+  `getupvalue=nil setupvalue=nil getinfo=function: 00000217073403C0 sethook=function: 00000217073404B0`,
+  so the capability gap card 30 found is still exactly that shape: `getinfo`/`sethook` present, the upvalue pair gone. Then the card's own fixture, driven over RPC rather than in-process: `debug_set_breakpoints` on `=noupval.lua:3` with condition `i == threshold`, then `debug_run` of the same chunk the off-sim test uses (`bridge/crates/bridge-core/tests/debug_engine_safety.rs:511-516`). Result `{"ran":true}`, `hits == 6` (the loop ran untouched, i = 5..10), `debug_state` → `{"paused":false,"running":false}` — fail-CLOSED preserved live, no stop. The mission log grew 39,236 → 39,710 bytes over the run and the new bytes are exactly ONE line, verbatim:
+
+  ```
+  2026-08-02T17:43:25.301078800+01:00 [ERROR] dcs_bridge_core::logger - breakpoint condition at =noupval.lua:3 references 'threshold', which is neither a local of that frame nor a global. This Lua state provides no debug.getupvalue (DCS strips it from both of its states), so an upvalue of that name cannot be read - the condition was treated as false and the breakpoint will not fire. Rewrite the condition over the frame's locals or a global. Reported once per breakpoint.
+  ```
+
+  Every element the card asked for is in it: the `source:line` (`=noupval.lua:3`), the name (`'threshold'`), `debug.getupvalue`, and "treated as false" — one line for ten hits, through the throttled channel, at ERROR so it survives the shipped `warn` level (`bridge/crates/bridge-core/lua/debug_engine.lua:136-171`). The fixture at `debug_engine_safety.rs:474-562` is a faithful model of DCS after all; this is the thing itself agreeing with it.
