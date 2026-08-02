@@ -120,7 +120,7 @@ export class FakeBridge {
       _source: string,
       _code: string,
       _pauseOnError: boolean,
-    ): Promise<{ ran?: boolean; error?: string | null; dispatched?: boolean }> => ({ ran: true }),
+    ): Promise<{ ran?: boolean; error?: string | null }> => ({ ran: true }),
   );
   /** Idle by default — an engine with no session, which is what a starting
    * session's "is anyone else running?" probe has to see to proceed. */

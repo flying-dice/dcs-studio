@@ -305,16 +305,14 @@ export function pollTransition(
 
 /**
  * debug_run resolved (fast-path end for short scripts): finish now unless a
- * pause snapshot is live — then the poll loop owns the outcome. A mission run
- * resolves `{ dispatched: true }` immediately (the resident mission runtime
- * executes it asynchronously — DCS ≥ 2.9.27); the poll loop owns that outcome
- * entirely, including its errors, which arrive via debug_state.
+ * pause snapshot is live — then the poll loop owns the outcome. (Both bridges'
+ * debug_run handlers block until the chunk returns; only the unrelated
+ * mission_boot RPC answers with a fire-and-forget `dispatched`.)
  */
 export function runFastPathDecision(
-  res: { ran?: boolean; error?: string | null; dispatched?: boolean },
+  res: { ran?: boolean; error?: string | null },
   hasSnapshot: boolean,
 ): { finish: boolean; error?: string } {
-  if (res && res.dispatched === true) return { finish: false };
   if (hasSnapshot) return { finish: false };
   return { finish: true, error: res.ran ? undefined : (res.error ?? undefined) };
 }

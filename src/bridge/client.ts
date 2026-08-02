@@ -229,12 +229,12 @@ export class BridgeClient implements DebugBridgePort {
     code: string,
     pauseOnError: boolean,
     timeoutMs = 600_000,
-  ): Promise<{ ran?: boolean; error?: string | null; dispatched?: boolean }> {
+  ): Promise<{ ran?: boolean; error?: string | null }> {
     return this.call(
       "debug_run",
       { env, source, code, pause_on_error: pauseOnError },
       timeoutMs,
-    ) as Promise<{ ran?: boolean; error?: string | null; dispatched?: boolean }>;
+    ) as Promise<{ ran?: boolean; error?: string | null }>;
   }
 
   /** The session poll: paused/running/error + pause snapshot. Also the

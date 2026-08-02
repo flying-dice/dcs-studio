@@ -48,7 +48,7 @@ export interface DebugBridgePort {
     code: string,
     pauseOnError: boolean,
     timeoutMs?: number,
-  ): Promise<{ ran?: boolean; error?: string | null; dispatched?: boolean }>;
+  ): Promise<{ ran?: boolean; error?: string | null }>;
 
   /** The paused snapshot: frames, scopes and why it stopped. */
   debugState(): Promise<DebugState>;

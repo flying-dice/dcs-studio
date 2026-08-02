@@ -495,12 +495,6 @@ describe("runFastPathDecision", () => {
     expect(runFastPathDecision({ ran: true }, true)).toEqual({ finish: false });
   });
 
-  it("defers to the poll loop for a dispatched mission run", () => {
-    // Forwarded to the resident mission runtime (DCS ≥ 2.9.27): the response
-    // says only "dispatched" — outcome and errors arrive via debug_state.
-    expect(runFastPathDecision({ dispatched: true }, false)).toEqual({ finish: false });
-  });
-
   it("finishes cleanly when the short run succeeded", () => {
     expect(runFastPathDecision({ ran: true }, false)).toEqual({ finish: true, error: undefined });
   });

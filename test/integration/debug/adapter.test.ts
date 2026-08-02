@@ -672,16 +672,6 @@ describe("DcsDebugAdapter", () => {
     expect(dap.events("exited")[0].body).toEqual({ exitCode: 1 });
   });
 
-  it("leaves a dispatched mission run to the poll loop", async () => {
-    // The resident mission runtime executes asynchronously (DCS ≥ 2.9.27), so
-    // the immediate ack says nothing about the script's outcome — treating it
-    // as the end would terminate the session before the first line ran.
-    mission.debugRun.mockResolvedValueOnce({ dispatched: true });
-    const dap = await started();
-    expect(dap.events("terminated")).toHaveLength(0);
-    expect(scheduler.liveIntervals).toEqual(expect.arrayContaining([250]));
-  });
-
   it("leaves the outcome to the poll loop when the run call times out", async () => {
     // Sessions longer than the server's 30s response window always land here.
     mission.debugRun.mockRejectedValueOnce(new Error("call 'debug_run' timed out"));

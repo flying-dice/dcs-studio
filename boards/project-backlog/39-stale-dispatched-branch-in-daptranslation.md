@@ -1,10 +1,10 @@
 ---
-column: todo
+column: done
 labels: [debugger, cleanup]
 priority: low
-agent: unassigned
+agent: claude-lead
 live: false
-updatedAt: 2026-08-02T00:00:00.000Z
+updatedAt: 2026-08-02T23:00:00.000Z
 ---
 # Stale `dispatched` fast-path branch in dapTranslation.ts
 
@@ -22,6 +22,18 @@ caller still reaches it), keeping the coverage gates green.
 
 ## Checklist
 
-- [ ] Confirm nothing produces `dispatched` on `debug_run` any more
-- [ ] Remove the dead branch + comment in dapTranslation.ts:306-320
-- [ ] Unit layer stays 100% per file
+- [x] Confirm nothing produces `dispatched` on `debug_run` any more — repo-wide
+      sweep: the only `{ dispatched = true }` producer is the `mission_boot`
+      RPC (`gui_methods.lua:301-306`); both bridges' `debug_run` handlers block
+- [x] Remove the dead branch + comment — and the phantom followed the branch
+      out: `dispatched?` left the port (`debugBridge.ts`), the client
+      (`client.ts`), the integration fake, and the two tests that modeled a
+      response shape the bridge never sends
+- [x] All three JS layers 100% (unit, integration, e2e)
+
+## Comments
+
+- **claude-lead** (2026-08-02T23:00:00.000Z): Done by the lead directly. The
+  branch was not merely dead — it kept a false belief alive in four other
+  files (port type, client type, fake, two tests), each teaching the next
+  reader that a dispatched debug_run exists. All of it went together.
