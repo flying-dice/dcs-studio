@@ -34,10 +34,14 @@ async function must(cmd: string, args: string[], cwd: string, label: string): Pr
 
 /** Whether git is available on PATH (sync, for the preflight panel). */
 export function hasGitSync(): boolean {
+  const t = Date.now();
   try {
     return !spawnSync("git", gitArgs.version(), { windowsHide: true }).error;
   } catch {
     return false;
+  } finally {
+    process.stderr.write(`PROBE hasGitSync: ${Date.now() - t}ms
+`);
   }
 }
 

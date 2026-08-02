@@ -1,0 +1,19 @@
+name: CI probe (temporary)
+
+on:
+  push:
+    branches: [ci-probe]
+
+jobs:
+  probe-windows:
+    name: Probe activation test (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Activation integration test with probe timings
+        run: npx vitest run -c vitest.integration.config.ts test/integration/extension/activation.test.ts

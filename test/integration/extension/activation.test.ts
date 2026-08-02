@@ -365,15 +365,32 @@ describe("manifest commands", () => {
 
 describe("panel commands", () => {
   it("opens the marketplace, my mods, publish, setup, skills and log panels", async () => {
+    // PROBE: per-command wall-clock timing (temporary, ci-probe branch only).
+    const t0 = Date.now();
+    let last = t0;
+    const mark = (label: string) => {
+      const now = Date.now();
+      process.stderr.write(`PROBE ${label}: +${now - last}ms (total ${now - t0}ms)
+`);
+      last = now;
+    };
     await activateExtension();
+    mark("activate");
 
     await run("dcs.marketplace.open");
+    mark("marketplace");
     await run("dcs.mymods.open");
+    mark("mymods");
     await run("dcs.publish.open");
+    mark("publish");
     await run("dcs.setup.open");
+    mark("setup");
     await run("dcs.skills.open");
+    mark("skills");
     await run("dcs.log.open");
+    mark("log");
     await run("dcs.bridge.console");
+    mark("console");
 
     expect(titles()).toEqual([
       "DCS Marketplace",
@@ -384,7 +401,7 @@ describe("panel commands", () => {
       "DCS Log",
       "DCS Lua Console",
     ]);
-  });
+  }, 30000);
 
   it("opens the docs at the requested page", async () => {
     await activateExtension();

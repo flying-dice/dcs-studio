@@ -52,10 +52,16 @@ export function ghLoginSync(): string | null {
 export function ghFactsSync(): GhFacts {
   let present = false;
   let authed = false;
+  const t0 = Date.now();
   try {
     present = !spawnSync("gh", ghArgs.version(), { windowsHide: true }).error;
+    const t1 = Date.now();
+    process.stderr.write(`PROBE gh --version: ${t1 - t0}ms
+`);
     if (present) {
       authed = spawnSync("gh", ghArgs.authStatus(), { windowsHide: true }).status === 0;
+      process.stderr.write(`PROBE gh auth status: ${Date.now() - t1}ms
+`);
     }
   } catch {
     /* not installed */
