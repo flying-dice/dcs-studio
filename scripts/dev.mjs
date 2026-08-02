@@ -24,7 +24,10 @@ if (!existsSync(path.join(sandbox, "README.md"))) {
 }
 
 console.log("› Compiling once…");
-const compile = spawnSync("npm", ["run", "compile"], { cwd: root, stdio: "inherit", shell: true });
+// Single command strings throughout: `npm`/`code`/`npx` are .cmd shims on
+// Windows (so a shell is required), and spawning an args ARRAY through a shell
+// is deprecated (DEP0190).
+const compile = spawnSync("npm run compile", { cwd: root, stdio: "inherit", shell: true });
 if (compile.status !== 0) {
   console.error("Initial compile failed — fix errors and re-run `npm run dev`.");
   process.exit(compile.status ?? 1);
@@ -37,16 +40,16 @@ console.log("› Launching Extension Development Host (this extension only)…")
 // are normal, so an unquoted interpolation splits mid-path and the host opens
 // the wrong folder or fails to launch with nothing that points at quoting.
 // Double quotes are the one form both cmd.exe and sh honour.
-spawn(
-  "code",
-  [`--extensionDevelopmentPath="${root}"`, "--disable-extensions", "--new-window", `"${sandbox}"`],
-  { cwd: root, stdio: "inherit", shell: true },
-);
+spawn(`code --extensionDevelopmentPath="${root}" --disable-extensions --new-window "${sandbox}"`, {
+  cwd: root,
+  stdio: "inherit",
+  shell: true,
+});
 
 console.log("› Watching for changes (edits rebuild out/ and the dev host auto-reloads)…");
 // Also shelled out, but every argument here is a literal — `cwd` is handed to
 // the OS directly rather than through the shell, so there is nothing to quote.
-const watch = spawn("npx", ["tsc", "-watch", "-p", "./"], {
+const watch = spawn("npx tsc -watch -p ./", {
   cwd: root,
   stdio: "inherit",
   shell: true,

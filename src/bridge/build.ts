@@ -37,9 +37,11 @@ export async function buildBridge(
     },
     () =>
       new Promise<void>((resolve) => {
+        // No `shell` — cargo is a real executable (not a .cmd shim), and
+        // spawning args through a shell is deprecated (DEP0190) and a needless
+        // quoting surface.
         const proc = spawnProcess("cargo", ["build", "--release"], {
           cwd: bridgeDir,
-          shell: true,
         });
         proc.stdout.on("data", (d) => out.append(d.toString()));
         proc.stderr.on("data", (d) => out.append(d.toString()));

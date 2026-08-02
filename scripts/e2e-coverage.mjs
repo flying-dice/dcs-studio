@@ -43,10 +43,14 @@ mkdirSync(rawDir, { recursive: true });
 // a locked-down network, a distro build, a shared cache. Skip the download when
 // it is set, since the download would go unused.
 if (!process.env.PW_CHROMIUM_PATH) {
-  const install = spawnSync("npx", ["playwright", "install", "chromium"], {
+  // One command string when a shell is involved: `npx` is `npx.cmd` on
+  // Windows (so a shell is required), and spawning an args ARRAY through a
+  // shell is deprecated (DEP0190). The args are static, so concatenation is
+  // safe.
+  const install = spawnSync("npx playwright install chromium", {
     cwd: root,
     stdio: "inherit",
-    shell: process.platform === "win32",
+    shell: true,
   });
   if (install.status !== 0) {
     console.error(
@@ -58,11 +62,11 @@ if (!process.env.PW_CHROMIUM_PATH) {
   }
 }
 
-const run = spawnSync("npx", ["playwright", "test"], {
+const run = spawnSync("npx playwright test", {
   cwd: root,
   stdio: "inherit",
   env: { ...process.env, E2E_COVERAGE: "1" },
-  shell: process.platform === "win32",
+  shell: true,
 });
 if (run.status !== 0) process.exit(run.status ?? 1);
 

@@ -58,13 +58,14 @@ describe("running cargo", () => {
 
   it("builds the release profile in the bridge workspace", async () => {
     await buildBridge(context(), fakeSpawn());
-    // A debug build produces DLLs the inject step would never find, and the
-    // shell is needed for the Windows `cargo` shim to resolve on PATH.
+    // A debug build produces DLLs the inject step would never find. No shell:
+    // rustup's cargo is a real .exe (not a .cmd shim), spawn resolves it from
+    // PATH directly, and args-through-a-shell is deprecated (DEP0190).
     expect(harness.calls).toEqual([
       {
         cmd: "cargo",
         args: ["build", "--release"],
-        opts: { cwd: tmp.join("bridge"), shell: true },
+        opts: { cwd: tmp.join("bridge") },
       },
     ]);
   });
