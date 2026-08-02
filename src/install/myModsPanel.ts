@@ -13,7 +13,7 @@ import type { MarketplacePort } from "../core/ports/marketplace";
 import { showError } from "../errors";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel, webviewPoster } from "../webview/panel";
 
 // The "My Mods" experience: manage subscribed mods — enable/disable the symlinks,
 // update to a newer release, or uninstall (unsubscribe). Everything the host
@@ -79,7 +79,7 @@ export class MyModsPanel {
         remember: async (key) => void (await context.globalState.update(key, true)),
       },
       dataDir: () => roots.dataDir(),
-      post: (msg) => void this.panel.webview.postMessage(msg),
+      post: webviewPoster(panel),
       effect: (effect) => this.perform(effect),
       confirm: (request) => this.confirm(request),
     });

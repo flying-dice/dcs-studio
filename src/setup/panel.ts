@@ -8,7 +8,7 @@ import type { SetupPaths } from "../core/app/webviewContract";
 import { type DcsCandidate, defaultDataDir } from "../core/domain/dcsDetect";
 import type { ArchivePort } from "../core/ports/archive";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel, webviewPoster } from "../webview/panel";
 
 // The DCS install selector: pick (or browse to) the userdata (Saved Games) and
 // installation folders, with auto-detected candidates. Saves to the
@@ -70,7 +70,7 @@ export class SetupPanel {
       detectedSevenZip: () => archive.available(),
       browse: (request) => this.browse(request),
       exists: (p) => fs.existsSync(p),
-      post: (msg) => void this.panel.webview.postMessage(msg),
+      post: webviewPoster(panel),
       effect: (effect) => this.perform(effect),
     });
     this.panel.webview.html = this.html();

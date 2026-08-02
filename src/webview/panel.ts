@@ -103,6 +103,35 @@ export function createPanel(
  * the part where drift means a leak: a listener left attached to a live signal,
  * or a `current` still pointing at a closed panel so it can never re-open.
  */
+/**
+ * A `post` function for a panel's presenter that goes quiet when the panel
+ * closes, instead of throwing.
+ *
+ * Presenters finish async work — a CLI probe, a marketplace fetch, a poll tick
+ * — and then post the result. The user can close the panel inside that window,
+ * and the real `webview` getter/`postMessage` THROW once the panel is disposed
+ * (`ExtHostWebview.assertNotDisposed`). Because every shell fire-and-forgets
+ * the presenter (`void presenter.refresh()`), that throw surfaces as an
+ * unhandled rejection in the extension host, blamed on nothing the user did.
+ * The publish panel demonstrated it live: its opening preflight spawns
+ * `gh --version` + `gh auth status` (seconds, cold), and closing the panel
+ * mid-probe crossed exactly this line.
+ *
+ * A message to a closed panel has no reader, so dropping it is the correct
+ * semantics, not merely the safe one. Every panel shell builds its presenter's
+ * `post` through this. (The nav sidebar keeps its own equivalent guard: its
+ * `WebviewView` slot is nulled on dispose and posted through `?.`.)
+ */
+export function webviewPoster(panel: vscode.WebviewPanel): (msg: unknown) => void {
+  let disposed = false;
+  panel.onDidDispose(() => {
+    disposed = true;
+  });
+  return (msg) => {
+    if (!disposed) void panel.webview.postMessage(msg);
+  };
+}
+
 export function disposeWithPanel(
   panel: vscode.WebviewPanel,
   teardown: () => void,

@@ -11,7 +11,7 @@ import type { MarketplacePort } from "../core/ports/marketplace";
 import { showError } from "../errors";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel, webviewPoster } from "../webview/panel";
 
 // The full-screen storefront, hosted as a webview panel. The webview owns all
 // view state (grid, product page, search/tag/sort); everything the host decides
@@ -56,7 +56,7 @@ export class MarketplacePanel {
       market,
       auth,
       topic: () => this.topic(),
-      post: (msg) => void this.panel.webview.postMessage(msg),
+      post: webviewPoster(panel),
       effect: (effect) => this.perform(effect),
     });
     this.panel.webview.html = this.html();

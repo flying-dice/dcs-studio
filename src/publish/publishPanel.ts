@@ -5,7 +5,7 @@ import type { PublishService } from "../core/app/publishService";
 import type { ManifestPort } from "../core/ports/manifest";
 import { openExternal } from "../external";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel, webviewPoster } from "../webview/panel";
 import { preflight, readManifest } from "./preflight";
 
 // The Publish panel: preflight checks, "Share to GitHub" (create repo + push),
@@ -57,7 +57,7 @@ export class PublishPanel {
       remoteUrl: (root) => publish.remoteUrl(root, "origin"),
       share: (root, opts, log) => publish.share(root, opts, log),
       cutRelease: (root, opts, log) => publish.cutRelease(root, opts, log),
-      post: (msg) => void this.panel.webview.postMessage(msg),
+      post: webviewPoster(panel),
       effect: (effect) => this.perform(effect),
     });
     this.panel.webview.html = this.html();

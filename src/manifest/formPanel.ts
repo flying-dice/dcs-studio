@@ -4,7 +4,7 @@ import type { ManifestInbound } from "../core/app/manifestPresenter";
 import { ManifestPresenter } from "../core/app/manifestPresenter";
 import type { InstallRootsPort } from "../core/ports/installRoots";
 import { renderWebviewHtml } from "../webview/html";
-import { createPanel, disposeWithPanel } from "../webview/panel";
+import { createPanel, disposeWithPanel, webviewPoster } from "../webview/panel";
 
 // The manifest authoring FORM as a companion webview opened beside the normal
 // text editor — a split view: raw dcs-studio.toml (real editor: TOML syntax +
@@ -64,7 +64,7 @@ export class ManifestFormPanel {
         edit.replace(this.document.uri, new vscode.Range(0, 0, this.document.lineCount, 0), text);
         await vscode.workspace.applyEdit(edit);
       },
-      post: (msg) => void this.panel.webview.postMessage(msg),
+      post: webviewPoster(panel),
     });
     this.panel.webview.html = this.html();
 

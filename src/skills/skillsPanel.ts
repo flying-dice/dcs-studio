@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import type { SkillsConfirm, SkillsEffect, SkillsInbound } from "../core/app/skillsPresenter";
 import { SkillsPresenter } from "../core/app/skillsPresenter";
 import { renderWebviewHtml } from "../webview/html";
-import { activeColumn, createPanel, disposeWithPanel } from "../webview/panel";
+import { activeColumn, createPanel, disposeWithPanel, webviewPoster } from "../webview/panel";
 import type { SkillsLibrary } from "./library";
 
 // The Agent Skills experience: a webview panel listing the skill files the
@@ -55,7 +55,7 @@ export class SkillsPanel {
       installedRef: (id) => manager.installedUri(id)?.toString(),
       bundledRef: (id) => manager.bundledUri(id).toString(),
       confirm: (question) => this.confirm(question),
-      post: (msg) => void this.panel.webview.postMessage(msg),
+      post: webviewPoster(panel),
       effect: (effect) => this.perform(effect),
     });
     this.panel.webview.html = this.html();
