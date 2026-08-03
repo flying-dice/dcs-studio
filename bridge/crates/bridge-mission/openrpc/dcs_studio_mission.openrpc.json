@@ -2,7 +2,7 @@
   "info": {
     "description": "In-DCS DCS Studio JSON-RPC bridge for the mission environment.",
     "title": "dcs-studio-mission",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "x-dcs-env": "mission"
   },
   "methods": [

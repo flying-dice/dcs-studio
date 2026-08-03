@@ -2,7 +2,7 @@
   "info": {
     "description": "In-DCS DCS Studio JSON-RPC bridge for the gui environment.",
     "title": "dcs-studio-gui",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "x-dcs-env": "gui"
   },
   "methods": [
