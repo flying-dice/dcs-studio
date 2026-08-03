@@ -1,11 +1,10 @@
 ---
-column: blocked
+column: done
 labels: [ci, process]
 priority: high
 agent: claude
 live: false
-status: blocked — the ONLY remaining step is one command the harness's permission layer refuses to run for an agent; payload ready, see the journal
-updatedAt: 2026-08-01T12:10:00.000Z
+updatedAt: 2026-08-03T21:55:00.000Z
 ---
 # Protect `main`, and give feature branches CI
 
@@ -26,9 +25,12 @@ integration`), so some of it may already be set — check before changing.
 
 ## Checklist
 
-- [ ] Read the current branch-protection config on `main`
-- [ ] Require the six CI checks (`static`, `unit`, `integration`, `e2e`, `rust`, `windows`)
-- [ ] Require one approving review, applied to admins
+- [x] Read the current branch-protection config on `main` — readable post-apply,
+      verified by GET
+- [x] Require the six CI checks (`static`, `unit`, `integration`, `e2e`, `rust`, `windows`)
+      — strict (branch must be up to date), applied
+- [x] Require one approving review, applied to admins — applied, with
+      `dismiss_stale_reviews: true`; see the journal for who reviews
 - [x] Decide whether `ci.yml` should also fire on `push` to any branch — done via card 15
 
 ## Comments
@@ -38,6 +40,19 @@ integration`), so some of it may already be set — check before changing.
 - **claude** (2026-07-29T07:05:00.000Z): The second half described above is no longer only a suggestion — it is card 15-ci-on-feature-branches, in `todo`, with the trade-off laid out (full matrix vs reduced set vs relying on this card's protection). The two cards interact: if protection lands here first, card 15's pressure drops to process rather than protection. This card itself remains blocked on a repo admin.
 - **sonnet-ci** (2026-07-29T08:00:00.000Z): Card 15's CI half has landed — `.github/workflows/ci.yml:3-11` now triggers `push` on every branch (`branches: ["**"]`), with `static` and `unit` (`.github/workflows/ci.yml:38-77`) running on all of them and `integration`/`e2e`/`rust`/`windows` (`.github/workflows/ci.yml:94,113,145,194`) gated to `pull_request`, `workflow_dispatch`/`workflow_call`, and `push` only when the ref is `main` or `develop`. That closes the zero-check-run half of #68 §4 structurally: every push now gets at least `static`+`unit`, so "commits pushed, issues closed, zero check-runs" (`8059b9a`, `5f7122b`, `d734646`, `bc927a8`) can no longer happen the same way. What remains on THIS card is protection only — checkbox 4 here is done via card 15, checkboxes 1-3 (read current protection config, require the six checks, require one approving review applied to admins) still need a repo admin in the GitHub UI. Card 15 is in `review`.
 - **claude-lead** (2026-08-01T12:10:00.000Z): Close-down attempt under the owner's full delegated authority. The GitHub capability wall is GONE — gh is authenticated as the owner with admin:true — but the Claude Code permission classifier refused the branch-protection PUT twice, and working around a permission layer is off-limits even under a mandate. The deviation from #68's review requirement is deliberate: one human on the repo means required PR review deadlocks the only workflow; required status checks + strict + enforce_admins close the zero-check-run incident #68 SS4 recorded. Run the one command below as yourself and this card is done.
+
+- **claude-lead** (2026-08-03T21:55:00.000Z): **DONE — applied by the owner in
+  an attended session** (`gh api -X PUT .../branches/main/protection`, verified
+  by GET immediately after). The earlier solo-maintainer deviation was
+  superseded by the owner's decision in the same session: their review BOT (a
+  GitHub App account) is the blocking reviewer, so
+  `required_pull_request_reviews` is IN — `required_approving_review_count: 1`
+  + `dismiss_stale_reviews: true` (an approval dies with the next push, which
+  is the right lifetime for an automated review). The API cannot name a
+  reviewer, so the requirement is count-based; the bot's app must hold write
+  access for its approval to count. **Consequence for every future session:
+  direct pushes to `main` are over — develop → main promotion is now a PR the
+  bot reviews.** #68's zero-check-run incident is structurally closed.
 
 ## Ready-to-run payload (protection.json)
 
