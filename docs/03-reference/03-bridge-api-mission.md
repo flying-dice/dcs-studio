@@ -2,7 +2,7 @@
 
 <!-- GENERATED FILE — do not edit. Regenerate with `npm run docs:bridge`. -->
 
-> Generated from [`bridge/crates/bridge-mission/openrpc/dcs_studio_mission.openrpc.json`](../../bridge/crates/bridge-mission/openrpc/dcs_studio_mission.openrpc.json) (bridge v0.3.0,
+> Generated from [`bridge/crates/bridge-mission/openrpc/dcs_studio_mission.openrpc.json`](../../bridge/crates/bridge-mission/openrpc/dcs_studio_mission.openrpc.json) (bridge v0.4.0,
 > OpenRPC 1.3.2, env `mission`). Do not edit by hand —
 > regenerate with `npm run docs:bridge`. See [01-bridge-api.md](01-bridge-api.md) for
 > transports, ports, and how to fetch this document live via `rpc.discover`.
