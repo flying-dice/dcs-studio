@@ -65,10 +65,43 @@ warning treats it exactly like any other section that does not exist.
   silence.
 - A user who wants their DCS globals recognized configures their own Lua tooling.
   The docs may say so plainly; that is documentation, not integration.
-- Nothing in the repo has to be unwound. `src/project/scaffold.ts` emits no lint
-  config today, and there is no `.luarc.json` anywhere in the tree — the
-  position is already implemented by having done nothing, which is why doubling
-  down costs nothing.
+- Nothing in the repo has to be unwound, and this was **swept rather than
+  assumed** (2026-08-05). Across `src/`, `media/`, `docs/`, the templates,
+  `README.md` and `package.json` there is no `.luarc.json`, no luals or luabox
+  config, no `[lint]`/`[globals]` handling, and no reference to LB0509. The
+  scaffolds emit a manifest, Lua sources, a README and — for the Rust template —
+  `Cargo.toml`, `.cargo/config.toml` and `lua5.1/lua.lib`. No editor config
+  among them. The position was already implemented by having done nothing.
+- Two places already state it correctly and are support, not residue:
+  `README.md:159` and `docs/01-getting-started/01-overview.md:42-43`, both of
+  which say the product is not a Lua language server — no autocomplete, no
+  type-checking, no linting — and to pair it with a Lua LSP extension.
+
+### The near neighbour, named deliberately
+
+The sweep did surface one thing that looks like a contradiction and is not, so
+it is recorded here rather than left for someone to rediscover and
+misinterpret.
+
+**The bridge already produces `.d.lua`.** `api_types` returns the generated
+EmmyLua definitions for the bridge's own Lua surface, and an introspection
+method walks the live DCS API in `_G` — `DCS`, `Export`, `net`, `lfs`, `log` for
+the GUI state; `env`, `timer`, `trigger`, `world` for the mission — and returns
+it as dotted `.d.lua` statements. The comment at
+`bridge/crates/bridge-core/lua/gui_methods.lua:61` says outright that this is
+"the live DCS API as `.d.lua` the editor's lua-analyzer indexes".
+
+That is not a violation of this decision, and the line between them is exactly
+the line drawn above: **the bridge produces definitions when asked; the
+extension never installs, writes or wires them into anyone's editor config.**
+Verified — nothing under `src/` or `media/` references `.d.lua` at all. A caller
+who wants those definitions asks for them and does what they like with the
+answer.
+
+This is also the mechanism most likely to feed the separate `.d.lua`
+repository. That remains consistent: generating a resource is not integrating
+with a linter. What would cross the line is the extension writing that output
+into a workspace or an editor config file on the user's behalf.
 - If the `.d.lua` repository later makes a reference worth having, it arrives as
   a new decision that supersedes this one. It does not arrive as an exception
   quietly added to a template.
