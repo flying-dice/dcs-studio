@@ -496,16 +496,26 @@ test.describe("manifest ↔ ManifestPresenter message contract", () => {
     const consumed = new Map<string, boolean>();
 
     await armProbe(page);
-    // Boot: media/manifest.js posts nothing and needs nothing pushed at it — the
-    // one covered panel whose opening state crosses inside the DOCUMENT, as the
-    // inline `window.__BOOTSTRAP__` the host renders and the fixture stands in
-    // for. So there is no handshake here to lose (cf. cards 22-24).
+    // Boot: the form's opening state crosses inside the DOCUMENT, as the inline
+    // `window.__BOOTSTRAP__` the host renders and the fixture stands in for — the
+    // one covered panel with no handshake to lose (cf. cards 22-24).
+    //
+    // It does post one thing at load, and only one: `bundlePreview`. The document
+    // carries the manifest but not the DISK, and existence and size are the
+    // host's to know, so the archive block is the single thing the bootstrap
+    // cannot bring with it. `bundlePreviewResult` arriving is what draws it.
     const errors = await openPreview(page, "manifest");
     await expect(page.getByTestId("bundle-row")).toHaveCount(1);
+    await expect(page.getByTestId("bundle-archive")).toBeVisible();
 
-    // `edit` — the form's only message, and debounced: it re-emits the WHOLE
-    // file 200ms after the last keystroke, which is why this waits for the post
-    // rather than reading the log straight after typing.
+    // `openDocs` — the `[[bundle]]` label's deep link into the manual (#71).
+    await page.getByTestId("bundle-docs-link").click();
+    await expectSent(page, { type: "openDocs", page: "mod-bundles" });
+
+    // `edit`, and debounced: the form re-emits the WHOLE file 200ms after the
+    // last keystroke, which is why this waits for the post rather than reading
+    // the log straight after typing. `bundlePreview` rides the same debounce, so
+    // this keystroke is also the second, non-boot source of it.
     await page.locator('[data-sec="project"][data-key="name"]').fill("renamed-in-the-form");
     await expect(page.getByTestId("toml-preview")).toContainText("renamed-in-the-form");
     await expectSent(page, { type: "edit" });

@@ -101,6 +101,60 @@ export function describeFileSystemPortContract(
       await expect(fs.readDir(harness.join(root(), "never-existed"))).rejects.toThrow();
     });
 
+    it("measures a single file as one file and its byte length", async () => {
+      const fs = create();
+      const file = harness.join(root(), "m.txt");
+      await fs.writeText(file, "12345");
+      expect(await fs.measure(file)).toEqual({ directory: false, files: 1, bytes: 5 });
+    });
+
+    it("measures a file in BYTES, not characters", async () => {
+      // The archive preview's totals are compared against a volume-split
+      // threshold in bytes. A fake counting `contents.length` would agree with
+      // the adapter on every ASCII fixture and quietly disagree on a manifest
+      // with a mod name in it — which is most of them.
+      const fs = create();
+      const file = harness.join(root(), "utf8.txt");
+      await fs.writeText(file, "Kurfürst"); // 8 chars, 9 UTF-8 bytes
+      expect(await fs.measure(file)).toEqual({ directory: false, files: 1, bytes: 9 });
+    });
+
+    it("measures a directory as the recursive totals of its files", async () => {
+      // Counts LEAVES: a [[bundle]] folder entry reports the files it brings,
+      // and the directories along the way are not among them.
+      const fs = create();
+      const base = root();
+      const dir = harness.join(base, "tree");
+      await fs.writeText(harness.join(dir, "a.txt"), "aa");
+      await fs.writeText(harness.join(dir, "nested", "b.txt"), "bbb");
+      await fs.writeText(harness.join(dir, "nested", "deeper", "c.txt"), "c");
+      expect(await fs.measure(dir)).toEqual({ directory: true, files: 3, bytes: 6 });
+    });
+
+    it("tells a one-file directory apart from that file", async () => {
+      // The whole reason `directory` is reported rather than inferred: both of
+      // these measure one file, and the archive preview says "brings its whole
+      // tree" about only one of them.
+      const fs = create();
+      const dir = harness.join(root(), "solo");
+      const file = harness.join(dir, "only.txt");
+      await fs.writeText(file, "x");
+      expect((await fs.measure(dir))?.directory).toBe(true);
+      expect((await fs.measure(file))?.directory).toBe(false);
+    });
+
+    it("measures an empty directory as nothing at all, which is not absence", async () => {
+      // `{ files: 0 }` and `null` are different rows in the preview: an empty
+      // folder is there and packs nothing, a missing one needs building first.
+      const fs = create();
+      expect(await fs.measure(root())).toEqual({ directory: true, files: 0, bytes: 0 });
+    });
+
+    it("answers null for a path that is not there rather than throwing", async () => {
+      const fs = create();
+      expect(await fs.measure(harness.join(root(), "never-existed"))).toBeNull();
+    });
+
     it("mkdirp creates nested directories and is idempotent", async () => {
       const fs = create();
       const dir = harness.join(root(), "x", "y", "z");

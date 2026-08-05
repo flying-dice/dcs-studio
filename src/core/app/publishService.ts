@@ -1,5 +1,6 @@
 import { win32 as path } from "node:path";
 import { payloadBase, stalePayloadVolumes } from "../domain/archivePolicy";
+import { archiveFiles } from "../domain/bundlePlan";
 import { fmtBytes } from "../domain/format";
 import { DISCOVERY_TOPIC } from "../domain/githubMarketplace";
 import { MANIFEST_FILE } from "../domain/manifestFile";
@@ -193,15 +194,16 @@ export class PublishService {
     }
     if (!(await archive.available())) throw new Error("7z not found.");
 
-    const files = [MANIFEST_FILE];
-    const seen = new Set<string>();
-    for (const b of m.bundle) {
-      if (seen.has(b.path)) continue; // dedupe: one archive entry per path
-      seen.add(b.path);
-      const abs = path.join(root, b.path);
-      if (!(await fs.exists(abs)))
-        throw new Error(`Bundle path missing: ${b.path} — build the project first.`);
-      files.push(b.path);
+    // What goes in the archive is `archiveFiles`' answer and no longer this
+    // file's own — the manifest form previews the same list, and two copies of
+    // "manifest first, then each path once" would eventually disagree about
+    // what a release contains. Only the existence check stays here: the
+    // preview reports a missing path as a row you can still see, while publish
+    // refuses outright, and that difference is deliberate.
+    const files = archiveFiles(m.bundle);
+    for (const rel of files.slice(1)) {
+      if (!(await fs.exists(path.join(root, rel))))
+        throw new Error(`Bundle path missing: ${rel} — build the project first.`);
     }
 
     const outDir = path.join(root, ".dcs-studio", "release");

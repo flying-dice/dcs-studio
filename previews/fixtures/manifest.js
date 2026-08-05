@@ -34,5 +34,60 @@ window.__BOOTSTRAP__ = {
   roots: { savedGames: "C:\\Users\\jonat\\Saved Games\\DCS", gameInstall: "" },
 };
 
-// The form posts only {edit}, which the real host applies as a WorkspaceEdit to
-// the open document. Nothing to simulate here — the form is its own preview.
+// {edit} needs no simulation — the real host applies it as a WorkspaceEdit to
+// the open document, and the form is its own preview of that.
+//
+// {bundlePreview} does: it is the form's one round trip, and only the host can
+// answer it because only the host can look at the disk. The reply below is what
+// a real BundlePreviewService would return for the FULL bootstrap above —
+// manifest first and flagged always-included, the [[bundle]] folder measured as
+// a tree, and one path that is not there yet, which is the state a project with
+// an unbuilt DLL is in and the row the preview exists to show.
+//
+// `?bundle=` picks a different answer:
+//   split   — a payload over the volume threshold, so the split warning renders
+//   error   — the host failed to measure (a tree being rewritten under the walk)
+//   minimal — nothing declared at all, which is a brand-new form: the archive is
+//             the manifest and only the manifest, and it is the one state where
+//             the totals are singular
+const BUNDLE_MODE = new URLSearchParams(location.search).get("bundle");
+
+const MANIFEST_ROW = { path: "dcs-studio.toml", always: true, kind: "file", files: 1, bytes: 812 };
+
+const ROWS = [
+  MANIFEST_ROW,
+  { path: "Mods/tech/F16Weapons", always: false, kind: "dir", files: 12, bytes: 34 * 1024 },
+  // A plain file entry beside the folder, because they read differently: a file
+  // gets its size, a folder says what it drags in with it.
+  { path: "Mods/tech/F16Weapons.lua", always: false, kind: "file", files: 1, bytes: 4096 },
+  { path: "target/release/f16_weapons.dll", always: false, kind: "missing", files: 0, bytes: 0 },
+];
+
+const GIB = 1024 * 1024 * 1024;
+
+window.__host.onPost((m) => {
+  if (m.type !== "bundlePreview") return;
+  if (BUNDLE_MODE === "error") {
+    window.__host.receive({
+      type: "bundlePreviewResult",
+      error: "EBUSY: resource busy or locked, scandir 'target\\release'",
+    });
+    return;
+  }
+  const split = BUNDLE_MODE === "split";
+  const minimal = BUNDLE_MODE === "minimal";
+  window.__host.receive({
+    type: "bundlePreviewResult",
+    preview: {
+      // Derived from the posted [project] fields, exactly as previewArchiveName
+      // does — so typing in the Name box moves the archive name on screen.
+      archiveName: `dcs-studio-${(m.name || "your-mod").toLowerCase().replace(/[^a-z0-9._-]+/g, "-")}-${m.version || "0.1.0"}.7z`,
+      rows: minimal ? [MANIFEST_ROW] : ROWS,
+      totalFiles: minimal ? 1 : split ? 4200 : 14,
+      totalBytes: minimal ? 812 : split ? 2 * GIB : 812 + 34 * 1024 + 4096,
+      missing: minimal ? 0 : 1,
+      volumeBytes: Math.round(1.5 * GIB),
+      likelySplit: split,
+    },
+  });
+});

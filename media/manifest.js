@@ -21,7 +21,10 @@
   let roots = boot.roots;
   const resolveDest = (dest) => self.DcsManifestCore.resolveDest(dest, roots);
 
-  const state = { model: parseToml(boot.rawText) };
+  // `preview` is the host's last answer about what the release archive would
+  // hold — null until it has given one, which is also what it is when the form
+  // is drawn for a document that has never asked.
+  const state = { model: parseToml(boot.rawText), preview: null };
 
   // ── Edit propagation (debounced so a keystroke isn't one undo step each) ──
   let editTimer = null;
@@ -30,6 +33,10 @@
     editTimer = setTimeout(() => {
       editTimer = null;
       vscode.postMessage({ type: "edit", text: emitToml(state.model) });
+      // Sharing the edit's debounce rather than keeping a second timer: the two
+      // are asking about the same pause in typing, and a walk of a `target/`
+      // tree per keystroke is the one request here expensive enough to matter.
+      requestPreview();
     }, 200);
   }
   /** Model changed via the form: refresh preview + push the edit to the document. */
@@ -141,13 +148,130 @@
         </div>`,
       )
       .join("");
+    // The blurb answers what the archive CONTAINS; the preview under it answers
+    // what THIS project's archive contains. Both, because neither is enough on
+    // its own: the sentence is what an empty form has instead of a preview, and
+    // the preview is what stops the sentence being read as boilerplate (#71,
+    // #72). "Learn more" deep-links the same explanation at full length.
     return `
       <section class="card">
-        <div class="section-label">[[bundle]] <span class="count">${m.bundle.length}</span></div>
-        <p class="blurb">Each entry is a project-relative <span class="mono">path</span> (file or folder) packed into the release archive when you publish.</p>
+        <div class="section-label">[[bundle]] <span class="count">${m.bundle.length}</span>
+          <button class="linkish" data-testid="bundle-docs-link" data-docs="mod-bundles">Learn more</button>
+        </div>
+        <p class="blurb">Each entry is a project-relative <span class="mono">path</span> packed into the release archive when you publish. A folder brings its <strong>whole tree</strong>, and everything is stored at its project-relative path — not flattened — which is what a <span class="mono">[[symlink]] source</span> resolves against. <span class="mono">dcs-studio.toml</span> is always packed alongside, whether or not you list it. The archive is named <span class="mono">dcs-studio-&lt;name&gt;-&lt;tag&gt;.7z</span> and is split into numbered volumes if it grows past 1.5&nbsp;GB.</p>
         ${rows || `<p class="empty">No bundled content yet.</p>`}
         <button class="btn ghost add" data-testid="${ADD_TESTID.bundle}" data-add="bundle">${I.plus} Add bundled path</button>
+        <div id="bundle-preview">${bundlePreviewHtml()}</div>
       </section>`;
+  }
+
+  // ── Archive preview ──
+  //
+  // What publish would pack, measured against the real project. Every claim the
+  // blurb above makes is visible here as a row: the manifest that arrives
+  // uninvited, a folder's file count, a path a build step has not produced yet.
+  //
+  // The host owns all of it — existence and size are its to know, and this file
+  // stays DOM-only. `state.preview` is the last answer it gave, kept because
+  // `render()` rebuilds the whole form and would otherwise blank the block on
+  // every keystroke that changes a different section.
+
+  /**
+   * Ask the host to re-measure — but only when the answer could have changed.
+   *
+   * The debounce alone is not enough. Measuring walks the declared trees, and a
+   * `[[bundle]] path = "target"` on a Rust project is six figures of files, so
+   * the walk is the expensive thing in this panel by orders of magnitude. Three
+   * fields decide its result and the form has a dozen; without this guard,
+   * typing a description re-walks `target/` once per pause in typing, for an
+   * answer identical to the one already on screen.
+   *
+   * The key is the whole request, so it cannot fall out of step with what is
+   * actually sent.
+   */
+  let lastPreviewKey = null;
+  function requestPreview() {
+    const request = {
+      type: "bundlePreview",
+      bundle: state.model.bundle.map((b) => ({ path: b.path })),
+      name: state.model.project.name,
+      version: state.model.project.version,
+    };
+    const key = JSON.stringify(request);
+    if (key === lastPreviewKey) return;
+    lastPreviewKey = key;
+    vscode.postMessage(request);
+  }
+
+  /**
+   * Ask again for an answer the form already has.
+   *
+   * The guard above is about the MANIFEST not having changed, and the disk can
+   * change without it: run the build that produces the missing DLL and every
+   * field is still exactly as it was, so nothing re-asks and the row goes on
+   * saying "build the project first" after you have. Rather than re-walk the
+   * tree on the chance that happened, the preview says who to ask.
+   */
+  function refreshPreview() {
+    lastPreviewKey = null;
+    requestPreview();
+  }
+
+  function bytes(n) {
+    // dcsUi.formatBytes renders 0 as an em dash, which reads as "unknown" where
+    // what is meant is "an empty folder packs nothing".
+    return n > 0 ? dcsUi.formatBytes(n) : "0 B";
+  }
+
+  // One place that knows "1 file" from "2 files", used by both the folder note
+  // and the total. Two copies of the same ternary is how "1 files" ships.
+  function count(n, noun) {
+    return `${n} ${noun}${n === 1 ? "" : "s"}`;
+  }
+
+  function previewRowHtml(row, last) {
+    const stem = last ? "└─" : "├─";
+    let note = "";
+    if (row.always) note = `<span class="note">always included</span>`;
+    else if (row.kind === "missing")
+      note = `<span class="warn-text">${I.warn} nothing here yet — build the project first</span>`;
+    else if (row.kind === "dir")
+      note = `<span class="note">whole folder — ${count(row.files, "file")}, ${bytes(row.bytes)}</span>`;
+    else note = `<span class="note">${bytes(row.bytes)}</span>`;
+    return `<li data-testid="preview-row" data-kind="${row.kind}"><span class="stem mono">${stem}</span><span class="mono path">${esc(row.path)}</span>${note}</li>`;
+  }
+
+  function bundlePreviewHtml() {
+    const p = state.preview;
+    if (!p) return "";
+    if (p.error)
+      return `<div class="archive" data-testid="preview-error"><p class="warn-text">${I.warn} Couldn't measure the project: ${esc(p.error)}</p></div>`;
+    const rows = p.rows.map((r, i) => previewRowHtml(r, i === p.rows.length - 1)).join("");
+    const split = p.likelySplit
+      ? `<span class="warn-text" data-testid="preview-split">${I.warn} over 1.5&nbsp;GB — likely split into numbered volumes</span>`
+      : "";
+    return `
+      <div class="archive" data-testid="bundle-archive">
+        <div class="archive-head">
+          <span class="mono" data-testid="preview-archive-name">${esc(p.archiveName)}</span>
+          <button class="linkish" data-testid="preview-refresh-btn" data-preview-refresh>Re-check</button>
+        </div>
+        <ul class="archive-tree">${rows}</ul>
+        <div class="archive-foot" data-testid="preview-total">${count(p.totalFiles, "file")}, ${bytes(p.totalBytes)} before compression ${split}</div>
+      </div>`;
+  }
+
+  /**
+   * Patch the preview block ALONE.
+   *
+   * Not `render()`: an answer arrives while the user is still typing — that is
+   * the normal case, since the request that produced it was sent by their last
+   * keystroke — and re-rendering the form would rebuild the input they are in
+   * and take the caret with it. Same reason `updateResolved` exists.
+   */
+  function patchPreview() {
+    const box = document.getElementById("bundle-preview");
+    if (box) box.innerHTML = bundlePreviewHtml();
   }
 
   /**
@@ -345,6 +469,17 @@
         pushEdit();
       });
     });
+    app.querySelectorAll("[data-docs]").forEach((el) => {
+      el.addEventListener("click", () => {
+        vscode.postMessage({ type: "openDocs", page: el.dataset.docs });
+      });
+    });
+    // Delegated, unlike every handler above, because `patchPreview` replaces
+    // this box's contents without going through `bind()` — a listener on the
+    // button itself would be thrown away by the first answer that arrived.
+    app.querySelector("#bundle-preview").addEventListener("click", (e) => {
+      if (e.target.closest("[data-preview-refresh]")) refreshPreview();
+    });
   }
 
   function updateResolved(i) {
@@ -380,11 +515,28 @@
       }
       state.model = parseToml(m.rawText);
       render();
+      // The entries changed under the form, so the preview on screen is about a
+      // manifest that no longer exists. A `git checkout` that swaps `[[bundle]]`
+      // wholesale is exactly this path.
+      requestPreview();
     } else if (m.type === "roots") {
       roots = m.roots;
       render();
+    } else if (m.type === "bundlePreviewResult") {
+      // Whatever arrives is the latest: the host drops the answer to any request
+      // a newer one has overtaken (ManifestPresenter.previewBundle), which is
+      // why there is no request id to match against here.
+      // An error is not an answer worth caching: the tree it failed to walk was
+      // being written at that moment, so the next edit should ask again rather
+      // than be told this request matches the last one.
+      if (m.error) lastPreviewKey = null;
+      state.preview = m.error ? { error: m.error } : m.preview;
+      patchPreview();
     }
   });
 
   render();
+  // The opening measurement. The bootstrap carries the document but not the
+  // disk, so this is the one request no edit provokes.
+  requestPreview();
 })();

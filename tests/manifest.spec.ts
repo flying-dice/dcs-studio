@@ -1,5 +1,20 @@
+import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import { expectSent, hostSend, openPreview, sentMessages } from "./helpers";
+
+/**
+ * The most recent `edit` the form posted.
+ *
+ * Deliberately not "the last message": one debounce tick posts `edit` and then
+ * `bundlePreview`, so the newest post is normally the preview request. Reaching
+ * for the newest EDIT says what these assertions mean, and stops a second
+ * message riding the same timer from breaking them again.
+ */
+async function lastEdit(page: Page): Promise<{ text: string }> {
+  const edits = (await sentMessages(page)).filter((m) => m.type === "edit");
+  expect(edits.length, "an edit was posted").toBeGreaterThan(0);
+  return edits[edits.length - 1];
+}
 
 test.describe("manifest preview", () => {
   test("seeds the Bundled content / Symlinks cards only from explicit [[bundle]]/[[symlink]] blocks", async ({
@@ -150,10 +165,7 @@ test.describe("manifest preview", () => {
     // The `edit` post is debounced 200ms after the last keystroke — expectSent
     // polls, so reading __sentMessages immediately here would be a race.
     await expectSent(page, { type: "edit" });
-    const messages = await sentMessages(page);
-    const last = messages[messages.length - 1];
-    expect(last.type).toBe("edit");
-    expect(last.text).toContain('name = "renamed-mod"');
+    expect((await lastEdit(page)).text).toContain('name = "renamed-mod"');
   });
 
   test("a [project] written with bare TOML numbers still validates and still edits", async ({
@@ -171,9 +183,171 @@ test.describe("manifest preview", () => {
     // The form is live, not just drawn: an edit still reaches the host.
     await page.locator('[data-sec="project"][data-key="author"]').fill("viper-drivers");
     await expectSent(page, { type: "edit" });
-    const messages = await sentMessages(page);
-    expect(messages[messages.length - 1].text).toContain('author = "viper-drivers"');
+    expect((await lastEdit(page)).text).toContain('author = "viper-drivers"');
     expect(errors).toEqual([]);
+  });
+
+  // ── The archive preview (#71/#72) ──
+  //
+  // The `[[bundle]]` copy used to say only that paths get "packed into the
+  // release archive". Four things it never said are the ones people got wrong,
+  // and the preview answers all four by SHOWING rather than by adding a
+  // sentence. Each is asserted below as the thing on screen, because a preview
+  // whose rows are right and whose labels are missing teaches nobody anything.
+
+  test("the boot preview draws the archive publish would build", async ({ page }) => {
+    const errors = await openPreview(page, "manifest");
+    // Posted without any keystroke: the bootstrap carries the document, and only
+    // the host can look at the disk.
+    await expectSent(page, { type: "bundlePreview" });
+
+    await expect(page.getByTestId("preview-archive-name")).toHaveText(
+      "dcs-studio-f16-weapons-expansion-2.3.1.7z",
+    );
+    // Four rows for ONE `[[bundle]]` entry — which is the point. The manifest
+    // rides along undeclared, and the fixture's project has an unbuilt DLL.
+    await expect(page.getByTestId("preview-row")).toHaveCount(4);
+    expect(errors).toEqual([]);
+  });
+
+  test("the manifest is shown as always included, without being declared", async ({ page }) => {
+    await openPreview(page, "manifest");
+    const manifestRow = page.getByTestId("preview-row").first();
+    await expect(manifestRow).toContainText("dcs-studio.toml");
+    await expect(manifestRow).toContainText("always included");
+    // …and no `[[bundle]]` row declares it. The form has one entry, and it is
+    // the folder — so this row can only have come from the packager's own rule.
+    await expect(page.getByTestId("bundle-row")).toHaveCount(1);
+    await expect(page.getByTestId("bundle-row").locator('[data-key="path"]')).toHaveValue(
+      "Mods/tech/F16Weapons",
+    );
+  });
+
+  test("a folder entry says it brings its whole tree, with the count", async ({ page }) => {
+    await openPreview(page, "manifest");
+    const dirRow = page.locator('[data-testid="preview-row"][data-kind="dir"]');
+    await expect(dirRow).toHaveCount(1);
+    await expect(dirRow).toContainText("whole folder — 12 files, 34 KB");
+  });
+
+  test("a plain file entry gets its size and no talk of a tree", async ({ page }) => {
+    // The two read differently on purpose: a file is what it is, a folder drags
+    // things in with it, and the `[[bundle]]` copy never distinguished them.
+    await openPreview(page, "manifest");
+    const fileRow = page.locator(
+      '[data-testid="preview-row"][data-kind="file"]:not(:has-text("always"))',
+    );
+    await expect(fileRow).toContainText("Mods/tech/F16Weapons.lua");
+    await expect(fileRow).toContainText("4.0 KB");
+    await expect(fileRow).not.toContainText("whole folder");
+  });
+
+  test("a manifest with nothing declared previews as an archive of one file", async ({ page }) => {
+    // The state a brand-new form opens in — and the one place the totals are
+    // singular, so "1 files" would be on screen for every first-time author.
+    await openPreview(page, "manifest", { query: { bundle: "minimal" } });
+    await expect(page.getByTestId("preview-row")).toHaveCount(1);
+    await expect(page.getByTestId("preview-total")).toContainText("1 file,");
+  });
+
+  test("a path with nothing at it is flagged on its own row, before the preflight", async ({
+    page,
+  }) => {
+    await openPreview(page, "manifest");
+    const missing = page.locator('[data-testid="preview-row"][data-kind="missing"]');
+    await expect(missing).toContainText("target/release/f16_weapons.dll");
+    await expect(missing).toContainText("build the project first");
+  });
+
+  test("the total is stated as pre-compression, and says nothing about splitting when small", async ({
+    page,
+  }) => {
+    await openPreview(page, "manifest");
+    await expect(page.getByTestId("preview-total")).toContainText("14 files");
+    await expect(page.getByTestId("preview-total")).toContainText("before compression");
+    await expect(page.getByTestId("preview-split")).toHaveCount(0);
+  });
+
+  test("an oversized payload warns that it is LIKELY to be split", async ({ page }) => {
+    // "Likely", not "will be": the threshold is on the compressed archive and
+    // all the form knows is the uncompressed source. Asserting the hedge keeps
+    // someone from tightening the copy into a promise the data cannot make.
+    await openPreview(page, "manifest", { query: { bundle: "split" } });
+    await expect(page.getByTestId("preview-split")).toContainText("likely split");
+  });
+
+  test("a preview the host could not build says so instead of showing a stale one", async ({
+    page,
+  }) => {
+    await openPreview(page, "manifest", { query: { bundle: "error" } });
+    await expect(page.getByTestId("preview-error")).toContainText("Couldn't measure the project");
+    await expect(page.getByTestId("bundle-archive")).toHaveCount(0);
+  });
+
+  test("editing a bundle path re-asks the host, and the answer patches only the preview", async ({
+    page,
+  }) => {
+    await openPreview(page, "manifest");
+    await expect(page.getByTestId("bundle-archive")).toBeVisible();
+
+    // The caret must survive the reply. A full re-render would rebuild this
+    // input and take the focus with it, which is the whole reason the result is
+    // patched into its own block.
+    const nameInput = page.locator('[data-sec="project"][data-key="name"]');
+    await nameInput.click();
+    await nameInput.fill("renamed-mod");
+    await expect(page.getByTestId("preview-archive-name")).toHaveText(
+      "dcs-studio-renamed-mod-2.3.1.7z",
+    );
+    await expect(nameInput).toBeFocused();
+  });
+
+  test("editing a field the archive does not depend on does not re-walk the disk", async ({
+    page,
+  }) => {
+    // The debounce alone is not enough. Measuring walks the declared trees, and
+    // `path = "target"` on a Rust project is six figures of files — so typing a
+    // description would re-walk it once per pause, for an answer identical to
+    // the one already on screen.
+    await openPreview(page, "manifest");
+    await expectSent(page, { type: "bundlePreview" });
+    const before = (await sentMessages(page)).filter((m) => m.type === "bundlePreview").length;
+
+    await page.locator('[data-sec="project"][data-key="description"]').fill("a longer blurb");
+    await expectSent(page, { type: "edit" });
+
+    const after = (await sentMessages(page)).filter((m) => m.type === "bundlePreview").length;
+    expect(after, "no new measurement for a field the preview ignores").toBe(before);
+  });
+
+  test("Re-check asks again for an answer nothing in the form changed", async ({ page }) => {
+    // The guard above is about the MANIFEST not having changed, and the disk can
+    // change without it: run the build that produces the missing DLL and every
+    // field is still exactly as it was. Without this button the row would go on
+    // saying "build the project first" after you had.
+    await openPreview(page, "manifest");
+    await expectSent(page, { type: "bundlePreview" });
+    const before = (await sentMessages(page)).filter((m) => m.type === "bundlePreview").length;
+
+    await page.getByTestId("preview-refresh-btn").click();
+
+    await expect
+      .poll(async () => (await sentMessages(page)).filter((m) => m.type === "bundlePreview").length)
+      .toBe(before + 1);
+  });
+
+  test("a failed measurement is not cached as the answer to that request", async ({ page }) => {
+    // The tree it failed to walk was being written at that moment, so the next
+    // edit must ask again rather than be told it matches the last request.
+    await openPreview(page, "manifest", { query: { bundle: "error" } });
+    await expect(page.getByTestId("preview-error")).toBeVisible();
+    const before = (await sentMessages(page)).filter((m) => m.type === "bundlePreview").length;
+
+    await page.locator('[data-sec="project"][data-key="description"]').fill("nudge");
+
+    await expect
+      .poll(async () => (await sentMessages(page)).filter((m) => m.type === "bundlePreview").length)
+      .toBe(before + 1);
   });
 
   test("clearing the name shows a validation issue", async ({ page }) => {

@@ -59,6 +59,13 @@ const GATES = {
   unitPublishService:
     "npx vitest run -c vitest.unit.config.ts test/unit/publish/publishService.test.ts",
   unitDap: "npx vitest run -c vitest.unit.config.ts test/unit/debug/dapTranslation.test.ts",
+  // Both files, because the rule they share is the point: the packager's list
+  // and the form's preview must answer alike, so a mutation only one of them
+  // notices is a mutation that has found the two drifting apart.
+  unitBundlePlan:
+    "npx vitest run -c vitest.unit.config.ts test/unit/core/bundlePlan.test.ts test/unit/core/bundlePreviewService.test.ts",
+  unitManifestPresenter:
+    "npx vitest run -c vitest.unit.config.ts test/unit/manifest/manifestPresenter.test.ts",
   integrationPublishPanel:
     "npx vitest run -c vitest.integration.config.ts test/integration/publish/publishPanel.test.ts",
   integrationErrors:
@@ -205,6 +212,22 @@ const MUTATIONS = [
     find: '      "supported": false,',
     replace: '      "supported": true,',
     expectFailIn: "integrationPackaging",
+  },
+  {
+    id: "bundle-blank-path",
+    file: "src/core/domain/bundlePlan.ts",
+    note: "card 44 — a blank [[bundle]] path joins to the PROJECT ROOT, so packing it puts the whole working tree, .git included, in a public release",
+    find: "    if (!path || seen.has(path)) continue;",
+    replace: "    if (seen.has(path)) continue; // MUTANT: a blank row is an entry",
+    expectFailIn: "unitBundlePlan",
+  },
+  {
+    id: "bundle-preview-generation",
+    file: "src/core/app/manifestPresenter.ts",
+    note: "card 44 — without the generation drop the form can settle on the answer to a question the user already changed, and nothing on screen says it is stale",
+    find: "    if (generation !== this.previewGeneration) return;",
+    replace: "    void generation; // MUTANT: a superseded answer still wins",
+    expectFailIn: "unitManifestPresenter",
   },
   {
     id: "rust-drop-stops-server",

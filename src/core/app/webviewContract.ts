@@ -10,6 +10,7 @@ import type { RepoRef } from "../domain/repoRemote";
 import type { SkillInfo } from "../domain/skillsStatus";
 import type { ModDto } from "../domain/subscriptions";
 import type { MarketListing, ProductDetail } from "../domain/types";
+import type { BundlePreview } from "./bundlePreviewService";
 import type { ReleaseOpts, ReleaseResult, ShareOpts, ShareResult } from "./publishService";
 import type { Progress } from "./subscriptionService";
 
@@ -532,26 +533,54 @@ export interface ManifestBootstrap {
 /**
  * A message `media/manifest.js` posts.
  *
- * One, and debounced: the form re-emits the WHOLE file 200ms after the last
+ * `edit` is debounced: the form re-emits the WHOLE file 200ms after the last
  * keystroke, and the host applies it as a `WorkspaceEdit` so save, dirty state
  * and undo belong to VS Code rather than to the form.
+ *
+ * `bundlePreview` rides the same debounce and carries the form's CURRENT
+ * entries rather than asking the host to re-read the document: what the archive
+ * preview answers about is the state of the boxes, which the document catches up
+ * with a moment later. It is a request the host answers, which makes this the
+ * only round trip in a protocol that was otherwise one-way in each direction —
+ * and the reason is that existence and size are the host's to know. The webview
+ * stays DOM-only.
  */
-export type ManifestWebviewMessage = { type: "edit"; text?: string };
+export type ManifestWebviewMessage =
+  | { type: "edit"; text?: string }
+  | { type: "bundlePreview"; bundle?: { path?: string }[]; name?: string; version?: string }
+  /** The `[[bundle]]` label's deep link into the manual (issue #71). */
+  | { type: "openDocs"; page?: string };
 
 /** A message `ManifestPresenter` pushes to the manifest form. */
 export type ManifestHostMessage =
   /** The document changed under the form (raw-text edit, undo, revert, git). */
   | { type: "external"; rawText: string }
   /** The DCS paths changed, so every resolved-dest line is stale. */
-  | { type: "roots"; roots: ManifestRoots };
+  | { type: "roots"; roots: ManifestRoots }
+  /**
+   * The answer to a `bundlePreview`, or the reason there is not one.
+   *
+   * Exactly one of the two fields is set, and `error` is a real branch rather
+   * than defensive padding: measuring walks a tree that may be a build output
+   * being rewritten underneath the walk, and the form has to be able to say so
+   * instead of showing the previous answer as though it were current.
+   *
+   * Unanswered requests are DROPPED rather than replied to — see
+   * `ManifestPresenter.previewBundle` — so the form can take whatever arrives as
+   * the latest without a request id to match it against.
+   */
+  | { type: "bundlePreviewResult"; preview?: BundlePreview; error?: string };
 
 const MANIFEST_TO_HOST_KEYS: { readonly [K in ManifestWebviewMessage["type"]]: true } = {
   edit: true,
+  bundlePreview: true,
+  openDocs: true,
 };
 
 const MANIFEST_TO_WEBVIEW_KEYS: { readonly [K in ManifestHostMessage["type"]]: true } = {
   external: true,
   roots: true,
+  bundlePreviewResult: true,
 };
 
 // ── Documentation ────────────────────────────────────────────────────────────
@@ -820,8 +849,10 @@ export const MANIFEST_PROTOCOL: WebviewProtocol = {
   scripts: ["manifest-core.js", "manifest.js"],
   toHost: Object.keys(MANIFEST_TO_HOST_KEYS),
   toWebview: Object.keys(MANIFEST_TO_WEBVIEW_KEYS),
-  // Both pushes re-render the whole form — there is nothing the form keeps that
-  // it does not draw.
+  // `external` and `roots` re-render the whole form. `bundlePreviewResult`
+  // deliberately does NOT — it patches its own block and nothing else, because a
+  // full re-render on an answer that arrives mid-typing would tear the field out
+  // from under the caret. It still changes the document, so it is not silent.
   silent: [],
 };
 

@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { ManifestPresenterDeps } from "../../../src/core/app/manifestPresenter";
+import { BundlePreviewService } from "../../../src/core/app/bundlePreviewService";
+import type {
+  ManifestInbound,
+  ManifestPresenterDeps,
+} from "../../../src/core/app/manifestPresenter";
 import { ManifestPresenter } from "../../../src/core/app/manifestPresenter";
 import type { ManifestHostMessage } from "../../../src/core/app/webviewContract";
+import { MemFileSystem } from "../../support/memFileSystem";
 
 // The manifest form's host half, with no `vscode` double anywhere.
 //
@@ -19,6 +24,8 @@ interface Harness {
   presenter: ManifestPresenter;
   posted: ManifestHostMessage[];
   writes: string[];
+  /** Pages handed to the docs deep link, in order. */
+  docs: string[];
   /** The document, mutable the way a real one is while the form is open. */
   setText: (text: string) => void;
 }
@@ -27,6 +34,7 @@ function harness(over: Partial<ManifestPresenterDeps> = {}): Harness {
   let text = TOML;
   const posted: ManifestHostMessage[] = [];
   const writes: string[] = [];
+  const docs: string[] = [];
   const presenter = new ManifestPresenter({
     text: () => text,
     targetPath: PATH,
@@ -41,12 +49,16 @@ function harness(over: Partial<ManifestPresenterDeps> = {}): Harness {
       text = next;
     },
     post: (msg) => posted.push(msg),
+    projectRoot: "C:\\proj",
+    bundlePreview: new BundlePreviewService(new MemFileSystem().seedFile("C:\\proj\\a.lua", "xy")),
+    openDocs: (page) => docs.push(page),
     ...over,
   });
   return {
     presenter,
     posted,
     writes,
+    docs,
     setText: (next) => {
       text = next;
     },
@@ -217,5 +229,119 @@ describe("form to document", () => {
     await h.presenter.handle({ type: "mystery" } as unknown as { type: "edit" });
     expect(h.writes).toEqual([]);
     expect(h.posted).toEqual([]);
+  });
+});
+
+// ── The archive preview request ──────────────────────────────────────────────
+//
+// The form's one round trip, and the only place this presenter answers rather
+// than announces. Everything here crossed a process boundary from a document
+// that may be stale or crafted, so the guards are the subject — plus the
+// generation counter, which is what buys the protocol its lack of a request id.
+
+describe("the bundle preview request", () => {
+  const request = (over: Record<string, unknown> = {}) =>
+    ({
+      type: "bundlePreview",
+      bundle: [{ path: "a.lua" }],
+      name: "m",
+      version: "1",
+      ...over,
+    }) as ManifestInbound;
+
+  it("answers with the archive the given entries would produce", async () => {
+    const h = harness();
+    await h.presenter.handle(request());
+    expect(h.posted).toEqual([
+      {
+        type: "bundlePreviewResult",
+        preview: expect.objectContaining({
+          archiveName: "dcs-studio-m-1.7z",
+          rows: [
+            { path: "dcs-studio.toml", always: true, kind: "missing", files: 0, bytes: 0 },
+            { path: "a.lua", always: false, kind: "file", files: 1, bytes: 2 },
+          ],
+        }),
+      },
+    ]);
+  });
+
+  it("rebuilds a bundle that is not an array rather than passing it on", async () => {
+    // What a stale or crafted post looks like. Reaching `path.join` with a
+    // non-string is the failure this refuses.
+    const h = harness();
+    await h.presenter.handle(request({ bundle: "Scripts" }));
+    await h.presenter.handle(request({ bundle: [{ path: 7 }, {}, null] }));
+    for (const posted of h.posted) {
+      expect(posted).toMatchObject({ type: "bundlePreviewResult" });
+      // Only the manifest survives: every supplied row rebuilt to a blank path,
+      // and a blank path is not an entry.
+      expect((posted as { preview: { rows: unknown[] } }).preview.rows).toHaveLength(1);
+    }
+  });
+
+  it("treats absent name and version as unfilled boxes", async () => {
+    const h = harness();
+    await h.presenter.handle(request({ name: undefined, version: 12 }));
+    expect(h.posted[0]).toMatchObject({
+      preview: { archiveName: "dcs-studio-your-mod-0.1.0.7z" },
+    });
+  });
+
+  it("reports a measurement that threw instead of leaving the last answer up", async () => {
+    const h = harness({
+      bundlePreview: {
+        preview: async () => {
+          throw new Error("EBUSY: resource busy or locked");
+        },
+      } as unknown as BundlePreviewService,
+    });
+    await h.presenter.handle(request());
+    expect(h.posted).toEqual([
+      { type: "bundlePreviewResult", error: "EBUSY: resource busy or locked" },
+    ]);
+  });
+
+  it("drops the answer to a request a newer one overtook", async () => {
+    // The panel dispatches with `void handle(m)` rather than serialising, and
+    // measuring a large tree takes long enough that a later, smaller request
+    // finishes first. Without the generation counter the form would settle
+    // showing an OLDER answer than one it had already been given, with nothing
+    // on screen saying so.
+    const gates: (() => void)[] = [];
+    const h = harness({
+      bundlePreview: {
+        preview: () =>
+          new Promise((resolve) => {
+            gates.push(() => resolve({ rows: [], archiveName: "x" }));
+          }),
+      } as unknown as BundlePreviewService,
+    });
+
+    const slow = h.presenter.handle(request({ name: "slow" }));
+    const fast = h.presenter.handle(request({ name: "fast" }));
+    // The second request answers first; the first then finishes into the void.
+    gates[1]();
+    await fast;
+    gates[0]();
+    await slow;
+
+    expect(h.posted).toHaveLength(1);
+  });
+});
+
+describe("the docs deep link", () => {
+  it("opens the page the label asked for", async () => {
+    const h = harness();
+    await h.presenter.handle({ type: "openDocs", page: "mod-bundles" });
+    expect(h.docs).toEqual(["mod-bundles"]);
+  });
+
+  it("opens nothing for a link with no page on it", async () => {
+    const h = harness();
+    await h.presenter.handle({ type: "openDocs" });
+    await h.presenter.handle({ type: "openDocs", page: "" });
+    await h.presenter.handle({ type: "openDocs", page: 7 } as unknown as ManifestInbound);
+    expect(h.docs).toEqual([]);
   });
 });
