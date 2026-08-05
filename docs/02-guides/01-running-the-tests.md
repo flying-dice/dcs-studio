@@ -171,7 +171,7 @@ webview contract tables, the panel lifecycle helpers, the presenters, the
 bridge's teardown path, the embedded Lua. That is the moment the recorded
 evidence stops being true and the moment this script is worth its runtime.
 
-**It is deliberately NOT in CI's per-push path.** It applies ten mutations and
+**It is deliberately NOT in CI's per-push path.** It applies seventeen mutations and
 runs a gate for each, including e2e and cargo, and it edits tracked files while
 it works — neither is something to put in front of every push. The suite it
 checks is already gated per push; this checks the gate itself, which is a
