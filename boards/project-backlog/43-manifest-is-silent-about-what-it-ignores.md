@@ -53,9 +53,17 @@ Two routes, and this card's first job is to pick one:
    editor config on save. Single source of truth, but the extension takes on
    writing third-party config files it does not own.
 
+## Blocked on a decision
+
+[Decision 12](../../decisions/12-where-dcs-globals-are-declared.md)
+(**Proposed**) — templates emit the editor config, or `[lint]` becomes a real
+manifest section. **This one blocks the whole card, not half of it:** both
+routes write the section list #79's validation is built from, so starting the
+validation first guarantees editing it twice.
+
 ## Checklist
 
-- [ ] Decision recorded in `decisions/` on route 1 vs 2 for `[lint]`
+- [ ] Decision 12 accepted
 - [ ] Unknown top-level sections warn, naming the section and nearest valid one
 - [ ] Unknown keys inside known sections warn the same way
 - [ ] Form editor inline, publish preflight row, marketplace install-plan flag

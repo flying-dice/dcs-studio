@@ -75,8 +75,19 @@ the node, and — critically — the **same cycle/identity rules the export
 serializer already uses**. `_G` reaches itself, and the two features must not
 disagree about what a table is.
 
+## Blocked on two decisions
+
+- [Decision 13](../../decisions/13-explorer-as-its-own-panel.md) (**Proposed**) —
+  the explorer becomes its own panel, and what happens to the console's tab in
+  the same change. Blocks the whole chain, since #76 and #77 land wherever this
+  puts them.
+- [Decision 14](../../decisions/14-how-copy-deep-resolves-a-subtree.md)
+  (**Proposed**) — client-side sweep vs sim-side serialize for Copy Deep.
+  Blocks #77 only; #75 and #76 can proceed once 13 is accepted.
+
 ## Checklist
 
+- [ ] Decisions 13 and 14 accepted
 - [ ] `ExplorerPanel` with its own view type and `dcs.explorer.open`
 - [ ] `explorerConfig` push moves; console contract loses the explorer messages
 - [ ] New contract entry and census row

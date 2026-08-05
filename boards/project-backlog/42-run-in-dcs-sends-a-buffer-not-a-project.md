@@ -46,11 +46,18 @@ Steps 1 and 2 are ready to build. **Step 3 is a design decision and is likely
 the actual want behind the report** — do not let the cheap steps close the card
 without a deliberate answer on it.
 
+## Blocked on a decision
+
+[Decision 11](../../decisions/11-dev-deploy-for-run-in-dcs.md) (**Proposed**) —
+whether the dev-deploy action gets built. It decides whether this is a
+day-long docs-and-warning card or a feature card. Layers 1 and 2 are honest on
+their own and can start now.
+
 ## Checklist
 
 - [ ] Run/Debug titles and the run-lua docs state the send-the-buffer semantics
 - [ ] Pre-launch warning when `[[symlink]]` dests are missing or stale
-- [ ] Decision recorded on the dev-deploy action (`decisions/`), built or explicitly deferred
+- [ ] Decision 11 accepted or declined — dev-deploy built, or the gap documented deliberately
 
 ## Comments
 

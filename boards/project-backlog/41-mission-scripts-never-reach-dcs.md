@@ -46,8 +46,16 @@ untoggle must be byte-identical. Tests over a corpus of REAL files — stock per
 DCS version, desanitized variants, third-party loader lines, mixed EOL and
 indent — asserting untouched bytes outside the edited line.
 
+## Blocked on a decision
+
+[Decision 10](../../decisions/10-where-missionscripting-is-managed.md)
+(**Proposed**) — where the management UX lives. It decides whether this card
+introduces a webview contract at all. #73's half can start regardless; #74's
+cannot.
+
 ## Checklist
 
+- [ ] Decision 10 accepted
 - [ ] `triggerStatus` consulted on enable/install and My Mods refresh
 - [ ] Blocking-severity nudge with one-click `installMissionHooks`, deep-linking to the management screen
 - [ ] Healthy state visible too, not only the broken one

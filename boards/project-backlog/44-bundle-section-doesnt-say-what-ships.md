@@ -61,6 +61,14 @@ the manifest contract; the webview stays DOM-only per the architecture. Debounce
 with the form's existing edit debounce, minding card 26's external-change
 semantics.
 
+## No decision blocks this one
+
+Deliberately checked, not overlooked: every other card in this batch has a
+`decisions/` record gating it, and this one has none. The issues prescribe the
+answer — reuse the packager's own naming, always-include and split-threshold
+functions, probe host-side behind a `bundlePreview` message, keep the webview
+DOM-only. Nothing is left open, so it can start today.
+
 ## Checklist
 
 - [ ] Blurb states always-included manifest, layout mirroring, folder semantics, naming/splitting
