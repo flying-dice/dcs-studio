@@ -45,7 +45,7 @@ normalizing them away, and must round-trip byte-identically.
 ## Decision
 
 **A dedicated MissionScripting webview panel, with controls for the file.**
-Chosen by the repository owner (jonathan.turnock@gmail.com) on 2026-08-05.
+Chosen by the repository owner.
 
 Option 1, and named more precisely than it was proposed: the panel is scoped to
 `MissionScripting.lua` itself, not to "mission things" generally. That

@@ -32,8 +32,8 @@ plausible-sounding request.
 ## Decision
 
 **DCS Studio does not participate in editor lint. Neither route is taken.**
-Decided by the repository owner (jonathan.turnock@gmail.com) on 2026-08-05,
-doubling down on the existing position rather than carving an exception into it.
+Decided by the repository owner, doubling down on the existing position rather
+than carving an exception into it.
 
 Concretely:
 
@@ -76,6 +76,9 @@ warning treats it exactly like any other section that does not exist.
   `README.md:159` and `docs/01-getting-started/01-overview.md:42-43`, both of
   which say the product is not a Lua language server — no autocomplete, no
   type-checking, no linting — and to pair it with a Lua LSP extension.
+- If the `.d.lua` repository later makes a reference worth having, it arrives as
+  a new decision that supersedes this one. It does not arrive as an exception
+  quietly added to a template.
 
 ### The near neighbour, named deliberately
 
@@ -102,6 +105,3 @@ This is also the mechanism most likely to feed the separate `.d.lua`
 repository. That remains consistent: generating a resource is not integrating
 with a linter. What would cross the line is the extension writing that output
 into a workspace or an editor config file on the user's behalf.
-- If the `.d.lua` repository later makes a reference worth having, it arrives as
-  a new decision that supersedes this one. It does not arrive as an exception
-  quietly added to a template.

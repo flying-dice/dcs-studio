@@ -3,7 +3,7 @@ column: todo
 labels: [bug, webview, extension]
 priority: med
 review-verdict: pending
-updatedAt: 2026-08-05T19:07:50.000Z
+updatedAt: 2026-08-05T19:45:49.000Z
 ---
 # The State Explorer needs its own surface, and real actions on it
 
@@ -36,9 +36,9 @@ with it. The webview contract partitions per panel, so this is a new contract
 entry and census row, with the console's contract **losing** the explorer
 messages rather than duplicating them.
 
-Either keep the console's explorer tab for one release behind a "pop out"
-affordance, or remove it in the same change. **Do not ship two half-synced
-explorers.**
+The console's explorer tab is **removed in the same change** — decision 13, no
+pop-out and no deprecation window. The rule it protects: never ship two
+half-synced explorers.
 
 *Rejected alternative:* true multi-instance consoles. Per-instance REPL
 history/state keys, sweep-budget fan-out, and no user story the dedicated panel
@@ -75,28 +75,36 @@ the node, and — critically — the **same cycle/identity rules the export
 serializer already uses**. `_G` reaches itself, and the two features must not
 disagree about what a table is.
 
-## Blocked on two decisions
+## Decided, and what is still open
 
-- [Decision 13](../../decisions/13-explorer-as-its-own-panel.md) (**Proposed**) —
-  the explorer becomes its own panel, and what happens to the console's tab in
-  the same change. Blocks the whole chain, since #76 and #77 land wherever this
-  puts them.
-- [Decision 14](../../decisions/14-how-copy-deep-resolves-a-subtree.md)
-  (**Proposed**) — client-side sweep vs sim-side serialize for Copy Deep.
-  Blocks #77 only; #75 and #76 can proceed once 13 is accepted.
+[Decision 13](../../decisions/13-explorer-as-its-own-panel.md) is **Accepted**:
+the Explorer and the Console are separate panels, and multi-instance consoles
+are rejected. **Separate means separate — the console keeps no explorer tab, and
+there is no deprecation window.** The explorer moves in one change rather than
+existing twice for a release.
+
+That unblocks #75 and #76, which is the front of the chain.
+
+[Decision 14](../../decisions/14-how-copy-deep-resolves-a-subtree.md) is still
+**Proposed** — client-side sweep vs sim-side serialize for Copy Deep. It blocks
+#77 only, and #77 is last in the order anyway, so the card can start now and
+that answer can arrive while #75 and #76 are being built.
 
 ## Checklist
 
-- [ ] Decisions 13 and 14 accepted
+- [x] Decision 13 accepted — separate panels, console tab removed outright
+- [ ] Decision 14 accepted — Copy Deep's mechanism
 - [ ] `ExplorerPanel` with its own view type and `dcs.explorer.open`
 - [ ] `explorerConfig` push moves; console contract loses the explorer messages
 - [ ] New contract entry and census row
-- [ ] Console's explorer tab either popped-out or removed — not duplicated
+- [ ] Console's explorer tab **removed** in the same change — no pop-out, no window
+- [ ] Release note: the explorer moved and has its own command, it did not disappear
 - [ ] Rows stamped with `data-vscode-context`; real actions in `menus.webview/context`
-- [ ] Decision recorded on Copy Deep's mechanism (sweep vs sim-side)
 - [ ] Budget with truthful partial-result marker; oversized subtree refuses honestly
 - [ ] Copy Deep shares the export serializer's cycle/identity rules
 
 ## Comments
 
 - **claude** (2026-08-05T19:07:50.000Z): Raised from the v0.17.0 QA batch. #76 was nearly picked up standalone earlier in this session and deliberately was not — with #75 open, the context menu would have been built into the console panel and then moved. That is the whole reason these three share a card.
+- **claude** (2026-08-05T19:45:49.000Z): Decision 13 accepted by the owner — explorer and console are separate panels, multi-instance consoles rejected. I have read "separate panels" as also settling the sub-question the record raised, namely what happens to the console's explorer tab: separate means the console keeps none, so it is removed in the same change with no pop-out and no deprecation window. Flagging that reading explicitly because it was not stated in those words — if a pop-out was wanted, it is a one-line correction to the decision. Checklist tightened accordingly: the "either popped-out or removed" line is now just removed, and a release-note item added, since the explorer moving rather than disappearing is the kind of thing users file an issue about.
+- **claude** (2026-08-05T19:45:49.000Z): #75 and #76 are unblocked and are the front of the chain. Decision 14 (Copy Deep's mechanism) is still Proposed but gates #77 only, which is last in the order — so this card can be picked up now and that answer can land while the panel and the context menu are being built. No reason to hold the card.

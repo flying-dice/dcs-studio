@@ -1,5 +1,5 @@
 ---
-status: Proposed
+status: Accepted
 date: 2026-08-05
 ---
 # Decision 13 — The State Explorer becomes its own panel
@@ -40,21 +40,22 @@ up on its own and deliberately was not, for exactly that reason.
 
 ## Decision
 
-**Proposed: promote the Explorer to its own panel; reject multi-instance
-consoles** — awaiting the owner's acceptance. This is the direction the issue
-itself recommends, recorded here because it is a structural change with a
-contract consequence rather than a preference.
+**The Explorer and the Console are separate panels.** Multi-instance consoles
+are rejected. Decided by the repository owner.
 
-A **third question comes with it and must be answered at the same time**: what
-happens to the explorer tab already inside the console. Either keep it for one
-release behind a "pop out" affordance, or remove it in the same change. Both are
-defensible. What is not defensible is shipping two half-synced explorers, and
-that is the outcome if this is left to be decided during implementation.
+The Explorer gets its own view type and open command, reusing `explorer-core.js`
+and the existing presenter machinery, and the layout comes from VS Code's own
+editor-group splitting rather than from any multi-instance semantics invented
+here.
 
-The recommendation is to **remove it in the same change**. A deprecation window
-is worth paying for when users have automation or muscle memory built on the old
-surface; a tab inside a debug console has neither, and keeping it means every
-explorer fix lands twice for a release.
+**Separate means separate: the console does not keep an explorer tab.** The
+third question this record raised — whether to keep the tab for one release
+behind a "pop out" affordance, or remove it in the same change — is answered by
+that. There is no deprecation window. A window is worth paying for when users
+have automation or muscle memory built on the old surface; a tab inside a debug
+console has neither, and keeping it means every explorer fix lands twice for a
+release. Two half-synced explorers was the outcome worth avoiding, and one
+explorer avoids it outright.
 
 ## Consequences
 
@@ -66,8 +67,8 @@ explorer fix lands twice for a release.
 - #76 and #77 land in their final home first time.
 - The console panel gets simpler: it goes back to being a REPL, a status line and
   a message router, without a second surface embedded in it.
-- Removing the tab in the same change is a visible behaviour change for anyone
-  who used it during the v0.17.x line. It needs a release-note line, not just a
-  commit message.
+- Removing the tab is a visible behaviour change for anyone who used it during
+  the v0.17.x line. It needs a release-note line, not just a commit message —
+  the explorer did not disappear, it moved and got its own command.
 - Multi-instance consoles stay unavailable. If a story for them appears later,
   this record does not block it — it records that no such story existed now.
