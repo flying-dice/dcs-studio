@@ -259,6 +259,40 @@ test.describe("marketplace preview", () => {
     await expect(page.getByTestId("mod-card")).toHaveCount(0);
   });
 
+  test("the empty-grid sentence renders on one line, with its chips inline", async ({ page }) => {
+    // Issue #70. `.empty` is a flex COLUMN — the product-error state stacks a
+    // message over a Try-again button — so the bare text nodes and two
+    // `.mono` chips that used to sit directly inside it each became their own
+    // row, and the sentence shipped broken across five lines. This asserts the
+    // rendered geometry rather than the copy, because the copy assertion
+    // above passed the entire time the layout was wrong.
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await openPreview(page, "marketplace");
+    await page.getByTestId("browse-anon-btn").click();
+    await hostSend(page, { type: "auth", signedIn: false, browsing: true });
+    await hostSend(page, { type: "listings" });
+
+    // One evaluate, not two boundingBox() calls: the auth and listings pushes
+    // each re-render, so a locator measured across the seam reads a detached
+    // node and returns null.
+    const geometry = () =>
+      page.evaluate(() => {
+        const el = document.querySelector('[data-testid="list-empty"]');
+        const chips = el ? [...el.querySelectorAll(".mono")] : [];
+        if (!el || chips.length !== 2) return null;
+        const [a, b] = chips.map((c) => c.getBoundingClientRect());
+        return { chipDelta: Math.abs(a.top - b.top), height: el.getBoundingClientRect().height };
+      });
+    await expect.poll(geometry).not.toBeNull();
+    const g = (await geometry())!;
+
+    // Both topic chips sit on the same baseline as the prose around them.
+    expect(g.chipDelta).toBeLessThan(2);
+    // And the block is one line tall, not five rows plus four 12px gaps.
+    const EMPTY_PADDING = 160; // .empty's 80px top + 80px bottom
+    expect(g.height - EMPTY_PADDING).toBeLessThan(40);
+  });
+
   test("a product push with no manifest or requirements renders the unknown state", async ({
     page,
   }) => {

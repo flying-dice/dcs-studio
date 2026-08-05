@@ -205,7 +205,7 @@
   function renderList() {
     if (!state.authKnown) {
       app.innerHTML = shell(
-        `<div class="empty"><span class="spin">${I.refresh}</span> Connecting…</div>`,
+        `<div class="empty"><p><span class="spin">${I.refresh}</span> Connecting…</p></div>`,
       );
       return;
     }
@@ -291,14 +291,16 @@
       .sort((a, b) => (state.sort === "stars" ? b.stars - a.stars : a.name.localeCompare(b.name)));
   }
 
+  // Every `.empty` state wraps its copy in one `<p>` — the div is a flex column,
+  // so anything left as a direct child gets its own line. See marketplace.css.
   function gridHtml() {
     if (state.listBusy && state.listings.length === 0)
-      return `<div class="empty" data-testid="list-loading"><span class="spin">${I.refresh}</span> Searching GitHub…</div>`;
+      return `<div class="empty" data-testid="list-loading"><p><span class="spin">${I.refresh}</span> Searching GitHub…</p></div>`;
     const xs = filtered();
     if (xs.length === 0) {
       if (state.listings.length === 0)
-        return `<div class="empty" data-testid="list-empty">No public repos are tagged <span class="mono">${esc(state.topic)}</span> yet. Publish one by adding the <span class="mono">${esc(state.topic)}</span> topic to a GitHub repo.</div>`;
-      return `<div class="empty" data-testid="list-empty">No mods match your search.</div>`;
+        return `<div class="empty" data-testid="list-empty"><p>No public repos are tagged <span class="mono">${esc(state.topic)}</span> yet. Publish one by adding the <span class="mono">${esc(state.topic)}</span> topic to a GitHub repo.</p></div>`;
+      return `<div class="empty" data-testid="list-empty"><p>No mods match your search.</p></div>`;
     }
     return `<div class="grid">${xs.map(card).join("")}</div>`;
   }
@@ -377,7 +379,7 @@
   function renderProduct() {
     if (state.productBusy) {
       app.innerHTML = productShell(
-        `<div class="empty"><span class="spin">${I.refresh}</span> Loading ${esc(state.repo || "")}…</div>`,
+        `<div class="empty"><p><span class="spin">${I.refresh}</span> Loading ${esc(state.repo || "")}…</p></div>`,
       );
       wireBack();
       return;
