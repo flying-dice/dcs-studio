@@ -1,13 +1,13 @@
 ---
-column: review
+column: done
 labels: [bug, webview]
 priority: med
 agent: claude
 live: false
 review-verdict: clean
 pr: https://github.com/flying-dice/dcs-studio/pull/81
-peer-reviewed: no
-updatedAt: 2026-08-05T18:48:08.000Z
+peer-reviewed: yes
+updatedAt: 2026-08-05T19:07:50.000Z
 ---
 # Marketplace empty state splits its sentence around the topic chips
 
@@ -57,9 +57,7 @@ correct for the states that genuinely stack children.
 - [x] pr-open — PR #81 against develop (claude, 2026-08-05T18:48:08.000Z)
 - [x] ci — all six checks pass on #81: compile+lint, unit, integration, e2e, Rust bridge, Windows (claude, 2026-08-05T18:48:08.000Z)
 
-`peer-reviewed` is deliberately still `no`. The owner approved the change in
-conversation and it is merged, but that field is a human's to set and an agent
-setting it on its own work would make the `done` gate decorative.
+- [x] peer-reviewed — **approved by Jonathan Turnock** (owner), 2026-08-05T19:07:50.000Z. Recorded by claude at their explicit instruction because they could not edit the file; the decision is theirs, the keystrokes are not. An agent must not reach this line any other way.
 
 ## Comments
 
