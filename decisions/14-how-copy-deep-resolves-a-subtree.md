@@ -1,5 +1,5 @@
 ---
-status: Proposed
+status: Accepted
 date: 2026-08-05
 ---
 # Decision 14 — How Copy Deep resolves a subtree
@@ -41,18 +41,26 @@ failure modes, different cancellation stories, and different code homes.
 
 ## Decision
 
-**Proposed: route 1, the client-side sweep** — awaiting the owner's acceptance.
+**Route 1, the client-side sweep.** Decided by the repository owner.
 
-Route 2 is faster in the common case and it is genuinely the more elegant
-mechanism; it is declined on behaviour at the limit. A single-shot serialize of
-an oversized subtree can only fail, and the user's request — copy this node —
+Route 2 is faster in the common case and is genuinely the more elegant
+mechanism; it is declined on **behaviour at the limit**. A single-shot serialize
+of an oversized subtree can only fail, and the user's request — copy this node —
 gives no signal in advance about which side of 32MB they are on. The sweep
-degrades: it copies what it reached and says so.
+degrades instead: it copies what it reached and says so.
 
 The sim also runs single-threaded, and the mission mailbox is one slot. A long
-sim-side serialize occupies that slot for its duration with no way to abandon it;
-the sweep already runs at concurrency 1 with a generation counter that cancels
-in-flight work, which is the machinery a user pressing Escape needs.
+sim-side serialize occupies that slot for its duration with no way to abandon it.
+The sweep already runs at concurrency 1 with a generation counter that cancels
+in-flight work — the machinery a user pressing Escape needs, already built and
+already proven by the filter/sweep path.
+
+A hybrid — probe the size, take the fast path when it fits and fall back to the
+sweep when it does not — was considered and rejected. It buys the common case at
+the price of two resolution paths that must agree **exactly** about cycles and
+identity, two sets of failure modes to test, and a sizing probe that is itself a
+round-trip and can be wrong. One honest path is worth more than one fast path
+and one honest path that might disagree.
 
 ## Consequences
 

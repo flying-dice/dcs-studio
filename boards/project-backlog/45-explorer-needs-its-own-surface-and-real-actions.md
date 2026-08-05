@@ -3,7 +3,7 @@ column: todo
 labels: [bug, webview, extension]
 priority: med
 review-verdict: pending
-updatedAt: 2026-08-05T19:45:49.000Z
+updatedAt: 2026-08-05T19:50:49.000Z
 ---
 # The State Explorer needs its own surface, and real actions on it
 
@@ -62,49 +62,51 @@ The tree is lazy, so the per-node copy takes only what is **loaded**; collapsed
 descendants are absent from the clipboard. The only way to capture a full
 subtree today is the file-shaped, table-rooted JSON export.
 
-Two mechanisms, and the card must pick deliberately:
+The mechanism is settled by decision 14: **client-side sweep**, reusing the
+sweep planning and budget maths. Not the sim-side serialize, and not a hybrid.
 
-1. **Client-side sweep** — reuse the sweep planning/budget math. Honest
-   progress, cancellable; N round-trips with the sim working per request.
-2. **Sim-side serialize** — the dbExport path already serializes whole tables in
-   one call. One round-trip, but mind the bridge's 32MB payload cap and 30s
-   deadline: a huge table must **refuse honestly** rather than stall the pump.
+Required either way, and now required of the sweep: a depth/size budget with a
+truthful partial marker, a busy state on the node, and — critically — the **same
+cycle/identity rules the export serializer already uses**. `_G` reaches itself,
+and the two features must not disagree about what a table is. Make that the same
+function, not the same behaviour reimplemented.
 
-Either way: a depth/size budget with a truthful partial marker, a busy state on
-the node, and — critically — the **same cycle/identity rules the export
-serializer already uses**. `_G` reaches itself, and the two features must not
-disagree about what a table is.
+## Both decisions are made — nothing blocks this card
 
-## Decided, and what is still open
+[Decision 13](../../decisions/13-explorer-as-its-own-panel.md) — the Explorer
+and the Console are **separate panels**, multi-instance consoles rejected.
+Separate means separate: the console keeps no explorer tab and there is no
+deprecation window, so the explorer moves in one change rather than existing
+twice for a release.
 
-[Decision 13](../../decisions/13-explorer-as-its-own-panel.md) is **Accepted**:
-the Explorer and the Console are separate panels, and multi-instance consoles
-are rejected. **Separate means separate — the console keeps no explorer tab, and
-there is no deprecation window.** The explorer moves in one change rather than
-existing twice for a release.
-
-That unblocks #75 and #76, which is the front of the chain.
-
-[Decision 14](../../decisions/14-how-copy-deep-resolves-a-subtree.md) is still
-**Proposed** — client-side sweep vs sim-side serialize for Copy Deep. It blocks
-#77 only, and #77 is last in the order anyway, so the card can start now and
-that answer can arrive while #75 and #76 are being built.
+[Decision 14](../../decisions/14-how-copy-deep-resolves-a-subtree.md) — Copy
+Deep uses the **client-side sweep**, not a sim-side serialize. The reason is
+behaviour at the limit: a one-shot serialize of an oversized subtree can only
+fail, and the user gets no signal in advance about which side of the bridge's
+32MB/30s wall they are on. The sweep degrades — it copies what it reached and
+marks the result truncated — and it inherits the concurrency-1 generation
+counter that makes cancellation real. A probe-then-pick hybrid was considered
+and rejected: two resolution paths would have to agree exactly about cycles and
+identity, and one honest path beats a fast path plus an honest path that might
+disagree.
 
 ## Checklist
 
 - [x] Decision 13 accepted — separate panels, console tab removed outright
-- [ ] Decision 14 accepted — Copy Deep's mechanism
+- [x] Decision 14 accepted — Copy Deep sweeps client-side
 - [ ] `ExplorerPanel` with its own view type and `dcs.explorer.open`
 - [ ] `explorerConfig` push moves; console contract loses the explorer messages
 - [ ] New contract entry and census row
 - [ ] Console's explorer tab **removed** in the same change — no pop-out, no window
 - [ ] Release note: the explorer moved and has its own command, it did not disappear
 - [ ] Rows stamped with `data-vscode-context`; real actions in `menus.webview/context`
-- [ ] Budget with truthful partial-result marker; oversized subtree refuses honestly
-- [ ] Copy Deep shares the export serializer's cycle/identity rules
+- [ ] Copy Deep built on the sweep's planner and its concurrency-1 generation counter — cancellation must actually work
+- [ ] Budget with a truthful partial marker ("truncated at N entries / M bytes"); a silently partial deep copy is worse than the shallow one it replaces
+- [ ] Copy Deep shares the export serializer's cycle/identity rules — the same function, not the same behaviour reimplemented
 
 ## Comments
 
 - **claude** (2026-08-05T19:07:50.000Z): Raised from the v0.17.0 QA batch. #76 was nearly picked up standalone earlier in this session and deliberately was not — with #75 open, the context menu would have been built into the console panel and then moved. That is the whole reason these three share a card.
 - **claude** (2026-08-05T19:45:49.000Z): Decision 13 accepted by the owner — explorer and console are separate panels, multi-instance consoles rejected. I have read "separate panels" as also settling the sub-question the record raised, namely what happens to the console's explorer tab: separate means the console keeps none, so it is removed in the same change with no pop-out and no deprecation window. Flagging that reading explicitly because it was not stated in those words — if a pop-out was wanted, it is a one-line correction to the decision. Checklist tightened accordingly: the "either popped-out or removed" line is now just removed, and a release-note item added, since the explorer moving rather than disappearing is the kind of thing users file an issue about.
 - **claude** (2026-08-05T19:45:49.000Z): #75 and #76 are unblocked and are the front of the chain. Decision 14 (Copy Deep's mechanism) is still Proposed but gates #77 only, which is last in the order — so this card can be picked up now and that answer can land while the panel and the context menu are being built. No reason to hold the card.
+- **claude** (2026-08-05T19:50:49.000Z): Decision 14 accepted by the owner — Copy Deep uses the **client-side sweep**. Both decisions on this card are now made, so the whole chain #75 → #76 → #77 is unblocked and it can be picked up end to end. I also put a probe-then-pick hybrid on the table and it was rejected with the other two: worth knowing it was considered, because "why not try the fast path first?" is the obvious question and the answer is that two resolution paths would have to agree exactly about cycles and identity — one honest path beats a fast path plus an honest path that might disagree. Checklist sharpened on the two things easiest to skip under the sweep: cancellation must actually work (build on the generation counter, do not invent a second one), and the partial marker must be truthful, since a silently partial deep copy is worse than the shallow copy it replaces because it looks complete.
