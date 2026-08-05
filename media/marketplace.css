@@ -317,6 +317,16 @@ select {
   padding: 80px 24px;
   font-size: 13px;
 }
+/* The column direction above is for the states that genuinely stack children —
+   the product error puts a message over a Try-again button. It also means every
+   direct child is a flex ROW, so a state built from bare text nodes and inline
+   `<span class="mono">` chips renders one node per line (issue #70: the
+   empty-grid sentence shipped broken across five). Each state in marketplace.js
+   therefore wraps its copy in a single `<p>` — one flex item, chips inline —
+   and the paragraph gives up its default 1em margins to the column's `gap`. */
+.empty p {
+  margin: 0;
+}
 /* ── Product page ── */
 .product {
   max-width: 1000px;

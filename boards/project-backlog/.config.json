@@ -5,8 +5,52 @@
     { "id": "todo", "name": "To Do", "color": "#4c8bf5" },
     { "id": "blocked", "name": "Blocked", "color": "#e5534b" },
     { "id": "doing", "name": "In Progress", "color": "#5cd68a", "wip": 3 },
-    { "id": "review", "name": "In Review", "color": "#d99a30" },
-    { "id": "done", "name": "Done", "color": "#3fb27f" }
+    {
+      "id": "review",
+      "name": "In Review",
+      "color": "#d99a30",
+      "enter": [
+        {
+          "id": "static",
+          "label": "Lint and typecheck clean",
+          "script": "npm run lint && npm run typecheck:tests"
+        },
+        {
+          "id": "coverage",
+          "label": "The three JS layers, serially, each against its own 100% gate",
+          "script": "npm run coverage"
+        },
+        {
+          "id": "code-review",
+          "label": "Local code review came back with nothing blocking",
+          "field": "review-verdict",
+          "check": "= clean"
+        },
+        {
+          "id": "pr-open",
+          "label": "Raised as a PR against main, not pushed to it",
+          "field": "pr"
+        },
+        {
+          "id": "ci",
+          "label": "All six CI checks green on that PR — the only gate covering Rust and Windows",
+          "script": "gh pr checks"
+        }
+      ]
+    },
+    {
+      "id": "done",
+      "name": "Done",
+      "color": "#3fb27f",
+      "enter": [
+        {
+          "id": "peer-reviewed",
+          "label": "A human approved the change — theirs to set, never an agent's",
+          "field": "peer-reviewed",
+          "check": "= yes"
+        }
+      ]
+    }
   ],
   "labels": {
     "extension": { "name": "extension", "color": "#4c8bf5" },
@@ -19,5 +63,19 @@
     "bug": { "name": "bug", "color": "#e5534b" },
     "process": { "name": "process", "color": "#b0783c" }
   },
-  "fields": []
+  "fields": [
+    {
+      "id": "review-verdict",
+      "label": "Local code review",
+      "type": "select",
+      "options": ["pending", "findings", "clean"]
+    },
+    { "id": "pr", "label": "Pull request", "type": "text" },
+    {
+      "id": "peer-reviewed",
+      "label": "Peer reviewed",
+      "type": "select",
+      "options": ["no", "yes"]
+    }
+  ]
 }
