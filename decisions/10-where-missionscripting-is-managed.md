@@ -1,8 +1,8 @@
 ---
-status: Proposed
+status: Accepted
 date: 2026-08-05
 ---
-# Decision 10 — Where the MissionScripting.lua management UX lives
+# Decision 10 — A dedicated MissionScripting panel
 
 ## Context
 
@@ -44,19 +44,38 @@ normalizing them away, and must round-trip byte-identically.
 
 ## Decision
 
-**Proposed: option 1, a dedicated Mission webview panel** — awaiting the owner's
-acceptance.
+**A dedicated MissionScripting webview panel, with controls for the file.**
+Chosen by the repository owner (jonathan.turnock@gmail.com) on 2026-08-05.
 
-Option 3 is cheapest and is genuinely tempting, but a QuickPick cannot show the
-"unmanaged content" state, and that state is the whole safety story for a file
-users hand-edit. A surface that silently omits the lines it does not understand
-teaches the user it manages the file, when it manages part of it.
+Option 1, and named more precisely than it was proposed: the panel is scoped to
+`MissionScripting.lua` itself, not to "mission things" generally. That
+distinction matters, because `dcs.mission.*` already exists as a broader command
+namespace and a panel called Mission would imply it owns all of it. This one
+owns a file.
 
-Option 2 is the closest call. Setup is the right *category* — this is machine
-configuration, not project configuration. It is rejected on size: per-item
-toggles, trigger-line status, backup affordances and an unmanaged-content region
-are a screen, not a section, and folding them into Setup makes Setup the panel
-that does everything.
+"Controls for the file" is the whole of its managed surface, per #74 and #73:
+
+- one row per sanitize lockdown item (`os`, `io`, `lfs`, `loadlib`, `require`,
+  …) with its current state, a toggle, and what enabling or disabling it means
+  in plain language;
+- the DCS Studio trigger lines and their status, so the file's managed state is
+  one screen rather than two features;
+- restore-original and view-backup, over the service's existing backup-first
+  behaviour;
+- an honest **unmanaged content** region for everything the domain does not
+  recognize.
+
+Option 3 (stay command-driven, a QuickPick over `ITEMS`) is cheapest and was
+genuinely tempting, but a QuickPick cannot show unmanaged content — and that
+state is the entire safety story for a file users hand-edit. A surface that
+silently omits the lines it does not understand teaches the user it manages the
+file, when it manages part of it.
+
+Option 2 (a section inside Setup) was the closest call. Setup is the right
+*category* — this is machine configuration, not project configuration. It is
+rejected on size: toggles, trigger status, backup affordances and an
+unmanaged-content region are a screen, not a section, and folding them in makes
+Setup the panel that does everything.
 
 ## Consequences
 
@@ -72,6 +91,9 @@ that does everything.
   code-review promise: stock file per DCS version, desanitized variants, files
   with third-party loader lines, mixed EOL and indent, each asserting untouched
   bytes outside the edited line.
-- If the owner picks option 3 instead, card 41 shrinks by roughly a panel's worth
-  of work and #73's nudge deep-links to a command rather than a view — acceptable,
-  at the price of never being able to show unmanaged content honestly.
+- Naming follows the file: a `MissionScripting` view type and an open command in
+  its own namespace, rather than extending `dcs.mission.*`. The existing
+  commands are about mission things; this panel is about one file, and blurring
+  them is how a panel ends up owning more than its name says.
+- Card 41 is unblocked. #73's nudge and #74's screen can be built together
+  rather than one waiting on the other.
