@@ -1,5 +1,6 @@
 import { win32 as path } from "node:path";
 import * as vscode from "vscode";
+import type { BundlePreviewService } from "../core/app/bundlePreviewService";
 import type { ManifestInbound } from "../core/app/manifestPresenter";
 import { ManifestPresenter } from "../core/app/manifestPresenter";
 import type { InstallRootsPort } from "../core/ports/installRoots";
@@ -28,6 +29,7 @@ export class ManifestFormPanel {
     context: vscode.ExtensionContext,
     document: vscode.TextDocument,
     roots: InstallRootsPort,
+    bundlePreview: BundlePreviewService,
   ): void {
     const key = document.uri.toString();
     const existing = ManifestFormPanel.panels.get(key);
@@ -41,7 +43,10 @@ export class ManifestFormPanel {
       `Form: ${path.basename(document.uri.fsPath)}`,
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
     );
-    ManifestFormPanel.panels.set(key, new ManifestFormPanel(panel, context, document, roots));
+    ManifestFormPanel.panels.set(
+      key,
+      new ManifestFormPanel(panel, context, document, roots, bundlePreview),
+    );
   }
 
   private constructor(
@@ -49,6 +54,7 @@ export class ManifestFormPanel {
     private readonly context: vscode.ExtensionContext,
     private readonly document: vscode.TextDocument,
     installRoots: InstallRootsPort,
+    bundlePreview: BundlePreviewService,
   ) {
     // Keyed by document rather than a single `current`: one form per manifest,
     // so the slot this releases is its entry in the map.
@@ -65,6 +71,13 @@ export class ManifestFormPanel {
         await vscode.workspace.applyEdit(edit);
       },
       post: webviewPoster(panel),
+      // The manifest's own folder, not the workspace root: the form is keyed by
+      // document and a repo may hold more than one, so `[[bundle]]` paths are
+      // relative to the file that declares them — which is what publish packages
+      // from too.
+      projectRoot: path.dirname(document.uri.fsPath),
+      bundlePreview,
+      openDocs: (page) => void vscode.commands.executeCommand("dcs.docs.open", page),
     });
     this.panel.webview.html = this.html();
 

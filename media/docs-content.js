@@ -270,8 +270,9 @@ dest = "{SavedGames}/Scripts/f16-weapons.lua"</code></pre>
 <p>Zero or more entries. Each declares one path packed into the release <a data-page="mod-bundles">bundle</a> (the <code>.7z</code>) when you publish. Bundling is decoupled from linking: bundle a whole folder here, then link only the pieces you need with <code>[[symlink]]</code>.</p>
 <table>
   <tr><th>Key</th><th>Required</th><th>Meaning</th></tr>
-  <tr><td><code>path</code></td><td>Yes</td><td>A file or directory, <strong>relative to the project root</strong>. Must exist on disk at publish time and must not itself be a symlink (the packager refuses symlinks). Repeated identical paths are packed once.</td></tr>
+  <tr><td><code>path</code></td><td>Yes</td><td>A file or directory, <strong>relative to the project root</strong>. Must exist on disk at publish time and must not itself be a symlink (the packager refuses symlinks). Repeated identical paths are packed once, and a blank one is ignored rather than treated as the project root.</td></tr>
 </table>
+<p><code>dcs-studio.toml</code> itself is packed alongside these entries whether or not you list it — it is what makes the release readable without downloading the payload. The manifest form draws the resulting archive under the <code>[[bundle]]</code> section as you edit, so you can see the tree, the file counts and any path that has not been built yet before you publish.</p>
 
 <h2><code>[[symlink]]</code> — what gets linked on enable</h2>
 <p>Zero or more links, created when a user enables the mod and removed when they disable it. Each <code>source</code> must resolve to a path <strong>inside the bundled content</strong> — preflight rejects a symlink whose source no <code>[[bundle]]</code> path covers, because the payload would never ship that file.</p>

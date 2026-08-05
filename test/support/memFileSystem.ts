@@ -1,5 +1,5 @@
 import { win32 as path } from "node:path";
-import type { FileSystemPort } from "../../src/core/ports/filesystem";
+import type { FileSystemPort, PathMeasure } from "../../src/core/ports/filesystem";
 
 // The one in-memory `FileSystemPort` the core-service unit tests run against.
 //
@@ -64,6 +64,30 @@ export class MemFileSystem implements FileSystemPort {
       if (entry.startsWith(prefix)) names.add(entry.slice(prefix.length).split(path.sep)[0]);
     }
     return [...names];
+  }
+
+  /**
+   * Sizes are the UTF-8 byte length of the stored text, not its character
+   * count — the reference adapter writes UTF-8, so a fake measuring
+   * `contents.length` would answer differently for every non-ASCII manifest and
+   * the contract suite would not catch it, since both are asked the same
+   * question through the same `writeText`.
+   */
+  async measure(p: string): Promise<PathMeasure | null> {
+    const k = key(p);
+    const contents = this.files.get(k);
+    if (contents !== undefined)
+      return { directory: false, files: 1, bytes: Buffer.byteLength(contents, "utf8") };
+    if (!this.dirs.has(k)) return null;
+    const prefix = childPrefix(k);
+    let files = 0;
+    let bytes = 0;
+    for (const [entry, text] of this.files) {
+      if (!entry.startsWith(prefix)) continue;
+      files++;
+      bytes += Buffer.byteLength(text, "utf8");
+    }
+    return { directory: true, files, bytes };
   }
 
   async remove(p: string): Promise<void> {

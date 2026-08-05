@@ -1,4 +1,4 @@
-import type { FileSystemPort } from "../../src/core/ports/filesystem";
+import type { FileSystemPort, PathMeasure } from "../../src/core/ports/filesystem";
 
 // A `FileSystemPort` decorator: records every call and can be told to reject a
 // specific one. It is deliberately not a second implementation — the semantics
@@ -63,6 +63,10 @@ export class RecordingFileSystem implements FileSystemPort {
 
   async readDir(p: string): Promise<string[]> {
     return this.run("readDir", [p], () => this.inner.readDir(p));
+  }
+
+  async measure(p: string): Promise<PathMeasure | null> {
+    return this.run("measure", [p], () => this.inner.measure(p));
   }
 
   async remove(p: string): Promise<void> {

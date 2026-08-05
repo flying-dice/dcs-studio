@@ -22,6 +22,7 @@ import { BridgeClients } from "./bridge/clients";
 import { registerBridgeCommands } from "./bridge/commands";
 import { type BridgeFs, nodeBridgeFs } from "./bridge/deploy";
 import { DcsLauncher } from "./bridge/launch";
+import { BundlePreviewService } from "./core/app/bundlePreviewService";
 import { DetectService } from "./core/app/detectService";
 import { MissionSanitizeService } from "./core/app/missionSanitizeService";
 import { PublishService } from "./core/app/publishService";
@@ -128,11 +129,27 @@ export function activate(
     ),
   );
 
+  // ── Composition root ──────────────────────────────────────────────────────
+  // Construct the port adapters ONCE and inject them into the core services the
+  // panels/commands drive. This is the only place implementations are chosen;
+  // panels receive service instances (never adapter classes) via their show(…)
+  // entry points. Adapter constructors are cheap (no I/O), and the manifest core
+  // (media/manifest-core.js) is loaded lazily on first use, so this adds no
+  // measurable activation cost. Shared stateless adapters are reused.
+  const fsPort = new NodeFileSystem();
+
   // Opening a dcs-studio.toml keeps the real text editor and auto-opens the
   // authoring form beside it (a split view). The document is the source of truth;
   // form and code editor are two-way bound.
+  //
+  // Wired here rather than above the composition root, where it used to sit,
+  // because the form's archive preview needs a real `FileSystemPort` — and the
+  // `forEach` below runs during activation, so the service has to exist by the
+  // time this block does, not merely by the end of `activate`.
+  const bundlePreview = new BundlePreviewService(fsPort);
   const openFormFor = (doc: vscode.TextDocument | undefined) => {
-    if (doc && isManifest(doc)) ManifestFormPanel.openBeside(context, doc, installRoots);
+    if (doc && isManifest(doc))
+      ManifestFormPanel.openBeside(context, doc, installRoots, bundlePreview);
   };
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument(openFormFor),
@@ -143,14 +160,6 @@ export function activate(
   // A manifest already open when the extension activates.
   vscode.workspace.textDocuments.forEach(openFormFor);
 
-  // ── Composition root ──────────────────────────────────────────────────────
-  // Construct the port adapters ONCE and inject them into the core services the
-  // panels/commands drive. This is the only place implementations are chosen;
-  // panels receive service instances (never adapter classes) via their show(…)
-  // entry points. Adapter constructors are cheap (no I/O), and the manifest core
-  // (media/manifest-core.js) is loaded lazily on first use, so this adds no
-  // measurable activation cost. Shared stateless adapters are reused.
-  const fsPort = new NodeFileSystem();
   const archive = new SevenZipArchive(() =>
     vscode.workspace.getConfiguration("dcsStudio").get<string>("sevenZipPath"),
   );
@@ -197,6 +206,7 @@ export function activate(
 
   registerPanelCommands(context, {
     publish,
+    bundlePreview,
     manifestPort,
     subscriptions,
     marketplace,
@@ -294,7 +304,7 @@ export function activate(
     void context.globalState.update(PENDING_OPEN_KEY, undefined);
     const ws = vscode.workspace.workspaceFolders?.[0];
     if (ws?.uri.scheme === "file" && samePath(ws.uri.fsPath, pending)) {
-      void openManifest(context);
+      void openManifest(context, bundlePreview);
     }
   }
 
@@ -346,6 +356,7 @@ export function activate(
  */
 interface PanelCommandDeps {
   publish: PublishService;
+  bundlePreview: BundlePreviewService;
   manifestPort: VsCodeManifest;
   subscriptions: SubscriptionService;
   marketplace: GithubMarketplace;
@@ -370,6 +381,7 @@ function registerPanelCommands(
   context: vscode.ExtensionContext,
   {
     publish,
+    bundlePreview,
     manifestPort,
     subscriptions,
     marketplace,
@@ -382,7 +394,9 @@ function registerPanelCommands(
   }: PanelCommandDeps,
 ): void {
   context.subscriptions.push(
-    vscode.commands.registerCommand("dcs.manifest.author", () => openManifest(context)),
+    vscode.commands.registerCommand("dcs.manifest.author", () =>
+      openManifest(context, bundlePreview),
+    ),
     vscode.commands.registerCommand("dcs.project.new", () => NewProjectPanel.show(context)),
     vscode.commands.registerCommand("dcs.publish.open", () =>
       PublishPanel.show(context, publish, manifestPort),
@@ -457,7 +471,10 @@ async function nudgeSkillUpdate(
  * split view (text editor + authoring form beside it). Otherwise open the
  * guided New Project experience to bootstrap a project from a template.
  */
-async function openManifest(context: vscode.ExtensionContext): Promise<void> {
+async function openManifest(
+  context: vscode.ExtensionContext,
+  bundlePreview: BundlePreviewService,
+): Promise<void> {
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (folder) {
     const uri = vscode.Uri.joinPath(folder.uri, MANIFEST_FILE);
@@ -468,7 +485,7 @@ async function openManifest(context: vscode.ExtensionContext): Promise<void> {
     if (exists) {
       const doc = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
-      ManifestFormPanel.openBeside(context, doc, installRoots);
+      ManifestFormPanel.openBeside(context, doc, installRoots, bundlePreview);
       return;
     }
   }

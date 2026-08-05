@@ -276,6 +276,79 @@ select.in {
   color: var(--vscode-foreground);
 }
 
+/* ── Archive preview: the tree under the [[bundle]] card ──
+   Distinct from `.preview` below, which is the Document pane on the right.
+   This one is what the release .7z would contain. */
+.linkish {
+  /* `.section-label` is a flex row, so this pushes to its far end. */
+  margin-left: auto;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 400;
+  color: var(--vscode-textLink-foreground);
+  text-decoration: underline;
+}
+.linkish:hover {
+  color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground));
+}
+
+.archive {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--vscode-editor-background);
+  overflow: hidden;
+}
+.archive-head {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--vscode-foreground);
+  word-break: break-all;
+}
+.archive-tree {
+  list-style: none;
+  margin: 0;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.archive-tree li {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.archive-tree .stem {
+  color: var(--muted);
+  flex: none;
+}
+.archive-tree .path {
+  /* The path is the row's subject: it keeps the space and wraps rather than
+     shoving the note off the end of a narrow panel. */
+  min-width: 0;
+  word-break: break-all;
+}
+.archive-tree .note {
+  color: var(--muted);
+  flex: none;
+}
+.archive-foot {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 /* ── Preview ── */
 .preview {
   position: sticky;

@@ -18,6 +18,7 @@ vi.mock("fs", () => ({ existsSync: (p: string) => existing.includes(p) }));
 
 import * as vscode from "vscode";
 import { installRoots } from "../../../src/adapters/vscode/installRoots";
+import { BundlePreviewService } from "../../../src/core/app/bundlePreviewService";
 import { ManifestFormPanel } from "../../../src/manifest/formPanel";
 
 // The wiring `src/manifest/formPanel.ts` is now the only witness for: the panel
@@ -51,8 +52,24 @@ const context = () =>
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
+// A real service over a stub probe. `fs` is mocked down to `existsSync` in this
+// file, so the node adapter cannot run here — and it does not need to: what this
+// file witnesses is that the panel HANDS the presenter a root and a service, and
+// the measuring itself is covered against a real disk in
+// test/integration/adapters/nodeFileSystem.test.ts.
+const previewService = () =>
+  new BundlePreviewService({
+    measure: async (p: string) =>
+      p.endsWith(".toml") ? { directory: false, files: 1, bytes: 9 } : null,
+  });
+
 function open(doc = document()) {
-  ManifestFormPanel.openBeside(context(), doc as unknown as vscode.TextDocument, installRoots);
+  ManifestFormPanel.openBeside(
+    context(),
+    doc as unknown as vscode.TextDocument,
+    installRoots,
+    previewService(),
+  );
   return { doc, panel: state.panels[state.panels.length - 1] };
 }
 
@@ -194,6 +211,35 @@ describe("form to document", () => {
     expect(state.appliedEdits).toEqual([
       { uri: `file://${DOC_PATH}`, text: '[project]\nname = "new"\n' },
     ]);
+  });
+});
+
+describe("form to the rest of the extension", () => {
+  it("measures the archive against the MANIFEST'S folder, not the workspace root", async () => {
+    // The panel is keyed by document and a repo may hold more than one manifest,
+    // so `[[bundle]]` paths are relative to the file that declares them — which
+    // is what publish packages from too.
+    const { panel } = open(document("D:\\repo\\addons\\mod-b\\dcs-studio.toml"));
+    await panel.webview.receive({ type: "bundlePreview", bundle: [], name: "m", version: "1" });
+    await flush();
+
+    // The stub answers only for the .toml, so a preview measured from anywhere
+    // else would come back with the manifest row missing.
+    expect(panel.webview.posted.at(-1)).toMatchObject({
+      type: "bundlePreviewResult",
+      preview: { rows: [{ path: "dcs-studio.toml", kind: "file" }] },
+    });
+  });
+
+  it("opens the manual through the docs command", async () => {
+    const { panel } = open();
+    await panel.webview.receive({ type: "openDocs", page: "mod-bundles" });
+    await flush();
+
+    expect(state.executedCommands).toContainEqual({
+      command: "dcs.docs.open",
+      args: ["mod-bundles"],
+    });
   });
 });
 

@@ -1,3 +1,5 @@
+import { errorText } from "../domain/errorText";
+import type { BundlePreviewService } from "./bundlePreviewService";
 import type {
   ManifestBootstrap,
   ManifestHostMessage,
@@ -80,6 +82,15 @@ export interface ManifestPresenterDeps {
    * the contract being updated first.
    */
   post: (msg: ManifestHostMessage) => void;
+  /**
+   * The project directory the form's `[[bundle]]` paths are relative to — the
+   * manifest's own folder, which is what publish packages from.
+   */
+  projectRoot: string;
+  /** Measures the archive the form's current entries would produce. */
+  bundlePreview: BundlePreviewService;
+  /** Open a page of the manual — the `[[bundle]]` label's deep link. */
+  openDocs: (page: string) => void;
 }
 
 export class ManifestPresenter {
@@ -159,7 +170,57 @@ export class ManifestPresenter {
       case "edit":
         await this.edit(msg.text);
         break;
+      case "bundlePreview":
+        await this.previewBundle(msg);
+        break;
+      case "openDocs":
+        if (typeof msg.page === "string" && msg.page) this.deps.openDocs(msg.page);
+        break;
     }
+  }
+
+  /**
+   * Which `bundlePreview` request is the current one. Bumped on arrival and
+   * re-read after the measuring `await`, so a request overtaken while it was
+   * walking the disk posts nothing at all.
+   *
+   * This is what buys the protocol its lack of a request id. The form asks on
+   * every debounced change, the panel dispatches with `void handle(m)` rather
+   * than serialising, and measuring a `target/` tree takes long enough that a
+   * later, smaller request finishes first — so without this the form could
+   * settle showing an older answer than one it had already been given, with
+   * nothing on screen suggesting it was stale. Dropping the loser is right
+   * rather than merely cheap: nobody wants the answer to a question they have
+   * already changed.
+   */
+  private previewGeneration = 0;
+
+  private async previewBundle(msg: {
+    bundle?: { path?: string }[];
+    name?: string;
+    version?: string;
+  }): Promise<void> {
+    const generation = ++this.previewGeneration;
+    let result: ManifestHostMessage;
+    try {
+      const preview = await this.deps.bundlePreview.preview(this.deps.projectRoot, {
+        // Everything here crossed a process boundary from a document that may be
+        // stale, so the shapes are rebuilt rather than trusted: a `bundle` that
+        // is not an array, or a row whose `path` is not a string, is what a
+        // crafted or half-updated post looks like and must not reach a
+        // `path.join`.
+        bundle: (Array.isArray(msg.bundle) ? msg.bundle : []).map((b) => ({
+          path: typeof b?.path === "string" ? b.path : "",
+        })),
+        name: typeof msg.name === "string" ? msg.name : "",
+        version: typeof msg.version === "string" ? msg.version : "",
+      });
+      result = { type: "bundlePreviewResult", preview };
+    } catch (e) {
+      result = { type: "bundlePreviewResult", error: errorText(e) };
+    }
+    if (generation !== this.previewGeneration) return;
+    this.deps.post(result);
   }
 
   /**

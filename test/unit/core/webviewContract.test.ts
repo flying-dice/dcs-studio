@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { BundlePreviewService } from "../../../src/core/app/bundlePreviewService";
 import type {
   ConsoleBridge,
   ConsoleEffect,
@@ -87,6 +88,7 @@ import type { DcsCandidate } from "../../../src/core/domain/dcsDetect";
 import type { Check } from "../../../src/core/domain/publishChecks";
 import type { SkillInfo } from "../../../src/core/domain/skillsStatus";
 import type { ManifestModel, ProductDetail, Subscription } from "../../../src/core/domain/types";
+import { MemFileSystem } from "../../support/memFileSystem";
 
 // The HOST half of the declared webview contract
 // (`src/core/app/webviewContract.ts`), both directions, table-driven.
@@ -623,6 +625,13 @@ function manifestHarness(over: Partial<ManifestPresenterDeps> = {}): ManifestHar
       text = next;
     },
     post: (msg) => posted.push(msg),
+    projectRoot: "C:\\proj",
+    // A real service over an in-memory disk, not a stub: `bundlePreview` is a
+    // request whose whole point is the answer, and a stub returning a canned
+    // object would let the presenter's argument-rebuilding drop a field without
+    // anything noticing.
+    bundlePreview: new BundlePreviewService(new MemFileSystem().seedFile("C:\\proj\\a.lua", "x")),
+    openDocs: (page) => calls.push(`openDocs:${page}`),
     ...over,
   };
   return {
@@ -868,6 +877,10 @@ const MANIFEST_DRIVES: Record<ManifestInbound["type"], Drive<ManifestInbound>> =
   // Deliberately not the document's current text: an identical buffer is refused
   // by design, so driving with one would test the refusal, not the handler.
   edit: { send: { type: "edit", text: '[project]\nname = "renamed-in-the-form"\n' } },
+  bundlePreview: {
+    send: { type: "bundlePreview", bundle: [{ path: "a.lua" }], name: "my-mod", version: "1.0.0" },
+  },
+  openDocs: { send: { type: "openDocs", page: "mod-bundles" } },
 };
 
 const DOCS_DRIVES: Record<DocsInbound["type"], Drive<DocsInbound>> = {
@@ -1332,6 +1345,9 @@ describe("manifest — host -> webview", () => {
     h.presenter.onDocumentChanged();
     // `roots` — the DCS paths changed while the form was open.
     h.presenter.pushRoots();
+    // `bundlePreviewResult` — the one message this panel sends in ANSWER to
+    // something, and the reason the protocol is no longer one-way per direction.
+    await h.presenter.handle({ type: "bundlePreview", bundle: [], name: "m", version: "1" });
 
     expect(typesOf(h.posted)).toEqual([...MANIFEST_PROTOCOL.toWebview].sort());
   });
