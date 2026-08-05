@@ -4,7 +4,10 @@ labels: [bug, webview]
 priority: med
 agent: claude
 live: false
-updatedAt: 2026-08-05T18:40:23.000Z
+review-verdict: clean
+pr: https://github.com/flying-dice/dcs-studio/pull/81
+peer-reviewed: no
+updatedAt: 2026-08-05T18:48:08.000Z
 ---
 # Marketplace empty state splits its sentence around the topic chips
 
@@ -46,6 +49,18 @@ correct for the states that genuinely stack children.
 - [x] Thresholds chosen from measured values, and two-sided
 - [x] Full gate green (`npm run pre-commit`)
 
+## Gates
+
+- [x] static — `npm run lint && npm run typecheck:tests` clean, 307 files (claude, 2026-08-05T18:48:08.000Z)
+- [x] coverage — `npm run coverage` green: unit 100% (2076 stmts), integration 100% (2062 stmts), e2e 100% across 14 webview scripts (claude, 2026-08-05T18:48:08.000Z)
+- [x] code-review — bounced once for a flaky test, clean on the second pass; findings and fixes journaled below (claude, 2026-08-05T18:48:08.000Z)
+- [x] pr-open — PR #81 against develop (claude, 2026-08-05T18:48:08.000Z)
+- [x] ci — all six checks pass on #81: compile+lint, unit, integration, e2e, Rust bridge, Windows (claude, 2026-08-05T18:48:08.000Z)
+
+`peer-reviewed` is deliberately still `no`. The owner approved the change in
+conversation and it is merged, but that field is a human's to set and an agent
+setting it on its own work would make the `done` gate decorative.
+
 ## Comments
 
 - **claude** (2026-08-05T18:00:16.000Z): Picked this up as the first of the v0.17.0 QA batch (#70-#80), working them in issue order. Confirmed the root cause reading `media/marketplace.css:310-319` against the four `.empty` call sites in `media/marketplace.js` — only `:301` ("No mods match your search.") is a lone text node and renders correctly today. The three spinner states share the defect with the reported one, so they are in scope here rather than left for a second pass at the same six lines.
@@ -58,3 +73,4 @@ correct for the states that genuinely stack children.
 - **claude** (2026-08-05T18:40:23.000Z): Both findings fixed in `tests/marketplace.spec.ts`. The test now drains the fixture with `toHaveCount(12)` before pushing anything of its own (`:326`), and the measurement moved into a `page.waitForFunction` that polls in the browser and hands back the value it settled on — one layout, one read, no second evaluate to straddle a re-render. `--repeat-each=48 --workers=8 --retries=0`: 48/48, against 12/24 failing before.
 - **claude** (2026-08-05T18:40:23.000Z): Second review pass on my own fix found three more things, all now closed. (1) **Test gap of my own making** — I changed the three spinner states but only tested the empty-grid one, so the coverage gate proved those lines execute while nothing proved they lay out on one row. Added `:339-357`, which drives `list-loading` and fails at 46px on the unwrapped markup. (2) **The 40px ceiling was badly placed** — measured the real values rather than keep guessing: one line is 17, the smallest stacked layout is 46 (two line boxes plus the column's 12px gap). 40 left only 6px of headroom, so a runner with smaller font metrics could have passed on broken markup. It is 30 now, which still catches stacking at a 13px line box and still tolerates the copy wrapping. (3) **A false-green hole in my helper** — a state present but not laid out measures 0, `contentHeight` goes to -160, and every ceiling passes. The wait now requires a non-zero height, so that case times out by name instead.
 - **claude** (2026-08-05T18:40:23.000Z): Shared `measureEmptyState` at `tests/marketplace.spec.ts:5-51` backs both tests. It is deliberately structure-blind — it looks for spans, never for the `<p>` that fixes the bug — so broken markup fails an assertion with a number in it rather than timing out. Verified both tests still fail on their own reverted markup before accepting green: chip spread 56 (ceiling 2) and spinner height 46 (ceiling 30). Gate: lint, `typecheck:tests`, 1428 unit, 914 integration, 268 e2e, `coverage:e2e` 100% across 14 webview scripts.
+- **claude** (2026-08-05T18:48:08.000Z): Merged as `19f5f17` and the branch is deleted. **#70 is still open on GitHub** — the PR said `Closes #70`, but GitHub only auto-closes on merge into the DEFAULT branch, and this went to `develop`. It will close when develop ships to `main`; nobody needs to close it by hand. Retro-fitted this card to the review gates added to `.config.json` in the same sweep, since it is the worked example the guide points at.
