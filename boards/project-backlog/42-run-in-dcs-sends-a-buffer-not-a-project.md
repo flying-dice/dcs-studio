@@ -3,7 +3,7 @@ column: todo
 labels: [bug, extension]
 priority: high
 review-verdict: pending
-updatedAt: 2026-08-05T19:07:50.000Z
+updatedAt: 2026-08-05T19:59:04.000Z
 ---
 # Run in DCS sends a buffer, not a project
 
@@ -29,36 +29,50 @@ file simply was not there.
 The QA session's file was in Saved Games from an **earlier manual copy** — which
 is why the failure looked like a deployment bug rather than a missing feature.
 
-## Fix direction — layered, cheapest first
+## Fix direction — settled by decision 11
 
-1. **Name the semantics where the user is looking.** Run/Debug editor titles and
-   the run-lua docs page say it sends this file's source to the live sim, and
-   that files it loads from disk must already be installed.
-2. **Warn on the failure shape we can predict.** When the project's manifest has
-   `[[symlink]]` entries whose dest files are missing or stale against their
-   sources, warn before launch and point at the install/enable action.
-3. **Consider a real dev-deploy action** — "Install project to Saved Games
-   (dev)", applying the manifest's symlink rules from the *workspace* rather
-   than a release bundle, so multi-file hook development has a supported loop:
-   edit → dev-install (links, so edits stay live) → Run in DCS.
+[Decision 11](../../decisions/11-two-ways-to-run.md) is **Accepted**, and it
+reframed the card rather than picking from its original menu. Running a file and
+running a project are two different acts with different guarantees, so they get
+two commands rather than one command with a mode:
 
-Steps 1 and 2 are ready to build. **Step 3 is a design decision and is likely
-the actual want behind the report** — do not let the cheap steps close the card
-without a deliberate answer on it.
+1. **Right-click Run in DCS is kept exactly as it is.** Sending the buffer is
+   the right answer for a self-contained script, and it is fast. No deployment
+   is added to this path — it is not a shortcoming to be fixed.
+2. **A central "Run project in DCS"** — project-level, not a per-file context
+   action — which goes through the whole process a deployed mod goes through:
+   build the bundle publish would produce, install it exactly as a marketplace
+   mod is installed, then run. Chosen over applying symlink rules from the
+   workspace because the point of running a project is to answer "does my mod
+   actually work", and only a byte-identical artefact answers that.
+3. **`dofile`/`require` detection bridges them.** Statically scan the file; when
+   someone right-click-runs a file that uses either, warn that it will not work
+   and point at Run project in DCS.
 
-## Blocked on a decision
+Note what part 3 **replaces**: the original plan was to warn when the manifest's
+`[[symlink]]` dests were missing or stale. Detection is the better signal,
+because it keys off what the file actually does — so it fires even when the
+manifest is wrong, absent, or is itself the thing the user misunderstood, which
+is exactly what happened in the report that produced this ticket.
 
-[Decision 11](../../decisions/11-dev-deploy-for-run-in-dcs.md) (**Proposed**) —
-whether the dev-deploy action gets built. It decides whether this is a
-day-long docs-and-warning card or a feature card. Layers 1 and 2 are honest on
-their own and can start now.
+## Nothing blocks this card
+
+Decision 11 is Accepted. It grew the card from docs-and-a-warning into a
+feature, so scope it accordingly.
 
 ## Checklist
 
+- [x] Decision 11 accepted — two commands, and the project run builds and installs for real
 - [ ] Run/Debug titles and the run-lua docs state the send-the-buffer semantics
-- [ ] Pre-launch warning when `[[symlink]]` dests are missing or stale
-- [ ] Decision 11 accepted or declined — dev-deploy built, or the gap documented deliberately
+- [ ] `dofile`/`require` detection warns on the per-file run, with Run project in DCS offered inline
+- [ ] Detection **warns, never blocks** — it is a heuristic with both false positives (comments, strings) and false negatives (aliased or computed calls)
+- [ ] Central Run project in DCS: pack via the publish packager, install via the real installer, then run
+- [ ] Project-run installs are distinguishable in the ledger from marketplace installs
+- [ ] Decide what a tagless project run packs as — it must not collide with or masquerade as a real release
+- [ ] Build-step projects (Rust template) fail before packaging with the preflight's message, not inside it
 
 ## Comments
 
 - **claude** (2026-08-05T19:07:50.000Z): Raised from the v0.17.0 QA batch. Kept separate from card 43 even though #78's triage is what produced #79 and #80: this card is about what Run in DCS does, that one is about what the manifest recognizes, and they touch different code. One detail from the issue worth not losing — the mangled `…utils.lua'utils` line in the require trace was verified present in the RAW dcs.log, so it is DCS's own logger, not our log pipeline. No ticket needed for it.
+- **claude** (2026-08-05T19:59:04.000Z): Decision 11 accepted, and the owner reframed it rather than answering the question as posed. I had asked whether to add a "dev-deploy" companion — a lighter install for iteration. The answer was that running a file and running a project are **two different acts**, so they get two commands: the per-file run stays exactly as it is (explicitly liked, not a shortcoming), and a separate project-level run builds and installs for real. Record rewritten and renamed to `11-two-ways-to-run.md`.
+- **claude** (2026-08-05T19:59:04.000Z): Two things in that answer are better than what I proposed, and worth naming so they survive. **(1)** `dofile`/`require` detection beats my manifest-staleness warning: it keys off what the file actually does, so it fires even when the manifest is wrong or absent — which is precisely the situation in the report that produced #78. **(2)** Choosing the full build+install over workspace-sourced links **dissolves the hazard my own record warned about** — workspace links would have pointed into the working tree, where a wrong uninstall deletes source. Installing a built bundle means links point at extracted release content like any other mod, so decision 03's ledger semantics apply unchanged. The cost is a slower loop with no live edits; that is deliberate and should not be quietly optimised away later, because that optimisation *is* this decision reversed.
