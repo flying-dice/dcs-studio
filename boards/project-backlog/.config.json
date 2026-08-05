@@ -28,7 +28,7 @@
         },
         {
           "id": "pr-open",
-          "label": "Raised as a PR against develop, not pushed to it",
+          "label": "Raised as a PR against main, not pushed to it",
           "field": "pr"
         },
         {

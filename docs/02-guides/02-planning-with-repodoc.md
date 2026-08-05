@@ -61,6 +61,17 @@ Two formatting rules that bite: frontmatter lists must use the inline form —
 `labels: [bug, ci]`, never block-style YAML — and the `NN-` prefix is the card's
 position across the **whole board**, not within its column.
 
+## Branches
+
+`main` is the only long-lived branch. Work happens on a branch off it and
+returns by pull request — there is no integration branch in between. `develop`
+was that branch until 2026-08-05 and is retired; a reference to it in an older
+card's journal is history, not instruction.
+
+`main` is protected, enforced on admins: the six CI checks, strict (your branch
+must be up to date), and one approving review. So a change cannot reach `main`
+by push, and cannot reach it on its author's own approval either.
+
 ## Getting a card into review
 
 `In Review` has five entry gates in `.config.json`, and they are the review
@@ -74,7 +85,7 @@ that did not pass.
 | `static` | `npm run lint && npm run typecheck:tests` | — |
 | `coverage` | `npm run coverage` | The three JS layers, serially. Not Rust. |
 | `code-review` | field `review-verdict` = `clean` | A local code review found nothing blocking. |
-| `pr-open` | field `pr` | The change is a PR against `develop`, not a push to it. |
+| `pr-open` | field `pr` | The change is a PR against `main`, not a push to it. |
 | `ci` | `gh pr checks` | All six checks on that PR — **the only gate that covers Rust and Windows.** |
 
 Run `ci` from the feature branch: bare `gh pr checks` infers the repo from the
