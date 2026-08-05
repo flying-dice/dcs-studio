@@ -20,7 +20,7 @@ link-based install model and the four gates was real and well written, but sprea
 across `ARCHITECTURE.md`, CI comments and issue threads, with no record that says
 "this was a choice, here is what it costs".
 
-Requested by the repository owner (jonathan.turnock@gmail.com) in this session.
+Requested by the repository owner in this session.
 
 ## Decision
 
