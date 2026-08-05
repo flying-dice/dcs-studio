@@ -1,5 +1,65 @@
+import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import { expectSent, hostSend, openPreview, sentMessages } from "./helpers";
+
+/**
+ * A `.empty` state's content box, measured in ONE in-page pass (issue #70).
+ *
+ * `waitForFunction` polls inside the browser and hands back the value it
+ * settled on, so every rectangle comes from a single layout. A pair of
+ * `boundingBox()` calls — or a poll followed by a second `evaluate` — can
+ * straddle a re-render and read a detached node instead.
+ *
+ * Deliberately structure-blind: it looks for spans, not for the `<p>` wrapper
+ * that fixes the bug, so broken markup fails an assertion by name rather than
+ * timing out here. It does insist the element is laid out, so a state that
+ * never renders times out instead of measuring as comfortably short.
+ *
+ * - `contentHeight` — height less `.empty`'s vertical padding, i.e. how many
+ *   lines the copy actually occupies.
+ * - `inlineSpread` — the baseline spread of the state's inline children. Zero
+ *   when there are fewer than two; non-zero means they landed on separate rows.
+ */
+async function measureEmptyState(
+  page: Page,
+  testid: string,
+): Promise<{ contentHeight: number; inlineSpread: number }> {
+  const measured = await (
+    await page.waitForFunction((id) => {
+      const el = document.querySelector(`[data-testid="${id}"]`);
+      // Height 0 means present but not laid out. Keep polling rather than
+      // measuring it: `contentHeight` would come back NEGATIVE and sail under
+      // every ceiling below, turning "never rendered" into a green test.
+      if (!el || el.getBoundingClientRect().height === 0) return null;
+      const tops = [...el.querySelectorAll("span")].map((s) => s.getBoundingClientRect().top);
+      return {
+        // 160 = `.empty`'s 80px top + 80px bottom padding (media/marketplace.css).
+        // Inlined rather than passed in: this callback runs in the page and
+        // cannot close over a constant declared out here.
+        contentHeight: el.getBoundingClientRect().height - 160,
+        inlineSpread: tops.length > 1 ? Math.max(...tops) - Math.min(...tops) : 0,
+      };
+    }, testid)
+  ).jsonValue();
+  // waitForFunction settles only on a truthy value, but its type keeps the
+  // `null` the callback returns to mean "not rendered yet". Narrow it here
+  // rather than with a `!`, so a genuine miss fails by name.
+  if (measured === null) throw new Error(`${testid} never rendered`);
+  return measured;
+}
+
+/**
+ * Ceiling for a one-line `.empty` state, in px of content height.
+ *
+ * Measured here: one line is 17, and the smallest possible STACKED layout is
+ * 46 — two line boxes plus the column's 12px `gap`. 30 sits between them with
+ * room on both sides, which matters because the runners do not all have the
+ * same default font: it still catches stacking if a line box shrinks to 13
+ * (13+12+13 = 38), and still tolerates the copy wrapping to two lines (34 at
+ * this line height, and no gap is paid for a wrap). The gap is what makes the
+ * two cases separable at all — don't raise this above it.
+ */
+const ONE_LINE = 30;
 
 test.describe("marketplace preview", () => {
   test("boots by posting ready and shows the sign-in wall", async ({ page }) => {
@@ -257,6 +317,50 @@ test.describe("marketplace preview", () => {
 
     await expect(page.getByTestId("list-empty")).toContainText("dcs-studio");
     await expect(page.getByTestId("mod-card")).toHaveCount(0);
+  });
+
+  test("the empty-grid sentence renders on one line, with its chips inline", async ({ page }) => {
+    // Issue #70. `.empty` is a flex COLUMN — the product-error state stacks a
+    // message over a Try-again button — so the bare text nodes and two
+    // `.mono` chips that used to sit directly inside it each became their own
+    // row, and the sentence shipped broken across five lines. This asserts the
+    // rendered geometry rather than the copy, because the copy assertion
+    // above passed the entire time the layout was wrong.
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await openPreview(page, "marketplace");
+    await page.getByTestId("browse-anon-btn").click();
+    // Drain the fixture's scripted replies before pushing our own. `browseAnon`
+    // answers with `listings:busy` at +10ms and 12 `listings` at +500ms
+    // (previews/fixtures/marketplace.js), so pushing straight after the click
+    // lets the busy reply land afterwards and flip the grid to `list-loading`,
+    // with the 12 listings then refilling it — and `list-empty` never returns.
+    await expect(page.getByTestId("mod-card")).toHaveCount(12);
+    await hostSend(page, { type: "auth", signedIn: false, browsing: true });
+    await hostSend(page, { type: "listings" });
+
+    const { contentHeight, inlineSpread } = await measureEmptyState(page, "list-empty");
+    // Both topic chips sit on the same baseline as the prose around them.
+    expect(inlineSpread).toBeLessThan(2);
+    // And the block is one line tall, not five rows plus four 12px gaps.
+    expect(contentHeight).toBeLessThan(ONE_LINE);
+  });
+
+  test("the searching-GitHub spinner shares a line with its label", async ({ page }) => {
+    // The same defect as #70, quieter: `.spin` is inline-block, but as a direct
+    // child of the flex column it is blockified and the spinner sits on its own
+    // row above the text. Coverage proves this state renders; only geometry
+    // proves it renders on one line.
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await openPreview(page, "marketplace");
+    await page.getByTestId("browse-anon-btn").click();
+    await expect(page.getByTestId("mod-card")).toHaveCount(12);
+    // Empty the grid first: the spinner state needs a busy flag AND no listings
+    // to fall back on, otherwise the panel keeps showing the results it has.
+    await hostSend(page, { type: "listings" });
+    await hostSend(page, { type: "listings:busy" });
+
+    const { contentHeight } = await measureEmptyState(page, "list-loading");
+    expect(contentHeight).toBeLessThan(ONE_LINE);
   });
 
   test("a product push with no manifest or requirements renders the unknown state", async ({
