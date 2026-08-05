@@ -138,28 +138,6 @@ export function activate(
   // measurable activation cost. Shared stateless adapters are reused.
   const fsPort = new NodeFileSystem();
 
-  // Opening a dcs-studio.toml keeps the real text editor and auto-opens the
-  // authoring form beside it (a split view). The document is the source of truth;
-  // form and code editor are two-way bound.
-  //
-  // Wired here rather than above the composition root, where it used to sit,
-  // because the form's archive preview needs a real `FileSystemPort` — and the
-  // `forEach` below runs during activation, so the service has to exist by the
-  // time this block does, not merely by the end of `activate`.
-  const bundlePreview = new BundlePreviewService(fsPort);
-  const openFormFor = (doc: vscode.TextDocument | undefined) => {
-    if (doc && isManifest(doc))
-      ManifestFormPanel.openBeside(context, doc, installRoots, bundlePreview);
-  };
-  context.subscriptions.push(
-    vscode.workspace.onDidOpenTextDocument(openFormFor),
-    vscode.commands.registerCommand("dcs.manifest.openForm", () => {
-      openFormFor(vscode.window.activeTextEditor?.document);
-    }),
-  );
-  // A manifest already open when the extension activates.
-  vscode.workspace.textDocuments.forEach(openFormFor);
-
   const archive = new SevenZipArchive(() =>
     vscode.workspace.getConfiguration("dcsStudio").get<string>("sevenZipPath"),
   );
@@ -203,6 +181,28 @@ export function activate(
   // swap below is a checked claim rather than an aspiration.
   const marketplace = new GithubMarketplace(auth);
   // ──────────────────────────────────────────────────────────────────────────
+
+  // Opening a dcs-studio.toml keeps the real text editor and auto-opens the
+  // authoring form beside it (a split view). The document is the source of truth;
+  // form and code editor are two-way bound.
+  //
+  // Wired after the adapters rather than before them, where it used to sit: the
+  // form's archive preview needs a real `FileSystemPort`, and the `forEach`
+  // below opens forms DURING activation — so the service has to exist by the
+  // time this block runs, not merely by the end of `activate`.
+  const bundlePreview = new BundlePreviewService(fsPort);
+  const openFormFor = (doc: vscode.TextDocument | undefined) => {
+    if (doc && isManifest(doc))
+      ManifestFormPanel.openBeside(context, doc, installRoots, bundlePreview);
+  };
+  context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument(openFormFor),
+    vscode.commands.registerCommand("dcs.manifest.openForm", () => {
+      openFormFor(vscode.window.activeTextEditor?.document);
+    }),
+  );
+  // A manifest already open when the extension activates.
+  vscode.workspace.textDocuments.forEach(openFormFor);
 
   registerPanelCommands(context, {
     publish,

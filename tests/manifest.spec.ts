@@ -302,6 +302,54 @@ test.describe("manifest preview", () => {
     await expect(nameInput).toBeFocused();
   });
 
+  test("editing a field the archive does not depend on does not re-walk the disk", async ({
+    page,
+  }) => {
+    // The debounce alone is not enough. Measuring walks the declared trees, and
+    // `path = "target"` on a Rust project is six figures of files — so typing a
+    // description would re-walk it once per pause, for an answer identical to
+    // the one already on screen.
+    await openPreview(page, "manifest");
+    await expectSent(page, { type: "bundlePreview" });
+    const before = (await sentMessages(page)).filter((m) => m.type === "bundlePreview").length;
+
+    await page.locator('[data-sec="project"][data-key="description"]').fill("a longer blurb");
+    await expectSent(page, { type: "edit" });
+
+    const after = (await sentMessages(page)).filter((m) => m.type === "bundlePreview").length;
+    expect(after, "no new measurement for a field the preview ignores").toBe(before);
+  });
+
+  test("Re-check asks again for an answer nothing in the form changed", async ({ page }) => {
+    // The guard above is about the MANIFEST not having changed, and the disk can
+    // change without it: run the build that produces the missing DLL and every
+    // field is still exactly as it was. Without this button the row would go on
+    // saying "build the project first" after you had.
+    await openPreview(page, "manifest");
+    await expectSent(page, { type: "bundlePreview" });
+    const before = (await sentMessages(page)).filter((m) => m.type === "bundlePreview").length;
+
+    await page.getByTestId("preview-refresh-btn").click();
+
+    await expect
+      .poll(async () => (await sentMessages(page)).filter((m) => m.type === "bundlePreview").length)
+      .toBe(before + 1);
+  });
+
+  test("a failed measurement is not cached as the answer to that request", async ({ page }) => {
+    // The tree it failed to walk was being written at that moment, so the next
+    // edit must ask again rather than be told it matches the last request.
+    await openPreview(page, "manifest", { query: { bundle: "error" } });
+    await expect(page.getByTestId("preview-error")).toBeVisible();
+    const before = (await sentMessages(page)).filter((m) => m.type === "bundlePreview").length;
+
+    await page.locator('[data-sec="project"][data-key="description"]').fill("nudge");
+
+    await expect
+      .poll(async () => (await sentMessages(page)).filter((m) => m.type === "bundlePreview").length)
+      .toBe(before + 1);
+  });
+
   test("clearing the name shows a validation issue", async ({ page }) => {
     await openPreview(page, "manifest");
     const nameInput = page.locator('[data-sec="project"][data-key="name"]');

@@ -176,14 +176,45 @@
   // `render()` rebuilds the whole form and would otherwise blank the block on
   // every keystroke that changes a different section.
 
-  /** Ask the host to re-measure. Rides the edit debounce, so it is not per-key. */
+  /**
+   * Ask the host to re-measure — but only when the answer could have changed.
+   *
+   * The debounce alone is not enough. Measuring walks the declared trees, and a
+   * `[[bundle]] path = "target"` on a Rust project is six figures of files, so
+   * the walk is the expensive thing in this panel by orders of magnitude. Three
+   * fields decide its result and the form has a dozen; without this guard,
+   * typing a description re-walks `target/` once per pause in typing, for an
+   * answer identical to the one already on screen.
+   *
+   * The key is the whole request, so it cannot fall out of step with what is
+   * actually sent.
+   */
+  let lastPreviewKey = null;
   function requestPreview() {
-    vscode.postMessage({
+    const request = {
       type: "bundlePreview",
       bundle: state.model.bundle.map((b) => ({ path: b.path })),
       name: state.model.project.name,
       version: state.model.project.version,
-    });
+    };
+    const key = JSON.stringify(request);
+    if (key === lastPreviewKey) return;
+    lastPreviewKey = key;
+    vscode.postMessage(request);
+  }
+
+  /**
+   * Ask again for an answer the form already has.
+   *
+   * The guard above is about the MANIFEST not having changed, and the disk can
+   * change without it: run the build that produces the missing DLL and every
+   * field is still exactly as it was, so nothing re-asks and the row goes on
+   * saying "build the project first" after you have. Rather than re-walk the
+   * tree on the chance that happened, the preview says who to ask.
+   */
+  function refreshPreview() {
+    lastPreviewKey = null;
+    requestPreview();
   }
 
   function bytes(n) {
@@ -221,7 +252,10 @@
       : "";
     return `
       <div class="archive" data-testid="bundle-archive">
-        <div class="archive-head mono" data-testid="preview-archive-name">${esc(p.archiveName)}</div>
+        <div class="archive-head">
+          <span class="mono" data-testid="preview-archive-name">${esc(p.archiveName)}</span>
+          <button class="linkish" data-testid="preview-refresh-btn" data-preview-refresh>Re-check</button>
+        </div>
         <ul class="archive-tree">${rows}</ul>
         <div class="archive-foot" data-testid="preview-total">${count(p.totalFiles, "file")}, ${bytes(p.totalBytes)} before compression ${split}</div>
       </div>`;
@@ -440,6 +474,12 @@
         vscode.postMessage({ type: "openDocs", page: el.dataset.docs });
       });
     });
+    // Delegated, unlike every handler above, because `patchPreview` replaces
+    // this box's contents without going through `bind()` — a listener on the
+    // button itself would be thrown away by the first answer that arrived.
+    app.querySelector("#bundle-preview").addEventListener("click", (e) => {
+      if (e.target.closest("[data-preview-refresh]")) refreshPreview();
+    });
   }
 
   function updateResolved(i) {
@@ -486,6 +526,10 @@
       // Whatever arrives is the latest: the host drops the answer to any request
       // a newer one has overtaken (ManifestPresenter.previewBundle), which is
       // why there is no request id to match against here.
+      // An error is not an answer worth caching: the tree it failed to walk was
+      // being written at that moment, so the next edit should ask again rather
+      // than be told this request matches the last one.
+      if (m.error) lastPreviewKey = null;
       state.preview = m.error ? { error: m.error } : m.preview;
       patchPreview();
     }
